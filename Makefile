@@ -101,7 +101,10 @@ ci: lint contracts-test signer-test server-test web-test investor-web-test vecto
 security-scan: ## Dependency vulnerability scan (fail-closed on reachable advisories)
 	cd server && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 	cd signer && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-	cd web && npm audit --audit-level=high
+	# Production deps only: dev tooling (eslint, openapi-typescript, playwright) never
+	# ships in the SPA/binary, and some of its transitive advisories have no upstream fix
+	# (js-yaml via @redocly/openapi-core). Mirrors the ci.yml security-scan job.
+	cd web && npm audit --omit=dev --audit-level=high
 
 up: ## Start local dev stack (anvil, mongo, ipfs)
 	cd docker && docker compose up -d

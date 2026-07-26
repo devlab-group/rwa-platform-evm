@@ -117,8 +117,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
-      - name: npm audit (web)
-        run: cd web && npm ci && npm audit --audit-level=high
+      - name: npm audit (web, production deps)
+        run: cd web && npm ci && npm audit --omit=dev --audit-level=high
       - uses: actions/setup-go@v5
         with: { go-version: "1.25" }
       - name: govulncheck (server + signer)
@@ -152,7 +152,8 @@ jobs:
       - uses: crytic/slither-action@v0.4.2
         with:
           target: contracts
-          slither-args: --exclude-dependencies --fail-high
+          fail-on: high
+          slither-args: --exclude-dependencies
 
   # Deep symbolic-execution pass (Mythril) — the heavier counterpart to the Slither
   # gate above. Too slow for per-PR, so it only runs on the weekly schedule and on
@@ -196,16 +197,17 @@ jobs:
   # Full on-chain + HTTP-API end-to-end flow.
   e2e:
     runs-on: ubuntu-latest
-    services:
-      mongo:
-        image: mongo:7
-        ports: ["27017:27017"]
+    # No `services:` here: server/e2e/run_e2e.sh starts and tears down its OWN anvil +
+    # MongoDB (a single-node replica set rs0 — required for the indexer's transactional
+    # CommitChunk) + IPFS.
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
       - uses: ./.github/actions/forge-deps
       - uses: actions/setup-go@v5
         with: { go-version: "1.25" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
       - name: contracts on-chain e2e
         run: cd contracts && bash script/e2e.sh
       - name: server HTTP-API e2e
