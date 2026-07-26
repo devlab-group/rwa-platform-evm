@@ -137,6 +137,10 @@ contract RWAFactory is IRWAFactory {
     }
 
     function _delegateDeploy(address target, bytes memory data) private returns (bytes memory) {
+        // `target` is one of four immutable, constructor-validated deployer addresses and `data`
+        // is always an abi.encodeCall(...) with a compile-time-fixed selector — never caller-
+        // controlled, so this delegatecall is not attacker-redirectable.
+        // slither-disable-next-line controlled-delegatecall
         (bool ok, bytes memory ret) = target.delegatecall(data);
         if (!ok) {
             if (ret.length > 0) {
@@ -153,14 +157,22 @@ contract RWAFactory is IRWAFactory {
         if (config.quoteToken == address(0)) revert InvalidConfig("quoteToken");
         if (config.admin == address(0)) revert InvalidConfig("admin");
         if (config.auditor == address(0)) revert InvalidConfig("auditor");
-        if (config.complianceOperator == address(0)) revert InvalidConfig("complianceOperator");
+        if (config.complianceOperator == address(0)) {
+            revert InvalidConfig("complianceOperator");
+        }
         if (config.pricer == address(0)) revert InvalidConfig("pricer");
         if (config.treasurer == address(0)) revert InvalidConfig("treasurer");
-        if (config.redemptionManager == address(0)) revert InvalidConfig("redemptionManager");
+        if (config.redemptionManager == address(0)) {
+            revert InvalidConfig("redemptionManager");
+        }
         if (config.treasury == address(0)) revert InvalidConfig("treasury");
         if (config.decimals > MAX_DECIMALS) revert InvalidConfig("decimals");
-        if (config.purchasePricePerWholeToken == 0) revert InvalidConfig("purchasePricePerWholeToken");
-        if (config.redemptionPricePerWholeToken == 0) revert InvalidConfig("redemptionPricePerWholeToken");
+        if (config.purchasePricePerWholeToken == 0) {
+            revert InvalidConfig("purchasePricePerWholeToken");
+        }
+        if (config.redemptionPricePerWholeToken == 0) {
+            revert InvalidConfig("redemptionPricePerWholeToken");
+        }
         if (config.redemptionTimeout < MIN_REDEMPTION_TIMEOUT || config.redemptionTimeout > MAX_REDEMPTION_TIMEOUT) {
             revert InvalidConfig("redemptionTimeout");
         }
