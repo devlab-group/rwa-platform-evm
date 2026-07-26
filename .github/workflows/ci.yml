@@ -2,7 +2,7 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [master]
   # Mythril (deep symbolic execution) is far too slow for the per-PR gate, so it
   # runs on a weekly schedule and on demand instead — see the `mythril` job.
   # Slither stays the fast, blocking per-PR static-analysis gate.
