@@ -131,8 +131,8 @@ jobs:
       # fail-closed gate); uploaded for the release record.
       - name: SBOM (Go modules + web)
         run: |
-          (cd server && go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest app -json -output /tmp/sbom-server.json ./cmd/platform)
-          (cd signer && go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest app -json -output /tmp/sbom-signer.json ./cmd/signer)
+          (cd server && go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest app -json -output /tmp/sbom-server.json -main cmd/platform .)
+          (cd signer && go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest app -json -output /tmp/sbom-signer.json -main cmd/signer .)
           (cd web && npm ci && npm sbom --sbom-format cyclonedx > /tmp/sbom-web.json)
       - uses: actions/upload-artifact@v4
         with:
