@@ -16,6 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
+      - uses: ./.github/actions/forge-deps
       - run: cd contracts && forge build && forge test -vv
       - run: cd contracts && forge fmt --check
 
@@ -41,6 +42,7 @@ jobs:
       # ABI/binding drift gate: the hand-written bindings must match the
       # compiled contract artifacts.
       - uses: foundry-rs/foundry-toolchain@v1
+      - uses: ./.github/actions/forge-deps
       - run: cd contracts && forge build
       - run: cd server && go run ./cmd/verifyabi
 
@@ -144,7 +146,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
-      - uses: crytic/slither-action@v0
+      # slither compiles the foundry project (crytic-compile -> forge build), so the
+      # gitignored contract deps must be installed first.
+      - uses: ./.github/actions/forge-deps
+      - uses: crytic/slither-action@v0.4.2
         with:
           target: contracts
           slither-args: --exclude-dependencies --fail-high
@@ -161,16 +166,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
+      # lib/ (OpenZeppelin, forge-std) is gitignored with no submodule/lockfile, so the
+      # forge-deps composite action installs the pinned versions before compiling.
+      - uses: ./.github/actions/forge-deps
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install mythril
-      # lib/ (OpenZeppelin, forge-std) is gitignored, so resolve deps the same way
-      # `make bootstrap` does before compiling.
       - name: build contracts
-        run: |
-          cd contracts
-          forge install --no-git 2>/dev/null || forge soldeer install 2>/dev/null || true
-          forge build
+        run: cd contracts && forge build
       # Flatten each deployed contract into a self-contained source file (resolves
       # remappings/imports) and analyze it, targeting our contract by name so the
       # report centers on our code rather than the inherited OZ base. solc pinned to
@@ -200,6 +203,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
+      - uses: ./.github/actions/forge-deps
       - uses: actions/setup-go@v5
         with: { go-version: "1.25" }
       - name: contracts on-chain e2e

@@ -1,0 +1,18 @@
+name: forge-deps
+description: Install the pinned Foundry contract dependencies (OpenZeppelin, forge-std) into contracts/lib.
+
+# contracts/lib is gitignored and there is no git submodule or lockfile recording what to
+# install, so every CI job that compiles the contracts must install these first, otherwise
+# `forge build`/`forge script` fails with "Source lib/openzeppelin-contracts/... not found".
+# The versions are pinned here as the single source of truth — keep them in sync with the
+# Makefile `bootstrap` target. `--no-git` copies the sources in without registering a submodule
+# (matching how they are used locally); `--shallow` fetches only the pinned tag. The install is
+# guarded so it is a no-op when a dependency is already present (e.g. a warm local checkout).
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: contracts
+      run: |
+        [ -d lib/openzeppelin-contracts ] || forge install --no-git --shallow OpenZeppelin/openzeppelin-contracts@v5.6.1
+        [ -d lib/forge-std ]              || forge install --no-git --shallow foundry-rs/forge-std@v1.16.2

@@ -10,7 +10,12 @@ help: ## Show this help
 	  awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 bootstrap: ## Install toolchains/deps for all subrepos
-	@echo "==> contracts"; cd contracts && forge install --no-git 2>/dev/null || forge soldeer install 2>/dev/null || true
+	# contracts/lib is gitignored with no submodule/lockfile, so install the pinned deps
+	# explicitly (idempotent — skips a dep that is already present). Keep these versions in
+	# sync with .github/actions/forge-deps (the CI single source of truth).
+	@echo "==> contracts"; cd contracts && \
+	  { [ -d lib/openzeppelin-contracts ] || forge install --no-git OpenZeppelin/openzeppelin-contracts@v5.6.1; } && \
+	  { [ -d lib/forge-std ] || forge install --no-git foundry-rs/forge-std@v1.16.2; }
 	@echo "==> signer";    cd signer && go mod download
 	@echo "==> server";    cd server && go mod download
 	@echo "==> web";       cd web && npm install
