@@ -1,0 +1,9 @@
+{
+  "description": "Canonical structural limits for parsing/validating operator-supplied profile, metadata, and assetSchema JSON. The server and the offline signer MUST enforce EXACTLY these values (audit retest R2-H-02). Both binaries hardcode them and assert equality against this file in a test. Changing a value here is a frozen-contract change (ADR).",
+  "maxStringLengthUnit": "UTF-8 bytes (Go len(string)/the length of the value's UTF-8 encoding, NOT Unicode scalar values/runes and NOT UTF-16 code units). Applies identically to string values AND object property keys -- every JSON string token in the document. FROZEN by audit H-03: see docs/spec/asset-profile.md 'Max string length unit'.",
+  "maxUncompressedBytes": 1048576,
+  "maxDepth": 32,
+  "maxStringLength": 32768,
+  "maxArrayItems": 4096,
+  "maxObjectProperties": 4096
+}

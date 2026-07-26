@@ -1,0 +1,60 @@
+{
+  "chainId": 31337,
+  "addresses": ["0x0000000000000000000000000000000000A001"],
+  "startBlock": 1,
+  "maxLogRange": 2000,
+  "steps": [
+    {
+      "description": "genesis ingest",
+      "headers": [{ "number": 1, "seed": 1 }],
+      "logs": [
+        { "address": "0x0000000000000000000000000000000000A001", "blockNumber": 1, "txHash": "0x01", "logIndex": 0, "topics": ["0x01"] }
+      ],
+      "head": 1
+    },
+    {
+      "description": "duplicate redelivery + one new log",
+      "headers": [{ "number": 1, "seed": 1 }, { "number": 2, "seed": 1 }],
+      "logs": [
+        { "address": "0x0000000000000000000000000000000000A001", "blockNumber": 1, "txHash": "0x01", "logIndex": 0, "topics": ["0x01"] },
+        { "address": "0x0000000000000000000000000000000000A001", "blockNumber": 2, "txHash": "0x02", "logIndex": 0, "topics": ["0x01"] }
+      ],
+      "head": 2
+    },
+    {
+      "description": "transient RPC fault, recovered by the indexer's own retry",
+      "headers": [{ "number": 3, "seed": 1 }],
+      "logs": [
+        { "address": "0x0000000000000000000000000000000000A001", "blockNumber": 3, "txHash": "0x03", "logIndex": 0, "topics": ["0x01"] }
+      ],
+      "head": 3,
+      "fault": "transient"
+    },
+    {
+      "description": "reorg: block 4 forked, its log replaced",
+      "headers": [{ "number": 4, "seed": 1 }],
+      "logs": [
+        { "address": "0x0000000000000000000000000000000000A001", "blockNumber": 4, "txHash": "0x04", "logIndex": 0, "topics": ["0x01"] }
+      ],
+      "head": 4
+    },
+    {
+      "description": "reorg lands: block 4 refork with a different log",
+      "headers": [{ "number": 4, "seed": 2 }],
+      "removeLogsFrom": 4,
+      "logs": [
+        { "address": "0x0000000000000000000000000000000000A001", "blockNumber": 4, "txHash": "0x04b", "logIndex": 0, "topics": ["0x01"] }
+      ],
+      "head": 4
+    },
+    {
+      "description": "undecodable event goes to the DLQ, not lost",
+      "headers": [{ "number": 5, "seed": 1 }],
+      "logs": [
+        { "address": "0x0000000000000000000000000000000000A001", "blockNumber": 5, "txHash": "0x05", "logIndex": 0, "topics": ["0x01"], "decodable": false },
+        { "address": "0x0000000000000000000000000000000000A001", "blockNumber": 5, "txHash": "0x05b", "logIndex": 1, "topics": ["0x01"] }
+      ],
+      "head": 5
+    }
+  ]
+}

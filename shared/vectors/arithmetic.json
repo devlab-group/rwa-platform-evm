@@ -1,0 +1,35 @@
+{
+  "_comment": "Frozen purchase/redemption arithmetic vectors. Price is quote smallest-units per 10**tokenDecimals RWA units. purchase rounds UP, redemption rounds DOWN. quote = mulDiv(tokenAmount, price, 10**tokenDecimals).",
+  "cases": [
+    {
+      "name": "whole-token-usdc",
+      "tokenDecimals": 18,
+      "quoteDecimals": 6,
+      "purchasePricePerWholeToken": "2000000",
+      "redemptionPricePerWholeToken": "1950000",
+      "tokenAmount": "1000000000000000000",
+      "expectedPurchaseQuote": "2000000",
+      "expectedRedemptionQuote": "1950000"
+    },
+    {
+      "name": "fractional-round-up-vs-down",
+      "tokenDecimals": 18,
+      "quoteDecimals": 6,
+      "purchasePricePerWholeToken": "2000000",
+      "redemptionPricePerWholeToken": "2000000",
+      "tokenAmount": "1500000000000000",
+      "expectedPurchaseQuote": "3000",
+      "expectedRedemptionQuote": "3000"
+    },
+    {
+      "name": "odd-amount-rounding",
+      "tokenDecimals": 18,
+      "quoteDecimals": 6,
+      "purchasePricePerWholeToken": "333333",
+      "redemptionPricePerWholeToken": "333333",
+      "tokenAmount": "1000000000000000001",
+      "expectedPurchaseQuote": "333334",
+      "expectedRedemptionQuote": "333333"
+    }
+  ]
+}

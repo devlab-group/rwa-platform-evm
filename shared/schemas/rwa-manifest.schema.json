@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwa-platform/schemas/rwa-manifest.schema.json",
+  "title": ".rwa Package Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["packageVersion", "primaryType", "profileDigest", "metadataDigest", "files"],
+  "properties": {
+    "packageVersion": { "type": "string", "const": "1.0" },
+    "primaryType": { "type": "string", "enum": ["MintAttestation", "BurnAttestation"] },
+    "profileDigest": { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+    "metadataDigest": { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "size", "mime"],
+        "properties": {
+          "path": { "type": "string", "pattern": "^[A-Za-z0-9._/-]{1,255}$" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "size": { "type": "integer", "minimum": 0, "maximum": 104857600 },
+          "mime": { "type": "string" }
+        }
+      }
+    }
+  }
+}

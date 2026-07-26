@@ -1,0 +1,32 @@
+{
+  "name": "RWA-Supply-Attestation",
+  "version": "1",
+  "types": {
+    "EIP712Domain": [
+      { "name": "name", "type": "string" },
+      { "name": "version", "type": "string" },
+      { "name": "chainId", "type": "uint256" },
+      { "name": "verifyingContract", "type": "address" }
+    ],
+    "MintAttestation": [
+      { "name": "auditor", "type": "address" },
+      { "name": "profileDigest", "type": "bytes32" },
+      { "name": "recordKey", "type": "bytes32" },
+      { "name": "metadataDigest", "type": "bytes32" },
+      { "name": "amount", "type": "uint256" },
+      { "name": "nonce", "type": "uint256" },
+      { "name": "validUntil", "type": "uint64" },
+      { "name": "vault", "type": "address" }
+    ],
+    "BurnAttestation": [
+      { "name": "auditor", "type": "address" },
+      { "name": "profileDigest", "type": "bytes32" },
+      { "name": "operationId", "type": "bytes32" },
+      { "name": "metadataDigest", "type": "bytes32" },
+      { "name": "amount", "type": "uint256" },
+      { "name": "nonce", "type": "uint256" },
+      { "name": "validUntil", "type": "uint64" },
+      { "name": "vault", "type": "address" }
+    ]
+  }
+}

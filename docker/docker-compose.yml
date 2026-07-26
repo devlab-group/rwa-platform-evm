@@ -1,0 +1,53 @@
+# ============================================================================
+# LOCAL DEVELOPMENT ONLY — DO NOT EXPOSE OR DEPLOY THIS FILE TO PRODUCTION.
+# All services bind to 127.0.0.1 (loopback) and Mongo/IPFS run WITHOUT auth,
+# which is fine for a laptop but a full-database/IPFS-node compromise if the
+# host is reachable from an untrusted network. For production: run Mongo with
+# authentication (MONGO_INITDB_ROOT_USERNAME/_PASSWORD + a real user), restrict
+# the IPFS API to loopback behind an authenticated proxy, and put the API server
+# behind TLS. See docs/operator/operator-guide.md.
+# ============================================================================
+services:
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    entrypoint: ["anvil", "--host", "0.0.0.0", "--chain-id", "31337", "--block-time", "1"]
+    ports: ["127.0.0.1:8545:8545"]
+    volumes:
+      - ./data/anvil:/anvil-data
+
+  mongo:
+    # Docker-official image (not mongodb-community-server): its entrypoint runs
+    # as root, chowns the mounted /data/db to the mongodb user, then drops
+    # privileges — so a host bind mount below works with no chmod/chown from you.
+    # (The community image runs straight as non-root and can't write an
+    # owner-mismatched bind mount: "create_directory /data/db/journal: Permission
+    # denied".) mongo:7 also bundles mongosh for the healthcheck and matches the
+    # image the API e2e uses.
+    image: mongo:7
+    command: --replSet rs0 --bind_ip_all --port 27017
+    healthcheck:
+      test: echo "try { rs.status() } catch (err) { rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27017'}]}) }" | mongosh
+      interval: 5s
+      timeout: 15s
+      start_period: 15s
+      retries: 10
+    # For production, uncomment and set strong credentials, then require them in the server URI:
+    # environment:
+    #   MONGO_INITDB_ROOT_USERNAME: rwa
+    #   MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?set MONGO_PASSWORD}
+    environment:
+      MONGO_INITDB_DATABASE: rwa
+    ports: ["127.0.0.1:27017:27017"]
+    volumes:
+      - ./data/mongo:/data/db
+
+  ipfs:
+    image: ipfs/kubo:latest
+    # Kubo's HTTP API (5001) is unauthenticated — keep it on loopback only.
+    ports: ["127.0.0.1:5001:5001", "127.0.0.1:8080:8080"]
+    volumes:
+      - ./data/ipfs:/data/ipfs
+
+volumes:
+  rwa_mongo_data:
+  rwa_ipfs_data:

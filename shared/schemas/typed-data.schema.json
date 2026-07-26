@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwa-platform/schemas/typed-data.schema.json",
+  "title": "Typed Data Attestation Request (.rwa/typed-data.json)",
+  "description": "The EIP-712 attestation request embedded in a .rwa package. The server package-builder and the offline signer MUST agree on these field names byte-for-byte. For MintAttestation, `message.recordId` is carried alongside `recordKey` so the signer can independently recompute recordKey = keccak256(bytes(recordId)). Digests are 0x-prefixed hex; amount/nonce are decimal strings; validUntil is a unix-seconds integer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["primaryType", "domain", "message"],
+  "properties": {
+    "primaryType": { "type": "string", "enum": ["MintAttestation", "BurnAttestation"] },
+    "domain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "chainId", "verifyingContract"],
+      "properties": {
+        "name": { "type": "string", "const": "RWA-Supply-Attestation" },
+        "version": { "type": "string", "const": "1" },
+        "chainId": { "type": "integer", "minimum": 1 },
+        "verifyingContract": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" }
+      }
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auditor", "profileDigest", "metadataDigest", "amount", "nonce", "validUntil", "vault"],
+      "properties": {
+        "auditor": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+        "profileDigest": { "type": "string", "pattern": "^0x[0-9a-fA-F]{64}$" },
+        "recordId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" },
+        "recordKey": { "type": "string", "pattern": "^0x[0-9a-fA-F]{64}$" },
+        "operationId": { "type": "string", "pattern": "^0x[0-9a-fA-F]{64}$" },
+        "metadataDigest": { "type": "string", "pattern": "^0x[0-9a-fA-F]{64}$" },
+        "amount": { "type": "string", "pattern": "^[0-9]+$" },
+        "nonce": { "type": "string", "pattern": "^[0-9]+$" },
+        "validUntil": { "type": "integer", "minimum": 1 },
+        "vault": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" }
+      }
+    }
+  },
+  "_typeRules": {
+    "_comment": "Conditional per primaryType (enforced in code, not by this schema's validators): MintAttestation message MUST include recordId + recordKey and MUST NOT include operationId; BurnAttestation message MUST include operationId and MUST NOT include recordId/recordKey.",
+    "MintAttestation": { "requires": ["recordId", "recordKey"], "forbids": ["operationId"] },
+    "BurnAttestation": { "requires": ["operationId"], "forbids": ["recordId", "recordKey"] }
+  }
+}

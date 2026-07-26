@@ -1,0 +1,15 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+*.tsbuildinfo
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+.debug-nav.mjs
+.smoke-test.mjs
+.contrast-check.mjs
+.axe-audit.mjs
+tests/specs/zzz-debug.spec.ts

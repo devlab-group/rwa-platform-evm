@@ -1,0 +1,31 @@
+{
+  "_comment": "FROZEN JCS+CID golden vector. input canonicalizes via RFC 8785 JCS; sha256 of canonicalBytes is the metadataDigest convention; cidv1 uses codec raw(0x55)+sha2-256.",
+  "input": {
+    "z": "last",
+    "a": {
+      "y": "2",
+      "x": "1"
+    },
+    "m": [
+      "3",
+      "1",
+      "2"
+    ],
+    "nested": {
+      "deep": {
+        "k": "v"
+      },
+      "arr": [
+        {
+          "b": "2",
+          "a": "1"
+        }
+      ]
+    },
+    "createdAt": "2026-07-17T12:00:00Z"
+  },
+  "canonicalBytesUtf8": "{\"a\":{\"x\":\"1\",\"y\":\"2\"},\"createdAt\":\"2026-07-17T12:00:00Z\",\"m\":[\"3\",\"1\",\"2\"],\"nested\":{\"arr\":[{\"a\":\"1\",\"b\":\"2\"}],\"deep\":{\"k\":\"v\"}},\"z\":\"last\"}",
+  "canonicalBytesHex": "7b2261223a7b2278223a2231222c2279223a2232227d2c22637265617465644174223a22323032362d30372d31375431323a30303a30305a222c226d223a5b2233222c2231222c2232225d2c226e6573746564223a7b22617272223a5b7b2261223a2231222c2262223a2232227d5d2c2264656570223a7b226b223a2276227d7d2c227a223a226c617374227d",
+  "sha256": "0xfae539d818ab3479ae0175d0aa1f5f9f8721bb783e673058c11c1638689c672b",
+  "cidv1": "bafkreih24u45qgflgr424alv2cvb6x47q4q3w6b6m4yfrqi4cy4grhdhfm"
+}

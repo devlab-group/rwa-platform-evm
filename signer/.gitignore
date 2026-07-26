@@ -1,0 +1,2 @@
+# Build artifacts (req_changes: build binaries into a gitignored bin/)
+bin/

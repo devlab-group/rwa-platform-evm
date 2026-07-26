@@ -1,0 +1,94 @@
+.tx-preview {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  background: var(--color-neutral-bg);
+  margin: var(--space-4) 0;
+}
+
+.tx-preview__title {
+  margin: 0 0 var(--space-3);
+  font-size: 1rem;
+}
+
+.tx-preview__grid {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tx-preview__row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  font-size: 0.9rem;
+
+  dt {
+    color: var(--color-text-muted);
+  }
+
+  dd {
+    margin: 0;
+    font-family: var(--font-mono);
+    text-align: right;
+  }
+}
+
+.tx-preview__price-side[data-side="purchase"] {
+  color: var(--color-info);
+}
+
+.tx-preview__price-side[data-side="redemption"] {
+  color: var(--color-warning);
+}
+
+.tx-preview__confirmation {
+  font-family: var(--font-sans);
+  font-weight: 600;
+}
+
+.tx-preview__confirmation[data-state="confirmed"] {
+  color: var(--color-success);
+}
+
+.tx-preview__confirmation[data-state="reverted"],
+.tx-preview__confirmation[data-state="reorged"] {
+  color: var(--color-danger);
+}
+
+.tx-preview__confirmation[data-state="submitted"],
+.tx-preview__confirmation[data-state="awaiting-signature"] {
+  color: var(--color-info);
+}
+
+.tx-preview__notice {
+  margin: var(--space-3) 0 0;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.tx-preview__actions {
+  margin-top: var(--space-4);
+  display: flex;
+  gap: var(--space-2);
+}
+
+// Operator-intervention detail shown for a flagged transaction on the
+// Transactions page: nonce, sender, and replacement lineage.
+.tx-intervention-detail {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-2) 0 0;
+  font-size: 0.85rem;
+
+  dt {
+    color: var(--color-text-muted);
+  }
+
+  dd {
+    margin: 0;
+    word-break: break-all;
+  }
+}

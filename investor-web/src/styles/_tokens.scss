@@ -1,0 +1,57 @@
+// Design tokens. Kept as CSS custom properties so components can be themed
+// without a CSS-in-JS dependency.
+:root {
+  --color-bg: #f7f8fa;
+  --color-surface: #ffffff;
+  // 3.3–3.5:1 against surface/bg — meets WCAG 1.4.11 non-text contrast for
+  // input/card/table borders (#d9dde3 was ~1.4:1, a real a11y gap).
+  --color-border: #828a98;
+  --color-text: #1a1d23;
+  --color-text-muted: #5b6270;
+  --color-primary: #1f5fce;
+  --color-primary-contrast: #ffffff;
+  --color-danger: #c53030;
+  --color-danger-bg: #fde8e8;
+  --color-success: #1c7a4a;
+  --color-success-bg: #e3f6ea;
+  --color-info: #2563a8;
+  --color-info-bg: #e2eefb;
+  --color-warning: #92620a;
+  --color-warning-bg: #fdf1da;
+  --color-neutral: #4a5160;
+  --color-neutral-bg: #eceef1;
+  --focus-ring: 0 0 0 3px rgba(31, 95, 206, 0.4);
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  --radius: 6px;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #14161a;
+    --color-surface: #1c1f26;
+    --color-border: #6b7488;
+    --color-text: #e7e9ee;
+    --color-text-muted: #9aa1b1;
+    --color-primary: #6ea2f4;
+    --color-primary-contrast: #0b1220;
+    --color-danger: #f28b8b;
+    --color-danger-bg: #3a1c1c;
+    --color-success: #7fd6a6;
+    --color-success-bg: #123023;
+    --color-info: #8ec0f2;
+    --color-info-bg: #17293c;
+    --color-warning: #f0c675;
+    --color-warning-bg: #3a2c0f;
+    --color-neutral: #b7bccb;
+    --color-neutral-bg: #262b35;
+  }
+}

@@ -1,0 +1,854 @@
+openapi: 3.0.3
+info:
+  title: Self-Hosted RWA Platform API
+  version: 1.0.0
+  description: >
+    FROZEN API skeleton (lead-owned). State-changing endpoints accept an
+    Idempotency-Key header. Errors use stable machine-readable codes.
+    On-chain actions (investor buy/request/claim/cancel, admin/treasury/redemption
+    wallet actions) are encoded client-side by the SPA and broadcast from the
+    connected wallet — never executed by a custodial server key.
+servers:
+  - url: http://localhost:8080
+security:
+  - BearerJwt: []
+tags:
+  - name: health
+  - name: project
+  - name: compliance
+  - name: assets
+  - name: sales
+  - name: redemptions
+  - name: transactions
+  - name: auth
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealth
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } } }
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReady
+      responses:
+        "200": { description: Ready, content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } } }
+        "503": { description: Not ready }
+
+  /api/v1/project:
+    get:
+      tags: [project]
+      operationId: getProject
+      responses:
+        "200": { description: Project, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+
+  /api/v1/config:
+    get:
+      tags: [project]
+      operationId: getConfig
+      summary: Bootstrap chain configuration (public).
+      description: >
+        Non-sensitive bootstrap values the web/admin console needs before any
+        project exists — the chain id and the RWAFactory address — so the admin
+        can assemble and broadcast RWAFactory.deploy(ProjectConfig) directly from
+        their own wallet (the project is deployed by the admin, not relayed by the
+        server). Available before the first deployment, when GET /project 404s.
+      responses:
+        "200": { description: Bootstrap config, content: { application/json: { schema: { $ref: "#/components/schemas/BootstrapConfig" } } } }
+
+  /api/v1/profile:
+    get:
+      tags: [assets]
+      operationId: getProfile
+      summary: Fetch the deployment's stored asset profile, if one exists (admin-only).
+      description: >
+        Returns the single stored Asset Profile for this deployment (one asset per
+        project), including the raw profile document, so the admin UI can repopulate
+        after a reload or navigation instead of forcing re-creation. 404 when no
+        profile has been created yet.
+      x-required-role: admin
+      responses:
+        "200": { description: The stored profile., content: { application/json: { schema: { $ref: "#/components/schemas/StoredProfile" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [assets]
+      operationId: createProfile
+      summary: Create the deployment's asset profile (admin-only, create-once).
+      description: >
+        Persists the asset profile for this deployment exactly once (create-once /
+        compare-and-set on projectId; immutable for the life of the deployment).
+        Requires the admin role. Unlike POST /api/v1/profile/validate — which is
+        pure and never persists — this is the only endpoint that stores a profile.
+        Persistence failures are surfaced to the caller (500), never silently
+        discarded. Every record/package/signature path additionally cross-checks
+        the stored profile digest against the project's persisted profileDigest.
+      x-required-role: admin
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, description: "Raw Asset Profile JSON document (shared/schemas/asset-profile.schema.json)." } } }
+      responses:
+        "201": { description: Profile created, content: { application/json: { schema: { $ref: "#/components/schemas/ValidationResult" } } } }
+        "400": { description: "Invalid profile; body is a ValidationResult with valid=false and an errors array.", content: { application/json: { schema: { $ref: "#/components/schemas/ValidationResult" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+
+  /api/v1/profile/validate:
+    post:
+      tags: [assets]
+      operationId: validateProfile
+      summary: Validate an asset profile (pure — no persistence side effect).
+      description: >
+        Pure validation: checks the profile against the platform schema and the
+        operator assetSchema dialect and returns the computed digest/cid. It does
+        NOT persist anything. Use POST /api/v1/profile to store one.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        "200": { description: Validation result, content: { application/json: { schema: { $ref: "#/components/schemas/ValidationResult" } } } }
+
+  /api/v1/compliance/wallets:
+    get:
+      tags: [compliance]
+      operationId: listWallets
+      x-required-role: operator
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: "Wallets (bounded/paginated, see Limit/Cursor)"
+          headers:
+            X-Total-Count: { $ref: "#/components/headers/XTotalCount" }
+            X-Page-Size: { $ref: "#/components/headers/XPageSize" }
+            X-Next-Cursor: { $ref: "#/components/headers/XNextCursor" }
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/WalletStatus" } } } }
+  /api/v1/compliance/challenge:
+    post:
+      tags: [compliance]
+      operationId: createChallenge
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [address], properties: { address: { type: string } } } } }
+      responses:
+        "200": { description: Challenge, content: { application/json: { schema: { $ref: "#/components/schemas/Challenge" } } } }
+  /api/v1/compliance/challenge/verify:
+    post:
+      tags: [compliance]
+      operationId: verifyChallenge
+      description: >
+        Submit the wallet signature over a previously issued challenge to prove ownership.
+        On success also mints a short-lived subject-scoped session (bound to `address`
+        only) so an investor can read their own status without an operator API key.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ChallengeVerify" } } }
+      responses:
+        "200": { description: Verified, content: { application/json: { schema: { $ref: "#/components/schemas/VerifyChallengeResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/me/wallet-status:
+    get:
+      tags: [compliance]
+      operationId: getMyWalletStatus
+      summary: This session's own wallet status (subject-scoped).
+      description: >
+        Returns the WalletStatus for the address bound to the presented wallet session
+        only. Authenticated by the X-Wallet-Session bearer minted at challenge-verify,
+        NOT by an operator API key. Replaces the investor page's former dependency on
+        the operator-only global wallet list.
+      security:
+        - WalletSession: []
+      responses:
+        "200": { description: Own wallet status, content: { application/json: { schema: { $ref: "#/components/schemas/WalletStatus" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/compliance/allowed/{address}:
+    get:
+      tags: [compliance]
+      operationId: isAddressAllowed
+      summary: Public transfer-preflight eligibility.
+      description: >
+        Minimal, unauthenticated lookup for transfer-recipient preflight. Returns only
+        whether a transfer to `address` would currently be permitted — deliberately not
+        the full WalletStatus, so an anonymous caller cannot enumerate a third party's
+        exact status / validUntil / ownership.
+      security: []
+      parameters:
+        - { name: address, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Eligibility, content: { application/json: { schema: { $ref: "#/components/schemas/AllowedResult" } } } }
+  /api/v1/compliance/webhooks:
+    get:
+      tags: [compliance]
+      operationId: listWebhookEvents
+      x-required-role: operator
+      description: KYC webhook history for the compliance screen.
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: "Webhook events (bounded/paginated, see Limit/Cursor)"
+          headers:
+            X-Total-Count: { $ref: "#/components/headers/XTotalCount" }
+            X-Page-Size: { $ref: "#/components/headers/XPageSize" }
+            X-Next-Cursor: { $ref: "#/components/headers/XNextCursor" }
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/WebhookEvent" } } } }
+
+  /api/v1/audit-logs:
+    get:
+      tags: [compliance]
+      operationId: listAuditLogs
+      x-required-role: operator
+      parameters:
+        - { name: category, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: >
+            Audit log entries (bounded/paginated; the
+            underlying store is a most-recent-N query so X-Total-Count is
+            omitted — only X-Page-Size/X-Next-Cursor are sent).
+          headers:
+            X-Page-Size: { $ref: "#/components/headers/XPageSize" }
+            X-Next-Cursor: { $ref: "#/components/headers/XNextCursor" }
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AuditLog" } } } }
+  /api/v1/compliance/status:
+    post:
+      tags: [compliance]
+      operationId: setComplianceStatus
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SetStatusRequest" } } }
+      responses:
+        "202": { description: Submitted, content: { application/json: { schema: { $ref: "#/components/schemas/TxRef" } } } }
+  /api/v1/compliance/webhook:
+    post:
+      tags: [compliance]
+      operationId: kycWebhook
+      description: >
+        HMAC-signed KYC provider webhook. Signature header `X-Webhook-Signature` =
+        lowercase hex of HMAC-SHA256(rawBody, sharedSecret), constant-time compared.
+        Replay/freshness-protected: the server requires provider + eventId
+        + occurredAt, enforces uniqueness on (provider, eventId) in addition to raw-body-hash
+        dedup, rejects occurredAt outside a 24h-past / 5min-future window, rejects a
+        strictly-older decision for an address than the latest already-applied one, normalizes
+        the address to EIP-55, and rejects negative / >100y-future validUntil before the
+        int64→uint64 cast. The occurrence timestamp travels in-body, so it is covered by the
+        existing HMAC-over-raw-body signature (no separate header). Not protected by ApiKeyAuth.
+      security: []
+      parameters:
+        - { name: X-Webhook-Signature, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/WebhookPayload" } } }
+      responses:
+        "202": { description: "Accepted and durably queued. The decision is stored and applied on-chain asynchronously by the reconciler; it is NOT yet applied when this returns. Poll the webhook events list for applyStatus." }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { description: "Replay/stale/out-of-order decision (same code family as replay).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/assets/records:
+    get:
+      tags: [assets]
+      operationId: listRecords
+      x-required-role: operator
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: "Records (bounded/paginated, see Limit/Cursor)"
+          headers:
+            X-Total-Count: { $ref: "#/components/headers/XTotalCount" }
+            X-Page-Size: { $ref: "#/components/headers/XPageSize" }
+            X-Next-Cursor: { $ref: "#/components/headers/XNextCursor" }
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AssetRecord" } } } }
+    post:
+      tags: [assets]
+      operationId: createRecord
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateRecordRequest" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/AssetRecord" } } } }
+  /api/v1/assets/records/{recordId}/package:
+    get:
+      tags: [assets]
+      operationId: downloadPackage
+      x-required-role: operator
+      parameters: [ { name: recordId, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: .rwa package, content: { application/zip: { schema: { type: string, format: binary } } } }
+  /api/v1/assets/records/{recordId}/reissue:
+    post:
+      tags: [assets]
+      operationId: reissueRecord
+      summary: Reissue an expired record with a fresh nonce/expiry.
+      description: >
+        Audited recovery for a record whose attestation window lapsed before it was
+        signed. Creates a NEW nonce and validUntil for the SAME immutable metadata
+        identity (recordId, metadata, digests unchanged) so a stuck record can be
+        re-attested without violating record-ID uniqueness. Admin-only. Only permitted
+        for a record that is still Pending (never Signed/Minted).
+      x-required-role: admin
+      parameters:
+        - { name: recordId, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "200": { description: Reissued, content: { application/json: { schema: { $ref: "#/components/schemas/AssetRecord" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /api/v1/sales/inventory:
+    get:
+      tags: [sales]
+      operationId: getInventory
+      responses:
+        "200": { description: Inventory, content: { application/json: { schema: { $ref: "#/components/schemas/Inventory" } } } }
+  # No server-built buy quote: the SPA reads Vault.previewBuy(tokenAmount) — an on-chain
+  # view — directly from the connected wallet, the same authoritative quote the on-chain
+  # buy uses, so the server is out of the pricing path too.
+  # No server-built calldata for on-chain actions. Treasury withdrawal
+  # (TREASURER_ROLE) and the investor buy are both encoded client-side by the
+  # SPA from pinned ABIs and broadcast from the connected wallet (the contract's
+  # own checks are the authorization), consistent with redemption fund/reject and
+  # the Security wallet actions. So a compromised server cannot redirect a call.
+  /api/v1/sales/purchases:
+    get:
+      tags: [sales]
+      operationId: listPurchases
+      x-required-role: operator
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: "Purchases (bounded/paginated, see Limit/Cursor)"
+          headers:
+            X-Total-Count: { $ref: "#/components/headers/XTotalCount" }
+            X-Page-Size: { $ref: "#/components/headers/XPageSize" }
+            X-Next-Cursor: { $ref: "#/components/headers/XNextCursor" }
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Purchase" } } } }
+
+  /api/v1/redemptions:
+    get:
+      tags: [redemptions]
+      operationId: listRedemptions
+      description: >
+        Public, paginated list of redemption requests. On-chain-public data (the
+        RedemptionEscrow's events), exposed unauthenticated so issuers can build their
+        own investor UIs. Filter by `address` (beneficiary) for a single investor's
+        requests, and/or by `status`.
+      security: []
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: address, in: query, required: false, schema: { type: string }, description: "Filter to requests whose beneficiary is this wallet." }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: "Redemptions (bounded/paginated, see Limit/Cursor)"
+          headers:
+            X-Total-Count: { $ref: "#/components/headers/XTotalCount" }
+            X-Page-Size: { $ref: "#/components/headers/XPageSize" }
+            X-Next-Cursor: { $ref: "#/components/headers/XNextCursor" }
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Redemption" } } } }
+  # No server-built redemption quote: the SPA reads RedemptionEscrow.previewRedeem(rwaAmount)
+  # — an on-chain view — directly from the connected wallet.
+  /api/v1/redemptions/{id}:
+    get:
+      tags: [redemptions]
+      operationId: getRedemption
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: Redemption, content: { application/json: { schema: { $ref: "#/components/schemas/Redemption" } } } }
+  # No server-built calldata for redemption actions. Funding (TREASURER_ROLE),
+  # rejection (REDEMPTION_MANAGER_ROLE), and the investor request/claim/cancel are
+  # all encoded client-side by the SPA from pinned ABIs and broadcast from the
+  # connected wallet (the contract's own checks are the authorization), consistent
+  # with the other wallet actions (pause/price/roles). So a compromised server
+  # cannot redirect a call.
+
+  /api/v1/transactions:
+    get:
+      tags: [transactions]
+      operationId: listTransactions
+      description: >
+        Public, paginated list of server-tracked transactions. On-chain-public data,
+        exposed unauthenticated so issuers can build their own investor UIs. Pass
+        `address` to filter to a single wallet (matches from/to/beneficiary/buyer).
+      security: []
+      parameters:
+        - { name: address, in: query, required: false, schema: { type: string }, description: "Filter to txs involving this wallet (from/to/beneficiary/buyer)." }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: "Transactions (bounded/paginated, see Limit/Cursor)"
+          headers:
+            X-Total-Count: { $ref: "#/components/headers/XTotalCount" }
+            X-Page-Size: { $ref: "#/components/headers/XPageSize" }
+            X-Next-Cursor: { $ref: "#/components/headers/XNextCursor" }
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Transaction" } } } }
+
+  /auth/challenge:
+    post:
+      tags: [auth]
+      operationId: createAuthChallenge
+      summary: Request a wallet-signature challenge for admin login (step 1).
+      description: >
+        Admin auth is wallet-signature based. The SPA sends the connected wallet address;
+        the server returns a single-use, time-limited message for the wallet to
+        personal_sign. Public — this is the login entry point.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              properties:
+                address: { type: string, description: "Connected wallet address (EIP-55 checksummed or lowercase)." }
+      responses:
+        "200":
+          description: Challenge issued.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, expiresAt]
+                properties:
+                  message: { type: string, description: "The exact message the wallet must personal_sign." }
+                  expiresAt: { type: integer, description: "Unix seconds; the challenge is single-use and expires." }
+        "429": { $ref: "#/components/responses/Error" }
+  /auth/session:
+    post:
+      tags: [auth]
+      operationId: createSession
+      summary: Verify a signed challenge and issue an admin JWT (step 2).
+      description: >
+        The SPA submits the wallet address and the signature over the challenge message
+        from POST /auth/challenge. The server recovers the signer and, if it equals the
+        configured project admin address, returns a signed JWT to attach as
+        `Authorization: Bearer <token>` on subsequent requests. The JWT is stateless —
+        logout is client-side (drop the token). Public — this is the exchange endpoint.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address, signature]
+              properties:
+                address: { type: string, description: "Wallet address that signed the challenge." }
+                signature: { type: string, description: "personal_sign signature over the challenge message ('0x'-hex, 65 bytes)." }
+      responses:
+        "200": { description: Authenticated; JWT issued., content: { application/json: { schema: { $ref: "#/components/schemas/AuthSession" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    BearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Admin JWT (HMAC-signed) issued by POST /auth/session after a successful
+        wallet-signature challenge whose signer equals the configured project admin
+        address. Attach as `Authorization: Bearer <jwt>`. Stateless — no server-side
+        revocation; logout drops the token client-side. Investor read routes use
+        X-Wallet-Session instead; requests with no/invalid token fall through to the
+        public (read-only) surface.
+    WalletSession:
+      type: apiKey
+      in: header
+      name: X-Wallet-Session
+      description: >
+        Short-lived (≈15 min) opaque session token minted at challenge-verify, scoped to
+        a single wallet address. Grants read access to that address's own status only —
+        never an admin capability. Kept separate from the admin BearerJwt so the two
+        auth models never collide.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: >
+        Required on every side-effecting endpoint — a missing or optional key
+        would let a mutation bypass idempotency protection entirely. Scoped
+        server-side to the authenticated caller's
+        credential identity, the operation, and its full concrete target
+        (path parameters + normalized query), not merely the route
+        template — see api.go's Idempotency middleware.
+      required: true
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      description: >
+        Max items to return. Server-enforced hard maximum
+        applies even if omitted or set higher than the maximum.
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Cursor:
+      name: cursor
+      in: query
+      description: >
+        Opaque pagination cursor from a previous response's X-Next-Cursor
+        header. Omit to fetch the first page.
+      required: false
+      schema: { type: string }
+  headers:
+    XTotalCount:
+      description: Total items available, when cheaply known.
+      schema: { type: integer }
+    XPageSize:
+      description: Items actually returned in this response.
+      schema: { type: integer }
+    XNextCursor:
+      description: >
+        Pass as `cursor` to fetch the next page; absent once this was the
+        last page.
+      schema: { type: string }
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+  schemas:
+    Health:
+      type: object
+      properties:
+        status: { type: string }
+        chainId: { type: integer }
+        lastIndexedBlock: { type: integer }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        details: { type: object }
+    Project:
+      type: object
+      properties:
+        projectId: { type: string }
+        version: { type: string }
+        chainId: { type: integer }
+        status:
+          type: string
+          enum: [Undeployed, Deploying, Verifying, Active, Failed]
+          description: >
+            Deployment lifecycle state. The admin UI hides the deploy form once this is
+            Deploying/Verifying/Active and polls GET /project until it reaches a terminal
+            state (Active or Failed).
+        verificationNote:
+          type: string
+          description: >
+            Why the deployment is Failed — e.g. a role-holder mismatch, a bytecode mismatch,
+            or a reorg that demoted the adopted ProjectDeployed event. Empty when verification
+            succeeded (a project is never left Active with a recorded gap).
+        decimals: { type: integer }
+        quoteDecimals:
+          type: integer
+          description: >
+            Decimals of the quote/collateral token (addresses.quoteToken), read on-chain
+            once at project setup/deploy and stored with the project settings. Lets the UI
+            scale quote-denominated amounts to/from whole units without its own on-chain read.
+            Omitted if not yet resolved.
+        purchasePricePerWholeToken:
+          type: string
+          description: >
+            Live on-chain purchase price per whole token, in quote-token minimal units
+            (scale by quoteDecimals for display). Projected from FixedPriceStrategy
+            PurchasePriceUpdated events — the current chain value, overlaying the
+            deploy-time price. Omitted if not yet projected.
+        redemptionPricePerWholeToken:
+          type: string
+          description: >
+            Live on-chain redemption price per whole token, in quote-token minimal units.
+            See purchasePricePerWholeToken.
+        tokenUnit: { type: string }
+        profileDigest: { type: string }
+        addresses: { $ref: "#/components/schemas/Addresses" }
+        paused: { type: boolean }
+        auditor: { type: string }
+        treasury: { type: string }
+        redemptionManager: { type: string }
+        pendingAdmin:
+          type: string
+          description: >
+            The incoming DEFAULT_ADMIN address of an in-progress two-step admin transfer
+            (OZ AccessControlDefaultAdminRules): set from the DefaultAdminTransferScheduled
+            event when the current admin begins a transfer, and cleared (empty/omitted) once
+            the new admin has accepted (DEFAULT_ADMIN_ROLE moved to them) or the transfer was
+            canceled. Event-sourced like the other security fields; see securityStale. The web
+            shows the pending admin an "Accept admin role" action while their wallet matches this.
+        finalityConfirmations: { type: integer }
+        bytecodeVerified:
+          type: boolean
+          description: >
+            V1: true when non-empty code exists at all deployed addresses (presence check).
+            Byte-for-byte / init-code-hash verification against the released artifacts is a
+            separate hardening step and is not implied by this flag.
+        roles:
+          allOf:
+            - $ref: "#/components/schemas/RoleHolders"
+          description: >
+            Complete role-holder sets enumerated via AccessControlEnumerable at deployment
+            verification: every role on every deployed contract, compared against
+            the deploy allowlist, so an unexpected out-of-band holder is detected. This is a
+            verification-time snapshot — see securityStale.
+        securityAsOfBlock:
+          type: integer
+          description: >
+            Last indexed block, i.e. how current the server's chain view is when it reported the
+            security-authority fields (paused/auditor/treasury/roles). Omitted when no indexer
+            checkpoint exists yet.
+        securityAsOfTime:
+          type: string
+          format: date-time
+          description: Timestamp of securityAsOfBlock (RFC3339). Omitted when no checkpoint exists.
+        securityStale:
+          type: boolean
+          description: >
+            True when the authority fields (paused/auditor/treasury/roles) may not
+            reflect live chain state — they are a deployment/verification-time snapshot that is
+            not yet continuously reconciled against governance/role events, so an out-of-band
+            pause, role grant, or auditor rotation would not appear here. Clients MUST NOT
+            present these values as guaranteed-current while this is true.
+    Addresses:
+      type: object
+      properties:
+        token: { type: string }
+        compliance: { type: string }
+        supplyController: { type: string }
+        vault: { type: string }
+        redemptionEscrow: { type: string }
+        strategy: { type: string }
+        quoteToken: { type: string }
+    RoleHolders:
+      type: object
+      additionalProperties: { type: array, items: { type: string } }
+      description: Map of role name (DEFAULT_ADMIN_ROLE, PAUSER_ROLE, ...) to holder addresses.
+    BootstrapConfig:
+      type: object
+      description: >
+        Non-sensitive bootstrap values for the admin console. The admin assembles
+        ProjectConfig (see IRWAFactory.ProjectConfig) client-side — using the
+        server-configured projectId and deriving profileDigest and decimals from the
+        stored Asset Profile — and broadcasts RWAFactory.deploy from their own wallet.
+        The server never signs or relays the deploy; it observes the on-chain
+        ProjectDeployed event.
+      required: [chainId, factoryAddress, projectId]
+      properties:
+        chainId: { type: integer, format: int64, description: "EVM chain id the factory is deployed on." }
+        factoryAddress: { type: string, description: "RWAFactory address the admin calls deploy(ProjectConfig) on." }
+        projectId:
+          type: string
+          description: >
+            The operator-configured projectId (UUID) this deployment is pinned to. The admin
+            console builds its Asset Profile with this value instead of generating one, and the
+            server rejects any profile whose projectId differs. Empty when the operator has not
+            set project_id in the server config yet — the console then blocks profile creation.
+    ValidationResult:
+      type: object
+      properties:
+        valid: { type: boolean }
+        errors: { type: array, items: { type: string } }
+        profileDigest: { type: string }
+        cid: { type: string }
+    WalletStatus:
+      type: object
+      properties:
+        address: { type: string }
+        status: { type: string, enum: [Unknown, Allowed, Blocked] }
+        validUntil: { type: integer }
+        ownershipVerified: { type: boolean }
+    VerifyChallengeResult:
+      type: object
+      description: WalletStatus for the verified address plus a short-lived subject-scoped session.
+      properties:
+        address: { type: string }
+        status: { type: string, enum: [Unknown, Allowed, Blocked] }
+        validUntil: { type: integer }
+        ownershipVerified: { type: boolean }
+        sessionToken: { type: string, description: "Opaque bearer for X-Wallet-Session; scoped to this address only." }
+        sessionExpiresAt: { type: string, format: date-time, description: "Session expiry (≈15 min TTL)." }
+    AllowedResult:
+      type: object
+      required: [allowed]
+      properties:
+        allowed: { type: boolean, description: "Whether a transfer to the address is currently permitted. Nothing else is disclosed." }
+    Challenge:
+      type: object
+      properties:
+        address: { type: string }
+        nonce: { type: string }
+        message: { type: string }
+        expiresAt: { type: string }
+    SetStatusRequest:
+      type: object
+      required: [address, status]
+      properties:
+        address: { type: string }
+        status: { type: string, enum: [Unknown, Allowed, Blocked] }
+        validUntil: { type: integer }
+    AssetRecord:
+      type: object
+      description: >
+        recordKey, nonce and validUntil are exposed so the admin can assemble the
+        SupplyController.MintAttestation and broadcast SupplyController.mint(attestation,
+        signature) directly from their wallet (the server no longer relays the mint; it
+        observes the on-chain Minted event and advances the record).
+      properties:
+        recordId: { type: string }
+        status: { type: string, enum: [Draft, Pending, Signed, Minted, Rejected] }
+        metadataDigest: { type: string }
+        cid: { type: string }
+        amount: { type: string }
+        createdAt: { type: string }
+        recordKey: { type: string, description: "bytes32 recordKey bound into the MintAttestation (consumed once on-chain)." }
+        nonce: { type: string, description: "uint256 attestation nonce (consumed once on-chain)." }
+        validUntil: { type: integer, format: int64, description: "Attestation expiry (unix seconds); block.timestamp must be <= this at mint." }
+    CreateRecordRequest:
+      type: object
+      required: [recordId, asset, amount]
+      properties:
+        recordId: { type: string }
+        asset: { type: object }
+        amount: { type: string }
+        proofs: { type: array, items: { type: object } }
+    SignedResult:
+      type: object
+      required: [formatVersion, auditor, primaryType, typedDataDigest, signature, signedAt]
+      properties:
+        formatVersion: { type: string }
+        auditor: { type: string }
+        primaryType: { type: string }
+        typedDataDigest: { type: string }
+        signature: { type: string }
+        signedAt: { type: string }
+    Inventory:
+      type: object
+      properties:
+        inventory: { type: string }
+        quoteBalance: { type: string }
+        purchasePrice: { type: string }
+        redemptionPrice: { type: string }
+    Redemption:
+      type: object
+      description: >
+        `status` is the on-chain enum. `claimable` is a server-derived convenience:
+        true when status==Funded AND confirmations>=finalityConfirmations. There is no
+        on-chain Claimable status. A Pending redemption is never a payment guarantee.
+      properties:
+        id: { type: string }
+        beneficiary: { type: string }
+        rwaAmount: { type: string }
+        quoteAmount: { type: string }
+        status: { type: string, enum: [None, Pending, Funded, Completed, Rejected, Cancelled] }
+        claimable: { type: boolean }
+        createdAt: { type: integer }
+        timeoutAt: { type: integer }
+        beneficiaryAllowed: { type: boolean }
+        confirmations: { type: integer }
+    ChallengeVerify:
+      type: object
+      required: [address, nonce, signature]
+      properties:
+        address: { type: string }
+        nonce: { type: string }
+        signature: { type: string }
+    WebhookPayload:
+      type: object
+      required: [provider, eventId, occurredAt, address, status]
+      properties:
+        provider: { type: string, description: "KYC provider id; part of the (provider,eventId) uniqueness key." }
+        eventId: { type: string, description: "Provider-assigned unique event id; part of the uniqueness key." }
+        occurredAt: { type: integer, format: int64, description: "Provider decision time, unix seconds. Rejected if outside 24h-past / 5min-future, or older than the latest applied decision for this address." }
+        address: { type: string, description: "Subject wallet; normalized to EIP-55 checksum server-side." }
+        status: { type: string, enum: [Allowed, Blocked, Pending], description: "Compliance decision." }
+        validUntil: { type: integer, format: int64, description: "Expiry (unix seconds) for an Allowed decision; 0 = no expiry. Negative or >100y-future is rejected before the int64→uint64 cast." }
+    WebhookEvent:
+      type: object
+      properties:
+        id: { type: string }
+        eventId: { type: string }
+        address: { type: string }
+        provider: { type: string }
+        outcome: { type: string, enum: [Allowed, Blocked, Pending] }
+        occurredAt: { type: string, format: date-time }
+        receivedAt: { type: string }
+        applyStatus: { type: string, enum: [Accepted, Applying, Applied, Superseded, Failed, Recorded], description: "Durable inbox/outbox state. Applied only after the on-chain setStatus tx confirms." }
+        applied: { type: boolean, description: "Derived convenience flag: applyStatus == Applied." }
+    AuditLog:
+      type: object
+      properties:
+        id: { type: string }
+        category: { type: string }
+        actor: { type: string }
+        action: { type: string }
+        target: { type: string }
+        createdAt: { type: string }
+        details: { type: object }
+    Purchase:
+      type: object
+      properties:
+        txHash: { type: string }
+        buyer: { type: string }
+        recipient: { type: string }
+        tokenAmount: { type: string }
+        quoteAmount: { type: string }
+        blockNumber: { type: integer }
+        confirmations: { type: integer }
+    TxRef:
+      type: object
+      properties:
+        txHash: { type: string }
+        status: { type: string }
+        idempotencyKey: { type: string }
+    Transaction:
+      type: object
+      properties:
+        txHash: { type: string }
+        kind: { type: string }
+        status: { type: string, enum: [pending, mined, confirmed, replaced, reverted, reorged, failed, broadcast_unknown, nonce_consumed_externally, needs_intervention] }
+        blockNumber: { type: integer }
+        explorerUrl: { type: string }
+        # Operator-intervention detail, surfaced so the UI can show a stuck or
+        # needs_intervention transaction's identity and replacement lineage instead
+        # of only a status badge. Additive and optional — older clients ignore it.
+        sender: { type: string, description: "Signing account (from address)." }
+        nonce: { type: integer, description: "Account nonce this attempt used." }
+        replacedBy: { type: string, description: "txHash of the replacement, if this attempt was replaced." }
+        replacementCount: { type: integer, description: "How many times this nonce has been fee-bumped/replaced." }
+    StoredProfile:
+      type: object
+      description: >
+        The deployment's single persisted Asset Profile (GET /api/v1/profile) — the raw
+        document plus the server-derived identity fields, enough for the admin UI to
+        repopulate the editor and the deploy form after a reload.
+      required: [profile, projectId, profileDigest]
+      properties:
+        profile: { type: object, description: "The raw Asset Profile JSON document as stored." }
+        projectId: { type: string }
+        profileDigest: { type: string }
+        cid: { type: string }
+        decimals: { type: integer, description: "Token decimals derived from the profile." }
+        tokenUnit: { type: string }
+    AuthSession:
+      type: object
+      description: Response of POST /auth/session — the admin JWT and its metadata.
+      required: [token, expiresAt, role, address]
+      properties:
+        token: { type: string, description: "Signed JWT — attach as `Authorization: Bearer <token>`." }
+        expiresAt: { type: integer, description: "Unix seconds; JWT expiry." }
+        role: { type: string, description: "Always 'admin' in V1 (single-admin model)." }
+        address: { type: string, description: "The authenticated admin wallet address (checksummed)." }

@@ -1,0 +1,25 @@
+{
+  "_comment": "FROZEN golden mint attestation vector. digest is the raw 32-byte EIP-712 digest that ECDSA.recover(digest, signature) must recover to `auditor`. signature produced by anvil account 0 private key over the raw digest (no EIP-191 prefix).",
+  "domain": {
+    "name": "RWA-Supply-Attestation",
+    "version": "1",
+    "chainId": 31337,
+    "verifyingContract": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+  },
+  "message": {
+    "auditor": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+    "profileDigest": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "recordId": "GOLD-BAR-12345",
+    "recordKey": "0x9768e992aee6c616a5d09c6ae32e413dba9a3429145511c247e87ea0e888289c",
+    "metadataDigest": "0x2222222222222222222222222222222222222222222222222222222222222222",
+    "amount": "1000000000000000000000",
+    "nonce": "42",
+    "validUntil": 1800000000,
+    "vault": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+  },
+  "domainSeparator": "0xbdfe35c5a8dead8b9a941d41fd18e7e4b773a28fd189d4747d37ac78596f6314",
+  "hashStruct": "0xcf5895fcf032e43fa0824af0efe0c65ce560ee30f5910785cba83e026cca64a4",
+  "digest": "0x68ee9475cc6af562a050251135435bb8ec7a833a75351783dfe26197f21197b9",
+  "signerPrivateKey": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+  "signature": "0x9307d1a6face62d62b3687e9281687d1f7f0a86c132bd526b2d8c2124fec502f7519091eb3527078a47b5a0067c3c8eb8a4710411b7433f798b431025a0f517e1b"
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwa-platform/schemas/asset-profile.schema.json",
+  "title": "Asset Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profileVersion", "projectId", "assetType", "tokenUnit", "tokenDecimals", "recordIdLabel", "assetSchema"],
+  "properties": {
+    "profileVersion": { "type": "string", "const": "1.0" },
+    "projectId": { "type": "string", "format": "uuid" },
+    "assetType": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "tokenUnit": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "tokenDecimals": { "type": "integer", "minimum": 0, "maximum": 36 },
+    "recordIdLabel": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "displayFields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "pointer"],
+        "properties": {
+          "label": { "type": "string", "minLength": 1 },
+          "pointer": { "type": "string", "pattern": "^/" }
+        }
+      }
+    },
+    "assetSchema": { "type": "object" }
+  }
+}

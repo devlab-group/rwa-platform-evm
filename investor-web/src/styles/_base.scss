@@ -1,0 +1,221 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  line-height: 1.2;
+}
+
+a {
+  color: var(--color-primary);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 4px;
+}
+
+.button {
+  font: inherit;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--color-primary);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+}
+
+.button--primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.button--secondary {
+  background: transparent;
+}
+
+.button--danger {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
+
+  label {
+    font-weight: 600;
+    font-size: 0.875rem;
+  }
+
+  input,
+  select,
+  textarea {
+    font: inherit;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text);
+  }
+
+  .field__hint {
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.9em;
+    }
+  }
+
+  // Read-only example snippet shown under a hint (e.g. the proofs[] shape).
+  .field__example {
+    margin: var(--space-1) 0 0;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    background: var(--color-surface-muted, var(--color-surface));
+    color: var(--color-text-muted);
+    font-size: 0.8rem;
+    overflow-x: auto;
+    white-space: pre;
+  }
+}
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+
+  th,
+  td {
+    text-align: left;
+    padding: var(--space-2) var(--space-3);
+    border-bottom: 1px solid var(--color-border);
+    font-size: 0.9rem;
+  }
+
+  th {
+    color: var(--color-text-muted);
+    font-weight: 600;
+  }
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.pagination-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.async-state {
+  padding: var(--space-4);
+  color: var(--color-text-muted);
+}
+
+.async-state--error {
+  color: var(--color-danger);
+}
+
+.security-staleness {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-4);
+}
+
+.security-staleness--stale {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+}
+
+// Small layout utilities — kept as classes (not inline `style` props) so the
+// CSP can drop `style-src 'unsafe-inline'` (see index.html).
+.u-mt-4 {
+  margin-top: var(--space-4);
+}
+
+.u-mt-5 {
+  margin-top: var(--space-5);
+}
+
+.field--narrow {
+  max-width: 240px;
+}
+
+.field--slim {
+  max-width: 200px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  top: -100%;
+  left: var(--space-3);
+  z-index: 100;
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  border-radius: var(--radius);
+
+  &:focus {
+    top: var(--space-3);
+  }
+}
