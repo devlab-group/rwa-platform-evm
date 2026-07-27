@@ -1,0 +1,18 @@
+// Host element for a KYC provider's web SDK. The provider owns everything
+// inside it (Sumsub renders an iframe, Onfido mounts its own DOM), so this only
+// reserves a sensible viewport for it: tall enough that a document-capture step
+// isn't squeezed, and bounded so the widget can't push the rest of the page off
+// screen on a phone.
+.kyc-sdk {
+  margin-top: var(--space-4);
+  min-height: 520px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+
+  iframe {
+    display: block;
+    width: 100%;
+    border: 0;
+  }
+}

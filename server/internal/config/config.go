@@ -162,6 +162,26 @@ type Config struct {
 	VaultKeyPrefix       string
 	KMSMockSeedHex       string
 
+	// KYC provider selection (internal/kyc). KYCProvider is "none" (default —
+	// the generic KYCWebhookHMACSecret webhook, no server-initiated flow),
+	// "sumsub", or "onfido". Only the selected provider's fields below are
+	// read; the rest may be empty. The webhook secret for the active provider
+	// gates forged KYC decisions the same way KYCWebhookHMACSecret does for the
+	// generic path, so production validation requires it (see load).
+	KYCProvider string
+
+	KYCSumsubAppToken      string
+	KYCSumsubSecretKey     string
+	KYCSumsubWebhookSecret string
+	KYCSumsubBaseURL       string
+	KYCSumsubLevelName     string
+
+	KYCOnfidoAPIToken     string
+	KYCOnfidoWebhookToken string
+	KYCOnfidoRegion       string
+	KYCOnfidoWorkflowID   string
+	KYCOnfidoReferrer     string
+
 	// MaxRequestBodyBytes bounds every request body. 0 disables the limit.
 	MaxRequestBodyBytes int64
 
@@ -358,6 +378,24 @@ type fileSchema struct {
 		KMSMockSeed          string `yaml:"kms_mock_seed"`
 	} `yaml:"keys"`
 
+	KYC struct {
+		Provider string `yaml:"provider"`
+		Sumsub   struct {
+			AppToken      string `yaml:"app_token"`
+			SecretKey     string `yaml:"secret_key"`
+			WebhookSecret string `yaml:"webhook_secret"`
+			BaseURL       string `yaml:"base_url"`
+			LevelName     string `yaml:"level_name"`
+		} `yaml:"sumsub"`
+		Onfido struct {
+			APIToken     string `yaml:"api_token"`
+			WebhookToken string `yaml:"webhook_token"`
+			Region       string `yaml:"region"`
+			WorkflowID   string `yaml:"workflow_id"`
+			Referrer     string `yaml:"referrer"`
+		} `yaml:"onfido"`
+	} `yaml:"kyc"`
+
 	Tx struct {
 		CoordinationMode string `yaml:"coordination_mode"`
 		LeaseTTL         string `yaml:"lease_ttl"`
@@ -467,6 +505,18 @@ func (f fileSchema) toEnvMap() map[string]string {
 	setStr("VAULT_KEY_PREFIX", f.Keys.VaultKeyPrefix)
 	setStr("KMS_MOCK_SEED", f.Keys.KMSMockSeed)
 
+	setStr("KYC_PROVIDER", f.KYC.Provider)
+	setStr("KYC_SUMSUB_APP_TOKEN", f.KYC.Sumsub.AppToken)
+	setStr("KYC_SUMSUB_SECRET_KEY", f.KYC.Sumsub.SecretKey)
+	setStr("KYC_SUMSUB_WEBHOOK_SECRET", f.KYC.Sumsub.WebhookSecret)
+	setStr("KYC_SUMSUB_BASE_URL", f.KYC.Sumsub.BaseURL)
+	setStr("KYC_SUMSUB_LEVEL_NAME", f.KYC.Sumsub.LevelName)
+	setStr("KYC_ONFIDO_API_TOKEN", f.KYC.Onfido.APIToken)
+	setStr("KYC_ONFIDO_WEBHOOK_TOKEN", f.KYC.Onfido.WebhookToken)
+	setStr("KYC_ONFIDO_REGION", f.KYC.Onfido.Region)
+	setStr("KYC_ONFIDO_WORKFLOW_ID", f.KYC.Onfido.WorkflowID)
+	setStr("KYC_ONFIDO_REFERRER", f.KYC.Onfido.Referrer)
+
 	setStr("TX_COORDINATION_MODE", f.Tx.CoordinationMode)
 	setStr("TX_LEASE_TTL", f.Tx.LeaseTTL)
 
@@ -506,6 +556,18 @@ func load(lookup envLookup) (Config, error) {
 		VaultToken:           getString(lookup, "VAULT_TOKEN", ""),
 		VaultKeyPrefix:       getString(lookup, "VAULT_KEY_PREFIX", "rwa-"),
 		KMSMockSeedHex:       getString(lookup, "KMS_MOCK_SEED", ""),
+
+		KYCProvider:            getString(lookup, "KYC_PROVIDER", "none"),
+		KYCSumsubAppToken:      getString(lookup, "KYC_SUMSUB_APP_TOKEN", ""),
+		KYCSumsubSecretKey:     getString(lookup, "KYC_SUMSUB_SECRET_KEY", ""),
+		KYCSumsubWebhookSecret: getString(lookup, "KYC_SUMSUB_WEBHOOK_SECRET", ""),
+		KYCSumsubBaseURL:       getString(lookup, "KYC_SUMSUB_BASE_URL", ""),
+		KYCSumsubLevelName:     getString(lookup, "KYC_SUMSUB_LEVEL_NAME", ""),
+		KYCOnfidoAPIToken:      getString(lookup, "KYC_ONFIDO_API_TOKEN", ""),
+		KYCOnfidoWebhookToken:  getString(lookup, "KYC_ONFIDO_WEBHOOK_TOKEN", ""),
+		KYCOnfidoRegion:        getString(lookup, "KYC_ONFIDO_REGION", "eu"),
+		KYCOnfidoWorkflowID:    getString(lookup, "KYC_ONFIDO_WORKFLOW_ID", ""),
+		KYCOnfidoReferrer:      getString(lookup, "KYC_ONFIDO_REFERRER", ""),
 
 		MetricsAddr: getString(lookup, "METRICS_ADDR", "127.0.0.1:9090"),
 
@@ -647,6 +709,41 @@ func load(lookup envLookup) (Config, error) {
 	if cfg.TxCoordinationMode == "mongo-lease" && cfg.PersistenceMode != "mongo" {
 		return Config{}, fmt.Errorf("config: TX_COORDINATION_MODE=%q requires PERSISTENCE_MODE=%q (a distributed lease needs a durable shared store)", "mongo-lease", "mongo")
 	}
+	// KYC provider selection + per-provider required fields, enforced in every
+	// environment: picking a provider you haven't configured is a
+	// misconfiguration, not a degrade path. Production additionally enforces
+	// webhook-secret strength below.
+	switch cfg.KYCProvider {
+	case "none":
+		// generic KYCWebhookHMACSecret path; nothing provider-specific required
+	case "sumsub":
+		for name, v := range map[string]string{
+			"KYC_SUMSUB_APP_TOKEN":      cfg.KYCSumsubAppToken,
+			"KYC_SUMSUB_SECRET_KEY":     cfg.KYCSumsubSecretKey,
+			"KYC_SUMSUB_WEBHOOK_SECRET": cfg.KYCSumsubWebhookSecret,
+		} {
+			if v == "" {
+				return Config{}, fmt.Errorf("config: %s is required when KYC_PROVIDER=sumsub", name)
+			}
+		}
+	case "onfido":
+		for name, v := range map[string]string{
+			"KYC_ONFIDO_API_TOKEN":     cfg.KYCOnfidoAPIToken,
+			"KYC_ONFIDO_WEBHOOK_TOKEN": cfg.KYCOnfidoWebhookToken,
+			"KYC_ONFIDO_WORKFLOW_ID":   cfg.KYCOnfidoWorkflowID,
+		} {
+			if v == "" {
+				return Config{}, fmt.Errorf("config: %s is required when KYC_PROVIDER=onfido", name)
+			}
+		}
+		switch cfg.KYCOnfidoRegion {
+		case "eu", "us", "ca":
+		default:
+			return Config{}, fmt.Errorf("config: KYC_ONFIDO_REGION must be eu, us, or ca, got %q", cfg.KYCOnfidoRegion)
+		}
+	default:
+		return Config{}, fmt.Errorf("config: KYC_PROVIDER must be %q, %q, or %q, got %q", "none", "sumsub", "onfido", cfg.KYCProvider)
+	}
 	for name, v := range map[string]string{
 		"TX_MAX_FEE_PER_GAS_WEI": cfg.MaxFeePerGasWei, "TX_MAX_TIP_PER_GAS_WEI": cfg.MaxTipPerGasWei, "TX_MAX_TOTAL_COST_WEI": cfg.MaxTxTotalCostWei,
 	} {
@@ -690,8 +787,30 @@ func load(lookup envLookup) (Config, error) {
 		return Config{}, fmt.Errorf("config: PROJECT_ID %q is not a valid UUID", cfg.ProjectID)
 	}
 	if cfg.Environment == EnvProduction {
-		if cfg.KYCWebhookHMACSecret == "" {
-			return Config{}, errors.New("config: KYC_WEBHOOK_HMAC_SECRET must be set in production (ENVIRONMENT=production) — an empty secret would permit forged KYC decisions once relayed on-chain")
+		// Whatever KYC path is active must authenticate its webhook: an empty
+		// secret would permit forged KYC decisions once relayed on-chain. For
+		// the generic ("none") path that is KYC_WEBHOOK_HMAC_SECRET; for a real
+		// provider it is that provider's own webhook secret (required in every
+		// environment above, and strength-checked for the operator-chosen
+		// Sumsub secret below). The Onfido webhook token is issued by Onfido, so
+		// it is required non-empty but not held to our operator-secret length
+		// floor.
+		switch cfg.KYCProvider {
+		case "none":
+			if cfg.KYCWebhookHMACSecret == "" {
+				return Config{}, errors.New("config: KYC_WEBHOOK_HMAC_SECRET must be set in production (ENVIRONMENT=production) — an empty secret would permit forged KYC decisions once relayed on-chain")
+			}
+		case "sumsub":
+			if len(cfg.KYCSumsubWebhookSecret) < MinProductionSecretBytes {
+				return Config{}, fmt.Errorf("config: KYC_SUMSUB_WEBHOOK_SECRET must be at least %d bytes in production, got %d", MinProductionSecretBytes, len(cfg.KYCSumsubWebhookSecret))
+			}
+			if weakProductionSecrets[strings.ToLower(cfg.KYCSumsubWebhookSecret)] {
+				return Config{}, errors.New("config: KYC_SUMSUB_WEBHOOK_SECRET is a known placeholder value and must not be used in production")
+			}
+		case "onfido":
+			if weakProductionSecrets[strings.ToLower(cfg.KYCOnfidoWebhookToken)] {
+				return Config{}, errors.New("config: KYC_ONFIDO_WEBHOOK_TOKEN is a known placeholder value and must not be used in production")
+			}
 		}
 		if cfg.PersistenceMode != "mongo" {
 			return Config{}, fmt.Errorf("config: PERSISTENCE_MODE=%q is not allowed in production; volatile in-memory repositories would silently drop project guards, idempotency records, and audit history on restart", cfg.PersistenceMode)
@@ -816,11 +935,17 @@ func validateProductionSecrets(cfg Config) error {
 	if weakProductionSecrets[strings.ToLower(cfg.JWTSecret)] {
 		return errors.New("config: JWT_SECRET is a known placeholder value and must not be used in production")
 	}
-	if len(cfg.KYCWebhookHMACSecret) < MinProductionSecretBytes {
-		return fmt.Errorf("config: KYC_WEBHOOK_HMAC_SECRET must be at least %d bytes in production, got %d", MinProductionSecretBytes, len(cfg.KYCWebhookHMACSecret))
-	}
-	if weakProductionSecrets[strings.ToLower(cfg.KYCWebhookHMACSecret)] {
-		return errors.New("config: KYC_WEBHOOK_HMAC_SECRET is a known placeholder value and must not be used in production")
+	// The generic KYC webhook secret is only the active authentication path
+	// when KYC_PROVIDER=none; with a real provider configured its own webhook
+	// secret is checked in load's production block instead, and this value is
+	// unused (and typically empty).
+	if cfg.KYCProvider == "none" {
+		if len(cfg.KYCWebhookHMACSecret) < MinProductionSecretBytes {
+			return fmt.Errorf("config: KYC_WEBHOOK_HMAC_SECRET must be at least %d bytes in production, got %d", MinProductionSecretBytes, len(cfg.KYCWebhookHMACSecret))
+		}
+		if weakProductionSecrets[strings.ToLower(cfg.KYCWebhookHMACSecret)] {
+			return errors.New("config: KYC_WEBHOOK_HMAC_SECRET is a known placeholder value and must not be used in production")
+		}
 	}
 	return nil
 }

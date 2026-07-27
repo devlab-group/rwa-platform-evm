@@ -12,6 +12,7 @@ import {
 import { useAsync } from "../../hooks/useAsync";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { useWallet } from "../../hooks/useWallet";
+import { KycVerificationSection } from "./KycVerification";
 import { api, ApiError } from "../../lib/client";
 import type { components } from "../../lib/api-types";
 import { resolveQuoteDecimals, resolveRwaDecimals } from "../../lib/decimals";
@@ -127,6 +128,11 @@ export function Investor() {
       <KycSection
         ownWalletStatus={ownWalletStatus}
         connected={Boolean(wallet.address)}
+      />
+
+      <KycVerificationSection
+        walletAddress={wallet.address}
+        ownWalletStatus={ownWalletStatus}
       />
 
       <BalanceSection
@@ -439,10 +445,6 @@ function KycSection({
           session, not a shared list.
         </p>
       )}
-      <p className="field__hint">
-        KYC provider redirect/link is operator-configured and not exposed by the
-        current API contract — reported as a gap.
-      </p>
     </section>
   );
 }

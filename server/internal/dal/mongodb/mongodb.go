@@ -26,8 +26,9 @@ const (
 	collAttestations         = "attestations"
 	collInvestors            = "investors"
 	collWalletChallenges     = "wallet_challenges"
-	collKYCEvents            = "kyc_events" // append-only webhook decision history
-	collKYCClaims            = "kyc_claims" // one doc per address: current (occurredAt,eventKey) claim winner
+	collKYCEvents            = "kyc_events"        // append-only webhook decision history
+	collKYCClaims            = "kyc_claims"        // one doc per address: current (occurredAt,eventKey) claim winner
+	collKYCVerifications     = "kyc_verifications" // (provider,ref) -> wallet address, written at verification start
 	collComplianceOperations = "compliance_operations"
 	collTransactions         = "transactions"
 	collChainEvents          = "chain_events"
@@ -55,6 +56,7 @@ func New(db *mongo.Database) *repository.Repositories {
 		Investors:            &investorRepo{coll: db.Collection(collInvestors)},
 		WalletChallenges:     &walletChallengeRepo{coll: db.Collection(collWalletChallenges)},
 		KYCEvents:            &kycEventRepo{coll: db.Collection(collKYCEvents), claims: db.Collection(collKYCClaims)},
+		KYCVerifications:     &kycVerificationRepo{coll: db.Collection(collKYCVerifications)},
 		ComplianceOperations: &complianceOperationRepo{coll: db.Collection(collComplianceOperations)},
 		Transactions:         &transactionRepo{coll: db.Collection(collTransactions)},
 		ChainEvents:          &chainEventRepo{coll: db.Collection(collChainEvents)},

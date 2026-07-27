@@ -180,6 +180,20 @@ type ComplianceOperationRepository interface {
 	List(ctx context.Context) ([]*models.ComplianceOperation, error)
 }
 
+// KYCVerificationRepository persists the (provider,ref) -> wallet-address
+// binding a KYC provider verification is started with, so an inbound webhook
+// whose payload carries only a provider-side reference (Onfido) can be resolved
+// back to the subject wallet. See models.KYCVerification.
+type KYCVerificationRepository interface {
+	// Upsert records/overwrites the binding. Idempotent: restarting
+	// verification for the same subject reference simply overwrites, so a
+	// retried start is not an error. Upsert sets v.ID from (Provider,Ref).
+	Upsert(ctx context.Context, v *models.KYCVerification) error
+	// GetByRef resolves a provider webhook's subject reference to the binding
+	// written at start time, or repository.ErrNotFound if none exists.
+	GetByRef(ctx context.Context, provider, ref string) (*models.KYCVerification, error)
+}
+
 // TransactionRepository persists transaction-manager state.
 type TransactionRepository interface {
 	Create(ctx context.Context, tx *models.Transaction) error
@@ -591,6 +605,7 @@ type Repositories struct {
 	Investors            InvestorRepository
 	WalletChallenges     WalletChallengeRepository
 	KYCEvents            KYCEventRepository
+	KYCVerifications     KYCVerificationRepository
 	ComplianceOperations ComplianceOperationRepository
 	Transactions         TransactionRepository
 	ChainEvents          ChainEventRepository

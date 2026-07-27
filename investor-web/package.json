@@ -15,6 +15,9 @@
     "typecheck:e2e": "tsc -p tsconfig.playwright.json --noEmit"
   },
   "dependencies": {
+    "@sumsub/websdk": "^2.6.5",
+    "@sumsub/websdk-react": "^2.6.5",
+    "onfido-sdk-ui": "^14.79.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",

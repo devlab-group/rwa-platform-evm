@@ -105,6 +105,13 @@ func TestLoadInvalid(t *testing.T) {
 		"bad persistence mode": {"PERSISTENCE_MODE": "redis"},
 		"bad tx coordination":  {"TX_COORDINATION_MODE": "raft"},
 		"bad tx lease ttl":     {"TX_LEASE_TTL": "not-a-duration"},
+		"bad kyc provider":     {"KYC_PROVIDER": "jumio"},
+		"sumsub missing app token": {"KYC_PROVIDER": "sumsub",
+			"KYC_SUMSUB_SECRET_KEY": "s", "KYC_SUMSUB_WEBHOOK_SECRET": "w"},
+		"onfido missing workflow": {"KYC_PROVIDER": "onfido",
+			"KYC_ONFIDO_API_TOKEN": "t", "KYC_ONFIDO_WEBHOOK_TOKEN": "w"},
+		"onfido bad region": {"KYC_PROVIDER": "onfido", "KYC_ONFIDO_API_TOKEN": "t",
+			"KYC_ONFIDO_WEBHOOK_TOKEN": "w", "KYC_ONFIDO_WORKFLOW_ID": "wf", "KYC_ONFIDO_REGION": "antarctica"},
 	}
 	for name, env := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -214,6 +221,32 @@ func prodEnv() map[string]string {
 func TestLoadProductionAcceptsStrongWebhookSecret(t *testing.T) {
 	if _, err := LoadFromMap(prodEnv()); err != nil {
 		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+// TestLoadProductionSumsubDoesNotRequireGenericSecret: with a real provider
+// active, the generic KYC_WEBHOOK_HMAC_SECRET is unused, so production must NOT
+// require it — but it MUST require that provider's own webhook secret to meet
+// the strength floor.
+func TestLoadProductionSumsubProvider(t *testing.T) {
+	env := prodEnv()
+	delete(env, "KYC_WEBHOOK_HMAC_SECRET") // not needed when a provider is configured
+	env["KYC_PROVIDER"] = "sumsub"
+	env["KYC_SUMSUB_APP_TOKEN"] = "app-token"
+	env["KYC_SUMSUB_SECRET_KEY"] = "secret-key"
+	// too-short webhook secret must fail
+	env["KYC_SUMSUB_WEBHOOK_SECRET"] = "short"
+	if _, err := LoadFromMap(env); err == nil {
+		t.Fatal("expected failure for a weak Sumsub webhook secret in production")
+	}
+	// a strong one passes with no generic secret present
+	env["KYC_SUMSUB_WEBHOOK_SECRET"] = "01234567890123456789012345678901234"
+	cfg, err := LoadFromMap(env)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.KYCProvider != "sumsub" {
+		t.Fatalf("KYCProvider = %q, want sumsub", cfg.KYCProvider)
 	}
 }
 

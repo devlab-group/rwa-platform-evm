@@ -233,7 +233,12 @@ paths:
       description: >
         HMAC-signed KYC provider webhook. Signature header `X-Webhook-Signature` =
         lowercase hex of HMAC-SHA256(rawBody, sharedSecret), constant-time compared.
-        Replay/freshness-protected: the server requires provider + eventId
+        When a specific provider is configured this endpoint ALSO accepts
+        that provider's own signed webhook shape instead — Sumsub's `X-Payload-Digest`
+        or Onfido's `X-SHA2-Signature`, each verified against that provider's webhook
+        secret and mapped server-side to the same provider-agnostic decision. The
+        generic shape documented here remains the default (`KYC_PROVIDER=none`) and is
+        unchanged. Replay/freshness-protected: the server requires provider + eventId
         + occurredAt, enforces uniqueness on (provider, eventId) in addition to raw-body-hash
         dedup, rejects occurredAt outside a 24h-past / 5min-future window, rejects a
         strictly-older decision for an address than the latest already-applied one, normalizes
@@ -242,7 +247,7 @@ paths:
         existing HMAC-over-raw-body signature (no separate header). Not protected by ApiKeyAuth.
       security: []
       parameters:
-        - { name: X-Webhook-Signature, in: header, required: true, schema: { type: string } }
+        - { name: X-Webhook-Signature, in: header, required: false, description: "Required for the generic shape; a configured provider sends its own header instead (X-Payload-Digest / X-SHA2-Signature). Exactly one signature header must verify.", schema: { type: string } }
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/WebhookPayload" } } }
@@ -251,6 +256,26 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "409": { description: "Replay/stale/out-of-order decision (same code family as replay).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/compliance/kyc/start:
+    post:
+      tags: [compliance]
+      operationId: startKYC
+      summary: Begin a KYC verification for this session's own wallet.
+      description: >
+        Begin a KYC verification with the server's configured provider for the wallet
+        bound to the presented session. Returns the provider SDK token / hosted URL the
+        investor SPA launches. The subject wallet is taken from the session, never a
+        request parameter. Approval is applied on-chain asynchronously by the server when
+        the provider's signed webhook arrives (see POST /api/v1/compliance/webhook) —
+        this endpoint does not itself change on-chain state. 501 means no KYC provider is
+        configured, or the configured one has no server-initiated flow (the default
+        `none` provider).
+      security:
+        - WalletSession: []
+      responses:
+        "200": { description: Provider verification session, content: { application/json: { schema: { $ref: "#/components/schemas/KYCSession" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
 
   /api/v1/assets/records:
     get:
@@ -310,14 +335,6 @@ paths:
       operationId: getInventory
       responses:
         "200": { description: Inventory, content: { application/json: { schema: { $ref: "#/components/schemas/Inventory" } } } }
-  # No server-built buy quote: the SPA reads Vault.previewBuy(tokenAmount) — an on-chain
-  # view — directly from the connected wallet, the same authoritative quote the on-chain
-  # buy uses, so the server is out of the pricing path too.
-  # No server-built calldata for on-chain actions. Treasury withdrawal
-  # (TREASURER_ROLE) and the investor buy are both encoded client-side by the
-  # SPA from pinned ABIs and broadcast from the connected wallet (the contract's
-  # own checks are the authorization), consistent with redemption fund/reject and
-  # the Security wallet actions. So a compromised server cannot redirect a call.
   /api/v1/sales/purchases:
     get:
       tags: [sales]
@@ -358,8 +375,6 @@ paths:
             X-Page-Size: { $ref: "#/components/headers/XPageSize" }
             X-Next-Cursor: { $ref: "#/components/headers/XNextCursor" }
           content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Redemption" } } } }
-  # No server-built redemption quote: the SPA reads RedemptionEscrow.previewRedeem(rwaAmount)
-  # — an on-chain view — directly from the connected wallet.
   /api/v1/redemptions/{id}:
     get:
       tags: [redemptions]
@@ -367,12 +382,6 @@ paths:
       parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
       responses:
         "200": { description: Redemption, content: { application/json: { schema: { $ref: "#/components/schemas/Redemption" } } } }
-  # No server-built calldata for redemption actions. Funding (TREASURER_ROLE),
-  # rejection (REDEMPTION_MANAGER_ROLE), and the investor request/claim/cancel are
-  # all encoded client-side by the SPA from pinned ABIs and broadcast from the
-  # connected wallet (the contract's own checks are the authorization), consistent
-  # with the other wallet actions (pause/price/roles). So a compromised server
-  # cannot redirect a call.
 
   /api/v1/transactions:
     get:
@@ -776,6 +785,19 @@ components:
         address: { type: string, description: "Subject wallet; normalized to EIP-55 checksum server-side." }
         status: { type: string, enum: [Allowed, Blocked, Pending], description: "Compliance decision." }
         validUntil: { type: integer, format: int64, description: "Expiry (unix seconds) for an Allowed decision; 0 = no expiry. Negative or >100y-future is rejected before the int64→uint64 cast." }
+    KYCSession:
+      type: object
+      description: >
+        A verification session issued by the configured KYC provider for the session's own
+        wallet. Exactly one of `token` (consumed by the provider's embedded web SDK) or
+        `url` (hosted redirect flow) is set, depending on the provider.
+      required: [provider]
+      properties:
+        provider: { type: string, enum: [sumsub, onfido, generic], description: "Which provider issued this session; tells the SPA which SDK to launch." }
+        token: { type: string, description: "Provider SDK/init token." }
+        url: { type: string, description: "Hosted-flow URL to redirect the investor to." }
+        ref: { type: string, description: "Provider-side reference for this verification (Onfido: workflowRunId). Bound server-side to the subject wallet so the provider's webhook can be resolved back to it." }
+        expiresAt: { type: string, format: date-time, description: "When the token/URL stops being usable." }
     WebhookEvent:
       type: object
       properties:

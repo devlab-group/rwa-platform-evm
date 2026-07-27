@@ -18,6 +18,23 @@ func writeConfig(t *testing.T, contents string) string {
 	return path
 }
 
+// TestLoadExampleConfig: the committed server/config.example.yaml must load
+// cleanly. Because LoadFile uses KnownFields(true), this fails if the example
+// documents a key the fileSchema doesn't declare (or vice versa) — a cheap
+// guard against the example and the schema drifting apart.
+func TestLoadExampleConfig(t *testing.T) {
+	cfg, err := LoadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatalf("LoadFile(config.example.yaml) error = %v", err)
+	}
+	if cfg.KYCProvider != "none" {
+		t.Errorf("KYCProvider = %q, want none (example default)", cfg.KYCProvider)
+	}
+	if cfg.KYCOnfidoRegion != "eu" {
+		t.Errorf("KYCOnfidoRegion = %q, want eu (example default)", cfg.KYCOnfidoRegion)
+	}
+}
+
 // TestLoadFileMissing: a nonexistent path is a startup error, not a silent
 // fall-through to defaults.
 func TestLoadFileMissing(t *testing.T) {

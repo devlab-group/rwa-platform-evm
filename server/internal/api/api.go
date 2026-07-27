@@ -18,6 +18,7 @@ import (
 	"github.com/rwa-platform/server/internal/auth"
 	"github.com/rwa-platform/server/internal/compliance"
 	"github.com/rwa-platform/server/internal/dal/repository"
+	"github.com/rwa-platform/server/internal/kyc"
 	"github.com/rwa-platform/server/internal/metrics"
 	"github.com/rwa-platform/server/internal/project"
 	"github.com/rwa-platform/server/internal/redemption"
@@ -71,11 +72,15 @@ type App struct {
 	LastIndexedBlock func() uint64 // nil-safe accessor; defaults to 0 if nil
 	ReadyCheck       func() error  // nil means always ready
 
-	Project     *project.Service
-	Records     *assets.RecordService
-	Challenges  *compliance.ChallengeService
-	Webhooks    *compliance.WebhookService
-	Status      *compliance.StatusService
+	Project    *project.Service
+	Records    *assets.RecordService
+	Challenges *compliance.ChallengeService
+	Webhooks   *compliance.WebhookService
+	Status     *compliance.StatusService
+	// KYC is the configured KYC provider (none/sumsub/onfido). nil disables the
+	// KYC endpoints (startKYC / kycWebhook return 501 not_configured). Provider
+	// selection is config-driven — see internal/kyc.New and cmd/platform.
+	KYC         kyc.Provider
 	Sales       *sales.Service
 	Redemptions *redemption.Service
 	Audit       *auditlog.Logger
@@ -244,6 +249,10 @@ func NewRouter(app *App) *gin.Engine {
 		// role), so it is deliberately outside the adminOnly/RequireRole
 		// vocabulary entirely, not merely "public" like the routes below.
 		v1.GET("/me/wallet-status", auth.RequireWalletSession(app.Sessions), app.getMyWalletStatus)
+		// startKYC begins a provider verification for the session's OWN
+		// wallet (subject-scoped by RequireWalletSession, same as
+		// /me/wallet-status — the address is never a request parameter).
+		v1.POST("/compliance/kyc/start", auth.RequireWalletSession(app.Sessions), app.startKYC)
 		// isAddressAllowed is genuinely public (api/openapi.yaml:
 		// security: []) — an anonymous transfer-preflight lookup that
 		// discloses only {allowed}, never the full WalletStatus of a third

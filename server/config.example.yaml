@@ -124,6 +124,29 @@ keys:
   vault_key_prefix: "rwa-"
   kms_mock_seed: ""             # test-only
 
+# KYC provider. Selects which identity-verification backend the platform loads
+# (internal/kyc). An approved verification result flips the wallet to Allowed
+# on-chain automatically via the compliance hot key — the same webhook →
+# reconciler path the generic webhook already uses.
+kyc:
+  # "none" (default): no server-initiated verification; the KYC webhook accepts
+  #   the generic HMAC shape signed with security.kyc_webhook_hmac_secret.
+  # "sumsub": Sum&Substance.  "onfido": Onfido (Entrust).
+  # Selecting a provider requires that provider's fields below.
+  provider: "none"
+  sumsub:
+    app_token: ""              # SECRET — Sumsub app token
+    secret_key: ""             # SECRET — signs outbound Sumsub API calls
+    webhook_secret: ""         # SECRET — verifies inbound webhooks (dashboard "Webhook secret key"); >=32 bytes in production
+    base_url: ""               # default https://api.sumsub.com
+    level_name: ""             # verification level; default "basic-kyc-level"
+  onfido:
+    api_token: ""              # SECRET — Onfido API token
+    webhook_token: ""          # SECRET — verifies inbound webhooks (X-SHA2-Signature)
+    region: "eu"               # eu | us | ca (data residency / API host)
+    workflow_id: ""            # Onfido Studio workflow to run
+    referrer: ""               # SDK token referrer pattern; default "*://*/*"
+
 tx:
   # "in-process" (default, single process per hot key) or "mongo-lease"
   # (multi-replica safe; requires persistence_mode: mongo).

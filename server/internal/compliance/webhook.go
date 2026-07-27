@@ -117,8 +117,26 @@ func (s *WebhookService) Process(ctx context.Context, payload []byte, signatureH
 	if !VerifyHMAC(payload, signatureHex, s.secret) {
 		return WebhookPayload{}, ErrInvalidSignature
 	}
+	var wp WebhookPayload
+	if err := json.Unmarshal(payload, &wp); err != nil {
+		return WebhookPayload{}, fmt.Errorf("compliance: invalid webhook payload: %w", err)
+	}
+	return s.ProcessDecision(ctx, payload, wp, allowManualOverride)
+}
 
-	sum := sha256.Sum256(payload)
+// ProcessDecision runs the provider-INDEPENDENT half of webhook handling on an
+// already-authenticated, already-parsed decision: byte-for-byte replay dedup,
+// field validation/normalization, the wallet-ownership requirement, and the
+// durable inbox/outbox write. It is what a provider adapter (internal/kyc)
+// calls after it has verified a provider-native signature (Sumsub
+// X-Payload-Digest, Onfido X-SHA2-Signature) and mapped the provider payload to
+// this generic WebhookPayload — the signature/parse step Process does for the
+// generic HMAC shape is exactly what those adapters replace, so it must not run
+// twice. rawForHash is the exact raw delivery bytes, hashed for replay dedup
+// (pass the raw request body). wp's fields are validated and normalized here,
+// so a caller need not pre-validate them.
+func (s *WebhookService) ProcessDecision(ctx context.Context, rawForHash []byte, wp WebhookPayload, allowManualOverride bool) (WebhookPayload, error) {
+	sum := sha256.Sum256(rawForHash)
 	payloadHash := hex.EncodeToString(sum[:])
 	// Fast-path only: under a genuine race between two concurrent
 	// deliveries of the same payload, both can pass this check before
@@ -132,10 +150,6 @@ func (s *WebhookService) Process(ctx context.Context, payload []byte, signatureH
 		return WebhookPayload{}, ErrReplayed
 	}
 
-	var wp WebhookPayload
-	if err := json.Unmarshal(payload, &wp); err != nil {
-		return WebhookPayload{}, fmt.Errorf("compliance: invalid webhook payload: %w", err)
-	}
 	if wp.Status != "Allowed" && wp.Status != "Blocked" && wp.Status != "Pending" {
 		return WebhookPayload{}, fmt.Errorf("compliance: unsupported status %q", wp.Status)
 	}

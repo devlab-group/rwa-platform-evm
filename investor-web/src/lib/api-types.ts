@@ -271,6 +271,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/compliance/kyc/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin a KYC verification for this session's own wallet.
+         * @description Begin a KYC verification with the server's configured provider for the wallet bound to the presented session. Returns the provider SDK token / hosted URL the investor SPA launches. The subject wallet is taken from the session, never a request parameter. Approval is applied on-chain asynchronously by the server when the provider's signed webhook arrives (see POST /api/v1/compliance/webhook) — this endpoint does not itself change on-chain state. 501 means no KYC provider is configured, or the configured one has no server-initiated flow (the default `none` provider).
+         */
+        post: operations["startKYC"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/assets/records": {
         parameters: {
             query?: never;
@@ -650,6 +670,25 @@ export interface components {
              * @description Expiry (unix seconds) for an Allowed decision; 0 = no expiry. Negative or >100y-future is rejected before the int64→uint64 cast.
              */
             validUntil?: number;
+        };
+        /** @description A verification session issued by the configured KYC provider for the session's own wallet. Exactly one of `token` (consumed by the provider's embedded web SDK) or `url` (hosted redirect flow) is set, depending on the provider. */
+        KYCSession: {
+            /**
+             * @description Which provider issued this session; tells the SPA which SDK to launch.
+             * @enum {string}
+             */
+            provider: "sumsub" | "onfido" | "generic";
+            /** @description Provider SDK/init token. */
+            token?: string;
+            /** @description Hosted-flow URL to redirect the investor to. */
+            url?: string;
+            /** @description Provider-side reference for this verification (Onfido: workflowRunId). Bound server-side to the subject wallet so the provider's webhook can be resolved back to it. */
+            ref?: string;
+            /**
+             * Format: date-time
+             * @description When the token/URL stops being usable.
+             */
+            expiresAt?: string;
         };
         WebhookEvent: {
             id?: string;
@@ -1171,6 +1210,28 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    startKYC: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Provider verification session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KYCSession"];
+                };
+            };
+            401: components["responses"]["Error"];
+            501: components["responses"]["Error"];
         };
     };
     listRecords: {

@@ -14,6 +14,8 @@ import (
 	"github.com/rwa-platform/server/internal/auth"
 	"github.com/rwa-platform/server/internal/compliance"
 	"github.com/rwa-platform/server/internal/dal/models"
+	"github.com/rwa-platform/server/internal/dal/repository"
+	"github.com/rwa-platform/server/internal/kyc"
 )
 
 // listWallets implements GET /api/v1/compliance/wallets (operationId
@@ -256,14 +258,72 @@ func (app *App) setComplianceStatus(c *gin.Context) {
 	c.JSON(http.StatusAccepted, dto.ToTxRef(tx))
 }
 
+// startKYC implements POST /api/v1/compliance/kyc/start (operationId startKYC).
+// Wallet-session-gated: begins a KYC verification with the configured provider
+// for the session's OWN wallet and returns the provider session (SDK token /
+// hosted URL) the investor SPA launches. The subject wallet comes from the
+// session (auth.WalletSessionAddress), never a request parameter. Approval is
+// applied on-chain asynchronously when the provider's signed webhook arrives —
+// this endpoint changes no on-chain state.
+func (app *App) startKYC(c *gin.Context) {
+	if app.KYC == nil {
+		fail(c, http.StatusNotImplemented, CodeNotImplemented, "KYC provider is not configured on this server")
+		return
+	}
+	address, ok := auth.WalletSessionAddress(c)
+	if !ok {
+		// Unreachable behind RequireWalletSession (wired in api.go); fail closed.
+		fail(c, http.StatusUnauthorized, CodeUnauthorized, "no wallet session")
+		return
+	}
+	sess, err := app.KYC.StartVerification(c.Request.Context(), address)
+	if err != nil {
+		if errors.Is(err, kyc.ErrStartNotSupported) {
+			fail(c, http.StatusNotImplemented, CodeNotImplemented, "the configured KYC provider does not support server-initiated verification")
+			return
+		}
+		// An upstream provider API failure is a bad-gateway condition, not a
+		// fault in this server's own logic.
+		failErr(c, http.StatusBadGateway, CodeInternal, err)
+		return
+	}
+	// Persist the provider reference -> wallet binding so a later webhook whose
+	// payload carries only that reference (Onfido's workflow-run id) resolves
+	// back to this subject. Sumsub embeds the address in its webhook and needs
+	// no lookup, but recording the binding uniformly is a useful audit trail.
+	if sess.Ref != "" {
+		if err := app.Repos.KYCVerifications.Upsert(c.Request.Context(), &models.KYCVerification{
+			Provider: app.KYC.Name(), Ref: sess.Ref, Address: address, CreatedAt: time.Now().UTC(),
+		}); err != nil {
+			failErr(c, http.StatusInternalServerError, CodeInternal, err)
+			return
+		}
+	}
+	app.recordAudit(c.Request.Context(), "compliance", address, "compliance.kycStart", address, map[string]any{"provider": sess.Provider})
+	c.JSON(http.StatusOK, dto.KYCSession{
+		Provider: sess.Provider, Token: sess.Token, URL: sess.URL, Ref: sess.Ref,
+		ExpiresAt: kycExpiresAt(sess.ExpiresAt),
+	})
+}
+
+func kycExpiresAt(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
+}
+
 // kycWebhook implements POST /api/v1/compliance/webhook (operationId
 // kycWebhook).
-// Authenticated by its own HMAC-SHA256 signature (hex, optionally
-// "0x"-prefixed) over the raw body in X-Webhook-Signature, not by a role;
-// durably records the decision and returns 202. The header name is a project
-// convention; api/openapi.yaml only specifies "HMAC-signed ... webhook".
+// Authenticated NOT by a role but by the configured provider's own webhook
+// signature scheme over the raw body — the generic X-Webhook-Signature
+// HMAC-SHA256 for provider "none", or a provider-native scheme (Sumsub
+// X-Payload-Digest, Onfido X-SHA2-Signature) when a provider is configured. The
+// provider adapter verifies the signature and maps the delivery to a
+// provider-agnostic decision; the shared replay/freshness/ownership/outbox
+// logic and the async on-chain relay (WebhookReconciler) are unchanged.
 func (app *App) kycWebhook(c *gin.Context) {
-	if app.Webhooks == nil {
+	if app.KYC == nil || app.Webhooks == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "KYC webhook is not configured on this server")
 		return
 	}
@@ -272,38 +332,66 @@ func (app *App) kycWebhook(c *gin.Context) {
 		failErr(c, http.StatusBadRequest, CodeBadRequest, err)
 		return
 	}
-	sig := c.GetHeader("X-Webhook-Signature")
 
-	wp, err := app.Webhooks.Process(c.Request.Context(), body, sig, false)
+	dec, err := app.KYC.VerifyWebhook(body, c.Request.Header)
 	if err != nil {
 		switch {
-		case errors.Is(err, compliance.ErrInvalidSignature):
+		case errors.Is(err, kyc.ErrInvalidSignature):
 			fail(c, http.StatusUnauthorized, CodeUnauthorized, err.Error())
-		case errors.Is(err, compliance.ErrReplayed):
-			fail(c, http.StatusConflict, CodeConflict, err.Error())
-		case errors.Is(err, compliance.ErrStale):
-			// 409 (not 400): the payload/signature are valid, this specific
-			// delivery is just too old or superseded — same conflict family
-			// as ErrReplayed.
-			fail(c, http.StatusConflict, CodeConflict, err.Error())
-		case errors.Is(err, compliance.ErrOwnershipNotVerified):
-			fail(c, http.StatusUnprocessableEntity, CodeBadRequest, err.Error())
+		case errors.Is(err, kyc.ErrUnhandledEvent):
+			// Correctly signed but not a decision we act on (a non-terminal
+			// status, an event type we ignore). Acknowledge so the provider
+			// stops retrying; record nothing.
+			c.Status(http.StatusAccepted)
 		default:
 			failErr(c, http.StatusBadRequest, CodeBadRequest, err)
 		}
 		return
 	}
 
-	// Process already durably stored this decision as Accepted (or Recorded,
-	// for "Pending") — the on-chain compliance transaction is submitted
-	// asynchronously by the WebhookReconciler, never synchronously here.
-	// Submitting it here would set the OLD Applied flag true (or, on a
-	// wired-Status-but-failed-relay deployment, leave the caller with a 500
-	// for a delivery that was already durably accepted and will still be
-	// retried) before the transaction was even durable, and would silently
-	// no-op with a misleading 204 when app.Status is nil. 202 Accepted
+	// Resolve the subject wallet. Providers that embed it (Sumsub's
+	// externalUserId) set dec.Address; otherwise resolve the provider reference
+	// to the address bound when verification was started.
+	address := dec.Address
+	if address == "" {
+		v, gerr := app.Repos.KYCVerifications.GetByRef(c.Request.Context(), dec.Provider, dec.Ref)
+		if gerr != nil {
+			if errors.Is(gerr, repository.ErrNotFound) {
+				// A signed decision for a verification this server never started
+				// (or whose binding is gone): acknowledge but apply nothing.
+				fail(c, http.StatusUnprocessableEntity, CodeBadRequest, "kyc webhook references an unknown verification")
+				return
+			}
+			failErr(c, http.StatusInternalServerError, CodeInternal, gerr)
+			return
+		}
+		address = v.Address
+	}
+
+	wp := compliance.WebhookPayload{
+		EventID: dec.EventID, Address: address, Provider: dec.Provider,
+		Status: dec.Status, OccurredAt: dec.OccurredAt, ValidUntil: dec.ValidUntil,
+	}
+	// ProcessDecision durably records the decision (Accepted, or Recorded for a
+	// "Pending" outcome); the on-chain compliance transaction is submitted
+	// asynchronously by the WebhookReconciler, never synchronously here. 202
 	// reflects the true state: durably queued, not yet applied.
-	app.recordAudit(c.Request.Context(), "compliance", "kyc-webhook", "compliance.webhookAccepted", wp.Address, map[string]any{"status": wp.Status})
+	if _, perr := app.Webhooks.ProcessDecision(c.Request.Context(), body, wp, false); perr != nil {
+		switch {
+		case errors.Is(perr, compliance.ErrReplayed):
+			fail(c, http.StatusConflict, CodeConflict, perr.Error())
+		case errors.Is(perr, compliance.ErrStale):
+			// 409 (not 400): the delivery is valid, just too old or superseded.
+			fail(c, http.StatusConflict, CodeConflict, perr.Error())
+		case errors.Is(perr, compliance.ErrOwnershipNotVerified):
+			fail(c, http.StatusUnprocessableEntity, CodeBadRequest, perr.Error())
+		default:
+			failErr(c, http.StatusBadRequest, CodeBadRequest, perr)
+		}
+		return
+	}
+
+	app.recordAudit(c.Request.Context(), "compliance", "kyc-webhook", "compliance.webhookAccepted", wp.Address, map[string]any{"status": wp.Status, "provider": wp.Provider})
 	c.Status(http.StatusAccepted)
 }
 

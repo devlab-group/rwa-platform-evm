@@ -54,6 +54,19 @@ func ToTxRef(tx *models.Transaction) TxRef {
 	return TxRef{TxHash: tx.TxHash, Status: string(tx.Status), IdempotencyKey: tx.IdempotencyKey}
 }
 
+// KYCSession mirrors components.schemas.KYCSession — what POST
+// /compliance/kyc/start returns for the investor SPA to launch the provider's
+// verification flow. Exactly one of Token (an SDK/init token) or URL (a hosted
+// redirect) is populated depending on the provider; Ref is the provider-side
+// reference (Onfido: workflowRunId) the SPA may need to init the SDK.
+type KYCSession struct {
+	Provider  string `json:"provider"`
+	Token     string `json:"token,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Ref       string `json:"ref,omitempty"`
+	ExpiresAt string `json:"expiresAt,omitempty"`
+}
+
 // ChallengeResponse mirrors components.schemas.Challenge.
 type ChallengeResponse struct {
 	Address   string `json:"address"`

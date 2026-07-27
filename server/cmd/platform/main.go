@@ -40,6 +40,7 @@ import (
 	"github.com/rwa-platform/server/internal/indexer"
 	"github.com/rwa-platform/server/internal/ipfs"
 	"github.com/rwa-platform/server/internal/keys"
+	"github.com/rwa-platform/server/internal/kyc"
 	"github.com/rwa-platform/server/internal/metrics"
 	"github.com/rwa-platform/server/internal/project"
 	"github.com/rwa-platform/server/internal/redemption"
@@ -549,7 +550,31 @@ func buildApp(cfg config.Config, addrs models.Addresses, auditor string, repos *
 	// config.Load already refuses to start in production without one; this
 	// keeps development/test the same "feature is off" outcome without a
 	// live, always-rejecting endpoint sitting on the router.
-	if cfg.KYCWebhookHMACSecret != "" {
+	// Select the KYC provider (none/sumsub/onfido) from config and wire it plus
+	// its webhook processor. app.Webhooks — the provider-INDEPENDENT
+	// replay/freshness/ownership/outbox half — is wired whenever ANY provider is
+	// active, including the generic "none" provider, which kyc.New returns as
+	// non-nil only when KYCWebhookHMACSecret is set (so the prior "webhook off
+	// unless a secret is configured" behavior is preserved exactly).
+	kycProvider, kerr := kyc.New(kyc.Config{
+		Mode:              kyc.Mode(cfg.KYCProvider),
+		GenericHMACSecret: cfg.KYCWebhookHMACSecret,
+		Sumsub: kyc.SumsubConfig{
+			AppToken: cfg.KYCSumsubAppToken, SecretKey: cfg.KYCSumsubSecretKey,
+			WebhookSecret: cfg.KYCSumsubWebhookSecret, BaseURL: cfg.KYCSumsubBaseURL, LevelName: cfg.KYCSumsubLevelName,
+		},
+		Onfido: kyc.OnfidoConfig{
+			APIToken: cfg.KYCOnfidoAPIToken, WebhookToken: cfg.KYCOnfidoWebhookToken,
+			Region: cfg.KYCOnfidoRegion, WorkflowID: cfg.KYCOnfidoWorkflowID, Referrer: cfg.KYCOnfidoReferrer,
+		},
+	})
+	if kerr != nil {
+		// config.Load already validates the selected provider's required fields,
+		// so this only fires on a genuine mismatch — degrade to "KYC disabled"
+		// (endpoints report 501) rather than aborting the whole server.
+		log.Printf("platform: KYC provider not configured (%v); KYC endpoints disabled", kerr)
+	} else if kycProvider != nil {
+		app.KYC = kycProvider
 		app.Webhooks = compliance.NewWebhookService(repos.KYCEvents, repos.Investors, cfg.KYCWebhookHMACSecret)
 	}
 	if addrs.Compliance != "" {

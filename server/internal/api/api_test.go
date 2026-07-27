@@ -27,6 +27,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/memory"
 	"github.com/rwa-platform/server/internal/dal/models"
 	"github.com/rwa-platform/server/internal/eip712"
+	"github.com/rwa-platform/server/internal/kyc"
 	"github.com/rwa-platform/server/internal/redemption"
 	"github.com/rwa-platform/server/internal/sales"
 )
@@ -114,6 +115,10 @@ func setupTestApp(t *testing.T) *testEnv {
 	records := assets.NewRecordService(repos.AssetRecords, repos.AuditPackages, repos.Attestations, nil, controllerAddr, vaultAddr, domainCfg, auditor)
 	challenges := compliance.NewChallengeService(repos.WalletChallenges, repos.Investors, time.Hour, "RWA Test Platform")
 	webhooks := compliance.NewWebhookService(repos.KYCEvents, repos.Investors, "webhook-secret")
+	// The generic ("none") KYC provider verifies the same X-Webhook-Signature
+	// HMAC shape these tests exercise; buildApp wires KYC + Webhooks together, so
+	// the test App does too.
+	kycProvider, _ := kyc.New(kyc.Config{Mode: kyc.ModeNone, GenericHMACSecret: "webhook-secret"})
 	status := compliance.NewStatusService(txs, common.HexToAddress("0x0000000000000000000000000000000000C0A1"), blockchain.NewStaticKeySigner(complianceKey))
 	salesSvc := sales.New(client, vaultAddr, common.HexToAddress("0xA001"), common.HexToAddress("0x57A7A"), repos.Purchases)
 	complianceRegistryAddr := common.HexToAddress("0x0000000000000000000000000000000000C0A1")
@@ -125,7 +130,7 @@ func setupTestApp(t *testing.T) *testEnv {
 
 	app := &App{
 		Repos: repos, ChainID: 31337,
-		Project: nil, Records: records, Challenges: challenges, Webhooks: webhooks, Status: status,
+		Project: nil, Records: records, Challenges: challenges, Webhooks: webhooks, KYC: kycProvider, Status: status,
 		Sales: salesSvc, Redemptions: redemptionSvc, Audit: auditlog.New(repos.AuditLogs),
 		Sessions:              auth.NewSessionManager(repos.WalletSessions, 15*time.Minute),
 		AdminChallenges:       auth.NewAdminChallengeService(repos.AdminChallenges, time.Hour, "RWA Test Platform"),

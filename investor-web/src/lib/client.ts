@@ -254,6 +254,22 @@ export const api = {
       { ...opts, walletSessionToken },
     ),
 
+  /**
+   * Opens a verification with the operator-configured KYC provider for this
+   * session's own wallet and returns the token its official web SDK is
+   * initialised with. The subject address comes from the session server-side,
+   * so there is deliberately nothing to send. Throws ApiError 501 when the
+   * deployment has no server-initiated provider flow.
+   */
+  startKYC: (
+    walletSessionToken: string,
+    opts: Pick<RequestOptions<operations["startKYC"]>, "signal"> = {},
+  ) =>
+    request<operations["startKYC"]>("POST", "/api/v1/compliance/kyc/start", {
+      ...opts,
+      walletSessionToken,
+    }),
+
   /** Public, unauthenticated transfer-recipient eligibility preflight. */
   isAddressAllowed: (
     address: string,

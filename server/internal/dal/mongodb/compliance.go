@@ -174,6 +174,17 @@ func (r *kycEventRepo) CurrentClaimEventKey(ctx context.Context, address string)
 	return claim.EventKey, nil
 }
 
+type kycVerificationRepo struct{ coll *mongo.Collection }
+
+func (r *kycVerificationRepo) Upsert(ctx context.Context, v *models.KYCVerification) error {
+	v.ID = models.KYCVerificationID(v.Provider, v.Ref)
+	return upsertByID(ctx, r.coll, v.ID, v)
+}
+
+func (r *kycVerificationRepo) GetByRef(ctx context.Context, provider, ref string) (*models.KYCVerification, error) {
+	return getByID[models.KYCVerification](ctx, r.coll, models.KYCVerificationID(provider, ref))
+}
+
 type complianceOperationRepo struct{ coll *mongo.Collection }
 
 func (r *complianceOperationRepo) Create(ctx context.Context, op *models.ComplianceOperation) error {
