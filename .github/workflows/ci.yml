@@ -172,7 +172,9 @@ jobs:
       - uses: ./.github/actions/forge-deps
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install mythril
+      # setuptools 81 dropped the bundled pkg_resources, which Mythril (via its deps)
+      # still imports at runtime — pin below 81 so `myth analyze` doesn't ModuleNotFoundError.
+      - run: pip install "setuptools<81" mythril
       - name: build contracts
         run: cd contracts && forge build
       # Flatten each deployed contract into a self-contained source file (resolves
