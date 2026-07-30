@@ -28,6 +28,7 @@ import (
 	"github.com/rwa-platform/server/internal/blockchain"
 	"github.com/rwa-platform/server/internal/compliance"
 	"github.com/rwa-platform/server/internal/dal/models"
+	"github.com/rwa-platform/server/internal/kyc"
 	"github.com/rwa-platform/server/internal/txindex"
 )
 
@@ -162,6 +163,94 @@ func TestCreateChallengeEnforcesActiveCapWith429(t *testing.T) {
 	}
 	if body["code"] != CodeTooManyActiveChallenges {
 		t.Errorf("code = %v, want %s", body["code"], CodeTooManyActiveChallenges)
+	}
+}
+
+// A provider delivery that is correctly signed and carries a real decision, but
+// no provider timestamp, must be DROPPED rather than applied with a fabricated
+// one (internal/compliance derives both the freshness window and the
+// newest-decision-wins ordering from it — see kyc.ErrMissingTimestamp).
+//
+// The HTTP answer is 202, not a 4xx: the condition is permanent, and both
+// providers retry non-2xx — Sumsub auto-disabling the webhook after continuous
+// failures — so a refusal here would risk blocking every later, well-formed
+// delivery. The drop is made visible through the audit log instead, which is
+// what this test pins: acknowledged, nothing applied, and an operator-visible
+// record that it happened.
+func TestKYCWebhookDropsDecisionWithNoProviderTimestamp(t *testing.T) {
+	env := setupTestApp(t)
+	walletAddr := addr("0xB0B0")
+	_ = env.app.Repos.Investors.Upsert(context.Background(), &models.Investor{Address: walletAddr, OwnershipVerified: true})
+
+	// Swap the generic provider for Onfido, whose webhook shape carries the
+	// decision timestamp in the payload rather than taking it on trust.
+	onfido, err := kyc.New(kyc.Config{
+		Mode:   kyc.ModeOnfido,
+		Onfido: kyc.OnfidoConfig{APIToken: "tok", WebhookToken: "whtok", WorkflowID: "wf1", Region: "eu"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.app.KYC = onfido
+
+	// Bind the workflow run to the wallet FIRST. Without this the handler
+	// returns its own 422 for an unresolvable subject reference, and this test
+	// would pass whether or not the timestamp is checked at all.
+	if err := env.app.Repos.KYCVerifications.Upsert(context.Background(), &models.KYCVerification{
+		Provider: "onfido", Ref: "run-123", Address: walletAddr,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// An approved workflow run with no completed_at_iso8601.
+	payload := []byte(`{"payload":{"resource_type":"workflow_run","action":"workflow_run.completed","object":{"id":"run-123","status":"approved"}}}`)
+	w := doJSONRaw(t, env.router, http.MethodPost, "/api/v1/compliance/webhook", payload,
+		map[string]string{"X-SHA2-Signature": sign(payload, "whtok")})
+	// Acknowledged so the provider does not retry a permanently-unprocessable
+	// delivery (and, for Sumsub, does not count it toward auto-disablement).
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202, body=%s", w.Code, w.Body.String())
+	}
+
+	// ...but NOTHING may have been applied: no decision recorded, so the
+	// fabricated-timestamp path is genuinely gone rather than merely renamed.
+	events, err := env.app.Repos.KYCEvents.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected no recorded kyc events, got %d: %+v", len(events), events)
+	}
+
+	// The 202 must not make the drop invisible — that is the whole reason this
+	// is not simply folded into the ErrUnhandledEvent branch. An operator has
+	// to be able to find it (GET /audit-logs) and apply the decision by hand.
+	logs, err := env.app.Repos.AuditLogs.List(context.Background(), "compliance", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dropped bool
+	for _, e := range logs {
+		if e.Action == "compliance.webhookDroppedNoTimestamp" {
+			dropped = true
+		}
+		if e.Action == "compliance.webhookAccepted" {
+			t.Fatalf("a timestamp-less delivery must not be audited as accepted: %+v", e)
+		}
+	}
+	if !dropped {
+		t.Fatalf("dropped decision left no audit trail; entries=%+v", logs)
+	}
+
+	// The same delivery WITH the provider's timestamp is accepted, so the
+	// rejection above is specifically about the missing timestamp and nothing
+	// else in the payload.
+	ok := []byte(`{"payload":{"resource_type":"workflow_run","action":"workflow_run.completed","object":{"id":"run-123","status":"approved","completed_at_iso8601":"` +
+		time.Now().UTC().Format(time.RFC3339) + `"}}}`)
+	w2 := doJSONRaw(t, env.router, http.MethodPost, "/api/v1/compliance/webhook", ok,
+		map[string]string{"X-SHA2-Signature": sign(ok, "whtok")})
+	if w2.Code != http.StatusAccepted {
+		t.Fatalf("timestamped delivery: status = %d, want 202, body=%s", w2.Code, w2.Body.String())
 	}
 }
 

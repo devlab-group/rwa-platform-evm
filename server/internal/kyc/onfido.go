@@ -197,20 +197,31 @@ func (p *onfidoProvider) VerifyWebhook(rawBody []byte, headers http.Header) (Dec
 		return Decision{}, ErrUnhandledEvent
 	}
 
+	occurredAt, err := onfidoOccurredAt(obj.CompletedAt)
+	if err != nil {
+		return Decision{}, err
+	}
+
 	return Decision{
 		Provider:   p.Name(),
 		EventID:    strings.Join([]string{wh.Payload.Action, obj.ID, obj.Status}, "|"),
 		Ref:        obj.ID, // workflow-run id, resolved to the wallet via the KYCVerification binding
 		Status:     status,
-		OccurredAt: onfidoOccurredAt(obj.CompletedAt),
+		OccurredAt: occurredAt,
 	}, nil
 }
 
-func onfidoOccurredAt(iso string) int64 {
-	if iso != "" {
-		if t, err := time.Parse(time.RFC3339, iso); err == nil {
-			return t.Unix()
-		}
+// onfidoOccurredAt parses the workflow run's own completion timestamp. A
+// missing or unparseable value is an error, never a substituted time.Now() —
+// see ErrMissingTimestamp for why fabricating one silently defeats both the
+// delivery-freshness window and the newest-decision-wins ordering downstream.
+func onfidoOccurredAt(iso string) (int64, error) {
+	if iso == "" {
+		return 0, fmt.Errorf("%w: onfido workflow run carries no completed_at_iso8601", ErrMissingTimestamp)
 	}
-	return time.Now().Unix()
+	t, err := time.Parse(time.RFC3339, iso)
+	if err != nil {
+		return 0, fmt.Errorf("%w: onfido completed_at_iso8601 %q is not a valid RFC3339 timestamp", ErrMissingTimestamp, iso)
+	}
+	return t.Unix(), nil
 }

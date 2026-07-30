@@ -181,13 +181,22 @@ func (p *sumsubProvider) VerifyWebhook(rawBody []byte, headers http.Header) (Dec
 		}
 	}
 
+	occurredAt, err := sumsubOccurredAt(wh)
+	if err != nil {
+		return Decision{}, err
+	}
+	eventID, err := sumsubEventID(wh)
+	if err != nil {
+		return Decision{}, err
+	}
+
 	return Decision{
 		Provider:   p.Name(),
-		EventID:    sumsubEventID(wh),
+		EventID:    eventID,
 		Ref:        wh.ExternalUserID,
 		Address:    wh.ExternalUserID, // Sumsub carries the subject wallet directly
 		Status:     status,
-		OccurredAt: sumsubOccurredAt(wh),
+		OccurredAt: occurredAt,
 	}, nil
 }
 
@@ -221,31 +230,48 @@ func (p *sumsubProvider) verifyDigest(body []byte, headers http.Header) bool {
 // otherwise combine the applicant id, event type, and creation timestamp — a
 // later re-review of the same applicant is a genuinely new decision (different
 // createdAtMs) and must not be deduped against the earlier one.
-func sumsubEventID(wh sumsubWebhook) string {
+//
+// The timestamp is what makes that composite key discriminate at all: with no
+// correlationId and no creation timestamp, two genuinely distinct re-reviews of
+// the same applicant collapse to the identical key, and internal/compliance's
+// (provider,eventId) uniqueness constraint discards the second as a replay — so
+// a real Blocked decision would be silently dropped. Refuse to build a key that
+// cannot distinguish, rather than emitting a colliding one.
+func sumsubEventID(wh sumsubWebhook) (string, error) {
 	if wh.CorrelationID != "" {
-		return wh.CorrelationID
+		return wh.CorrelationID, nil
 	}
 	ts := wh.CreatedAtMs
 	if ts == "" {
 		ts = wh.CreatedAt
 	}
-	return strings.Join([]string{wh.ApplicantID, wh.Type, wh.ReviewStatus, ts}, "|")
+	if ts == "" {
+		return "", fmt.Errorf(
+			"%w: sumsub webhook has neither a correlationId nor a creation timestamp to derive a stable event id from",
+			ErrMissingTimestamp)
+	}
+	return strings.Join([]string{wh.ApplicantID, wh.Type, wh.ReviewStatus, ts}, "|"), nil
 }
 
-// sumsubOccurredAt extracts the provider's decision timestamp (Unix seconds),
-// preferring the millisecond epoch field and falling back to the RFC-style
-// createdAt, then to now.
-func sumsubOccurredAt(wh sumsubWebhook) int64 {
+// sumsubOccurredAt extracts the provider's own decision timestamp (Unix
+// seconds), preferring the millisecond epoch field and falling back to the
+// RFC-style createdAt. When neither is present or parseable this is an error,
+// never a substituted time.Now() — see ErrMissingTimestamp for why fabricating
+// one silently defeats both the delivery-freshness window and the
+// newest-decision-wins ordering downstream.
+func sumsubOccurredAt(wh sumsubWebhook) (int64, error) {
 	if wh.CreatedAtMs != "" {
 		if ms, err := strconv.ParseInt(wh.CreatedAtMs, 10, 64); err == nil {
-			return ms / 1000
+			return ms / 1000, nil
 		}
 	}
 	if wh.CreatedAt != "" {
 		// Sumsub renders createdAt like "2020-02-21 13:23:19+0000".
 		if t, err := time.Parse("2006-01-02 15:04:05-0700", wh.CreatedAt); err == nil {
-			return t.Unix()
+			return t.Unix(), nil
 		}
 	}
-	return time.Now().Unix()
+	return 0, fmt.Errorf(
+		"%w: sumsub webhook carries no parseable createdAtMs or createdAt (createdAtMs=%q createdAt=%q)",
+		ErrMissingTimestamp, wh.CreatedAtMs, wh.CreatedAt)
 }

@@ -64,6 +64,22 @@ var (
 	// acknowledges it with 202 so the provider stops retrying, without
 	// recording anything.
 	ErrUnhandledEvent = errors.New("kyc: webhook carried no actionable decision")
+
+	// ErrMissingTimestamp is returned by VerifyWebhook for a signed delivery
+	// that carries a real decision but no provider timestamp to stamp it with
+	// (for Sumsub, also nothing to build a stable event id from).
+	//
+	// internal/compliance uses Decision.OccurredAt both to age deliveries out
+	// and to decide which of an address's decisions is newest, so a substituted
+	// time.Now() would make the delivery unconditionally fresh AND
+	// unconditionally the newest — letting a late redelivery of an old decision
+	// overwrite a newer one. Providers do deliver out of order, so refuse.
+	//
+	// Separate from ErrUnhandledEvent because they mean different things to an
+	// operator (nothing to do vs. a decision was dropped), even though the API
+	// layer answers 202 to both — see internal/api's kycWebhook for why it
+	// can't answer a 4xx.
+	ErrMissingTimestamp = errors.New("kyc: webhook carries no usable provider decision timestamp")
 )
 
 // Session is what StartVerification returns for the investor SPA to launch the
@@ -108,7 +124,10 @@ type Provider interface {
 	StartVerification(ctx context.Context, address string) (Session, error)
 	// VerifyWebhook authenticates one raw webhook delivery (signature in
 	// headers) and maps it to a Decision. Returns ErrInvalidSignature on a bad
-	// signature and ErrUnhandledEvent for a signed-but-irrelevant delivery.
+	// signature, ErrUnhandledEvent for a signed-but-irrelevant delivery, and
+	// ErrMissingTimestamp for a decision with no usable provider timestamp. A
+	// returned Decision always has OccurredAt > 0 taken from the provider's own
+	// payload — implementations MUST NOT substitute the current time.
 	VerifyWebhook(rawBody []byte, headers http.Header) (Decision, error)
 }
 

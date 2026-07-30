@@ -139,6 +139,122 @@ func TestSumsubWebhookBadSignature(t *testing.T) {
 	}
 }
 
+// A signed decision with no usable provider timestamp must be REFUSED, never
+// stamped with time.Now(): OccurredAt drives both internal/compliance's
+// delivery-freshness window and its newest-decision-wins claim, so a fabricated
+// "now" would make any such delivery unconditionally fresh and unconditionally
+// the newest for its address.
+func TestSumsubWebhookRejectsMissingTimestamp(t *testing.T) {
+	p := newTestSumsub(t)
+	addr := "0x1111111111111111111111111111111111111111"
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			"no createdAtMs or createdAt",
+			`{"applicantId":"a1","externalUserId":"` + addr + `","type":"applicantReviewed","reviewResult":{"reviewAnswer":"GREEN"}}`,
+		},
+		{
+			"unparseable createdAtMs, no createdAt",
+			`{"applicantId":"a1","externalUserId":"` + addr + `","type":"applicantReviewed","reviewResult":{"reviewAnswer":"GREEN"},"createdAtMs":"not-a-number"}`,
+		},
+		{
+			"unparseable createdAt",
+			`{"applicantId":"a1","externalUserId":"` + addr + `","type":"applicantReviewed","reviewResult":{"reviewAnswer":"RED","reviewRejectType":"FINAL"},"createdAt":"21/02/2020"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(tc.body)
+			h := http.Header{}
+			h.Set(sumsubHeaderDigest, hexHMAC("whsecret", body))
+			dec, err := p.VerifyWebhook(body, h)
+			if !errors.Is(err, ErrMissingTimestamp) {
+				t.Fatalf("err = %v, want ErrMissingTimestamp (decision was %+v)", err, dec)
+			}
+			// Not ErrUnhandledEvent: that maps to a 202 that would silently
+			// drop a genuine decision instead of surfacing it.
+			if errors.Is(err, ErrUnhandledEvent) {
+				t.Fatal("a real decision with no timestamp must not be reported as an unhandled event")
+			}
+		})
+	}
+}
+
+// createdAt (the RFC-style field) is the documented fallback when createdAtMs
+// is absent — it must still be honored, so the rejection above is specifically
+// about "no usable timestamp", not about dropping the fallback path.
+func TestSumsubWebhookAcceptsCreatedAtFallback(t *testing.T) {
+	p := newTestSumsub(t)
+	addr := "0x1111111111111111111111111111111111111111"
+	body := []byte(`{"applicantId":"a1","externalUserId":"` + addr + `","type":"applicantReviewed","reviewResult":{"reviewAnswer":"GREEN"},"createdAt":"2020-02-21 13:23:19+0000"}`)
+	h := http.Header{}
+	h.Set(sumsubHeaderDigest, hexHMAC("whsecret", body))
+	dec, err := p.VerifyWebhook(body, h)
+	if err != nil {
+		t.Fatalf("VerifyWebhook: %v", err)
+	}
+	if dec.OccurredAt != 1582291399 {
+		t.Fatalf("occurredAt = %d, want 1582291399 (2020-02-21T13:23:19Z)", dec.OccurredAt)
+	}
+}
+
+// Without correlationId AND without any creation timestamp, the composite event
+// id degenerates to applicantId|type|reviewStatus — identical for two genuinely
+// distinct re-reviews of the same applicant, so the second would be discarded
+// by internal/compliance's (provider,eventId) uniqueness as a replay. Refusing
+// the delivery is what keeps a real decision from being silently dropped.
+func TestSumsubEventIDRefusesToCollide(t *testing.T) {
+	if _, err := sumsubEventID(sumsubWebhook{ApplicantID: "a1", Type: "applicantReviewed"}); !errors.Is(err, ErrMissingTimestamp) {
+		t.Fatalf("err = %v, want ErrMissingTimestamp", err)
+	}
+	// correlationId alone is enough — it is Sumsub's own per-delivery id.
+	id, err := sumsubEventID(sumsubWebhook{ApplicantID: "a1", Type: "applicantReviewed", CorrelationID: "corr-1"})
+	if err != nil || id != "corr-1" {
+		t.Fatalf("sumsubEventID(correlationId) = %q, %v; want \"corr-1\", nil", id, err)
+	}
+}
+
+func TestOnfidoWebhookRejectsMissingTimestamp(t *testing.T) {
+	p := newTestOnfido(t)
+	cases := []struct {
+		name        string
+		completedAt string
+	}{
+		{"absent", ``},
+		{"empty", `,"completed_at_iso8601":""`},
+		{"not RFC3339", `,"completed_at_iso8601":"2023-01-02 03:04:05"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"payload":{"resource_type":"workflow_run","action":"workflow_run.completed","object":{"id":"run-123","status":"approved"` + tc.completedAt + `}}}`)
+			h := http.Header{}
+			h.Set(onfidoSigHeader, hexHMAC("whtok", body))
+			dec, err := p.VerifyWebhook(body, h)
+			if !errors.Is(err, ErrMissingTimestamp) {
+				t.Fatalf("err = %v, want ErrMissingTimestamp (decision was %+v)", err, dec)
+			}
+		})
+	}
+}
+
+// The happy path still carries the PROVIDER's timestamp through verbatim.
+func TestOnfidoWebhookUsesProviderTimestamp(t *testing.T) {
+	p := newTestOnfido(t)
+	body := []byte(`{"payload":{"resource_type":"workflow_run","action":"workflow_run.completed","object":{"id":"run-123","status":"approved","completed_at_iso8601":"2023-01-02T03:04:05Z"}}}`)
+	h := http.Header{}
+	h.Set(onfidoSigHeader, hexHMAC("whtok", body))
+	dec, err := p.VerifyWebhook(body, h)
+	if err != nil {
+		t.Fatalf("VerifyWebhook: %v", err)
+	}
+	if dec.OccurredAt != 1672628645 {
+		t.Fatalf("occurredAt = %d, want 1672628645 (2023-01-02T03:04:05Z)", dec.OccurredAt)
+	}
+}
+
 func newTestOnfido(t *testing.T) *onfidoProvider {
 	t.Helper()
 	p, err := newOnfidoProvider(OnfidoConfig{APIToken: "tok", WebhookToken: "whtok", WorkflowID: "wf1", Region: "eu"})

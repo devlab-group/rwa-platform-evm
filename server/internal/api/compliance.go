@@ -343,6 +343,16 @@ func (app *App) kycWebhook(c *gin.Context) {
 			// status, an event type we ignore). Acknowledge so the provider
 			// stops retrying; record nothing.
 			c.Status(http.StatusAccepted)
+		case errors.Is(err, kyc.ErrMissingTimestamp):
+			// A real decision we can't safely order, so we drop it. Still 202:
+			// retrying can't fix a payload that has no timestamp, and Sumsub
+			// disables a webhook that keeps failing — one bad delivery would
+			// then block every good one behind it. The audit entry is how an
+			// operator finds it (and can apply the status by hand).
+			app.recordAudit(c.Request.Context(), "compliance", "kyc-webhook", "compliance.webhookDroppedNoTimestamp", "",
+				map[string]any{"provider": app.KYC.Name(), "reason": err.Error()})
+			log.Printf("api: kyc webhook dropped, provider sent no usable decision timestamp (provider=%s): %v", app.KYC.Name(), err)
+			c.Status(http.StatusAccepted)
 		default:
 			failErr(c, http.StatusBadRequest, CodeBadRequest, err)
 		}
