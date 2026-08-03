@@ -53,7 +53,7 @@ func (app *App) listRedemptions(c *gin.Context) {
 	cursor, limit := cursorLimitParams(c)
 	page, next, err := app.Redemptions.ListPage(c.Request.Context(), status, address, cursor, limit)
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	out := make([]dto.RedemptionResponse, len(page))

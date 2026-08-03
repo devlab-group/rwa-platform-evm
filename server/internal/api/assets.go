@@ -78,7 +78,7 @@ func (app *App) createProfile(c *gin.Context) {
 		// them — an earlier handler ignored Upsert's error entirely
 		// (`_ = app.Repos.AssetProfiles.Upsert(...)`), so a storage failure
 		// could report success while nothing was actually stored.
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	app.recordAudit(c.Request.Context(), "assets", caller(c), "assets.createProfile", profile.ProjectID, map[string]any{"profileDigest": result.ProfileDigest})
@@ -107,7 +107,7 @@ func (app *App) listRecords(c *gin.Context) {
 	cursor, limit := cursorLimitParams(c)
 	page, next, err := app.Repos.AssetRecords.ListPage(c.Request.Context(), cursor, limit)
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	out := make([]dto.AssetRecordResponse, len(page))
@@ -168,7 +168,7 @@ func (app *App) currentProfile(c *gin.Context) (*assets.Profile, string, bool) {
 	}
 	result, profile := assets.ValidateProfile(stored.ProfileRaw)
 	if !result.Valid {
-		failErr(c, http.StatusInternalServerError, CodeInternal, errors.New("api: stored asset profile no longer validates"))
+		failInternal(c, errors.New("api: stored asset profile no longer validates"))
 		return nil, "", false
 	}
 	return profile, p.ProjectID, true
@@ -200,7 +200,7 @@ func (app *App) createRecord(c *gin.Context) {
 	actor := caller(c)
 	intentID, err := app.recordAuditIntent(c.Request.Context(), "assets", actor, "assets.createRecord", body.RecordID, map[string]any{"amount": body.Amount})
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	rec, err := app.Records.CreateRecord(c.Request.Context(), profile, projectID, assets.CreateRecordRequest{
@@ -234,7 +234,7 @@ func (app *App) reissueRecord(c *gin.Context) {
 	actor := caller(c)
 	intentID, err := app.recordAuditIntent(c.Request.Context(), "assets", actor, "assets.reissueRecord", recordID, nil)
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	rec, err := app.Records.ReissueRecord(c.Request.Context(), recordID)
@@ -246,7 +246,7 @@ func (app *App) reissueRecord(c *gin.Context) {
 		case errors.Is(err, assets.ErrRecordNotReissuable):
 			failErr(c, http.StatusConflict, CodeConflict, err)
 		default:
-			failErr(c, http.StatusInternalServerError, CodeInternal, err)
+			failInternal(c, err)
 		}
 		return
 	}
@@ -294,13 +294,13 @@ func (app *App) downloadPackage(c *gin.Context) {
 	}
 	profileDigestBytes, err := hexToBytes32(profileDoc.Digest)
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 
 	zipBytes, err := app.Records.BuildPackage(c.Request.Context(), rec, profileDigestBytes, profileDoc.ProfileRaw)
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	c.Data(http.StatusOK, "application/zip", zipBytes)

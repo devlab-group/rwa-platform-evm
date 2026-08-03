@@ -29,7 +29,7 @@ func (app *App) listWallets(c *gin.Context) {
 	cursor, limit := cursorLimitParams(c)
 	page, next, err := app.Repos.Investors.ListPage(c.Request.Context(), cursor, limit)
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	out := make([]dto.WalletStatus, len(page))
@@ -119,7 +119,7 @@ func (app *App) verifyChallenge(c *gin.Context) {
 	if app.Sessions != nil {
 		token, expiresAt, err := app.Sessions.Issue(c.Request.Context(), inv.Address)
 		if err != nil {
-			failErr(c, http.StatusInternalServerError, CodeInternal, err)
+			failInternal(c, err)
 			return
 		}
 		result.SessionToken = token
@@ -135,7 +135,7 @@ func (app *App) verifyChallenge(c *gin.Context) {
 func (app *App) listWebhookEvents(c *gin.Context) {
 	events, err := app.Repos.KYCEvents.List(c.Request.Context())
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	offset, limit := paginationParams(c)
@@ -168,7 +168,7 @@ func (app *App) listAuditLogs(c *gin.Context) {
 	}
 	entries, err := app.Audit.Recent(c.Request.Context(), category, fetchLimit)
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	start, end, next := paginateWindow(len(entries), offset, limit)
@@ -228,14 +228,14 @@ func (app *App) setComplianceStatus(c *gin.Context) {
 	intentID, err := app.recordAuditIntent(c.Request.Context(), "compliance", actor, "compliance.setStatus", body.Address,
 		map[string]any{"status": body.Status, "validUntil": body.ValidUntil})
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 
 	tx, err := app.Status.SetStatus(c.Request.Context(), c.GetHeader("Idempotency-Key"), common.HexToAddress(body.Address), status, body.ValidUntil)
 	if err != nil {
 		app.recordAuditResult(c.Request.Context(), intentID, "compliance", actor, "compliance.setStatus", body.Address, false, map[string]any{"error": err.Error()})
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 
@@ -295,7 +295,7 @@ func (app *App) startKYC(c *gin.Context) {
 		if err := app.Repos.KYCVerifications.Upsert(c.Request.Context(), &models.KYCVerification{
 			Provider: app.KYC.Name(), Ref: sess.Ref, Address: address, CreatedAt: time.Now().UTC(),
 		}); err != nil {
-			failErr(c, http.StatusInternalServerError, CodeInternal, err)
+			failInternal(c, err)
 			return
 		}
 	}
@@ -372,7 +372,7 @@ func (app *App) kycWebhook(c *gin.Context) {
 				fail(c, http.StatusUnprocessableEntity, CodeBadRequest, "kyc webhook references an unknown verification")
 				return
 			}
-			failErr(c, http.StatusInternalServerError, CodeInternal, gerr)
+			failInternal(c, gerr)
 			return
 		}
 		address = v.Address

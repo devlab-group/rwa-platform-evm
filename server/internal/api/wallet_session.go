@@ -43,7 +43,7 @@ func (app *App) getMyWalletStatus(c *gin.Context) {
 			c.JSON(http.StatusOK, dto.WalletStatus{Address: address, Status: string(models.ComplianceUnknown), OwnershipVerified: true})
 			return
 		}
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, dto.ToWalletStatus(inv))
@@ -75,7 +75,7 @@ func (app *App) isAddressAllowed(c *gin.Context) {
 	}
 	allowed, err := app.Redemptions.IsBeneficiaryAllowed(c.Request.Context(), common.HexToAddress(addressParam))
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, dto.AllowedResult{Allowed: allowed})

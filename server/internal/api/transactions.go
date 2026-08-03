@@ -34,7 +34,7 @@ func (app *App) listTransactions(c *gin.Context) {
 	cursor, limit := cursorLimitParams(c)
 	page, next, err := app.Repos.Transactions.ListPage(c.Request.Context(), c.Query("address"), cursor, limit)
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	out := make([]dto.TransactionResponse, len(page))

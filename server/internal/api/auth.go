@@ -75,7 +75,7 @@ func (app *App) createSession(c *gin.Context) {
 	adminAddr := common.HexToAddress(app.AdminAddress).Hex()
 	token, expiresAt, err := auth.IssueAdminJWT(app.JWTSecret, adminAddr, app.JWTTTL)
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	// Attribute the admin login in the operational audit trail (a security

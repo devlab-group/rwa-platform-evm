@@ -17,7 +17,7 @@ func (app *App) getInventory(c *gin.Context) {
 	}
 	inv, err := app.Sales.GetInventory(c.Request.Context())
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, inv)
@@ -43,7 +43,7 @@ func (app *App) listPurchases(c *gin.Context) {
 	cursor, limit := cursorLimitParams(c)
 	page, next, err := app.Sales.ListPurchases(c.Request.Context(), app.lastIndexedBlock(), cursor, limit)
 	if err != nil {
-		failErr(c, http.StatusInternalServerError, CodeInternal, err)
+		failInternal(c, err)
 		return
 	}
 	setPaginationHeaders(c, -1, len(page), next)
