@@ -133,7 +133,7 @@ func foldSecurity(ctx context.Context, chainEvents repository.ChainEventReposito
 	// lexicographically-first current holder, else empty (role vacated).
 	state.Admin = derive(p.Admin, unionHolders(perContract, "DEFAULT_ADMIN_ROLE", a.Token, a.Compliance, a.SupplyController, a.Vault, a.RedemptionEscrow, a.Strategy))
 	state.ComplianceOperator = derive(p.ComplianceOperator, unionHolders(perContract, "COMPLIANCE_ROLE", a.Compliance))
-	state.Pricer = derive(p.Pricer, unionHolders(perContract, "PRICER_ROLE", a.Vault, a.Strategy))
+	state.Pricer = derive(p.Pricer, unionHolders(perContract, "PRICER_ROLE", a.Strategy))
 	state.Treasurer = derive(p.Treasurer, unionHolders(perContract, "TREASURER_ROLE", a.Vault, a.RedemptionEscrow))
 	state.RedemptionManager = derive(p.RedemptionManager, unionHolders(perContract, "REDEMPTION_MANAGER_ROLE", a.RedemptionEscrow))
 
@@ -243,8 +243,7 @@ func foldRoles(ctx context.Context, chainEvents repository.ChainEventRepository,
 	}
 	seed(a.Token, "PAUSER_ROLE", p.Admin)
 	seed(a.Compliance, "COMPLIANCE_ROLE", p.ComplianceOperator)
-	seed(a.Vault, "PRICER_ROLE", p.Pricer)
-	seed(a.Strategy, "PRICER_ROLE", p.Pricer)
+	seed(a.Strategy, "PRICER_ROLE", p.Pricer) // strategy only — the Vault gates nothing on it
 	seed(a.Vault, "TREASURER_ROLE", p.Treasurer)
 	seed(a.RedemptionEscrow, "TREASURER_ROLE", p.Treasurer)
 	seed(a.RedemptionEscrow, "REDEMPTION_MANAGER_ROLE", p.RedemptionManager)

@@ -47,7 +47,7 @@ export function roleHash(role: string): Hex {
  */
 export const ROLE_TARGET_FIELDS: Record<string, (keyof Addresses)[]> = {
   [ROLES.pauser]: ["token"],
-  [ROLES.pricer]: ["vault", "strategy"],
+  [ROLES.pricer]: ["strategy"],
   [ROLES.treasurer]: ["vault", "redemptionEscrow"],
   [ROLES.redemptionManager]: ["redemptionEscrow"],
   [ROLES.compliance]: ["compliance"],

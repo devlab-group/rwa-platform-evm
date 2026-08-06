@@ -245,8 +245,8 @@ func NewRouter(app *App) *gin.Engine {
 		v1.POST("/compliance/challenge", auth.RateLimit(challengeCreateRatePerSecond, challengeCreateBurst), app.createChallenge)
 		v1.POST("/compliance/challenge/verify", app.verifyChallenge)
 		// getMyWalletStatus is subject-scoped by auth.RequireWalletSession
-		// (X-Wallet-Session, minted at verifyChallenge — NOT an X-API-Key
-		// role), so it is deliberately outside the adminOnly/RequireRole
+		// (X-Wallet-Session, minted at verifyChallenge — not the admin JWT),
+		// so it is deliberately outside the adminOnly/RequireRole
 		// vocabulary entirely, not merely "public" like the routes below.
 		v1.GET("/me/wallet-status", auth.RequireWalletSession(app.Sessions), app.getMyWalletStatus)
 		// startKYC begins a provider verification for the session's OWN
@@ -260,9 +260,9 @@ func NewRouter(app *App) *gin.Engine {
 		v1.GET("/compliance/allowed/:address", app.isAddressAllowed)
 		v1.GET("/compliance/webhooks", adminOnly, app.listWebhookEvents)
 		v1.POST("/compliance/status", auth.RequireRole(auth.RoleAdmin), idem, app.setComplianceStatus)
-		// kycWebhook is deliberately NOT API-key gated: it authenticates
-		// via its own HMAC signature scheme (X-Webhook-Signature), not
-		// X-API-Key — see the handler's doc comment.
+		// kycWebhook is deliberately NOT role-gated: it authenticates via
+		// its own HMAC signature scheme (X-Webhook-Signature, or the
+		// configured provider's own header) — see the handler's doc comment.
 		v1.POST("/compliance/webhook", app.kycWebhook)
 
 		v1.GET("/audit-logs", adminOnly, app.listAuditLogs)

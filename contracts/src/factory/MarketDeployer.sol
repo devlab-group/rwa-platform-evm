@@ -36,7 +36,6 @@ contract MarketDeployer {
                 config.treasury,
                 config.admin,
                 config.treasurer,
-                config.pricer,
                 config.adminTransferDelay
             )
         );

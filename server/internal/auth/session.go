@@ -107,8 +107,8 @@ const WalletSessionHeader = "X-Wallet-Session"
 // resolved address is available to downstream handlers via
 // WalletSessionAddress(c) — there is no way for a handler behind this
 // middleware to learn or act on any OTHER address; that is the entire
-// point of this being a distinct, narrower auth mechanism from
-// RequireRole/X-API-Key.
+// point of this being a distinct, narrower auth mechanism from the
+// admin JWT and RequireRole.
 func RequireWalletSession(sm *SessionManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if sm == nil {

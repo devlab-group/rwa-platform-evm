@@ -53,9 +53,10 @@ var maxCachedResponseBytes = 1 << 20 // 1 MiB
 // wires this middleware MUST run it AFTER auth.Authenticate and any per-route
 // auth.RequireRole (see internal/api/api.go's route table) — Idempotency
 // namespaces its reservation by:
-//   - the authenticated PRINCIPAL (auth.PrincipalFromContext — a digest of
-//     the actual X-API-Key, not just the coarser Role bucket: two different
-//     API keys that map to the same role must not collide);
+//   - the authenticated PRINCIPAL (auth.PrincipalFromContext — the admin
+//     wallet address from the JWT, not just the coarser Role bucket, so this
+//     stays correct if the platform ever authenticates more than one identity
+//     into the same role);
 //   - the HTTP method and the REGISTERED route template (gin's
 //     c.FullPath(), the same normalization internal/metrics.GinMiddleware
 //     uses);

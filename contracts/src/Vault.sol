@@ -19,14 +19,12 @@ import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 /// @notice Holds inventory, sells for one quote token (on-chain purchase only), and
 ///         withdraws sale proceeds.
 /// @dev `AccessControlEnumerable` lets an off-chain verifier enumerate
-///      `TREASURER_ROLE`/`PRICER_ROLE`/`DEFAULT_ADMIN_ROLE` holders on-chain — see
-///      ComplianceRegistry's NatSpec for the full rationale and the diamond-override pattern
-///      reused below.
+///      `TREASURER_ROLE`/`DEFAULT_ADMIN_ROLE` holders on-chain — see ComplianceRegistry's
+///      NatSpec for the full rationale and the diamond-override pattern reused below.
 contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRules, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     bytes32 public constant TREASURER_ROLE = keccak256("TREASURER_ROLE");
-    bytes32 public constant PRICER_ROLE = keccak256("PRICER_ROLE");
 
     address public immutable token;
     address public immutable quoteToken;
@@ -42,7 +40,6 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
         address treasury_,
         address admin,
         address treasurer,
-        address pricer,
         uint48 adminTransferDelay
     ) AccessControlDefaultAdminRules(adminTransferDelay, admin) {
         if (token_ == address(0) || quoteToken_ == address(0) || strategy_ == address(0) || treasury_ == address(0)) {
@@ -55,7 +52,6 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
         _compliance = IRWAToken(token_).compliance();
 
         _grantRole(TREASURER_ROLE, treasurer);
-        _grantRole(PRICER_ROLE, pricer);
     }
 
     function buy(uint256 tokenAmount, uint256 maxQuoteAmount, address recipient, uint64 deadline)
@@ -63,9 +59,15 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
         nonReentrant
     {
         if (IRWAToken(token).paused()) revert ProjectPaused();
-        if (!IComplianceRegistry(_compliance).isAllowed(msg.sender)) revert CallerNotAllowed(msg.sender);
-        if (!IComplianceRegistry(_compliance).isAllowed(recipient)) revert RecipientNotAllowed(recipient);
-        if (deadline < block.timestamp) revert DeadlineExpired(deadline, block.timestamp);
+        if (!IComplianceRegistry(_compliance).isAllowed(msg.sender)) {
+            revert CallerNotAllowed(msg.sender);
+        }
+        if (!IComplianceRegistry(_compliance).isAllowed(recipient)) {
+            revert RecipientNotAllowed(recipient);
+        }
+        if (deadline < block.timestamp) {
+            revert DeadlineExpired(deadline, block.timestamp);
+        }
         if (tokenAmount == 0) revert ZeroAmount();
         uint256 inv = IERC20(token).balanceOf(address(this));
         if (tokenAmount > inv) revert InsufficientInventory(tokenAmount, inv);

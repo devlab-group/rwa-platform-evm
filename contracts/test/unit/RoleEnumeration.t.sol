@@ -49,8 +49,7 @@ contract RoleEnumerationTest is TestBase {
     function test_vault_roleEnumeration() public view {
         assertEq(vault.getRoleMemberCount(vault.TREASURER_ROLE()), 1);
         assertEq(vault.getRoleMember(vault.TREASURER_ROLE(), 0), treasurer);
-        assertEq(vault.getRoleMemberCount(vault.PRICER_ROLE()), 1);
-        assertEq(vault.getRoleMember(vault.PRICER_ROLE(), 0), pricer);
+        assertEq(vault.getRoleMemberCount(strategy.PRICER_ROLE()), 0);
         assertEq(vault.getRoleMemberCount(vault.DEFAULT_ADMIN_ROLE()), 1);
         assertEq(vault.getRoleMember(vault.DEFAULT_ADMIN_ROLE(), 0), admin);
     }
@@ -123,10 +122,10 @@ contract RoleEnumerationTest is TestBase {
 
         // Vault
         assertFalse(vault.hasRole(vault.TREASURER_ROLE(), f));
-        assertFalse(vault.hasRole(vault.PRICER_ROLE(), f));
+        assertFalse(vault.hasRole(strategy.PRICER_ROLE(), f));
         assertFalse(vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), f));
         _assertNotAMember(vault.getRoleMembers(vault.TREASURER_ROLE()), f);
-        _assertNotAMember(vault.getRoleMembers(vault.PRICER_ROLE()), f);
+        _assertNotAMember(vault.getRoleMembers(strategy.PRICER_ROLE()), f);
         _assertNotAMember(vault.getRoleMembers(vault.DEFAULT_ADMIN_ROLE()), f);
 
         // RedemptionEscrow

@@ -68,8 +68,8 @@ func (app *App) isAddressAllowed(c *gin.Context) {
 	}
 	if app.Redemptions == nil {
 		// This route is unauthenticated/public, so a 501 "not configured"
-		// is the honest response here — there is no API key for a caller
-		// to reconfigure the way other 501s in this file suggest.
+		// is the honest response here — there is no credential a caller
+		// could present to get a different answer.
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "compliance eligibility lookup is not configured on this server")
 		return
 	}

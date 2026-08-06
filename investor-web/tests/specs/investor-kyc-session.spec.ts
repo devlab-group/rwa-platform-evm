@@ -35,7 +35,6 @@ test.describe("Investor — KYC via subject-scoped session", () => {
     // The only credential the app sends is this subject-scoped session token
     // (see src/lib/walletSession.ts).
     expect(request.headers()["x-wallet-session"]).toBeTruthy();
-    expect(request.headers()["x-api-key"]).toBeFalsy();
     expect(request.headers()["authorization"]).toBeFalsy();
     await expect(investor.kycSection).toContainText("Allowed");
   });

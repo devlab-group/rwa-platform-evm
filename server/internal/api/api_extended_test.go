@@ -87,7 +87,7 @@ func TestVerifyChallengeEndToEnd(t *testing.T) {
 
 	// Proving ownership must mint a subject-scoped session token, and
 	// that token must authenticate GET /me/wallet-status for THIS address
-	// with no operator X-API-Key.
+	// with no admin credential.
 	if status.SessionToken == "" {
 		t.Fatal("expected verifyChallenge to mint a SessionToken")
 	}

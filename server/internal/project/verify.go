@@ -104,7 +104,6 @@ func verifyRoles(ctx context.Context, client blockchain.Client, p *models.Projec
 	}
 	addExpected("token", "PAUSER_ROLE", admin)
 	addExpected("compliance", "COMPLIANCE_ROLE", common.HexToAddress(p.ComplianceOperator))
-	addExpected("vault", "PRICER_ROLE", common.HexToAddress(p.Pricer))
 	addExpected("strategy", "PRICER_ROLE", common.HexToAddress(p.Pricer))
 	addExpected("vault", "TREASURER_ROLE", common.HexToAddress(p.Treasurer))
 	addExpected("redemptionEscrow", "TREASURER_ROLE", common.HexToAddress(p.Treasurer))

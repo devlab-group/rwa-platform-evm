@@ -131,7 +131,6 @@ test.describe("Assets — create record and mint via auditor signature", () => {
       downloadButton.click(),
     ]);
     expect(request.headers()["authorization"]).toMatch(/^Bearer /);
-    expect(request.headers()["x-api-key"]).toBeFalsy();
     expect(download.suggestedFilename()).toBe("record-002.rwa");
   });
 

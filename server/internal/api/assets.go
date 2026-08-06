@@ -24,7 +24,7 @@ import (
 //
 // It used to upsert every valid submission keyed by the document's own
 // (attacker-controlled) projectId with no auth requirement — since a
-// missing/invalid API key reads as RoleReadOnly rather than being rejected (see
+// missing/invalid admin JWT reads as RoleReadOnly rather than being rejected (see
 // auth.Authenticate), an unauthenticated caller could silently overwrite the
 // active project's stored profile, poisoning every downstream
 // record/package/signature operation. Use POST /api/v1/profile (admin-only,

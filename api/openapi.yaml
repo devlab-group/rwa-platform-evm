@@ -142,7 +142,7 @@ paths:
       description: >
         Submit the wallet signature over a previously issued challenge to prove ownership.
         On success also mints a short-lived subject-scoped session (bound to `address`
-        only) so an investor can read their own status without an operator API key.
+        only) so an investor can read their own status without an admin credential.
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/ChallengeVerify" } } }
@@ -157,8 +157,8 @@ paths:
       description: >
         Returns the WalletStatus for the address bound to the presented wallet session
         only. Authenticated by the X-Wallet-Session bearer minted at challenge-verify,
-        NOT by an operator API key. Replaces the investor page's former dependency on
-        the operator-only global wallet list.
+        NOT by the admin JWT. Replaces the investor page's former dependency on
+        the admin-only global wallet list.
       security:
         - WalletSession: []
       responses:
@@ -244,7 +244,7 @@ paths:
         strictly-older decision for an address than the latest already-applied one, normalizes
         the address to EIP-55, and rejects negative / >100y-future validUntil before the
         int64→uint64 cast. The occurrence timestamp travels in-body, so it is covered by the
-        existing HMAC-over-raw-body signature (no separate header). Not protected by ApiKeyAuth.
+        existing HMAC-over-raw-body signature (no separate header). Not protected by BearerJwt.
       security: []
       parameters:
         - { name: X-Webhook-Signature, in: header, required: false, description: "Required for the generic shape; a configured provider sends its own header instead (X-Payload-Digest / X-SHA2-Signature). Exactly one signature header must verify.", schema: { type: string } }

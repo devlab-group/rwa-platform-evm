@@ -33,8 +33,8 @@ contract RWAFactoryTest is TestBase {
         assertTrue(compliance.hasRole(compliance.COMPLIANCE_ROLE(), complianceOperator));
         assertTrue(token.hasRole(token.PAUSER_ROLE(), admin));
         assertTrue(vault.hasRole(vault.TREASURER_ROLE(), treasurer));
-        assertTrue(vault.hasRole(vault.PRICER_ROLE(), pricer));
         assertTrue(strategy.hasRole(strategy.PRICER_ROLE(), pricer));
+        assertFalse(vault.hasRole(strategy.PRICER_ROLE(), pricer));
         assertTrue(escrow.hasRole(escrow.TREASURER_ROLE(), treasurer));
         assertTrue(escrow.hasRole(escrow.REDEMPTION_MANAGER_ROLE(), redemptionManager));
         assertEq(supplyController.auditor(), auditor);

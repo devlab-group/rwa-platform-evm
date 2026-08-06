@@ -96,7 +96,7 @@ func stubExpectedRoleHolders(t *testing.T, c *perContractClient, p *models.Proje
 		stubRoleHolders(t, c, compliance, bindings.ComplianceRole, op)
 	}
 	if pr := common.HexToAddress(p.Pricer); pr != (common.Address{}) {
-		stubRoleHolders(t, c, vault, bindings.PricerRole, pr)
+		// Strategy only — RWAFactory does not grant PRICER_ROLE on the Vault.
 		stubRoleHolders(t, c, strategy, bindings.PricerRole, pr)
 	}
 	if tr := common.HexToAddress(p.Treasurer); tr != (common.Address{}) {

@@ -281,8 +281,8 @@ const goldGramProfileOtherProject = `{
 }`
 
 // TestValidateProfileIsPure checks that POST
-// /api/v1/profile/validate — reachable with no API key at all (a missing
-// key reads as RoleReadOnly, not rejected) — must never write to the
+// /api/v1/profile/validate — reachable with no credential at all (a missing
+// admin JWT reads as RoleReadOnly, not rejected) — must never write to the
 // AssetProfiles repository, even for a valid, well-formed profile.
 func TestValidateProfileIsPure(t *testing.T) {
 	env := setupTestApp(t)

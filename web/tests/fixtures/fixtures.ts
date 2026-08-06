@@ -9,9 +9,8 @@ import { installMockWallet, MOCK_WALLET_ADDRESS } from "./mock-wallet";
 export const isLiveRun = Boolean(process.env.BASE_URL);
 
 /**
- * Admin routes require a live admin session — now a wallet-signature-minted
- * JWT (see src/lib/authSession.ts, src/components/Login.tsx) instead of the
- * old operator API-key exchange. Playwright page objects do a full
+ * Admin routes require a live admin session — a wallet-signature-minted JWT
+ * (see src/lib/authSession.ts, src/components/Login.tsx). Playwright page objects do a full
  * `page.goto(path)` per screen, and although the JWT is persisted in
  * IndexedDB, seeding it directly is simplest: the `api` fixture below sets
  * `window.__RWA_E2E_SESSION__` (read once at module load by lib/authSession.ts)

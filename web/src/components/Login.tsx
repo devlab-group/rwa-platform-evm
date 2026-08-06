@@ -5,8 +5,7 @@ import { setSession } from "../lib/authSession";
 import { shortenAddress } from "../lib/format";
 
 /**
- * Admin sign-in via wallet signature. Replaces the old operator API-key
- * exchange. The flow: the connected wallet address is sent to
+ * Admin sign-in via wallet signature. The flow: the connected wallet address is sent to
  * `POST /auth/challenge`, the wallet personal_signs the returned message, and
  * the signature goes to `POST /auth/session`. If the server recovers the
  * project admin as the signer it returns a JWT, which is stored (IndexedDB via

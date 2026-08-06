@@ -8,9 +8,9 @@ import (
 
 // TestRouteAuthorizationMatrix asserts an authorization outcome for every
 // route. It exercises every route
-// NewRouter registers with NO X-API-Key header (a missing key reads as
-// RoleReadOnly per auth.Authenticate — see api.go's operatorOrAdmin doc
-// comment) and asserts the expected outcome: a gated route must reject
+// NewRouter registers with NO Authorization header (a missing/invalid admin
+// JWT reads as RoleReadOnly per auth.Authenticate — see api.go's adminOnly
+// doc comment) and asserts the expected outcome: a gated route must reject
 // with 403 before the handler ever runs (regardless of a missing/invalid
 // body or path parameter — RequireRole is upstream middleware); a public
 // route must NOT be rejected with 403 (it may still fail for other
@@ -39,7 +39,7 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 		{http.MethodPost, "/api/v1/compliance/challenge/verify", false},
 		{http.MethodGet, "/api/v1/compliance/webhooks", true},
 		{http.MethodPost, "/api/v1/compliance/status", true},
-		{http.MethodPost, "/api/v1/compliance/webhook", false}, // HMAC-authenticated, not X-API-Key
+		{http.MethodPost, "/api/v1/compliance/webhook", false}, // HMAC-authenticated, not role-gated
 
 		{http.MethodGet, "/api/v1/audit-logs", true},
 
@@ -64,10 +64,10 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 			env.router.ServeHTTP(w, req)
 
 			if rt.gated && w.Code != http.StatusForbidden {
-				t.Errorf("gated route with no API key = %d, want 403 (body=%s)", w.Code, w.Body.String())
+				t.Errorf("gated route with no admin JWT = %d, want 403 (body=%s)", w.Code, w.Body.String())
 			}
 			if !rt.gated && w.Code == http.StatusForbidden {
-				t.Errorf("public route with no API key = 403, want anything else (this route should not require a role)")
+				t.Errorf("public route with no admin JWT = 403, want anything else (this route should not require a role)")
 			}
 		})
 	}

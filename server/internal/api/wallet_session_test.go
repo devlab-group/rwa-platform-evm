@@ -15,8 +15,8 @@ import (
 )
 
 // TestGetMyWalletStatusRequiresSession pins the auth boundary:
-// /api/v1/me/wallet-status is gated by auth.RequireWalletSession, not
-// X-API-Key — no header at all must 401.
+// /api/v1/me/wallet-status is gated by auth.RequireWalletSession, not the
+// admin JWT — no header at all must 401.
 func TestGetMyWalletStatusRequiresSession(t *testing.T) {
 	env := setupTestApp(t)
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/me/wallet-status", nil, nil)
@@ -39,7 +39,7 @@ func TestGetMyWalletStatusRejectsInvalidSessionToken(t *testing.T) {
 // TestGetMyWalletStatusReturnsOwnStatus is the core case: a
 // valid session returns the WalletStatus for exactly the address bound to
 // that session (seeded here as Allowed), and never requires — or accepts
-// — an X-API-Key.
+// — an admin credential.
 func TestGetMyWalletStatusReturnsOwnStatus(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -96,7 +96,8 @@ func TestGetMyWalletStatusUnknownForAddressWithNoRecord(t *testing.T) {
 }
 
 // TestIsAddressAllowedIsPublicAndDisclosesOnlyAllowed covers the other
-// half: no X-API-Key / no X-Wallet-Session at all, and the response body
+// half: no credential of any kind — no bearer token, no X-Wallet-Session —
+// and the response body
 // contains ONLY the "allowed" field — never status/validUntil/ownership,
 // which would let an anonymous caller enumerate a third party's compliance
 // state.

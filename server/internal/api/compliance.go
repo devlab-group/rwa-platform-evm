@@ -108,7 +108,7 @@ func (app *App) verifyChallenge(c *gin.Context) {
 
 	// Proving wallet ownership mints a short-lived, subject-scoped
 	// session so the investor page can read ITS OWN status via
-	// GET /me/wallet-status without an operator X-API-Key. If no
+	// GET /me/wallet-status without an admin credential. If no
 	// SessionManager is wired (reduced deployment) we still return the
 	// verified status — the token fields simply stay empty and the client
 	// falls back to re-verifying when it next needs a session.
@@ -405,20 +405,11 @@ func (app *App) kycWebhook(c *gin.Context) {
 	c.Status(http.StatusAccepted)
 }
 
-// caller identifies the API caller for audit logging without persisting the
-// raw credential.
-//
-// An earlier version hashed X-API-Key ONLY — but a bearer-authenticated
-// request (the current SPA's normal path: exchange the operator API key for a
-// short-lived session at POST /auth/session, then present ONLY the bearer token
-// — see auth.Authenticate) carries no X-API-Key header at all, so every such
-// privileged action was logged as "anonymous". It also truncated the digest to
-// a 32-bit prefix, weak enough to occasionally collide between two different
-// keys in a large-enough audit log. auth.PrincipalFromContext already resolves
-// the correct identity for EITHER credential path (set once by
-// auth.Authenticate, the same value auth.Idempotency's cache scoping already
-// relies on) as the FULL SHA-256 digest — reusing it here also removes a
-// second, weaker, redundant hash.
+// caller identifies the API caller for audit logging: the admin wallet address
+// from the request's JWT, or "anonymous". It reuses the principal
+// auth.Authenticate already resolved (the same value auth.Idempotency scopes
+// its cache by) rather than re-deriving one, so the audit trail and the
+// idempotency namespace can never disagree about who made a request.
 func caller(c *gin.Context) string {
 	return auth.PrincipalFromContext(c)
 }

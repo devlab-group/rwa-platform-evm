@@ -87,10 +87,7 @@ describe("roleHash", () => {
 describe("roleTargets / adminTransferTargets", () => {
   it("maps each granular role to the contracts it is held on", () => {
     expect(roleTargets(ROLES.pauser, ADDRESSES)).toEqual([ADDRESSES.token]);
-    expect(roleTargets(ROLES.pricer, ADDRESSES)).toEqual([
-      ADDRESSES.vault,
-      ADDRESSES.strategy,
-    ]);
+    expect(roleTargets(ROLES.pricer, ADDRESSES)).toEqual([ADDRESSES.strategy]);
     expect(roleTargets(ROLES.treasurer, ADDRESSES)).toEqual([
       ADDRESSES.vault,
       ADDRESSES.redemptionEscrow,

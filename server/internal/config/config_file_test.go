@@ -180,7 +180,7 @@ alerts:
 func TestLoadFileRejectsUnknownKey(t *testing.T) {
 	const yaml = `
 security:
-  admin_api_keys: "typo-on-the-key-name"
+  jwt_secrets: "typo-on-the-key-name"
 `
 	if _, err := LoadFile(writeConfig(t, yaml)); err == nil {
 		t.Fatal("expected an error for an unknown YAML key")
