@@ -820,6 +820,7 @@ function RedemptionSection({
   const [error, setError] = useState<string | null>(null);
   const [txState, setTxState] = useState<ConfirmationState>("draft");
   const [approveTx, setApproveTx] = useState<string | null>(null);
+  const [allowance, setAllowance] = useState<bigint | null>(null);
   const [requestTx, setRequestTx] = useState<string | null>(null);
   const [claimTx, setClaimTx] = useState<string | null>(null);
   const [cancelTx, setCancelTx] = useState<string | null>(null);
@@ -859,10 +860,18 @@ function RedemptionSection({
   const minQuoteOut = quote?.quoteAmount
     ? applySlippageFloor(quote.quoteAmount, slippageBps)
     : null;
+  const allowanceSufficient =
+    allowance !== null &&
+    minimalRwaAmount !== null &&
+    allowance >= BigInt(minimalRwaAmount);
 
   async function handlePreview() {
     setError(null);
     setRequestTx(null);
+    // A re-quote invalidates the previous approval: its allowance covers the
+    // old amount, not this one.
+    setApproveTx(null);
+    setAllowance(null);
     try {
       if (!escrow || !chainId) throw new Error("Project addresses not loaded.");
       // Human whole units -> the RWA token's minimal units before the amount
@@ -902,6 +911,7 @@ function RedemptionSection({
       return;
     setTxState("awaiting-signature");
     setError(null);
+    setAllowance(null);
     try {
       const tx = await sendErc20Approve(
         chainId,
@@ -912,6 +922,16 @@ function RedemptionSection({
       );
       setApproveTx(tx);
       onSubmitted(tx, "approve (RWA token)");
+      // Confirm the approval landed, then read the real on-chain allowance —
+      // Request stays disabled until it's actually sufficient.
+      await waitForTxReceipt(tx as `0x${string}`);
+      const current = await readErc20Allowance(
+        chainId,
+        project.addresses.token as `0x${string}`,
+        walletAddress as `0x${string}`,
+        project.addresses.redemptionEscrow as `0x${string}`,
+      );
+      setAllowance(current);
       setTxState("submitted");
     } catch (err) {
       setTxState("draft");
@@ -1084,6 +1104,7 @@ function RedemptionSection({
             disabled={
               !walletAddress ||
               !approveTx ||
+              !allowanceSufficient ||
               chainMismatch ||
               txState === "awaiting-signature"
             }

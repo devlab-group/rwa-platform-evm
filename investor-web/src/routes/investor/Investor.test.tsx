@@ -420,4 +420,35 @@ describe("Investor buy and redemption request (client-encoded)", () => {
 
     await screen.findByText(/Request submitted:/);
   });
+
+  it("keeps the redemption request disabled when the approval left too small an allowance", async () => {
+    // The approve tx returns a hash and lands, but the on-chain allowance
+    // covers less than the requested amount (a re-quote for more, a wallet
+    // that edited the amount down). A submitted hash alone must not enable
+    // the request — requestRedemption would revert on safeTransferFrom.
+    vi.mocked(readErc20Allowance).mockResolvedValue(2499999n);
+
+    renderWithWallet(<Investor />, { connected: true });
+    await waitFor(() => expect(api.getProject).toHaveBeenCalled());
+
+    fireEvent.change(
+      screen.getByLabelText("RWA amount to redeem (whole units)"),
+      { target: { value: "2.5" } },
+    );
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Preview quote" })[1],
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "1. Approve RWA spend" }),
+    );
+    await screen.findByText(/Approval submitted:/);
+
+    const request = screen.getByRole("button", {
+      name: "2. Request redemption",
+    });
+    await waitFor(() => expect(readErc20Allowance).toHaveBeenCalled());
+    expect(request).toBeDisabled();
+    expect(sendRequestRedemption).not.toHaveBeenCalled();
+  });
 });
