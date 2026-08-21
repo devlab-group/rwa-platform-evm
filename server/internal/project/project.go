@@ -415,7 +415,7 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 		reasons = append(reasons, "Vault and/or RedemptionEscrow is not Allowed in the compliance registry")
 	}
 
-	configOK, configReason, err := verifyImmutableConfig(ctx, s.client, p)
+	configOK, configReason, err := verifyImmutableConfig(ctx, s.client, p, common.HexToAddress(p.Addresses.Strategy))
 	if err != nil {
 		return nil, fmt.Errorf("project: verify immutable config: %w", err)
 	}

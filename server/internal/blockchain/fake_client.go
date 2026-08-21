@@ -46,6 +46,11 @@ type FakeClient struct {
 	GasPrice      *big.Int
 	EstimatedGas  uint64
 	CallResponses map[string][]byte // keyed by hex(msg.Data)
+	// Calls records every CallContract in order, so a test can assert
+	// WHERE a read went, not only what it returned — CallResponses is
+	// keyed by calldata alone and so cannot distinguish two contracts
+	// exposing the same method.
+	Calls []ethereum.CallMsg
 	// DefaultCallResponse, if set, is returned by CallContract for any
 	// calldata not present in CallResponses, instead of erroring. Handy for
 	// tests that need every hasRole/isAllowed-style call in a batch to
@@ -178,6 +183,7 @@ func (f *FakeClient) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (uin
 func (f *FakeClient) CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, msg)
 	key := common.Bytes2Hex(msg.Data)
 	if resp, ok := f.CallResponses[key]; ok {
 		return resp, nil

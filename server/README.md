@@ -279,6 +279,9 @@ plus:
 - `rwa_redemptions_pending_count` / `rwa_redemptions_pending_oldest_age_seconds` /
   `rwa_redemptions_funded_unclaimed_count`.
 - `rwa_alerts_fired_total{kind}` — incremented by the alert evaluators below, per finding, per tick.
+- `rwa_config_drift` — 1 when the deployed stack's on-chain wiring no longer matches the project
+  record, 0 when it matches. A gauge, not a counter: drift is a standing condition that clears
+  only when the wiring is put back (or the record corrected).
 
 Business gauges refresh on a 30s ticker (`cmd/platform`'s `refreshBusinessGauges`), reading live
 from `app.Sales.GetInventory` and the redemption read model.
@@ -290,6 +293,15 @@ redemption older than `alerts.pending_redemption_sla`; `EvaluateFundedClaimFailu
 its last state change. `cmd/platform` runs both on a 5-minute ticker; every finding is logged,
 appended to the audit log (`category: "alerts"`, visible via `GET /api/v1/audit-logs`), and
 counted in `rwa_alerts_fired_total`.
+
+A third 5-minute ticker re-verifies the deployed stack's wiring against the chain
+(`project.CheckConfigDrift`). Deployment verification otherwise runs exactly once, at adoption,
+so nothing re-evaluated it afterwards and an out-of-band rewiring stayed invisible for the life
+of the deployment. It is read-only — a mismatch is reported as a `config_drift` alert (log, audit
+log, `rwa_config_drift`), never by demoting a project out of Active. Legitimately mutable state is
+excluded so the alert stays meaningful: treasury/auditor/strategy are compared against the live
+event-sourced projection rather than the deploy snapshot, and prices and role holders are not
+checked at all (they move by design and are already projected into `Security`).
 
 ## Backup, restore, and reindex
 

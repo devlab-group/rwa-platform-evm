@@ -126,6 +126,13 @@ type SecurityState struct {
 	// projection.
 	PendingAdmin string `json:"pendingAdmin,omitempty" bson:"pendingAdmin,omitempty"`
 	Treasurer    string `json:"treasurer,omitempty" bson:"treasurer,omitempty"`
+	// Strategy is the pricing strategy the Vault CURRENTLY points at, folded
+	// from Vault.StrategyChanged. Vault.setStrategy is admin-callable, so
+	// Addresses.Strategy — written once at deploy verification and never
+	// rewritten — is only the baseline. This is what the price projection
+	// below reads from, and what the indexer's watched-address set is
+	// rebuilt from after a swap; empty until the fold has a value.
+	Strategy string `json:"strategy,omitempty" bson:"strategy,omitempty"`
 	// PurchasePricePerWholeToken/RedemptionPricePerWholeToken are the live
 	// strategy prices. NOTE: the /project API response does not currently
 	// expose price fields at all (see dto.ProjectResponse) — flagged as a

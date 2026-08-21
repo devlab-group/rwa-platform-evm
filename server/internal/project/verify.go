@@ -315,7 +315,14 @@ func verifySystemAllowlist(ctx context.Context, client blockchain.Client, addrs 
 // requested value in the first place). Returns (false, humanReadableReason,
 // nil) on the first mismatch found, or a non-nil error only for an
 // RPC/decode failure.
-func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *models.Project) (bool, string, error) {
+//
+// vaultStrategy is what Vault.strategy() must currently equal. It is a
+// parameter rather than p.Addresses.Strategy because Vault.setStrategy is
+// admin-callable: at deploy time the two are the same, but a later drift
+// re-check has to compare against the LIVE strategy (Security.Strategy) or
+// it would report every legitimate swap as a mismatch. RedemptionEscrow's
+// strategy is immutable and so keeps comparing against the deployed one.
+func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *models.Project, vaultStrategy common.Address) (bool, string, error) {
 	tokenABI := bindings.NewERC20().ABI
 	vaultABI := bindings.NewVault().ABI
 	escrowABI := bindings.NewRedemptionEscrow().ABI
@@ -352,7 +359,7 @@ func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *mod
 		{"vault.token", vaultABI, vault, "token", token},
 		{"vault.quoteToken", vaultABI, vault, "quoteToken", wantQuoteToken},
 		{"vault.treasury", vaultABI, vault, "treasury", wantTreasury},
-		{"vault.strategy", vaultABI, vault, "strategy", strategy},
+		{"vault.strategy", vaultABI, vault, "strategy", vaultStrategy},
 		{"escrow.token", escrowABI, escrow, "token", token},
 		{"escrow.quoteToken", escrowABI, escrow, "quoteToken", wantQuoteToken},
 		{"escrow.vault", escrowABI, escrow, "vault", vault},

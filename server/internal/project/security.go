@@ -110,20 +110,35 @@ func foldSecurity(ctx context.Context, chainEvents repository.ChainEventReposito
 			state.Treasury = v
 		}
 	}
-	if a.Strategy != "" {
-		if v, ok, err := latestStringField(ctx, chainEvents, chainID, a.Strategy, "PurchasePriceUpdated", "newPrice"); err != nil {
+	// The Vault's strategy pointer is mutable, so fold it BEFORE reading
+	// prices: after a setStrategy the prices that matter are the ones the
+	// NEW strategy emits, and the old contract's last PurchasePriceUpdated
+	// is not the live price any more. Everything downstream (the price
+	// fold, the role fold, and the indexer address set rebuilt from
+	// Security.Strategy) follows this address rather than the deploy
+	// baseline.
+	state.Strategy = a.Strategy
+	if a.Vault != "" {
+		if v, ok, err := latestAddressField(ctx, chainEvents, chainID, a.Vault, "StrategyChanged", "newStrategy"); err != nil {
+			return nil, err
+		} else if ok {
+			state.Strategy = v
+		}
+	}
+	if state.Strategy != "" {
+		if v, ok, err := latestStringField(ctx, chainEvents, chainID, state.Strategy, "PurchasePriceUpdated", "newPrice"); err != nil {
 			return nil, err
 		} else if ok {
 			state.PurchasePricePerWholeToken = v
 		}
-		if v, ok, err := latestStringField(ctx, chainEvents, chainID, a.Strategy, "RedemptionPriceUpdated", "newPrice"); err != nil {
+		if v, ok, err := latestStringField(ctx, chainEvents, chainID, state.Strategy, "RedemptionPriceUpdated", "newPrice"); err != nil {
 			return nil, err
 		} else if ok {
 			state.RedemptionPricePerWholeToken = v
 		}
 	}
 
-	perContract, err := foldRoles(ctx, chainEvents, chainID, p)
+	perContract, err := foldRoles(ctx, chainEvents, chainID, p, state.Strategy)
 	if err != nil {
 		return nil, err
 	}
@@ -131,9 +146,9 @@ func foldSecurity(ctx context.Context, chainEvents repository.ChainEventReposito
 	// Derived single-value role fields: prefer the still-holding configured
 	// address (so the field is stable when nothing changed), else the
 	// lexicographically-first current holder, else empty (role vacated).
-	state.Admin = derive(p.Admin, unionHolders(perContract, "DEFAULT_ADMIN_ROLE", a.Token, a.Compliance, a.SupplyController, a.Vault, a.RedemptionEscrow, a.Strategy))
+	state.Admin = derive(p.Admin, unionHolders(perContract, "DEFAULT_ADMIN_ROLE", a.Token, a.Compliance, a.SupplyController, a.Vault, a.RedemptionEscrow, state.Strategy))
 	state.ComplianceOperator = derive(p.ComplianceOperator, unionHolders(perContract, "COMPLIANCE_ROLE", a.Compliance))
-	state.Pricer = derive(p.Pricer, unionHolders(perContract, "PRICER_ROLE", a.Strategy))
+	state.Pricer = derive(p.Pricer, unionHolders(perContract, "PRICER_ROLE", state.Strategy))
 	state.Treasurer = derive(p.Treasurer, unionHolders(perContract, "TREASURER_ROLE", a.Vault, a.RedemptionEscrow))
 	state.RedemptionManager = derive(p.RedemptionManager, unionHolders(perContract, "REDEMPTION_MANAGER_ROLE", a.RedemptionEscrow))
 
@@ -208,7 +223,9 @@ func pendingAdminOnContract(ctx context.Context, chainEvents repository.ChainEve
 // at deploy) and applies RoleGranted/RoleRevoked deltas in (block, logIndex)
 // order. The result is keyed by lowercased contract address -> role name ->
 // set of holder hex addresses.
-func foldRoles(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, p *models.Project) (map[string]map[string]map[string]bool, error) {
+// strategyAddr is the LIVE strategy (Security.Strategy), which after a
+// Vault.setStrategy is no longer p.Addresses.Strategy — see foldSecurity.
+func foldRoles(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, p *models.Project, strategyAddr string) (map[string]map[string]map[string]bool, error) {
 	a := p.Addresses
 	perContract := map[string]map[string]map[string]bool{}
 	holderSet := func(addr, role string) map[string]bool {
@@ -236,14 +253,24 @@ func foldRoles(ctx context.Context, chainEvents repository.ChainEventRepository,
 	// expected map.
 	contracts := []struct{ label, addr string }{
 		{"token", a.Token}, {"compliance", a.Compliance}, {"supplyController", a.SupplyController},
-		{"vault", a.Vault}, {"redemptionEscrow", a.RedemptionEscrow}, {"strategy", a.Strategy},
+		{"vault", a.Vault}, {"redemptionEscrow", a.RedemptionEscrow}, {"strategy", strategyAddr},
 	}
+	// A strategy swapped in after deployment carries no verified baseline —
+	// verifyRoles never checked it — so seeding the deploy config's admin
+	// and pricer onto it would assert authority nobody confirmed. Its
+	// holders are exactly what its own role events say, and nothing else.
+	swappedStrategy := strategyAddr != a.Strategy
 	for _, c := range contracts {
+		if c.label == "strategy" && swappedStrategy {
+			continue
+		}
 		seed(c.addr, "DEFAULT_ADMIN_ROLE", p.Admin) // admin is DEFAULT_ADMIN on every child
 	}
 	seed(a.Token, "PAUSER_ROLE", p.Admin)
 	seed(a.Compliance, "COMPLIANCE_ROLE", p.ComplianceOperator)
-	seed(a.Strategy, "PRICER_ROLE", p.Pricer) // strategy only — the Vault gates nothing on it
+	if !swappedStrategy {
+		seed(a.Strategy, "PRICER_ROLE", p.Pricer) // strategy only — the Vault gates nothing on it
+	}
 	seed(a.Vault, "TREASURER_ROLE", p.Treasurer)
 	seed(a.RedemptionEscrow, "TREASURER_ROLE", p.Treasurer)
 	seed(a.RedemptionEscrow, "REDEMPTION_MANAGER_ROLE", p.RedemptionManager)

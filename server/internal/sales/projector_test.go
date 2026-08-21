@@ -58,7 +58,7 @@ func TestReconcileRebuildsPurchases(t *testing.T) {
 	vaultAddr := common.HexToAddress("0x0000000000000000000000000000000000000A")
 	events := memory.NewChainEventRepository()
 	purchases := memory.NewPurchaseRepository()
-	svc := New(nil, vaultAddr, common.Address{}, common.Address{}, purchases)
+	svc := New(nil, vaultAddr, common.Address{}, purchases)
 
 	ctx := context.Background()
 	if err := events.Create(ctx, &models.ChainEvent{
@@ -112,7 +112,7 @@ func TestReconcileNeverExposesEmptyOrPartialPurchasesToConcurrentReaders(t *test
 	vaultAddr := common.HexToAddress("0x0000000000000000000000000000000000000A")
 	events := memory.NewChainEventRepository()
 	purchases := delayedPurchaseRepo{memory.NewPurchaseRepository()}
-	svc := New(nil, vaultAddr, common.Address{}, common.Address{}, purchases)
+	svc := New(nil, vaultAddr, common.Address{}, purchases)
 
 	ctx := context.Background()
 	for i, tx := range []string{"0x1", "0x2", "0x3"} {

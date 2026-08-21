@@ -325,3 +325,55 @@ func TestReconcileSecuritySkipsNonActive(t *testing.T) {
 		t.Error("a non-Active project must not be projected")
 	}
 }
+
+// TestReconcileSecurityStrategySwap: Vault.setStrategy repoints the Vault at
+// a different pricing contract. The projection must follow it — the live
+// address, and the prices from the NEW contract, not the last ones the old
+// one emitted before it stopped being used.
+func TestReconcileSecurityStrategySwap(t *testing.T) {
+	repos := setup(t)
+	newStrategy := addr("0x0000000000000000000000000000000000000b11")
+
+	// The old strategy priced up to the swap; the new one prices after it.
+	addEvent(t, repos, strategyAddr, "PurchasePriceUpdated", 10, 0, map[string]any{"newPrice": "1500"})
+	addEvent(t, repos, strategyAddr, "RedemptionPriceUpdated", 10, 1, map[string]any{"newPrice": "1400"})
+	addEvent(t, repos, vaultAddr, "StrategyChanged", 11, 0, map[string]any{"previousStrategy": strategyAddr, "newStrategy": newStrategy})
+	addEvent(t, repos, newStrategy, "PurchasePriceUpdated", 12, 0, map[string]any{"newPrice": "2500"})
+	addEvent(t, repos, newStrategy, "RedemptionPriceUpdated", 12, 1, map[string]any{"newPrice": "2400"})
+
+	s := reconcile(t, repos)
+	if s.Strategy != newStrategy {
+		t.Errorf("Strategy = %s, want the Vault's current strategy %s", s.Strategy, newStrategy)
+	}
+	if s.PurchasePricePerWholeToken != "2500" || s.RedemptionPricePerWholeToken != "2400" {
+		t.Errorf("prices = %s/%s, want the new strategy's 2500/2400", s.PurchasePricePerWholeToken, s.RedemptionPricePerWholeToken)
+	}
+}
+
+// TestReconcileSecurityStrategySwapDropsUnverifiedBaseline: the deploy-config
+// role baseline was verified against the DEPLOYED strategy only. A swapped-in
+// contract inherits none of it — its authority is exactly what its own role
+// events say — so the configured pricer must not be reported as holding
+// PRICER_ROLE on a contract nobody checked.
+func TestReconcileSecurityStrategySwapDropsUnverifiedBaseline(t *testing.T) {
+	repos := setup(t)
+	newStrategy := addr("0x0000000000000000000000000000000000000b11")
+	addEvent(t, repos, vaultAddr, "StrategyChanged", 11, 0, map[string]any{"previousStrategy": strategyAddr, "newStrategy": newStrategy})
+
+	s := reconcile(t, repos)
+	if s.Pricer != "" {
+		t.Errorf("Pricer = %s, want empty: the deploy baseline says nothing about the swapped-in strategy", s.Pricer)
+	}
+	for _, h := range s.Roles["PRICER_ROLE"] {
+		if h == pricer {
+			t.Errorf("PRICER_ROLE still lists the deploy-config pricer %s after a strategy swap: %v", pricer, s.Roles["PRICER_ROLE"])
+		}
+	}
+
+	// A grant on the NEW strategy is what puts a pricer back.
+	addEvent(t, repos, newStrategy, "RoleGranted", 12, 0, map[string]any{"role": roleHex(bindings.PricerRole), "account": pricer, "sender": adminA})
+	s = reconcile(t, repos)
+	if s.Pricer != pricer {
+		t.Errorf("Pricer = %s after a grant on the new strategy, want %s", s.Pricer, pricer)
+	}
+}

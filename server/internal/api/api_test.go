@@ -120,7 +120,7 @@ func setupTestApp(t *testing.T) *testEnv {
 	// the test App does too.
 	kycProvider, _ := kyc.New(kyc.Config{Mode: kyc.ModeNone, GenericHMACSecret: "webhook-secret"})
 	status := compliance.NewStatusService(txs, common.HexToAddress("0x0000000000000000000000000000000000C0A1"), blockchain.NewStaticKeySigner(complianceKey))
-	salesSvc := sales.New(client, vaultAddr, common.HexToAddress("0xA001"), common.HexToAddress("0x57A7A"), repos.Purchases)
+	salesSvc := sales.New(client, vaultAddr, common.HexToAddress("0xA001"), repos.Purchases)
 	complianceRegistryAddr := common.HexToAddress("0x0000000000000000000000000000000000C0A1")
 	redemptionSvc := redemption.New(client, escrowAddr, repos.RedemptionRequests, complianceRegistryAddr)
 

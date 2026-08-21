@@ -755,7 +755,7 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 
 	// The server wires its address-dependent services (records/sales/
 	// redemptions/compliance-status) asynchronously once the project reaches
-	// Active (cmd/platform watchForActivation rebuilds the app + router). Wait
+	// Active (cmd/platform watchProject rebuilds the app + router). Wait
 	// until a service-gated endpoint stops reporting 501 so the subsequent
 	// lifecycle steps don't race that rebuild.
 	if err := poll("address-dependent services wired after activation", 60*time.Second, 2*time.Second, func() (bool, error) {

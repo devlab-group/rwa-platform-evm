@@ -234,7 +234,10 @@ Document each rehearsal's date, admin, and result.
   public API port — scrape it from your monitoring network only. Business gauges include Vault
   inventory, pending-redemption count/oldest-age, and funded-unclaimed count; alert evaluators
   (pending-redemption SLA, funded-claim-failure) fire on a 5-minute ticker into logs + audit log +
-  the `rwa_alerts_fired_total` counter.
+  the `rwa_alerts_fired_total` counter. A `config_drift` alert on the same ticker means the
+  deployed stack's on-chain wiring stopped matching the project record — `rwa_config_drift` stays
+  1 until it matches again. Deliberate rotations (treasury, auditor, strategy) and price moves are
+  not drift; a rewired cross-contract pointer is.
 - **Reindex**: `cmd/reindex` drops only reconstructable read models (chain_events, checkpoints,
   purchases, redemption_requests) — never asset profiles, ownership flags, or audit
   logs. `server/ops/reindex_rehearsal.sh` proves before/after collection parity.

@@ -784,6 +784,41 @@ func TestProjectResponsePriceOverlay(t *testing.T) {
 	}
 }
 
+// TestProjectResponseStrategyOverlay: addresses.strategy is what the admin
+// console targets when it sets a price or grants PRICER_ROLE, so after a
+// Vault.setStrategy it must report the live strategy, not the deploy
+// baseline — otherwise those transactions go to the contract the Vault
+// stopped pricing through.
+func TestProjectResponseStrategyOverlay(t *testing.T) {
+	env := setupTestApp(t)
+	ctx := context.Background()
+	p, err := env.app.Repos.Projects.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployed := "0x000000000000000000000000000000000000A11A"
+	p.Addresses.Strategy = deployed
+
+	// No projection yet: the deploy baseline is what there is.
+	p.Security = nil
+	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := getProjectResp(t, env).Addresses.Strategy; got != deployed {
+		t.Fatalf("strategy = %s with no projection, want the baseline %s", got, deployed)
+	}
+
+	// The Vault has since been repointed.
+	swapped := "0x000000000000000000000000000000000000B11B"
+	p.Security = &models.SecurityState{Strategy: swapped}
+	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := getProjectResp(t, env).Addresses.Strategy; got != swapped {
+		t.Fatalf("strategy = %s after a swap, want the live %s", got, swapped)
+	}
+}
+
 // TestProjectResponseLifecycleFields confirms GET /project surfaces the
 // deployment lifecycle status and verification note the admin UI polls.
 func TestProjectResponseLifecycleFields(t *testing.T) {

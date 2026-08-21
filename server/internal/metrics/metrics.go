@@ -63,6 +63,16 @@ var (
 		Name: "rwa_storage_up", Help: "1 if the last periodic MongoDB ping succeeded, 0 otherwise.",
 	})
 
+	// ConfigDrift is 1 when the last config-drift check found the deployed
+	// stack's on-chain wiring no longer matching what the project record
+	// says it should be (see project.CheckConfigDrift), 0 when it matched.
+	// A gauge rather than a counter because drift is a standing condition,
+	// not an event: it stays 1 until the wiring is put back or the record
+	// is corrected. Absent until the first check runs.
+	ConfigDrift = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "rwa_config_drift", Help: "1 if the last config-drift check found on-chain wiring that no longer matches the project record, 0 otherwise.",
+	})
+
 	// IdempotencyOutboxErrorsTotal counts IdempotencyRepository.Complete/
 	// Release calls that returned an error after the handler's side effect
 	// and HTTP response had already happened. A completion failure after

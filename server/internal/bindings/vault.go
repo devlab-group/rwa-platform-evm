@@ -58,6 +58,18 @@ func (v Vault) UnpackInventory(data []byte) (*big.Int, error) {
 	return abi.ConvertType(out[0], new(big.Int)).(*big.Int), nil
 }
 
+// PackStrategy builds calldata for the strategy() view call.
+func (v Vault) PackStrategy() ([]byte, error) { return v.ABI.Pack("strategy") }
+
+// UnpackStrategy decodes the return value of strategy().
+func (v Vault) UnpackStrategy(data []byte) (common.Address, error) {
+	out, err := v.ABI.Unpack("strategy", data)
+	if err != nil {
+		return common.Address{}, err
+	}
+	return *abi.ConvertType(out[0], new(common.Address)).(*common.Address), nil
+}
+
 // PackPreviewBuy builds calldata for previewBuy(uint256).
 func (v Vault) PackPreviewBuy(tokenAmount *big.Int) ([]byte, error) {
 	return v.ABI.Pack("previewBuy", tokenAmount)

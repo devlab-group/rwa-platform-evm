@@ -129,6 +129,14 @@ func ToProjectResponse(p *models.Project, tokenUnit string, finalityConfirmation
 	// first projection has run.
 	if s := p.Security; s != nil {
 		resp.Paused = s.Paused
+		// The Vault's strategy pointer is mutable, and addresses.strategy is
+		// what the admin console targets when it sets a price or grants
+		// PRICER_ROLE (web/src/routes/admin/Security.tsx). Reporting the
+		// deploy baseline after a setStrategy would silently point those
+		// transactions at the contract the Vault stopped pricing through.
+		if s.Strategy != "" {
+			resp.Addresses.Strategy = s.Strategy
+		}
 		resp.Auditor = s.Auditor
 		resp.Treasury = s.Treasury
 		resp.RedemptionManager = s.RedemptionManager

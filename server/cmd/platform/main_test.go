@@ -76,7 +76,7 @@ var _ keys.Provider = (*fakeKeyProvider)(nil)
 
 // TestProviderRegistryTracksAllGenerations is the regression test for
 // providerRegistry: a provider set added by an initial buildApp call AND a
-// later watchForActivation rebuild must BOTH be closed at shutdown, not
+// later watchProject rebuild must BOTH be closed at shutdown, not
 // just whichever set was added last.
 func TestProviderRegistryTracksAllGenerations(t *testing.T) {
 	reg := &providerRegistry{}
@@ -118,7 +118,7 @@ func TestAddressesFromProject(t *testing.T) {
 // addresses from the single Project record ONLY when it is Active — a
 // missing record (factory-only boot) or a not-yet-Active project yields the
 // zero set, leaving every address-dependent service gated until
-// watchForActivation wires them post-activation.
+// watchProject wires them post-activation.
 func TestLoadProjectAddressesOnlyWhenActive(t *testing.T) {
 	ctx := context.Background()
 
@@ -287,5 +287,36 @@ func TestRunAsReconcilerLeaderSerializesConcurrentReplicas(t *testing.T) {
 	_, ok, err = repos.NonceLeases.Acquire(ctx, "reconciler:test/leader:31337", "other-replica", time.Minute)
 	if err != nil || !ok {
 		t.Fatalf("expected the lease to be free again after runAsReconcilerLeader returned: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestAddressesFromProjectPrefersLiveStrategy: Addresses.Strategy is the
+// deploy baseline and is never rewritten, so after a Vault.setStrategy the
+// address the indexer must scan and decode is Security.Strategy — the live
+// pointer folded from StrategyChanged. Without this, a restart quietly
+// resubscribes to the strategy the Vault stopped pricing through.
+func TestAddressesFromProjectPrefersLiveStrategy(t *testing.T) {
+	p := &models.Project{
+		Addresses: models.Addresses{Token: "0xT001", Vault: "0xV001", Strategy: "0xST01"},
+		Auditor:   "0xAUD1",
+	}
+
+	// No projection yet (or no swap recorded): the baseline stands.
+	if got, _ := addressesFromProject(p); got.Strategy != "0xST01" {
+		t.Errorf("strategy = %q with no projection, want the deploy baseline 0xST01", got.Strategy)
+	}
+	p.Security = &models.SecurityState{}
+	if got, _ := addressesFromProject(p); got.Strategy != "0xST01" {
+		t.Errorf("strategy = %q with an empty projection, want the deploy baseline 0xST01", got.Strategy)
+	}
+
+	// A swap recorded by the projector wins, and nothing else moves.
+	p.Security.Strategy = "0xST02"
+	got, auditor := addressesFromProject(p)
+	if got.Strategy != "0xST02" {
+		t.Errorf("strategy = %q after a swap, want the live 0xST02", got.Strategy)
+	}
+	if got.Vault != "0xV001" || got.Token != "0xT001" || auditor != "0xAUD1" {
+		t.Errorf("unrelated wiring changed: %+v auditor=%q", got, auditor)
 	}
 }

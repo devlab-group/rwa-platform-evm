@@ -120,8 +120,8 @@ func main() {
 	// activates the project, rebuild the app/router/background loops from
 	// the now-known addresses — no restart required. A no-op when the
 	// server already has every address configured (nothing to watch for).
-	if chainClient != nil && app.Project != nil && app.Records == nil {
-		go watchForActivation(ctx, cfg, repos, chainClient, mongoClient, handler, providers, &bgLoops)
+	if chainClient != nil && app.Project != nil {
+		go watchProject(ctx, cfg, repos, chainClient, mongoClient, handler, providers, &bgLoops, addrs)
 	}
 
 	// Conservative read/write/idle timeouts and a header-size cap on
@@ -170,7 +170,7 @@ func main() {
 		// process is shutting down and won't sign anything else (see
 		// keys.Provider.Close's doc comment). providers
 		// tracks every keys.Provider ever created, including ones replaced
-		// by watchForActivation's rebuild (see providerRegistry's doc
+		// by watchProject's rebuild (see providerRegistry's doc
 		// comment) — not just the ones buildApp created at initial startup.
 		providers.closeAll()
 	}()
@@ -189,14 +189,14 @@ func main() {
 // project, every route depending on those services needs to start working
 // WITHOUT a server restart. Swapping one atomic pointer here is far less
 // invasive than making every api.App field individually swappable (~50
-// read call sites across the api package) — see watchForActivation.
+// read call sites across the api package) — see watchProject.
 type routerHandler struct{ p atomic.Pointer[gin.Engine] }
 
 func (h *routerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.p.Load().ServeHTTP(w, r) }
 func (h *routerHandler) set(r *gin.Engine)                                { h.p.Store(r) }
 
 // providerRegistry tracks every keys.Provider created over the process's
-// lifetime — including ones watchForActivation's rebuild creates well
+// lifetime — including ones watchProject's rebuild creates well
 // after buildApp's initial call — so shutdown can zero every hot key's
 // in-memory material exactly once each, not just the set
 // buildApp happened to create at startup.
@@ -221,15 +221,25 @@ func (r *providerRegistry) closeAll() {
 	}
 }
 
-// watchForActivation polls the project record until it reaches Active (the
-// deployment reconciler started inside startBackgroundLoops is what
-// actually drives that transition), then rebuilds the App/router/
-// background loops from the newly discovered contract addresses and
-// atomically swaps them in. It exits after one successful
-// rebuild or when ctx is done — the one-project-per-server
-// invariant means this transition happens at most once in the process's
-// lifetime, so there's nothing further to watch for afterward.
-func watchForActivation(ctx context.Context, cfg config.Config, repos *repository.Repositories, chainClient blockchain.Client, mongoClient *mongodriver.Client, handler *routerHandler, providers *providerRegistry, bgLoops *atomic.Pointer[context.CancelFunc]) {
+// watchProject polls the project record and rebuilds the App/router/
+// background loops whenever the address set they were wired from stops
+// matching the record's. Two things move it:
+//
+//   - Activation. A factory-only boot starts with the zero address set and
+//     every address-dependent service nil; once the deployment reconciler
+//     (started inside startBackgroundLoops) drives the project to Active,
+//     the discovered addresses are wired in without a restart. The
+//     one-project-per-server invariant means this happens at most once.
+//   - A strategy swap. Vault.setStrategy repoints the Vault at a different
+//     pricing contract, and Security.Strategy follows it (see
+//     project.ReconcileSecurity). The indexer's watched-address set and its
+//     decoder are both fixed at construction, so the only way to scan the
+//     new strategy's price events — and to type them rather than drop them
+//     as generic — is to rebuild. Unlike activation this can recur, so this
+//     loop keeps watching instead of returning after the first rewire.
+//
+// wired is the address set the caller already started background loops with.
+func watchProject(ctx context.Context, cfg config.Config, repos *repository.Repositories, chainClient blockchain.Client, mongoClient *mongodriver.Client, handler *routerHandler, providers *providerRegistry, bgLoops *atomic.Pointer[context.CancelFunc], wired models.Addresses) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -243,9 +253,20 @@ func watchForActivation(ctx context.Context, cfg config.Config, repos *repositor
 		if err != nil || p.Status != models.ProjectStatusActive {
 			continue // repository.ErrNotFound, still Deploying/Verifying, or Failed (nothing to rewire for) — keep watching
 		}
-
-		log.Printf("platform: project %s reached Active; rewiring dependent services from its discovered addresses", p.ProjectID)
 		addrs, auditor := addressesFromProject(p)
+		if addrs == wired {
+			continue
+		}
+
+		switch {
+		case wired.Token == "":
+			log.Printf("platform: project %s reached Active; rewiring dependent services from its discovered addresses", p.ProjectID)
+		case addrs.Strategy != wired.Strategy:
+			log.Printf("platform: project %s switched pricing strategy %s -> %s; rebuilding the indexer address set and dependent services", p.ProjectID, wired.Strategy, addrs.Strategy)
+		default:
+			log.Printf("platform: project %s address set changed; rewiring dependent services", p.ProjectID)
+		}
+
 		newApp, newProviders := buildApp(cfg, addrs, auditor, repos, chainClient, mongoClient)
 		providers.add(newProviders)
 
@@ -254,12 +275,12 @@ func watchForActivation(ctx context.Context, cfg config.Config, repos *repositor
 		handler.set(newRouter)
 
 		if old := bgLoops.Load(); old != nil {
-			(*old)() // cancel the background loops that were reading the pre-activation (mostly-nil-service) App/addresses
+			(*old)() // cancel the loops reading the superseded App/address set
 		}
 		bgCtx, cancel := context.WithCancel(ctx)
 		bgLoops.Store(&cancel)
 		startBackgroundLoops(bgCtx, cfg, addrs, repos, chainClient, newApp, mongoClient)
-		return
+		wired = addrs
 	}
 }
 
@@ -270,7 +291,7 @@ func watchForActivation(ctx context.Context, cfg config.Config, repos *repositor
 // address-dependent service then starts gated/deferred, exactly as an unset
 // config address did before) whenever there is no Active project yet — a
 // factory-only boot, a still-Deploying/Verifying project, or a Failed one —
-// so the deployment reconciler + watchForActivation can wire services once
+// so the deployment reconciler + watchProject can wire services once
 // the project reaches Active without a restart.
 func loadProjectAddresses(ctx context.Context, repos *repository.Repositories) (models.Addresses, string) {
 	p, err := repos.Projects.Get(ctx)
@@ -289,7 +310,17 @@ func loadProjectAddresses(ctx context.Context, repos *repository.Repositories) (
 // can't happen before a project is Active, and the record's Auditor is the
 // sole authority.
 func addressesFromProject(p *models.Project) (models.Addresses, string) {
-	return p.Addresses, p.Auditor
+	addrs := p.Addresses
+	// Addresses.Strategy is the deploy baseline and is never rewritten;
+	// Vault.setStrategy can point the Vault at a different pricing contract
+	// afterwards. Security.Strategy is that live pointer, folded from
+	// StrategyChanged by ReconcileSecurity — scan and decode THAT, or the
+	// indexer keeps watching a strategy the Vault no longer prices through
+	// (and a restart would silently do the same).
+	if p.Security != nil && p.Security.Strategy != "" {
+		addrs.Strategy = p.Security.Strategy
+	}
+	return addrs, p.Auditor
 }
 
 // connectRepositories resolves the persistence backend per
@@ -582,7 +613,7 @@ func buildApp(cfg config.Config, addrs models.Addresses, auditor string, repos *
 	}
 
 	if addrs.Vault != "" {
-		app.Sales = sales.New(chainClient, common.HexToAddress(addrs.Vault), common.HexToAddress(addrs.QuoteToken), common.HexToAddress(addrs.Strategy), repos.Purchases)
+		app.Sales = sales.New(chainClient, common.HexToAddress(addrs.Vault), common.HexToAddress(addrs.QuoteToken), repos.Purchases)
 	}
 	if addrs.RedemptionEscrow != "" {
 		app.Redemptions = redemption.New(chainClient, common.HexToAddress(addrs.RedemptionEscrow), repos.RedemptionRequests, common.HexToAddress(addrs.Compliance))
@@ -680,7 +711,7 @@ func startBackgroundLoops(ctx context.Context, cfg config.Config, addrs models.A
 			indexer.WithDeadLetterQueue(repos.IndexerDeadLetters))
 		go runTicker(ctx, 5*time.Second, func() {
 			// context.Canceled is an expected teardown signal (this loop's ctx is
-			// cancelled when watchForActivation rebuilds after the project reaches
+			// cancelled when watchProject rebuilds after the project reaches
 			// Active, and on shutdown) — not a poll failure. Logging it as an
 			// "indexer poll error" is misleading noise; the in-flight RPC to the
 			// chain is simply abandoned and a fresh indexer resumes.
@@ -810,6 +841,15 @@ func startBackgroundLoops(ctx context.Context, cfg config.Config, addrs models.A
 		})
 	}
 
+	// Re-verify the deployed stack's wiring against the chain. VerifyDeployment
+	// runs these checks once, at adoption, and ReconcileDeployment is a no-op
+	// for a project already Active on the same deploy tx — so without this
+	// nothing ever re-evaluates them and an out-of-band rewiring stays
+	// invisible. Read-only: it reports, it never demotes the project.
+	if app.Project != nil && addrs.Token != "" {
+		go runTicker(ctx, 5*time.Minute, func() { checkConfigDrift(ctx, repos, chainClient, app) })
+	}
+
 	go runTicker(ctx, 30*time.Second, func() { refreshBusinessGauges(ctx, repos, app) })
 	go runTicker(ctx, 5*time.Minute, func() { evaluateAlerts(ctx, cfg, repos, app) })
 
@@ -900,6 +940,31 @@ func evaluateAlerts(ctx context.Context, cfg config.Config, repos *repository.Re
 				"message": a.Message, "since": a.Since, "ageSeconds": a.Age.Seconds(),
 			})
 		}
+	}
+}
+
+// checkConfigDrift reports a deployed stack whose on-chain wiring no longer
+// matches the project record, the same way evaluateAlerts reports an SLA
+// breach: a log line, an audit-log entry and a Prometheus signal. The gauge
+// is set on every outcome (including "no drift"), so a deployment that is put
+// back in order clears it without waiting for a restart.
+func checkConfigDrift(ctx context.Context, repos *repository.Repositories, chainClient blockchain.Client, app *api.App) {
+	ok, reason, err := project.CheckConfigDrift(ctx, chainClient, repos.Projects)
+	if err != nil {
+		// An RPC failure is not drift — leave the gauge where it was rather
+		// than reporting a clean stack as broken (or a broken one as clean).
+		log.Printf("platform: config-drift check: %v", err)
+		return
+	}
+	if ok {
+		metrics.ConfigDrift.Set(0)
+		return
+	}
+	metrics.ConfigDrift.Set(1)
+	log.Printf("platform: ALERT [config_drift] %s", reason)
+	metrics.AlertsFiredTotal.WithLabelValues("config_drift").Inc()
+	if app.Audit != nil {
+		_ = app.Audit.Record(ctx, "alerts", "system", "alerts.config_drift", "project", map[string]any{"reason": reason})
 	}
 }
 

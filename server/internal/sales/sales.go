@@ -51,19 +51,39 @@ type Service struct {
 	strategy       bindings.FixedPriceStrategy
 	vaultAddr      common.Address
 	quoteTokenAddr common.Address
-	strategyAddr   common.Address
 	purchases      repository.PurchaseRepository
 }
 
 // New constructs a sales Service. purchases may be nil if the caller never
-// calls ListPurchases/Reconcile.
-func New(client blockchain.Client, vaultAddr, quoteTokenAddr, strategyAddr common.Address, purchases repository.PurchaseRepository) *Service {
+// calls ListPurchases/Reconcile. The strategy is deliberately NOT a
+// parameter — see strategyAddress.
+func New(client blockchain.Client, vaultAddr, quoteTokenAddr common.Address, purchases repository.PurchaseRepository) *Service {
 	return &Service{
 		client: client,
 		vault:  bindings.NewVault(), erc20: bindings.NewERC20(), strategy: bindings.NewFixedPriceStrategy(),
-		vaultAddr: vaultAddr, quoteTokenAddr: quoteTokenAddr, strategyAddr: strategyAddr,
+		vaultAddr: vaultAddr, quoteTokenAddr: quoteTokenAddr,
 		purchases: purchases,
 	}
+}
+
+// strategyAddress reads the Vault's CURRENT pricing strategy rather than
+// trusting the one recorded at deployment. Vault.setStrategy is
+// admin-callable (unlike RedemptionEscrow's immutable strategy), so the
+// deployed address is a snapshot, not an invariant: an admin who swaps the
+// strategy would otherwise leave this public, unauthenticated price feed
+// quoting a contract that the investor's own client-side Vault.previewBuy
+// no longer routes through — the server advertising one price while the
+// buy executes at another.
+func (s *Service) strategyAddress(ctx context.Context) (common.Address, error) {
+	data, err := s.vault.PackStrategy()
+	if err != nil {
+		return common.Address{}, err
+	}
+	out, err := blockchain.Call(ctx, s.client, s.vaultAddr, data)
+	if err != nil {
+		return common.Address{}, fmt.Errorf("sales: Vault.strategy: %w", err)
+	}
+	return s.vault.UnpackStrategy(out)
 }
 
 // GetInventory reads Vault inventory, the Vault's quote-token balance, and
@@ -95,11 +115,15 @@ func (s *Service) GetInventory(ctx context.Context) (Inventory, error) {
 		return Inventory{}, err
 	}
 
-	purchasePrice, err := s.readStrategyPrice(ctx, "purchasePricePerWholeToken")
+	strategyAddr, err := s.strategyAddress(ctx)
 	if err != nil {
 		return Inventory{}, err
 	}
-	redemptionPrice, err := s.readStrategyPrice(ctx, "redemptionPricePerWholeToken")
+	purchasePrice, err := s.readStrategyPrice(ctx, strategyAddr, "purchasePricePerWholeToken")
+	if err != nil {
+		return Inventory{}, err
+	}
+	redemptionPrice, err := s.readStrategyPrice(ctx, strategyAddr, "redemptionPricePerWholeToken")
 	if err != nil {
 		return Inventory{}, err
 	}
@@ -112,7 +136,7 @@ func (s *Service) GetInventory(ctx context.Context) (Inventory, error) {
 	}, nil
 }
 
-func (s *Service) readStrategyPrice(ctx context.Context, method string) (*big.Int, error) {
+func (s *Service) readStrategyPrice(ctx context.Context, strategyAddr common.Address, method string) (*big.Int, error) {
 	var data []byte
 	var err error
 	switch method {
@@ -126,7 +150,7 @@ func (s *Service) readStrategyPrice(ctx context.Context, method string) (*big.In
 	if err != nil {
 		return nil, err
 	}
-	out, err := blockchain.Call(ctx, s.client, s.strategyAddr, data)
+	out, err := blockchain.Call(ctx, s.client, strategyAddr, data)
 	if err != nil {
 		return nil, fmt.Errorf("sales: strategy.%s: %w", method, err)
 	}
