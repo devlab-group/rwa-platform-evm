@@ -46,6 +46,13 @@ func (r *kycEventRepo) List(ctx context.Context) ([]*models.KYCEvent, error) {
 	return findMany[models.KYCEvent](ctx, r.coll, bson.M{}, options.Find().SetSort(bson.D{{Key: "receivedAt", Value: 1}}))
 }
 
+// ListAppliedWithTx backs the deep-reorg reopen scan; served by the
+// applyStatus index below.
+func (r *kycEventRepo) ListAppliedWithTx(ctx context.Context) ([]*models.KYCEvent, error) {
+	filter := bson.M{"applyStatus": models.KYCApplyApplied, "txId": bson.M{"$gt": ""}}
+	return findMany[models.KYCEvent](ctx, r.coll, filter, options.Find().SetSort(bson.D{{Key: "occurredAt", Value: 1}}))
+}
+
 func (r *kycEventRepo) ListPending(ctx context.Context) ([]*models.KYCEvent, error) {
 	// Claiming is included so the reconciler picks up an event whose claim
 	// was never resolved because Process died at the claim/finalize boundary.

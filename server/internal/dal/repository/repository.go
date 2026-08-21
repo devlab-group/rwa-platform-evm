@@ -154,6 +154,10 @@ type KYCEventRepository interface {
 	// queue. Claiming is included so an event durably created but never
 	// finalized (Process died at the claim/finalize boundary) is recovered.
 	ListPending(ctx context.Context) ([]*models.KYCEvent, error)
+	// ListAppliedWithTx returns the terminal-Applied events that still
+	// carry a transaction id — the only ones a deep reorg can force back
+	// open (WebhookReconciler.reopenReorgedApplied).
+	ListAppliedWithTx(ctx context.Context) ([]*models.KYCEvent, error)
 	// ClaimLatestForAddress atomically records (occurredAt,eventKey) as
 	// the current winning decision for address IFF it is strictly newer
 	// (by (occurredAt,eventKey) lexicographic order, the defined ordering
@@ -225,7 +229,25 @@ type TransactionRepository interface {
 	// ErrNotFound if id doesn't exist at all.
 	UpdateConditional(ctx context.Context, tx *models.Transaction, expectedVersion int) (bool, error)
 	List(ctx context.Context) ([]*models.Transaction, error)
-	ListByStatus(ctx context.Context, status models.TxStatus) ([]*models.Transaction, error)
+	// ListByStatuses returns every transaction whose Status is one of
+	// statuses. Passing none returns none.
+	ListByStatuses(ctx context.Context, statuses ...models.TxStatus) ([]*models.Transaction, error)
+	// ListUnfinalized returns the transactions TxManager.RefreshStatuses
+	// still has work for: everything except the permanently terminal
+	// statuses (Replaced/Failed), minus the Confirmed records that have
+	// already sat out their reorg-recheck window — i.e. Confirmed is
+	// included only from block confirmedFromBlock onwards. That last part
+	// matters because Confirmed is where every successful relay ends up
+	// and so dominates an aged collection; without it the tick would keep
+	// re-reading the whole history every 10s. The status set is expressed
+	// as an exclusion so a newly added status is picked up by default
+	// (the safe direction: refreshed needlessly, never stalled). Callers
+	// still apply their own finality check to what comes back — this is a
+	// narrowing, not the decision.
+	ListUnfinalized(ctx context.Context, confirmedFromBlock uint64) ([]*models.Transaction, error)
+	// ListReplacements returns every record created as the replacement of
+	// another (Replaces non-empty) — reconcileReplacements' work queue.
+	ListReplacements(ctx context.Context) ([]*models.Transaction, error)
 	// ListPage returns one bounded, ascending-SubmittedAt page via
 	// repository-level keyset pagination (see
 	// AssetRecordRepository.ListPage's doc comment), optionally filtered

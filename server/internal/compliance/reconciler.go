@@ -69,23 +69,17 @@ func (r *WebhookReconciler) Reconcile(ctx context.Context) error {
 // flipped its linked transaction to TxReorged (a deep, post-confirmation
 // reorg — see TxManager.RefreshStatuses) would otherwise stay permanently
 // "Applied" with no matching on-chain effect and nothing left to re-drive
-// it. Scanning every event each tick is more work than a dedicated
-// repository query would be, but keeps this fix entirely inside the
-// reconciler (in scope for this fix) rather than requiring a repository
-// interface change. Reopening just resets the event to Accepted with its
+// it. Reopening just resets the event to Accepted with its
 // TxID cleared; the standard ListPending -> reconcileOne -> submit path on
 // a later tick does the rest (including the supersede check), exactly as
 // it does for a freshly accepted webhook decision.
 func (r *WebhookReconciler) reopenReorgedApplied(ctx context.Context) error {
-	all, err := r.events.List(ctx)
+	all, err := r.events.ListAppliedWithTx(ctx)
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, e := range all {
-		if e.ApplyStatus != models.KYCApplyApplied || e.TxID == "" {
-			continue
-		}
 		tx, err := r.txs.Get(ctx, e.TxID)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("kyc event %s (%s): reopen check: %w", e.ID, e.Address, err))

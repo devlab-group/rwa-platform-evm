@@ -242,6 +242,26 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	if err != nil {
 		return err
 	}
+	// (status, blockNumber) backs the every-10s refresh tick:
+	// ListUnfinalized's two branches (status $nin, and Confirmed still
+	// inside its reorg-recheck window) and ListByStatuses, which uses the
+	// status prefix alone. Without it both are collection scans that grow
+	// with the deployment's whole transaction history.
+	_, err = db.Collection(collTransactions).Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "status", Value: 1}, {Key: "blockNumber", Value: 1}},
+	})
+	if err != nil {
+		return err
+	}
+	// replaces backs ListReplacements. Partial: only replacement records
+	// carry the field at all, and they are a small minority.
+	_, err = db.Collection(collTransactions).Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "replaces", Value: 1}},
+		Options: options.Index().SetPartialFilterExpression(bson.D{{Key: "replaces", Value: bson.D{{Key: "$gt", Value: ""}}}}),
+	})
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

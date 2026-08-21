@@ -90,6 +90,17 @@ func (r *KYCEventRepository) Update(ctx context.Context, e *models.KYCEvent) err
 	return nil
 }
 
+func (r *KYCEventRepository) ListAppliedWithTx(ctx context.Context) ([]*models.KYCEvent, error) {
+	all, _ := r.List(ctx)
+	out := make([]*models.KYCEvent, 0)
+	for _, v := range all {
+		if v.ApplyStatus == models.KYCApplyApplied && v.TxID != "" {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
 func (r *KYCEventRepository) ListPending(ctx context.Context) ([]*models.KYCEvent, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -568,12 +568,12 @@ func (m *txManager) renewNonceLease(ctx context.Context, from common.Address, to
 }
 
 func (m *txManager) needsInterventionTx(ctx context.Context, from common.Address) (*models.Transaction, error) {
-	stuck, err := m.txs.ListByStatus(ctx, models.TxNeedsIntervention)
+	stuck, err := m.txs.ListByStatuses(ctx, models.TxNeedsIntervention, models.TxReorged, models.TxNonceConsumedExternally)
 	if err != nil {
-		return nil, fmt.Errorf("blockchain: list needs-intervention transactions: %w", err)
+		return nil, fmt.Errorf("blockchain: list blocking transactions: %w", err)
 	}
 	for _, tx := range stuck {
-		if strings.EqualFold(tx.From, from.Hex()) {
+		if tx.Status == models.TxNeedsIntervention && strings.EqualFold(tx.From, from.Hex()) {
 			return tx, nil
 		}
 	}
@@ -590,12 +590,9 @@ func (m *txManager) needsInterventionTx(ctx context.Context, from common.Address
 	// resubmit it under the same idempotency key shortly (see
 	// isRetryableStatus), and blocking the signer in the meantime would
 	// defeat that opt-in.
-	for _, status := range []models.TxStatus{models.TxReorged, models.TxNonceConsumedExternally} {
-		unresolved, err := m.txs.ListByStatus(ctx, status)
-		if err != nil {
-			return nil, fmt.Errorf("blockchain: list %s transactions: %w", status, err)
-		}
-		for _, tx := range unresolved {
+	for _, tx := range stuck {
+		switch tx.Status {
+		case models.TxReorged, models.TxNonceConsumedExternally:
 			if strings.EqualFold(tx.From, from.Hex()) && !tx.AllowReorgRetry {
 				return tx, nil
 			}
@@ -762,11 +759,19 @@ func (m *txManager) RefreshStatuses(ctx context.Context, confirmations uint64) e
 		return err
 	}
 
-	all, err := m.txs.List(ctx)
+	currentBlock, err := m.client.BlockNumber(ctx)
 	if err != nil {
 		return err
 	}
-	currentBlock, err := m.client.BlockNumber(ctx)
+	// Ask the repository for the same set isFinal would keep, so an aged
+	// collection's long tail of finalized records is never read back. The
+	// bound saturates at 0 on a young chain; isFinal below is still the
+	// authority on each record.
+	var confirmedFrom uint64
+	if cutoff := confirmations + postConfirmationReorgWindow; currentBlock > cutoff {
+		confirmedFrom = currentBlock - cutoff
+	}
+	all, err := m.txs.ListUnfinalized(ctx, confirmedFrom)
 	if err != nil {
 		return err
 	}
@@ -984,12 +989,12 @@ func (m *txManager) markNeedsIntervention(ctx context.Context, tx *models.Transa
 // undo Replace's own revert on a later tick, marking a still-live original
 // Replaced by an attempt that never broadcast anything.
 func (m *txManager) reconcileReplacements(ctx context.Context) error {
-	all, err := m.txs.List(ctx)
+	all, err := m.txs.ListReplacements(ctx)
 	if err != nil {
 		return err
 	}
 	for _, tx := range all {
-		if tx.Replaces == "" || tx.Status == models.TxFailed {
+		if tx.Status == models.TxFailed {
 			continue
 		}
 		original, err := m.txs.Get(ctx, tx.Replaces)

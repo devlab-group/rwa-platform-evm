@@ -86,8 +86,26 @@ func (r *transactionRepo) List(ctx context.Context) ([]*models.Transaction, erro
 	return findMany[models.Transaction](ctx, r.coll, bson.M{}, options.Find().SetSort(bson.D{{Key: "submittedAt", Value: 1}}))
 }
 
-func (r *transactionRepo) ListByStatus(ctx context.Context, status models.TxStatus) ([]*models.Transaction, error) {
-	return findMany[models.Transaction](ctx, r.coll, bson.M{"status": status})
+func (r *transactionRepo) ListByStatuses(ctx context.Context, statuses ...models.TxStatus) ([]*models.Transaction, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	return findMany[models.Transaction](ctx, r.coll, bson.M{"status": bson.M{"$in": statuses}})
+}
+
+// ListUnfinalized narrows the refresh tick to the records that can still
+// change — see the interface doc comment. Both branches are served by the
+// (status, blockNumber) index declared in EnsureIndexes.
+func (r *transactionRepo) ListUnfinalized(ctx context.Context, confirmedFromBlock uint64) ([]*models.Transaction, error) {
+	filter := bson.M{"$or": bson.A{
+		bson.M{"status": bson.M{"$nin": bson.A{models.TxReplaced, models.TxFailed, models.TxConfirmed}}},
+		bson.M{"status": models.TxConfirmed, "blockNumber": bson.M{"$gte": confirmedFromBlock}},
+	}}
+	return findMany[models.Transaction](ctx, r.coll, filter, options.Find().SetSort(bson.D{{Key: "submittedAt", Value: 1}}))
+}
+
+func (r *transactionRepo) ListReplacements(ctx context.Context) ([]*models.Transaction, error) {
+	return findMany[models.Transaction](ctx, r.coll, bson.M{"replaces": bson.M{"$gt": ""}})
 }
 
 // ListPage returns one bounded, repository-level keyset page — see

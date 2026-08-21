@@ -118,11 +118,43 @@ func (r *TransactionRepository) List(ctx context.Context) ([]*models.Transaction
 	return out, nil
 }
 
-func (r *TransactionRepository) ListByStatus(ctx context.Context, status models.TxStatus) ([]*models.Transaction, error) {
-	all, _ := r.List(ctx)
+func (r *TransactionRepository) ListByStatuses(ctx context.Context, statuses ...models.TxStatus) ([]*models.Transaction, error) {
+	return r.filter(func(tx *models.Transaction) bool {
+		for _, s := range statuses {
+			if tx.Status == s {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// ListUnfinalized mirrors transactionRepo's Mongo filter — see the
+// interface doc comment.
+func (r *TransactionRepository) ListUnfinalized(ctx context.Context, confirmedFromBlock uint64) ([]*models.Transaction, error) {
+	return r.filter(func(tx *models.Transaction) bool {
+		switch tx.Status {
+		case models.TxReplaced, models.TxFailed:
+			return false
+		case models.TxConfirmed:
+			return tx.BlockNumber >= confirmedFromBlock
+		default:
+			return true
+		}
+	})
+}
+
+func (r *TransactionRepository) ListReplacements(ctx context.Context) ([]*models.Transaction, error) {
+	return r.filter(func(tx *models.Transaction) bool { return tx.Replaces != "" })
+}
+
+// filter returns the copies List would return, keeping only those keep
+// accepts, in the same SubmittedAt order.
+func (r *TransactionRepository) filter(keep func(*models.Transaction) bool) ([]*models.Transaction, error) {
+	all, _ := r.List(context.Background())
 	out := make([]*models.Transaction, 0)
 	for _, v := range all {
-		if v.Status == status {
+		if keep(v) {
 			out = append(out, v)
 		}
 	}
