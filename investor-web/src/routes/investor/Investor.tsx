@@ -1026,10 +1026,15 @@ function RedemptionSection({
           id="redeem-slippage"
           type="number"
           min={0}
-          max={10_000}
+          max={MAX_SLIPPAGE_BPS}
           value={slippageBps}
           onChange={(e) => setSlippageBps(Number(e.target.value))}
+          aria-describedby="redeem-slippage-hint"
         />
+        <span className="field__hint" id="redeem-slippage-hint">
+          Capped at {MAX_SLIPPAGE_BPS / 100}% — the minimum payout accepted
+          never drops below this.
+        </span>
       </div>
       <button
         type="button"

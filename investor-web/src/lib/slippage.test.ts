@@ -36,8 +36,8 @@ describe("applySlippageFloor", () => {
     expect(applySlippageFloor("1000000", 150)).toBe("985000");
   });
 
-  it("clamps above 10000 bps (100%) rather than going negative", () => {
-    expect(applySlippageFloor("1000000", 50_000)).toBe("0");
+  it("clamps at MAX_SLIPPAGE_BPS, so minQuoteOut is never zero", () => {
+    expect(applySlippageFloor("1000000", 50_000)).toBe("500000");
   });
 
   it("treats a negative slippage as zero", () => {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestConfirm_AcceptsYAndYes(t *testing.T) {
@@ -152,5 +153,32 @@ func TestRenderActionBanner_SanitizesUnrecognizedType(t *testing.T) {
 	}
 	if !strings.Contains(s, "UNRECOGNIZED ACTION TYPE") {
 		t.Errorf("banner does not flag the unrecognized type:\n%s", s)
+	}
+}
+
+// TestRender_NonASCIILabelColumnWidth covers the column measurement. fmt's
+// %-*s pads by rune count, so a byte-measured width doesn't misalign the ':'
+// column — it just pads every label out to the byte length of the widest one,
+// leaving a gap of phantom spaces whenever a label contains a multi-byte rune.
+func TestRender_NonASCIILabelColumnWidth(t *testing.T) {
+	var buf bytes.Buffer
+	Render(&buf, "Review", []Field{
+		{Label: "société", Value: "a"}, // 7 runes, 8 bytes
+		{Label: "chainId", Value: "31337"},
+	}, nil)
+
+	var cols []int
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if i := strings.Index(line, " : "); i >= 0 {
+			cols = append(cols, utf8.RuneCountInString(strings.TrimPrefix(line, "  ")[:i-2]))
+		}
+	}
+	if len(cols) != 2 {
+		t.Fatalf("expected 2 field lines, got %d: %q", len(cols), buf.String())
+	}
+	for _, got := range cols {
+		if got != 7 {
+			t.Errorf("label column = %d runes, want 7 (the longest label's rune count):\n%s", got, buf.String())
+		}
 	}
 }

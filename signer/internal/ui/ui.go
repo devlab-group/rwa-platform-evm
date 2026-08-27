@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/rwa-platform/signer/internal/textsafe"
 )
@@ -45,13 +46,15 @@ func Render(w io.Writer, title string, critical, display []Field) {
 
 func renderFields(w io.Writer, fields []Field) {
 	// Sanitize labels before measuring them, so column alignment is computed
-	// from what actually gets printed.
+	// from what actually gets printed. Measured in runes because fmt's %-*s
+	// pads by rune count too — measuring bytes would over-pad any label with
+	// a non-ASCII character and skew the ':' column.
 	labels := make([]string, len(fields))
 	width := 0
 	for i, f := range fields {
 		labels[i] = textsafe.SanitizeForTerminal(f.Label)
-		if len(labels[i]) > width {
-			width = len(labels[i])
+		if n := utf8.RuneCountInString(labels[i]); n > width {
+			width = n
 		}
 	}
 	for i, f := range fields {

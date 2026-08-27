@@ -114,7 +114,7 @@ paths:
     get:
       tags: [compliance]
       operationId: listWallets
-      x-required-role: operator
+      x-required-role: admin
       parameters:
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Cursor" }
@@ -183,7 +183,7 @@ paths:
     get:
       tags: [compliance]
       operationId: listWebhookEvents
-      x-required-role: operator
+      x-required-role: admin
       description: KYC webhook history for the compliance screen.
       parameters:
         - { $ref: "#/components/parameters/Limit" }
@@ -201,7 +201,7 @@ paths:
     get:
       tags: [compliance]
       operationId: listAuditLogs
-      x-required-role: operator
+      x-required-role: admin
       parameters:
         - { name: category, in: query, schema: { type: string } }
         - { $ref: "#/components/parameters/Limit" }
@@ -281,7 +281,7 @@ paths:
     get:
       tags: [assets]
       operationId: listRecords
-      x-required-role: operator
+      x-required-role: admin
       parameters:
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Cursor" }
@@ -306,7 +306,7 @@ paths:
     get:
       tags: [assets]
       operationId: downloadPackage
-      x-required-role: operator
+      x-required-role: admin
       parameters: [ { name: recordId, in: path, required: true, schema: { type: string } } ]
       responses:
         "200": { description: .rwa package, content: { application/zip: { schema: { type: string, format: binary } } } }
@@ -339,7 +339,7 @@ paths:
     get:
       tags: [sales]
       operationId: listPurchases
-      x-required-role: operator
+      x-required-role: admin
       parameters:
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Cursor" }
