@@ -1,6 +1,6 @@
 {
   "dialect": "rwa-profile-assetSchema/1",
-  "description": "Differential conformance vectors for the operator assetSchema dialect (docs/spec/profile-schema-dialect.md). The server guard/compiler and the offline signer compiler MUST both produce the stated 'expect' (accept = schema compiles, reject = schema refused) for every case. Parity is a release gate (audit H-03). 'schema' is a full assetSchema document.",
+  "description": "Differential conformance vectors for the operator assetSchema dialect (docs/spec/profile-schema-dialect.md). The server guard/compiler and the offline signer compiler MUST both produce the stated 'expect' (accept = schema compiles, reject = schema refused) for every case. Parity is a release gate. 'schema' is a full assetSchema document.",
   "cases": [
     { "name": "empty-object", "expect": "accept", "schema": {} },
     { "name": "type-object-basic", "expect": "accept", "schema": { "type": "object", "additionalProperties": false, "required": ["a"], "properties": { "a": { "type": "string" } } } },
@@ -31,7 +31,7 @@
     { "name": "reject-anchor", "expect": "reject", "schema": { "$anchor": "x", "type": "object" } },
     { "name": "reject-unevaluatedProperties", "expect": "reject", "schema": { "type": "object", "unevaluatedProperties": false } },
     { "name": "reject-unevaluatedItems", "expect": "reject", "schema": { "type": "array", "unevaluatedItems": false } },
-    { "name": "reject-multipleOf", "expect": "reject", "note": "server enforced it, signer ignored it (H-03)", "schema": { "type": "integer", "multipleOf": 5 } },
+    { "name": "reject-multipleOf", "expect": "reject", "note": "server enforced it, signer ignored it", "schema": { "type": "integer", "multipleOf": 5 } },
     { "name": "reject-minProperties", "expect": "reject", "schema": { "type": "object", "minProperties": 1 } },
     { "name": "reject-maxProperties", "expect": "reject", "schema": { "type": "object", "maxProperties": 10 } },
     { "name": "reject-patternProperties", "expect": "reject", "schema": { "type": "object", "patternProperties": { "^x": { "type": "string" } } } },
@@ -40,7 +40,7 @@
     { "name": "reject-dependentSchemas", "expect": "reject", "schema": { "type": "object", "dependentSchemas": { "a": { "type": "object" } } } },
     { "name": "reject-contains", "expect": "reject", "schema": { "type": "array", "contains": { "type": "string" } } },
     { "name": "reject-minContains", "expect": "reject", "schema": { "type": "array", "contains": { "type": "string" }, "minContains": 1 } },
-    { "name": "reject-format", "expect": "reject", "note": "signer ignored format, server enforced it (H-03)", "schema": { "type": "string", "format": "email" } },
+    { "name": "reject-format", "expect": "reject", "note": "signer ignored format, server enforced it", "schema": { "type": "string", "format": "email" } },
     { "name": "reject-prefixItems", "expect": "reject", "schema": { "type": "array", "prefixItems": [ { "type": "string" } ] } },
     { "name": "reject-additionalItems", "expect": "reject", "schema": { "type": "array", "additionalItems": false } },
     { "name": "reject-contentEncoding", "expect": "reject", "schema": { "type": "string", "contentEncoding": "base64" } },
@@ -52,15 +52,15 @@
     { "name": "reject-remote-ref-relative", "expect": "reject", "schema": { "$ref": "./other.json" } },
     { "name": "reject-ref-not-hash", "expect": "reject", "schema": { "$ref": "leaf" } },
     { "name": "reject-ref-unresolvable", "expect": "reject", "schema": { "type": "object", "properties": { "x": { "$ref": "#/$defs/missing" } } } },
-    { "name": "reject-ref-cycle-direct", "expect": "reject", "note": "self-referential schema (L-01)", "schema": { "$defs": { "loop": { "$ref": "#/$defs/loop" } }, "type": "object", "properties": { "x": { "$ref": "#/$defs/loop" } } } },
+    { "name": "reject-ref-cycle-direct", "expect": "reject", "note": "self-referential schema", "schema": { "$defs": { "loop": { "$ref": "#/$defs/loop" } }, "type": "object", "properties": { "x": { "$ref": "#/$defs/loop" } } } },
     { "name": "reject-ref-cycle-indirect", "expect": "reject", "schema": { "$defs": { "a": { "$ref": "#/$defs/b" }, "b": { "$ref": "#/$defs/a" } }, "type": "object", "properties": { "x": { "$ref": "#/$defs/a" } } } },
     { "name": "reject-bad-type-value", "expect": "reject", "schema": { "type": "stringy" } },
-    { "name": "reject-empty-type-array", "expect": "reject", "note": "R2-H-02: signer compiled [] as any-type; server rejected", "schema": { "type": [] } },
-    { "name": "reject-defs-unused-forbidden-keyword", "expect": "reject", "note": "R2-H-02: every $defs member must satisfy the dialect even if never $ref'd", "schema": { "type": "object", "$defs": { "unused": { "multipleOf": 2 } } } },
+    { "name": "reject-empty-type-array", "expect": "reject", "note": "signer compiled [] as any-type; server rejected", "schema": { "type": [] } },
+    { "name": "reject-defs-unused-forbidden-keyword", "expect": "reject", "note": "every $defs member must satisfy the dialect even if never $ref'd", "schema": { "type": "object", "$defs": { "unused": { "multipleOf": 2 } } } },
     { "name": "accept-defs-unused-valid", "expect": "accept", "note": "an unused-but-valid $defs member compiles", "schema": { "type": "object", "$defs": { "unused": { "type": "string", "minLength": 1 } } } }
   ],
   "limits": {
-    "note": "Mirror of shared/schemas/structural-limits.json. Both binaries enforce EXACTLY these (R2-H-02).",
+    "note": "Mirror of shared/schemas/structural-limits.json. Both binaries enforce EXACTLY these.",
     "maxUncompressedBytes": 1048576,
     "maxDepth": 32,
     "maxStringLength": 32768,
@@ -105,11 +105,11 @@
     { "name": "nested-object-deep-invalid", "schema": { "type": "object", "additionalProperties": false, "properties": { "rows": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id"], "properties": { "id": { "type": "integer", "minimum": 0 } } } } } }, "instance": { "rows": [ { "id": -1 } ] }, "expectValid": "invalid" }
   ],
   "limitCases": [
-    { "name": "string-length", "kind": "string", "limit": 32768, "note": "Build assetSchema data = a JSON string of exactly `limit` UTF-8 BYTES (accept) and `limit`+1 bytes (reject) validated against {type:string}, using single-byte (ASCII) characters so byte length and rune count coincide. Both binaries construct identically. Audit H-03 froze the unit as UTF-8 bytes -- see string-length-2byte/-3byte/-4byte for multi-byte value vectors and object-key-length/-4byte for the same bound applied to an object key." },
-    { "name": "string-length-2byte", "kind": "string-2byte", "limit": 32768, "note": "A JSON string value built from the 2-byte-UTF-8 character U+00E9 (é), repeated as many whole times as fit and padded with single-byte 'x' filler, so the value's total UTF-8 BYTE length is exactly `limit` (accept) / `limit`+1 (reject); its rune count is far below `limit`. Audit H-03: the signer previously measured string length in runes (utf8.RuneCountInString), so a value like this -- well under `limit` runes but at/over `limit` bytes -- was wrongly accepted where the server (byte-counting) rejects it." },
+    { "name": "string-length", "kind": "string", "limit": 32768, "note": "Build assetSchema data = a JSON string of exactly `limit` UTF-8 BYTES (accept) and `limit`+1 bytes (reject) validated against {type:string}, using single-byte (ASCII) characters so byte length and rune count coincide. Both binaries construct identically. The unit is frozen as UTF-8 bytes -- see string-length-2byte/-3byte/-4byte for multi-byte value vectors and object-key-length/-4byte for the same bound applied to an object key." },
+    { "name": "string-length-2byte", "kind": "string-2byte", "limit": 32768, "note": "A JSON string value built from the 2-byte-UTF-8 character U+00E9 (é), repeated as many whole times as fit and padded with single-byte 'x' filler, so the value's total UTF-8 BYTE length is exactly `limit` (accept) / `limit`+1 (reject); its rune count is far below `limit`. The signer previously measured string length in runes (utf8.RuneCountInString), so a value like this -- well under `limit` runes but at/over `limit` bytes -- was wrongly accepted where the server (byte-counting) rejects it." },
     { "name": "string-length-3byte", "kind": "string-3byte", "limit": 32768, "note": "Same construction as string-length-2byte using the 3-byte-UTF-8 character U+4E2D (中)." },
     { "name": "string-length-4byte", "kind": "string-4byte", "limit": 32768, "note": "Same construction as string-length-2byte using the 4-byte-UTF-8 character U+1F600 (😀)." },
-    { "name": "object-key-length", "kind": "object-key", "limit": 32768, "note": "A JSON object with a single ASCII key of exactly `limit` bytes (accept) / `limit`+1 bytes (reject). Audit H-03: the signer previously had NO length check on object keys at all (only on string values), so a key this long -- which the server's limits.go already rejected, since it checks every string token including keys -- was silently accepted by the signer." },
+    { "name": "object-key-length", "kind": "object-key", "limit": 32768, "note": "A JSON object with a single ASCII key of exactly `limit` bytes (accept) / `limit`+1 bytes (reject). The signer previously had NO length check on object keys at all (only on string values), so a key this long -- which the server's limits.go already rejected, since it checks every string token including keys -- was silently accepted by the signer." },
     { "name": "object-key-length-4byte", "kind": "object-key-4byte", "limit": 32768, "note": "Same as object-key-length but the key is built from the 4-byte-UTF-8 character U+1F600 (padded with ASCII 'x'), so its UTF-8 byte length is exactly `limit`/`limit`+1 while its rune count is far smaller -- pins that the key bound is byte-based, not rune-based, exactly like the value bound." },
     { "name": "array-items", "kind": "array", "limit": 4096, "note": "A JSON array of exactly `limit` integers (accept) and `limit`+1 (reject) against {type:array,items:{type:integer}}." },
     { "name": "object-properties", "kind": "object", "limit": 4096, "note": "A JSON object with exactly `limit` string-keyed props (accept) and `limit`+1 (reject) against {type:object}." },
@@ -119,6 +119,6 @@
   "envelopeCases": [
     { "name": "profile-clean", "target": "profile", "expectValid": "valid", "note": "A minimal well-formed asset profile.", "document": { "profileVersion": "1.0", "projectId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "assetType": "bond", "tokenUnit": "USD", "tokenDecimals": 2, "recordIdLabel": "CUSIP", "assetSchema": { "type": "object" } } },
     { "name": "profile-unknown-top-field", "target": "profile", "expectValid": "invalid", "note": "Unknown top-level field must be rejected by strict decoding on both sides.", "document": { "profileVersion": "1.0", "projectId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "assetType": "bond", "tokenUnit": "USD", "tokenDecimals": 2, "recordIdLabel": "CUSIP", "assetSchema": { "type": "object" }, "surprise": 1 } },
-    { "name": "profile-unknown-displayFields-field", "target": "profile", "expectValid": "invalid", "note": "R2-H-02: server previously ignored unknown fields inside displayFields[]; must now reject like the signer.", "document": { "profileVersion": "1.0", "projectId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "assetType": "bond", "tokenUnit": "USD", "tokenDecimals": 2, "recordIdLabel": "CUSIP", "displayFields": [ { "label": "X", "pointer": "/x", "extra": true } ], "assetSchema": { "type": "object" } } }
+    { "name": "profile-unknown-displayFields-field", "target": "profile", "expectValid": "invalid", "note": "server previously ignored unknown fields inside displayFields[]; must now reject like the signer.", "document": { "profileVersion": "1.0", "projectId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "assetType": "bond", "tokenUnit": "USD", "tokenDecimals": 2, "recordIdLabel": "CUSIP", "displayFields": [ { "label": "X", "pointer": "/x", "extra": true } ], "assetSchema": { "type": "object" } } }
   ]
 }

@@ -33,7 +33,7 @@ below are contained but not fully reversed on-chain.
 
 **Detection:** unexpected `Minted`/`Burned` events with a `recordId`/`operationId` your
 records don't recognize; the auditor reports a lost/stolen key or device; a signed
-attestation surfaces that no one on the audit team remembers signing.
+attestation surfaces that nobody on your side remembers signing.
 
 **Containment:**
 1. Admin executes `SupplyController` auditor rotation to a new address (emits
@@ -89,8 +89,7 @@ and `to` to be `Allowed` on an ordinary transfer, and `Vault`/`RedemptionEscrow`
 `from` or `to` on every buy and claim. Blocking either one doesn't contain an
 incident — it self-inflicts a platform-wide outage and, worse, can strand a `Funded`
 redemption's escrowed quote mid-claim (the claim transfer to Vault reverts, so the request
-never reaches `Completed`). As of ADR-001 (`docs/adr/ADR-001-compliance-system-address-protection.md`),
-`ComplianceRegistry` pins both system addresses `Allowed` for the life of the deployment and
+never reaches `Completed`). `ComplianceRegistry` pins both system addresses `Allowed` for the life of the deployment and
 rejects any attempt to change that at the contract level — but treat this note as
 defense-in-depth, not a reason to stop being careful with batch `setStatuses` calls during
 an incident.

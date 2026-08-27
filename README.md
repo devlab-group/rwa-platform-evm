@@ -61,12 +61,12 @@ every redemption is funded — those remain issuer and jurisdiction responsibili
 | `investor-web/`    | Standalone example investor SPA — a self-contained reference to fork for your own investor UI (not served by the binary) | [investor-web/README.md](investor-web/README.md) |
 | `shared/`          | EIP-712 types, golden vectors, JSON schemas, deployment manifests                                                        | —                                                |
 | `api/openapi.yaml` | HTTP contract                                                                                                            | —                                                |
-| `docs/`            | Specs, ADRs, operator/auditor/security guides                                                                            | [docs index](#documentation)                     |
+| `docs/`            | Specs, design decisions, operator/auditor/security guides                                                                            | [docs index](#documentation)                     |
 | `docker/`          | Local anvil + MongoDB + IPFS compose (dev only)                                                                          | —                                                |
 
 `shared/`, `contracts/src/interfaces/`, `api/openapi.yaml`, `docs/spec/`, the `Makefile`, and the
-CI workflows are the contracts between components. Change them through a reviewed ADR
-(`docs/adr/`), since they're what keeps the Solidity, Go, and TypeScript sides in agreement.
+CI workflows are the contracts between components. Change them deliberately and in one
+reviewed step, since they're what keeps the Solidity, Go, and TypeScript sides in agreement.
 
 ## Setup
 
@@ -205,7 +205,7 @@ The CI workflow runs the contracts/signer/server/web jobs plus a dependency scan
   server hot key. There is no deployer or relayer key.
 - Request size and rate limits, security headers (strict CSP, `X-Frame-Options: DENY`, `nosniff`),
   atomic idempotency, webhook replay protection, and constant-time HMAC.
-- The Vault and RedemptionEscrow are pinned `Allowed` (see ADR-001) so a compromised compliance key
+- The Vault and RedemptionEscrow are pinned `Allowed` so a compromised compliance key
   cannot freeze core flows.
 - Threat model and acceptance matrix live under `docs/spec/`; incident response is in
   [`docs/security/incident-response.md`](docs/security/incident-response.md).

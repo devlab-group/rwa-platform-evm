@@ -1,7 +1,7 @@
 // The offline signer's trust-root policy (the `--policy policy.json` file the
 // admin hands the auditor). The signer parses it with DisallowUnknownFields, so
 // it MUST carry exactly these six keys and nothing else — no lifetime override
-// (the signer uses its default when absent). See signer/CLAUDE.md.
+// (the signer uses its default when absent).
 import type { components } from "./api-types";
 
 type Project = components["schemas"]["Project"];

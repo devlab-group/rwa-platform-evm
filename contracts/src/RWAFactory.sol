@@ -67,7 +67,7 @@ contract RWAFactory is IRWAFactory {
         RWAToken(token).setRedemptionEscrow(escrow);
 
         ComplianceRegistry complianceRegistry = ComplianceRegistry(compliance);
-        // ADR-001: pin Vault + RedemptionEscrow so COMPLIANCE_ROLE can never block them later.
+        // Pin Vault + RedemptionEscrow so COMPLIANCE_ROLE can never block them later.
         complianceRegistry.setSystemAddresses(vault, escrow);
         complianceRegistry.setStatus(vault, IComplianceRegistry.ComplianceStatus.Allowed, 0);
         complianceRegistry.setStatus(escrow, IComplianceRegistry.ComplianceStatus.Allowed, 0);

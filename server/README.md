@@ -81,10 +81,11 @@ binaries in `cmd/`.
 
 ## How it implements api/openapi.yaml
 
-`api/openapi.yaml` is a frozen, lead-owned contract. `internal/api.NewRouter` wires one Gin
+`api/openapi.yaml` is a frozen contract. `internal/api.NewRouter` wires one Gin
 route per operationId; handler names match operationIds. The router-wide middleware chain
 (outermost to innermost) is: `gin.Recovery` → Prometheus request metrics
-(`metrics.GinMiddleware`) → security headers (`auth.SecurityHeaders`) → request-size limit
+(`metrics.GinMiddleware`) → security headers (`auth.SecurityHeaders`) → CORS
+(`auth.CORS`, inert unless `http.cors_allowed_origins` is set) → request-size limit
 (`auth.MaxRequestBody`) → rate limit (`auth.RateLimit`, when enabled) → `auth.Authenticate`.
 Per-route, on top of that: `auth.RequireRole(auth.RoleAdmin)` on every admin route →
 `auth.Idempotency` (state-changing routes only) → the handler.
@@ -203,7 +204,7 @@ explicit `0` is honored (and, in production, rejected where a zero would disable
 | Section | Keys | Notes |
 |---|---|---|
 | *(top level)* | `environment` (`development`) | `development` or `production`. `production` enables the fail-closed startup checks — see [Production hardening](#production-hardening). |
-| `http:` | `addr` (`:8080`), `metrics_addr` (`127.0.0.1:9090`), `read_header_timeout` (`5s`), `read_timeout` (`30s`), `write_timeout` (`60s`), `idle_timeout` (`120s`), `max_header_bytes` (32 KiB), `max_request_body_bytes` (2 MiB), `trusted_proxies` (`[]`) | `addr` is the public API + embedded SPA listener; the timeouts and header cap apply to it *and* the metrics listener (slowloris hardening). `max_request_body_bytes: 0` disables the limit; empty `trusted_proxies` trusts none — see [Security posture](#security-posture). |
+| `http:` | `addr` (`:8080`), `metrics_addr` (`127.0.0.1:9090`), `read_header_timeout` (`5s`), `read_timeout` (`30s`), `write_timeout` (`60s`), `idle_timeout` (`120s`), `max_header_bytes` (32 KiB), `max_request_body_bytes` (2 MiB), `trusted_proxies` (`[]`), `cors_allowed_origins` (`[]`) | `addr` is the public API + embedded SPA listener; the timeouts and header cap apply to it *and* the metrics listener (slowloris hardening). `max_request_body_bytes: 0` disables the limit; empty `trusted_proxies` trusts none — see [Security posture](#security-posture). `cors_allowed_origins` is empty by default (CORS off — the embedded console is same-origin); set it to the standalone investor SPA's exact origin(s), e.g. `["http://localhost:5173"]`. `"*"`, a trailing slash, or a missing scheme is refused at startup in every environment. |
 | `chain:` | `rpc_url` (`http://127.0.0.1:8545`), `id` (`31337`), `confirmations` (`3`), `fee_mode` (`eip1559`), `max_fee_per_gas_wei`, `max_tip_per_gas_wei`, `max_tx_total_cost_wei` | `id` must be positive; `fee_mode` is `eip1559` or `legacy`. `confirmations` is how many blocks past a receipt before a tx counts as confirmed, and also what gates `Redemption.claimable`. The three caps are base-10 wei strings, empty meaning no cap; `TxManager.Submit` REJECTS (never clamps) a transaction whose computed fee/cost would exceed one. |
 | `contract:` | `factory_address`, `start_block` (`0`), `project_id` | **Bootstrap-only.** Only the factory (the one-time deploy entry point) and the block the indexer starts scanning from live here. Every *deployed* address — token, compliance, supply controller, vault, escrow, strategy, quote token — and the auditor come from the DB Project record the indexer keeps live, so a redeploy never means editing this file. `project_id` is the UUID this deployment is pinned to: the admin SPA reads it from `GET /api/v1/config` and the server rejects any profile whose `projectId` differs. |
 | `mongo:` | `uri` (`mongodb://127.0.0.1:27017`), `db` (`rwa_platform`), `persistence_mode` (`mongo`) | `memory` is an explicit dev/CI opt-in, refused in production. A `mongo`-mode connect/ping/index failure falls back to in-memory repositories with a loud warning in development, but is fatal at startup in production. |

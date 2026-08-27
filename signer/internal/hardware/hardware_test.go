@@ -19,8 +19,7 @@ func TestStubAdapter_AlwaysReportsNotSupported(t *testing.T) {
 }
 
 // TestOpen_SupportedKindsReturnStubAdapter covers every DeviceKind Open
-// recognizes: each is a real, distinct integration seam (see
-// docs/adr/ADR-006-hardware-wallet-signing.md), and every one currently
+// recognizes: each is a real, distinct integration seam, and every one currently
 // resolves to the same not-yet-implemented StubAdapter, never a silent
 // fallback to software signing.
 func TestOpen_SupportedKindsReturnStubAdapter(t *testing.T) {

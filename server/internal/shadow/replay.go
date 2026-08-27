@@ -31,9 +31,9 @@ type LogSpec struct {
 	Data        string   `json:"data,omitempty"`
 	// Decodable, when explicitly set false, makes this log fail EventDecoder
 	// (see Runner's decoder) — a scripted "malformed RPC response" /
-	// undecodable-event scenario exercising the indexer's DLQ path (audit
-	// 3.1 §6's required input coverage) rather than the indexer's own
-	// unit-tested decode-failure path being taken on faith here too.
+	// undecodable-event scenario exercising the indexer's DLQ path end to end,
+	// rather than taking the indexer's own unit-tested decode-failure path on
+	// faith here too.
 	Decodable *bool `json:"decodable,omitempty"`
 }
 

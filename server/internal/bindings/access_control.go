@@ -78,7 +78,7 @@ func (a AccessControl) UnpackGetRoleMember(data []byte) (common.Address, error) 
 	return *abi.ConvertType(out[0], new(common.Address)).(*common.Address), nil
 }
 
-// Role IDs per docs/spec/roles.md ("FROZEN — lead-owned"). DefaultAdminRole
+// Role IDs per docs/spec/roles.md (FROZEN). DefaultAdminRole
 // is OZ's fixed bytes32(0); the rest are keccak256 of the exact role name string.
 var (
 	DefaultAdminRole      = [32]byte{}

@@ -10,7 +10,7 @@
   picked up by slither's default compilation scope for this repo layout; they were reviewed
   manually instead (see "Deployment-script hardening" below).
 - Result: **24 → 16 findings** during this pass, verified unchanged (still 16, no new findings)
-  after the later ADR-001 (`ComplianceRegistry.setSystemAddresses`) change. The 8 that were
+  after the later `ComplianceRegistry.setSystemAddresses` change. The 8 that were
   fixed were all missing-zero-address-validation findings (see below); every remaining finding
   was reviewed and is either intentional-by-design or purely informational/stylistic. None
   represent an exploitable vulnerability.
@@ -136,9 +136,9 @@ instead of deploying. Covered by `test/unit/DeployScript.t.sol` (anvil-chain fal
 works; non-anvil chain without the env var reverts; non-anvil chain with it set explicitly
 succeeds).
 
-## ADR-001 — ComplianceRegistry system-address pin
+## ComplianceRegistry system-address pin
 
-See `docs/adr/ADR-001-compliance-system-address-protection.md`. Not a Slither finding — surfaced
+Not a Slither finding — surfaced
 by the security review (`COMPLIANCE_ROLE` could `Blocked` the Vault or
 RedemptionEscrow, freezing settled investor funds in a `Funded` redemption). Remediated with a
 one-time `setSystemAddresses(vault, redemptionEscrow)` wiring call plus a guard in
@@ -146,8 +146,8 @@ one-time `setSystemAddresses(vault, redemptionEscrow)` wiring call plus a guard 
 Regression tests in `test/unit/ComplianceRegistry.t.sol` (11 tests) prove: blocking Vault/Escrow
 reverts (`setStatus` and batch `setStatuses`), setting them to `Unknown` also reverts (only
 `Allowed` is ever accepted), re-`Allowed`-ing succeeds, `setSystemAddresses` is deployer-gated
-and one-time, and — the ADR's own acceptance criterion — `buy`/`distribute`/`claimRedemption`
-all still complete normally after an attempted (and rejected) block.
+and one-time, and `buy`/`claimRedemption` all still complete normally after an attempted
+(and rejected) block.
 
 ## Gas baseline
 

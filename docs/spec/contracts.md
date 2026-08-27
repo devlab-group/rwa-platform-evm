@@ -1,8 +1,8 @@
 # Contract specification
 
 The Solidity interfaces in `contracts/src/interfaces/*.sol`, together with this file, describe
-how the contracts behave. Implementations follow them; changing an interface means writing an
-ADR for it first.
+how the contracts behave. Implementations follow them; changing an interface is a
+frozen-contract change and needs a written, reviewed decision first.
 
 Solidity `^0.8.24`, OpenZeppelin Contracts 5.x. All contracts non-upgradeable.
 
@@ -65,8 +65,8 @@ Nonce namespace is shared across mint and burn. Distinct type hashes prevent cro
 
 Immutable: `token`, `quoteToken`. Mutable: `strategy`, `treasury` (admin). Holds RWA inventory
 (`inventory()==token.balanceOf(this)`). `nonReentrant` + `SafeERC20`. `buy` is the only inbound
-token flow (ADR-007 removed off-chain payment distribution — `distribute`, `distributionCap`,
-`DISTRIBUTOR_ROLE` no longer exist).
+token flow: there is no off-chain payment distribution (`distribute`, `distributionCap`,
+`DISTRIBUTOR_ROLE` do not exist).
 
 `buy(tokenAmount, maxQuoteAmount, recipient, deadline)`:
 - `!paused`; caller & recipient `isAllowed`; `deadline>=block.timestamp`;

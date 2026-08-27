@@ -61,8 +61,8 @@ type conformanceFile struct {
 
 // loadConformanceFile reads and parses shared/vectors/schema-dialect-conformance.json,
 // failing the test immediately if it can't be found -- this differential
-// corpus is a shared contract (ADR-002 / docs/spec/profile-schema-dialect.md),
-// not something the signer generates.
+// corpus is a shared contract (docs/spec/profile-schema-dialect.md), not
+// something the signer generates.
 func loadConformanceFile(t *testing.T) conformanceFile {
 	t.Helper()
 	path, err := filepath.Abs(filepath.Join("..", "..", "..", "shared", "vectors", "schema-dialect-conformance.json"))
@@ -85,8 +85,8 @@ func loadConformanceFile(t *testing.T) conformanceFile {
 
 // TestDialectConformance reproduces shared/vectors/schema-dialect-conformance.json's
 // "cases" array exactly: for every case, Compile must accept or reject the
-// schema per the vector's "expect", per docs/spec/profile-schema-dialect.md
-// (ADR-002). This is the differential gate: the signer and server compilers
+// schema per the vector's "expect", per docs/spec/profile-schema-dialect.md.
+// This is the differential gate: the signer and server compilers
 // must agree on every case. Name and package are
 // load-bearing -- the root `make dialect-check` target runs
 // `go test ./internal/jsonschema/... -run Dialect -count=1` (a substring

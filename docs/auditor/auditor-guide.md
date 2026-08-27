@@ -150,7 +150,7 @@ chain/contract/project. It cannot know whether the record is *true*. Before conf
 ## 5. Key management
 
 - **Hardware-backed signing is the recommended production configuration** for the auditor key
-  (`--hardware ledger|trezor|yubikey|hsm` — see `docs/adr/ADR-006-hardware-wallet-signing.md`).
+  (`--hardware ledger|trezor|yubikey|hsm`).
   No device has a working integration in the current build yet, so every production deployment
   today uses the hardened software-keystore fallback described below; treat that as an
   explicitly-approved interim state, not the intended end state, and move to hardware once your

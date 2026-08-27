@@ -40,6 +40,12 @@ http:
   # trusted_proxies:
   #   - "10.0.0.1"
   #   - "172.16.0.0/12"
+  # cors_allowed_origins lists the exact browser origins allowed to call this
+  # API cross-origin. Empty (default) disables CORS: the embedded admin console
+  # is same-origin and needs none. Set it to the standalone investor SPA's
+  # origin(s). "*", a trailing slash, or a missing scheme is refused at startup.
+  cors_allowed_origins: []
+  # cors_allowed_origins: ["http://localhost:5173"]
 
 chain:
   rpc_url: "http://127.0.0.1:8545"

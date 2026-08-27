@@ -27,7 +27,7 @@ interface IComplianceRegistry {
 
     error ArrayLengthMismatch();
     error ZeroAddressAccount();
-    /// @dev ADR-001: the Vault and RedemptionEscrow are pinned Allowed; they cannot be set to any
+    /// @dev The Vault and RedemptionEscrow are pinned Allowed; they cannot be set to any
     ///      other status, so a fat-fingered or compromised COMPLIANCE_ROLE cannot freeze core flows.
     error SystemAddressCannotBeBlocked(address account);
     error SystemAddressesAlreadySet();

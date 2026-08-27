@@ -72,9 +72,9 @@ Flags:
                               trimmed). The file must not be group- or world-readable.
   --hardware <device>        sign with a hardware-wallet/HSM adapter instead of a keystore file;
                               <device> is one of: ledger, trezor, yubikey, hsm. No device has a
-                              working integration in this V1 build (see internal/hardware and
-                              docs/adr/ADR-006-hardware-wallet-signing.md) -- this always errors
-                              today, but is the recommended production signing path once wired up.
+                              working integration in this V1 build (see internal/hardware) -- this
+                              always errors today, but is the recommended production signing path
+                              once wired up.
   --out <path>                output path for signed-result.json (default: <package-dir>/signed-result.json)
   --policy <path>            REQUIRED. Independently-provisioned deployment trust root (JSON):
                               chainId, controller, vault, auditor, projectId, profileDigest, and
@@ -439,7 +439,7 @@ func signDigest(digest common.Hash, f signFlags) ([]byte, common.Address, error)
 		defer hw.Close()
 		addr, err := hw.Address()
 		if err != nil {
-			return nil, common.Address{}, fmt.Errorf("hardware-wallet signing (%s) is not implemented in this V1 build (see internal/hardware, docs/adr/ADR-006-hardware-wallet-signing.md): %w", f.hardware, err)
+			return nil, common.Address{}, fmt.Errorf("hardware-wallet signing (%s) is not implemented in this V1 build (see internal/hardware): %w", f.hardware, err)
 		}
 		sig, err := hw.SignDigest(digest)
 		if err != nil {

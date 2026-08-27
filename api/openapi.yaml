@@ -3,7 +3,7 @@ info:
   title: Self-Hosted RWA Platform API
   version: 1.0.0
   description: >
-    FROZEN API skeleton (lead-owned). State-changing endpoints accept an
+    FROZEN API skeleton. State-changing endpoints accept an
     Idempotency-Key header. Errors use stable machine-readable codes.
     On-chain actions (investor buy/request/claim/cancel, admin/treasury/redemption
     wallet actions) are encoded client-side by the SPA and broadcast from the

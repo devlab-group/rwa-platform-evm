@@ -501,6 +501,7 @@ func buildApp(cfg config.Config, addrs models.Addresses, auditor string, repos *
 		IdempotencyTTL:      cfg.IdempotencyTTL,
 		RateLimitRPS:        cfg.RateLimitRPS,
 		RateLimitBurst:      cfg.RateLimitBurst,
+		CORSAllowedOrigins:  cfg.CORSAllowedOrigins,
 		MaxRequestBodyBytes: cfg.MaxRequestBodyBytes,
 		TrustedProxies:      cfg.TrustedProxies,
 	}

@@ -85,6 +85,9 @@ http:
   trusted_proxies:
     - "10.0.0.1"
     - "172.16.0.0/12"
+  cors_allowed_origins:
+    - "http://localhost:5173"
+    - "https://investor.example"
 chain:
   rpc_url: "http://chain:8545"
   id: 5
@@ -171,6 +174,20 @@ alerts:
 	for i, w := range want {
 		if cfg.TrustedProxies[i] != w {
 			t.Errorf("TrustedProxies[%d] = %q, want %q", i, cfg.TrustedProxies[i], w)
+		}
+	}
+	// cors_allowed_origins lives under http:, alongside trusted_proxies — it
+	// is an HTTP-transport concern, not a credential/identity one. Asserting
+	// it through the FILE path (not just the env map) is what pins the block
+	// it belongs to: a key under the wrong block is rejected outright by
+	// KnownFields, so this would fail rather than silently ignore it.
+	wantOrigins := []string{"http://localhost:5173", "https://investor.example"}
+	if len(cfg.CORSAllowedOrigins) != len(wantOrigins) {
+		t.Fatalf("CORSAllowedOrigins = %v, want %v", cfg.CORSAllowedOrigins, wantOrigins)
+	}
+	for i, w := range wantOrigins {
+		if cfg.CORSAllowedOrigins[i] != w {
+			t.Errorf("CORSAllowedOrigins[%d] = %q, want %q", i, cfg.CORSAllowedOrigins[i], w)
 		}
 	}
 }

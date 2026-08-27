@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Server-vs-Anvil black-box API E2E (P5 exit gate).
+# Server-vs-Anvil black-box API E2E.
 #
 # Boots a fresh anvil + MongoDB + IPFS, deploys ONLY the reusable RWAFactory
 # (contracts/script/DeployFactory.s.sol) plus a quote-token MockERC20, starts

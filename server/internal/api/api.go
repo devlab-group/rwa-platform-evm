@@ -1,5 +1,5 @@
 // Package api implements the Gin HTTP handlers matching every operationId
-// in api/openapi.yaml (FROZEN, lead-owned). Handlers are thin: validation
+// in api/openapi.yaml (FROZEN). Handlers are thin: validation
 // and side effects live in the workflow packages (internal/assets,
 // internal/compliance, internal/sales, internal/redemption,
 // internal/project); this package only translates HTTP <-> those calls and
@@ -115,6 +115,11 @@ type App struct {
 	// doc comment for why that, not gin's own permissive built-in default,
 	// is what a directly internet-facing deployment needs.
 	TrustedProxies []string
+	// CORSAllowedOrigins is the exact browser origins allowed to call this API
+	// cross-origin. Empty (the default) disables CORS entirely — correct for a
+	// deployment serving only the embedded, same-origin admin console. Copied
+	// verbatim from config.Config; see auth.CORS.
+	CORSAllowedOrigins []string
 }
 
 // recordAudit appends one entry to the operational audit trail, logging
@@ -127,8 +132,8 @@ type App struct {
 // logs/monitoring) rather than invisible. This is a partial mitigation, not the
 // stronger design (a transactional outbox that persists the audit/operation
 // intent BEFORE broadcast and blocks on it) — retrofitting that across
-// assets/compliance/sales without disturbing their existing, already-audited
-// request flows needs dedicated design work beyond this pass.
+// assets/compliance/sales without disturbing their existing request flows
+// needs dedicated design work of its own.
 func (app *App) recordAudit(ctx context.Context, category, actor, action, target string, metadata map[string]any) {
 	if app.Audit == nil {
 		return
@@ -183,6 +188,14 @@ func NewRouter(app *App) *gin.Engine {
 	r.Use(gin.Recovery())
 	r.Use(metrics.GinMiddleware())
 	r.Use(auth.SecurityHeaders())
+	// CORS sits AHEAD of the rate limiter and Authenticate, and behind
+	// SecurityHeaders. A preflight OPTIONS carries no Authorization header by
+	// design, so it must be answered before anything tries to authenticate it;
+	// and counting preflights against the per-IP budget would let a browser's
+	// own bookkeeping exhaust a legitimate client's rate limit. Recovery and
+	// the metrics/security-header middleware still wrap it, so a preflight is
+	// still measured and still gets the baseline security headers.
+	r.Use(auth.CORS(app.CORSAllowedOrigins))
 	r.Use(auth.MaxRequestBody(app.MaxRequestBodyBytes))
 	if app.RateLimitRPS > 0 {
 		r.Use(auth.RateLimit(app.RateLimitRPS, app.RateLimitBurst))

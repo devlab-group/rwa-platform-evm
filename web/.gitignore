@@ -13,3 +13,4 @@ dist-ssr
 .contrast-check.mjs
 .axe-audit.mjs
 tests/specs/zzz-debug.spec.ts
+.env

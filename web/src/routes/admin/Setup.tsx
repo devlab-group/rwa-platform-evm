@@ -46,8 +46,7 @@ const DEPLOY_POLL_MS = 3000;
  * once a profile is stored. The deploy form derives projectId, decimals,
  * tokenUnit, and profileDigest from that stored profile instead of letting the
  * browser supply its own, separately-typed copies that could silently disagree
- * with it (the server does not yet derive these itself; see docs/adr for the
- * follow-up once it does).
+ * with it (the server does not yet derive these itself).
  */
 export function Setup() {
   const project = useAsync<Project>((signal) => api.getProject({ signal }), []);

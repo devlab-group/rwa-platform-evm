@@ -41,8 +41,7 @@ func (StubAdapter) SignDigest(_ [32]byte) ([]byte, error) { return nil, ErrNotSu
 func (StubAdapter) Close() error                          { return nil }
 
 // DeviceKind identifies a hardware-wallet/HSM device family the signer
-// could integrate with as a Signer adapter (see
-// docs/adr/ADR-006-hardware-wallet-signing.md). Naming --hardware's value
+// could integrate with as a Signer adapter. Naming --hardware's value
 // after a specific device, rather than leaving it a bare boolean, is the
 // seam a real adapter plugs into: adding a device means adding one case to
 // Open and one adapter type that implements Signer -- nothing in cmd/signer

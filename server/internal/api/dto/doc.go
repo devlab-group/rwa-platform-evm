@@ -3,8 +3,8 @@
 // the handlers in internal/api stay HTTP-only: routing, auth, status codes and
 // error mapping there, JSON shape here.
 //
-// The types mirror components.schemas.* in api/openapi.yaml (FROZEN,
-// lead-owned) — field names and json tags are part of that contract, so
+// The types mirror components.schemas.* in api/openapi.yaml (FROZEN) —
+// field names and json tags are part of that contract, so
 // changing one here is an API change, not a refactor.
 //
 // Mappers are deliberately dumb: they read a model (and whatever the caller

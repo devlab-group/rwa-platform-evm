@@ -59,7 +59,7 @@ describe("RedemptionComplianceBadge", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders nothing once the request is Funded, even if the beneficiary is not Allowed (already committed per §3.1)", () => {
+  it("renders nothing once the request is Funded, even if the beneficiary is not Allowed (already committed)", () => {
     const { container } = render(
       <RedemptionComplianceBadge status="Funded" beneficiaryAllowed={false} />,
     );

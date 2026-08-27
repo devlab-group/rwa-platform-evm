@@ -1,6 +1,6 @@
 // Package jsonschema implements the operator assetSchema dialect defined in
-// docs/spec/profile-schema-dialect.md (dialect id "rwa-profile-assetSchema/1",
-// ADR-002): it validates operator-defined Asset Profile "assetSchema"
+// docs/spec/profile-schema-dialect.md (dialect id "rwa-profile-assetSchema/1"):
+// it validates operator-defined Asset Profile "assetSchema"
 // documents against submitted asset data.
 //
 // Supported validation keywords: type, properties, required,

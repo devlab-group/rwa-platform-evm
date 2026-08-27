@@ -367,8 +367,7 @@ contract RedemptionEscrowTest is TestBase {
         // If the beneficiary is removed before funding, both
         // fundRedemption AND cancelRedemption are blocked by the same compliance check — the
         // RWA-return leg goes through RWAToken.returnEscrowedRWA, which itself enforces the
-        // platform-wide invariant that a transfer requires the recipient to be Allowed (see
-        // root CLAUDE.md: "Transfers require both from and to currently Allowed"). This is not
+        // platform-wide invariant that a transfer requires the recipient to be Allowed. This is not
         // a stuck state: the RWA stays exactly where it was (escrowed, never lost, never
         // claimable by the issuer — no fundRedemption ever ran, so no quote was ever pulled),
         // and the moment compliance is restored the same timed-out cancelRedemption call

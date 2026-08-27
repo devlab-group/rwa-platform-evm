@@ -336,7 +336,7 @@ func TestWebhookReconcilerReopensApplyStatusAfterPostConfirmationReorg(t *testin
 
 // TestWebhookReconcilerLeavesAcceptedEventWithoutStatusService documents
 // the deliberate "stuck, never fabricated Applied" behavior when no
-// compliance signer is configured — see submit's doc comment and M-11.
+// compliance signer is configured — see submit's doc comment.
 func TestWebhookReconcilerLeavesAcceptedEventWithoutStatusService(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	txRepo := memory.NewTransactionRepository()

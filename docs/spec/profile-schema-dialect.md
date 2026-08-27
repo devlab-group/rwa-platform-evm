@@ -6,7 +6,7 @@ Profile only. It does **not** govern the platform's own JSON Schemas in
 Draft 2020-12 validator; e.g. `asset-profile.schema.json` legitimately uses
 `format: uuid`).
 
-Established by ADR-002. The reason it exists: the server compiled operator `assetSchema`
+The reason it exists: the server compiled operator `assetSchema`
 documents with a full Draft 2020-12 implementation while the offline signer
 implemented a hand-written subset that **silently ignored** unknown keywords.
 A schema using e.g. `multipleOf`, `format`, or `patternProperties` was therefore

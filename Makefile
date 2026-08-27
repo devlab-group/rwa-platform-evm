@@ -54,7 +54,7 @@ vectors-check: dialect-check ## Verify shared golden vectors reproduce across la
 	cd signer && go test ./internal/attestation/... -run Vectors
 	cd contracts && forge test --match-contract Vectors
 
-dialect-check: ## Cross-binary parity for the assetSchema dialect (see ADR-002/003)
+dialect-check: ## Cross-binary parity for the assetSchema dialect
 	# First run fails the build on any failing case; second asserts a Dialect test
 	# actually ran (guards against a rename silently matching zero tests). Package
 	# globs include every package holding a Dialect* test (server: assets;

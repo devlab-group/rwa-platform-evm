@@ -12,12 +12,11 @@ import (
 )
 
 // ComputeCIDv1Raw derives the CIDv1(raw,sha2-256) for data — the same
-// convention every Client implementation in this package uses (architecture
-// §6.3). Exported so callers (ReplicationManager.Verify in particular) can
-// independently re-derive the expected CID from freshly retrieved bytes
-// instead of trusting a destination's own report of what it stored (audit
-// 3.1 §4: "verification SHOULD retrieve the content and confirm that its
-// digest matches the expected CID").
+// convention every Client implementation in this package uses. Exported so
+// callers (ReplicationManager.Verify in particular) can independently
+// re-derive the expected CID from freshly retrieved bytes instead of trusting
+// a destination's own report of what it stored: verification retrieves the
+// content and confirms that its digest matches the expected CID.
 func ComputeCIDv1Raw(data []byte) (string, error) {
 	mh, err := multihash.Sum(data, multihash.SHA2_256, -1)
 	if err != nil {

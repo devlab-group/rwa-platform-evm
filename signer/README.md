@@ -143,7 +143,6 @@ signer/
     ├── attestation/        EIP-712 domain/typehash/digest, Sign, Recover
     ├── keystore/            keystore load/create + unlock hardening -- see "Keys and secrets"
     ├── hardware/            Signer interface, DeviceKind/Open factory, non-production StubAdapter
-    │                        (design: docs/adr/ADR-006-hardware-wallet-signing.md)
     ├── output/              signed-result.json construction + schema validation
     └── ui/                  review-screen rendering, mint/burn banner, fail-closed confirm prompt
 ```
@@ -281,10 +280,8 @@ independently.
   resolving to `StubAdapter` (`ErrNotSupported`) — no device has a working integration in this
   build, and none is attempted here since real hardware cannot be exercised in this environment.
   `--hardware <device>` on the CLI selects a device by name (previously a bare boolean); an
-  unrecognized device name is a distinct error from "not yet implemented." See
-  `docs/adr/ADR-006-hardware-wallet-signing.md` for the integration seam, the device shortlist and
-  their EIP-712 constraints, and why hardware-backed signing — not the software keystore above —
-  is the recommended production configuration.
+  unrecognized device name is a distinct error from "not yet implemented." Hardware-backed
+  signing — not the software keystore above — is the recommended production configuration.
 
 ## The `--policy` flag
 

@@ -2,13 +2,13 @@
 
 Status: `None → Pending → {Funded → Completed | Rejected | Cancelled}`.
 
-| From    | Function            | Caller               | Guard                                             | To        | Asset effect                                  |
-| ------- | ------------------- | -------------------- | ------------------------------------------------- | --------- | --------------------------------------------- |
-| None    | requestRedemption   | anyone allowed       | !paused, amount>0, deadline ok, quote>=minQuoteOut | Pending   | pull exact rwaAmount from caller into escrow  |
-| Pending | fundRedemption      | TREASURER_ROLE       | !paused, beneficiary allowed                      | Funded    | pull exact quoteAmount from funder into escrow |
-| Pending | rejectRedemption    | REDEMPTION_MANAGER   | !paused, reasonCode!=0, beneficiary allowed       | Rejected  | return exact rwaAmount to beneficiary         |
-| Pending | cancelRedemption    | beneficiary only     | now >= createdAt + timeout, beneficiary allowed   | Cancelled | return exact rwaAmount to beneficiary         |
-| Funded  | claimRedemption     | anyone (permissionless) | !paused                                        | Completed | rwaAmount → Vault; quoteAmount → beneficiary   |
+| From    | Function          | Caller                  | Guard                                              | To        | Asset effect                                   |
+| ------- | ----------------- | ----------------------- | -------------------------------------------------- | --------- | ---------------------------------------------- |
+| None    | requestRedemption | anyone allowed          | !paused, amount>0, deadline ok, quote>=minQuoteOut | Pending   | pull exact rwaAmount from caller into escrow   |
+| Pending | fundRedemption    | TREASURER_ROLE          | !paused, beneficiary allowed                       | Funded    | pull exact quoteAmount from funder into escrow |
+| Pending | rejectRedemption  | REDEMPTION_MANAGER      | !paused, reasonCode!=0, beneficiary allowed        | Rejected  | return exact rwaAmount to beneficiary          |
+| Pending | cancelRedemption  | beneficiary only        | now >= createdAt + timeout, beneficiary allowed    | Cancelled | return exact rwaAmount to beneficiary          |
+| Funded  | claimRedemption   | anyone (permissionless) | !paused                                            | Completed | rwaAmount → Vault; quoteAmount → beneficiary   |
 
 Invariants:
 - A request's RWA leaves escrow exactly once.
@@ -76,13 +76,13 @@ Because the contract only ever observes one final transaction ordering per block
 outcome for any interleaving of `{request, whitelist removal, whitelist restoration, funding,
 claim, timeout cancellation}` is fully deterministic from that ordering alone:
 
-| Ordering (funding/removal/restoration relative to each other) | Outcome | Test |
-| --- | --- | --- |
-| removal before funding | `fundRedemption` reverts `BeneficiaryNotAllowed`, stays `Pending` | `test_fundRedemption_beneficiaryDeWhitelistedReverts` |
-| funding before removal | funding commits; later removal cannot unwind `Funded` | `test_fundRedemption_thenRemoval_staysFunded` |
-| removal, then restoration, before funding | funding proceeds normally | `test_fundRedemption_reapprovalBeforeFunding_proceeds` |
-| removal after funding, before claim | claim still pays the recorded beneficiary in full | `test_claimRedemption_doesNotRecheckWhitelist` |
-| funded request, any compliance state | reject/cancel attempts revert `NotPending` | `test_rejectRedemption_afterFundReverts`, `test_cancelRedemption_afterFundReverts` |
+| Ordering (funding/removal/restoration relative to each other) | Outcome                                                           | Test                                                                               |
+| ------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| removal before funding                                        | `fundRedemption` reverts `BeneficiaryNotAllowed`, stays `Pending` | `test_fundRedemption_beneficiaryDeWhitelistedReverts`                              |
+| funding before removal                                        | funding commits; later removal cannot unwind `Funded`             | `test_fundRedemption_thenRemoval_staysFunded`                                      |
+| removal, then restoration, before funding                     | funding proceeds normally                                         | `test_fundRedemption_reapprovalBeforeFunding_proceeds`                             |
+| removal after funding, before claim                           | claim still pays the recorded beneficiary in full                 | `test_claimRedemption_doesNotRecheckWhitelist`                                     |
+| funded request, any compliance state                          | reject/cancel attempts revert `NotPending`                        | `test_rejectRedemption_afterFundReverts`, `test_cancelRedemption_afterFundReverts` |
 
 A reorg that changes which of two competing transactions (e.g. funding vs. removal) actually
 landed first changes which row above applies, but not the determinism itself — the contract
@@ -103,9 +103,7 @@ following hold:
 - The investor can recover the escrowed RWA via timeout `cancelRedemption` — **but recovery is
   gated on the same compliance check as funding**, not unconditional: `cancelRedemption`'s
   RWA-return leg goes through `RWAToken.returnEscrowedRWA`, which itself enforces the
-  platform-wide invariant that a transfer requires the recipient currently Allowed (see root
-  `CLAUDE.md`: "Transfers require both `from` and `to` currently Allowed"). So while the
-  beneficiary remains Blocked, timeout cancellation reverts too (`test_cancelRedemption_deWhitelistedBeneficiaryReverts`)
+  platform-wide invariant that a transfer requires the recipient currently Allowed. So while the beneficiary remains Blocked, timeout cancellation reverts too (`test_cancelRedemption_deWhitelistedBeneficiaryReverts`)
   — the RWA is not lost or claimable by the issuer, just not yet movable. The instant
   compliance restores the beneficiary, the same timed-out `cancelRedemption` call succeeds
   (`test_cancelRedemption_timeoutRecovery_impossibleWhileBlocked_succeedsOnceRestored`). This is

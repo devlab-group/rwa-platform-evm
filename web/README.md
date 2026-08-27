@@ -13,8 +13,7 @@ investor-facing belongs here — no `/investor` route, no buy/request/claim/canc
 senders, no wallet-session (`X-Wallet-Session`) client. Adding one back would put the
 investor surface behind the admin login gate and re-bloat this bundle.
 
-See also: `api/openapi.yaml` (the frozen API contract), `web/CLAUDE.md`, and
-`web/CSP-AUDIT.md`.
+See also: `api/openapi.yaml` (the frozen API contract), and `web/CSP-AUDIT.md`.
 
 ## Stack
 
@@ -248,18 +247,18 @@ immediately.
 
 ## Scripts
 
-| Script | What it does |
-| --- | --- |
-| `npm run dev` | Vite dev server with HMR, no CSP meta tag. |
-| `npm run build` | `tsc -b` then `NODE_ENV=production vite build` → `dist/`. |
-| `npm run typecheck` | `tsc -b --noEmit` over the app (`src/`). |
-| `npm run typecheck:e2e` | `tsc --noEmit` over `tests/` against `tsconfig.playwright.json`. |
-| `npm test` | `vitest run` — unit/component tests, `src/**/*.test.{ts,tsx}` only. |
-| `npm run test:e2e` | Builds, then runs the full Playwright suite in mock mode. |
-| `npm run lint` | ESLint over the whole project (`src/` and `tests/`). |
-| `npm run format` | Prettier over `src/**/*.{ts,tsx,scss}`. |
-| `npm run gen:api` | Regenerates `src/lib/api-types.ts` from `../api/openapi.yaml`. |
-| `npm run preview` | Serves the built `dist/` (what Playwright's mock mode drives). |
+| Script                  | What it does                                                        |
+| ----------------------- | ------------------------------------------------------------------- |
+| `npm run dev`           | Vite dev server with HMR, no CSP meta tag.                          |
+| `npm run build`         | `tsc -b` then `NODE_ENV=production vite build` → `dist/`.           |
+| `npm run typecheck`     | `tsc -b --noEmit` over the app (`src/`).                            |
+| `npm run typecheck:e2e` | `tsc --noEmit` over `tests/` against `tsconfig.playwright.json`.    |
+| `npm test`              | `vitest run` — unit/component tests, `src/**/*.test.{ts,tsx}` only. |
+| `npm run test:e2e`      | Builds, then runs the full Playwright suite in mock mode.           |
+| `npm run lint`          | ESLint over the whole project (`src/` and `tests/`).                |
+| `npm run format`        | Prettier over `src/**/*.{ts,tsx,scss}`.                             |
+| `npm run gen:api`       | Regenerates `src/lib/api-types.ts` from `../api/openapi.yaml`.      |
+| `npm run preview`       | Serves the built `dist/` (what Playwright's mock mode drives).      |
 
 From the repo root, `make web-test` runs typecheck + test + build.
 

@@ -36,7 +36,7 @@ const TRANSACTION_TONE: Record<TransactionChainStatus, string> = {
 /** Tone for an unrecognized/forward-compat status: visible, not silently neutral. */
 const TRANSACTION_UNKNOWN_TONE = "badge--warning";
 
-/** Redemption status badge. Derives Pending/Funded/Claimable/Completed/Rejected/Cancelled per §10.3. */
+/** Redemption status badge. Derives Pending/Funded/Claimable/Completed/Rejected/Cancelled. */
 export function RedemptionStatusBadge({
   status,
   claimable,
@@ -62,7 +62,7 @@ export function RedemptionStatusBadge({
 
 /**
  * Shown alongside the status badge when a Pending redemption's beneficiary
- * has lost compliance eligibility, so funding would revert (audit §3.1).
+ * has lost compliance eligibility, so funding would revert.
  * Renders nothing once the request is Funded/Completed/etc. (compliance no
  * longer blocks it) or if `beneficiaryAllowed` isn't present on the
  * response (defensive — degrades to no indicator rather than a guess).

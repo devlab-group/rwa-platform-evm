@@ -95,7 +95,7 @@ contract RWATokenTest is TestBase {
 
     function test_burnFromVaultSucceeds() public {
         // controllerBurn (to == 0) never re-checks compliance — only ordinary transfers
-        // (from != 0 && to != 0) are gated — and per ADR-001 the Vault can't be blocked
+        // (from != 0 && to != 0) are gated — and the Vault can't be blocked
         // anyway (see ComplianceRegistryTest for that regression coverage), so this is now a
         // plain happy-path sanity check rather than a compliance-bypass proof.
         _mintTo(address(vault), 5 ether);

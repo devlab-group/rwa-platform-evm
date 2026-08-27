@@ -18,10 +18,8 @@ interface ConfirmStepProps {
 
 /**
  * Two-step confirm gate for admin actions that call a server hot-key
- * endpoint directly (no wallet signature in between to catch a mistake —
- * see web/CLAUDE.md: "Admin actions either call an allowed server hot-key
- * endpoint or produce wallet/Safe transactions"). Reuses the same
- * review-then-confirm shape as Setup's deploy flow.
+ * endpoint directly. Reuses the same review-then-confirm shape as
+ * Setup's deploy flow.
  */
 export function ConfirmStep({
   reviewLabel,

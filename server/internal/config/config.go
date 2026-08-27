@@ -201,6 +201,21 @@ type Config struct {
 	// proxy/load balancer's address when running behind one.
 	TrustedProxies []string
 
+	// CORSAllowedOrigins is the exact list of browser origins allowed to call
+	// this API cross-origin (scheme+host+port, e.g.
+	// "http://localhost:5173"), or empty to disable CORS entirely.
+	//
+	// Empty is the right default for a deployment that only serves the
+	// EMBEDDED admin console: that is same-origin and needs no CORS at all.
+	// It exists for the standalone investor SPA (investor-web/), which is a
+	// separate deployable served from its own origin.
+	//
+	// "*" is REFUSED in every environment (see Load): this API accepts an
+	// Authorization bearer, and a wildcard origin combined with that would let
+	// any page on the internet drive an authenticated session from a victim's
+	// browser. List the real origins instead.
+	CORSAllowedOrigins []string
+
 	// MetricsAddr, if non-empty, serves Prometheus /metrics on its own
 	// listener (deliberately not the public API port — see cmd/platform).
 	// Defaults to loopback-only so /metrics is not exposed on all interfaces
@@ -320,6 +335,7 @@ type fileSchema struct {
 		MaxHeaderBytes      *int64   `yaml:"max_header_bytes"`
 		MaxRequestBodyBytes *int64   `yaml:"max_request_body_bytes"`
 		TrustedProxies      []string `yaml:"trusted_proxies"`
+		CORSAllowedOrigins  []string `yaml:"cors_allowed_origins"`
 	} `yaml:"http"`
 
 	Chain struct {
@@ -463,6 +479,9 @@ func (f fileSchema) toEnvMap() map[string]string {
 	setI64("MAX_REQUEST_BODY_BYTES", f.HTTP.MaxRequestBodyBytes)
 	if len(f.HTTP.TrustedProxies) > 0 {
 		setStr("TRUSTED_PROXIES", strings.Join(f.HTTP.TrustedProxies, ","))
+	}
+	if len(f.HTTP.CORSAllowedOrigins) > 0 {
+		setStr("CORS_ALLOWED_ORIGINS", strings.Join(f.HTTP.CORSAllowedOrigins, ","))
 	}
 
 	setStr("CHAIN_RPC_URL", f.Chain.RPCURL)
@@ -657,6 +676,16 @@ func load(lookup envLookup) (Config, error) {
 		cfg.TrustedProxies = proxies
 	}
 
+	if v, ok := lookup("CORS_ALLOWED_ORIGINS"); ok && strings.TrimSpace(v) != "" {
+		var origins []string
+		for _, o := range strings.Split(v, ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				origins = append(origins, o)
+			}
+		}
+		cfg.CORSAllowedOrigins = origins
+	}
+
 	pendingSLA, err := getDuration(lookup, "PENDING_REDEMPTION_SLA", 48*time.Hour)
 	if err != nil {
 		return Config{}, err
@@ -697,6 +726,22 @@ func load(lookup envLookup) (Config, error) {
 	if cfg.ChainID <= 0 {
 		return Config{}, fmt.Errorf("config: CHAIN_ID must be positive, got %d", cfg.ChainID)
 	}
+	// CORS origins are validated in EVERY environment, not just production:
+	// a wildcard is never a legitimate value for an API that accepts an
+	// Authorization bearer, and a malformed origin silently never matches
+	// (browsers send the exact scheme+host+port), which presents as "CORS is
+	// broken" with nothing in the logs to say why.
+	for _, origin := range cfg.CORSAllowedOrigins {
+		switch {
+		case origin == "*":
+			return Config{}, errors.New(`config: http.cors_allowed_origins must not contain "*" — this API accepts an Authorization bearer, and a wildcard origin would let any site drive an authenticated session from a victim's browser; list the exact origins instead`)
+		case strings.HasSuffix(origin, "/"):
+			return Config{}, fmt.Errorf("config: http.cors_allowed_origins %q must not have a trailing slash — a browser's Origin header is scheme+host+port only, so this would never match", origin)
+		case !strings.HasPrefix(origin, "http://") && !strings.HasPrefix(origin, "https://"):
+			return Config{}, fmt.Errorf("config: http.cors_allowed_origins %q must be a full origin including the scheme, e.g. %q", origin, "http://localhost:5173")
+		}
+	}
+
 	if cfg.Environment != EnvDevelopment && cfg.Environment != EnvProduction {
 		return Config{}, fmt.Errorf("config: ENVIRONMENT must be %q or %q, got %q", EnvDevelopment, EnvProduction, cfg.Environment)
 	}

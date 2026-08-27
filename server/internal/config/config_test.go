@@ -94,6 +94,65 @@ func TestLoadTrustedProxies(t *testing.T) {
 	}
 }
 
+// TestLoadCORSAllowedOrigins covers the parse: a comma-separated list becomes
+// discrete origins, with surrounding whitespace and empty entries dropped.
+func TestLoadCORSAllowedOrigins(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]string{
+		"CORS_ALLOWED_ORIGINS": " http://localhost:5173 , https://investor.example ,, ",
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"http://localhost:5173", "https://investor.example"}
+	if len(cfg.CORSAllowedOrigins) != len(want) {
+		t.Fatalf("CORSAllowedOrigins = %v, want %v", cfg.CORSAllowedOrigins, want)
+	}
+	for i, w := range want {
+		if cfg.CORSAllowedOrigins[i] != w {
+			t.Errorf("origin %d = %q, want %q", i, cfg.CORSAllowedOrigins[i], w)
+		}
+	}
+}
+
+// TestLoadCORSDefaultsToDisabled: the default must be no cross-origin access at
+// all. A deployment serving only the embedded (same-origin) console needs none,
+// and defaulting to anything permissive would hand every such deployment a
+// cross-origin surface it never asked for.
+func TestLoadCORSDefaultsToDisabled(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]string{})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.CORSAllowedOrigins) != 0 {
+		t.Errorf("CORSAllowedOrigins = %v, want empty by default", cfg.CORSAllowedOrigins)
+	}
+}
+
+// TestLoadRejectsBadCORSOrigins is the fail-closed half, enforced in EVERY
+// environment rather than production only.
+//
+// "*" is the load-bearing case: this API accepts an Authorization bearer, so a
+// wildcard origin would let any page on the internet drive an authenticated
+// admin session out of a victim's browser. The malformed cases matter for a
+// duller reason — a browser's Origin header is exactly scheme+host+port, so a
+// trailing slash or a missing scheme silently never matches, and the operator
+// sees "CORS is broken" with nothing explaining why.
+func TestLoadRejectsBadCORSOrigins(t *testing.T) {
+	for name, value := range map[string]string{
+		"wildcard":              "*",
+		"wildcard among others": "http://localhost:5173,*",
+		"trailing slash":        "http://localhost:5173/",
+		"missing scheme":        "localhost:5173",
+		"bare host":             "investor.example",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LoadFromMap(map[string]string{"CORS_ALLOWED_ORIGINS": value}); err == nil {
+				t.Fatalf("expected load to reject CORS_ALLOWED_ORIGINS=%q", value)
+			}
+		})
+	}
+}
+
 func TestLoadInvalid(t *testing.T) {
 	tests := map[string]map[string]string{
 		"bad chain id":         {"CHAIN_ID": "not-a-number"},

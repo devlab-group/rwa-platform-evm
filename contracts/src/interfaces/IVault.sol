@@ -4,8 +4,8 @@ pragma solidity ^0.8.24;
 /// @title IVault
 /// @notice Holds inventory, sells for one quote token, and withdraws sale proceeds.
 /// @dev Stable interface; see docs/spec/contracts.md.
-///      ADR-007: off-chain payment distribution (`distribute`, `distributionCap`,
-///      `DISTRIBUTOR_ROLE`) has been removed. `buy` is the only inbound token flow now.
+///      There is no off-chain payment distribution (`distribute`, `distributionCap`,
+///      `DISTRIBUTOR_ROLE`): `buy` is the only inbound token flow.
 interface IVault {
     event Purchased(
         address indexed buyer, address indexed recipient, uint256 tokenAmount, uint256 quoteAmount, address strategy

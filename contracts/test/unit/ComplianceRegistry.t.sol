@@ -103,10 +103,9 @@ contract ComplianceRegistryTest is TestBase {
         assertTrue(compliance.isAllowed(address(escrow)));
     }
 
-    // ---- ADR-001: Vault/RedemptionEscrow are pinned system addresses ----
-    // See docs/adr/ADR-001-compliance-system-address-protection.md. A fat-fingered or
-    // compromised COMPLIANCE_ROLE must not be able to self-DoS the deployment by blocking the
-    // contracts that move RWA on every buy/claim.
+    // ---- Vault/RedemptionEscrow are pinned system addresses ----
+    // A fat-fingered or compromised COMPLIANCE_ROLE must not be able to self-DoS the
+    // deployment by blocking the contracts that move RWA on every buy/claim.
 
     function test_isSystemAddress() public view {
         assertTrue(compliance.isSystemAddress(address(vault)));
@@ -245,7 +244,7 @@ contract ComplianceRegistryTest is TestBase {
     function test_buyRequestClaimRejectCancel_stillWorkAfterPermittedSystemAddressUpdates() public {
         // Every permitted update to a system address (re-Allowed, validUntil == 0, any number
         // of times) must leave buy/request/claim/reject/cancel fully usable —
-        // the ADR-001 system-address guarantee, exercised end to end rather than just
+        // the system-address guarantee, exercised end to end rather than just
         // re-checking isAllowed.
         vm.startPrank(complianceOperator);
         compliance.setStatus(address(vault), IComplianceRegistry.ComplianceStatus.Allowed, 0);
@@ -273,7 +272,7 @@ contract ComplianceRegistryTest is TestBase {
         vault.buy(buyAmount, quote, investor, uint64(block.timestamp + 1 hours));
         assertEq(token.balanceOf(investor), buyAmount);
 
-        // buy (second beneficiary, on-chain purchase — ADR-007 removed off-chain distribute)
+        // buy (second beneficiary, on-chain purchase — there is no off-chain distribute)
         uint256 quote2 = strategy.quotePurchase(5 ether);
         quoteToken.mint(investor2, quote2);
         vm.prank(investor2);
@@ -343,7 +342,7 @@ contract ComplianceRegistryTest is TestBase {
     }
 
     function test_buyClaim_stillWorkAfterAttemptedVaultBlock() public {
-        // ADR-001's own acceptance criterion: an attempted (and rejected) block of the Vault
+        // An attempted (and rejected) block of the Vault
         // or RedemptionEscrow must not disturb the normal buy/claim paths — proven here by
         // actually driving each of them to completion, not just re-checking isAllowed.
         vm.prank(complianceOperator);
@@ -359,7 +358,7 @@ contract ComplianceRegistryTest is TestBase {
         compliance.setStatus(address(escrow), IComplianceRegistry.ComplianceStatus.Blocked, 0);
 
         // Give the Vault inventory to sell.
-        ISupplyController.MintAttestation memory a = _mintAttestation(auditor, 100 ether, "ADR-001-REC", 1);
+        ISupplyController.MintAttestation memory a = _mintAttestation(auditor, 100 ether, "SYSADDR-REC", 1);
         supplyController.mint(a, _signMint(a, AUDITOR_PK));
 
         // buy still works.

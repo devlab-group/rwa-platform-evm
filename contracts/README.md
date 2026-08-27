@@ -16,7 +16,7 @@ around it locally.
 
 | Contract | Role |
 | --- | --- |
-| `ComplianceRegistry.sol` | Wallet allowlist with optional KYC expiry. Pins `Vault`/`RedemptionEscrow` as un-blockable system addresses (ADR-001, below). |
+| `ComplianceRegistry.sol` | Wallet allowlist with optional KYC expiry. Pins `Vault`/`RedemptionEscrow` as un-blockable system addresses (see below). |
 | `RWAToken.sol` | ERC-20 + `ERC20Pausable`. Compliance-gated ordinary transfers; controller-only mint/burn; deployer-gated one-time `setSupplyController`. |
 | `SupplyController.sol` | Validates EIP-712 auditor attestations (OZ `EIP712` + `SignatureChecker`, EOA + ERC-1271) and mints/burns supply through `RWAToken`. |
 | `Vault.sol` | Holds RWA inventory; `buy` (sells for the quote token) and `withdrawProceeds`. |
@@ -78,7 +78,7 @@ the `ProjectDeployed` event, and all deploy-time wiring behavior are unchanged b
    permanently after the first call; behaves as immutable-after-construction even though it
    isn't the Solidity `immutable` keyword.
 5. `RedemptionEscrowDeployer.deploy()` → `RedemptionEscrow` (needs `Vault` + `FixedPriceStrategy`).
-6. `compliance.setSystemAddresses(vault, escrow)` — pins both as un-blockable (ADR-001, below).
+6. `compliance.setSystemAddresses(vault, escrow)` — pins both as un-blockable (see below).
 7. `compliance.setStatus(vault, Allowed, 0)` and same for `escrow` — actually marks them
    `Allowed` in the registry (step 6 only pins what `setStatus` can change them *to* later; it
    doesn't allow them by itself).
@@ -129,9 +129,8 @@ anvil banner.
 After this, point the server at the factory (`contract.factory_address` + `contract.start_block`),
 and deploy individual projects through it via the server's deploy endpoint or `script/Deploy.s.sol`.
 
-## ADR-001 — ComplianceRegistry system-address pin
+## ComplianceRegistry system-address pin
 
-See [`docs/adr/ADR-001-compliance-system-address-protection.md`](../docs/adr/ADR-001-compliance-system-address-protection.md).
 Without it, `COMPLIANCE_ROLE` could set `Vault` or `RedemptionEscrow` to `Blocked` exactly like
 a user wallet — bricking `buy`/`claimRedemption` (both are `RWAToken` transfer
 counterparties) and, worse, trapping a `Funded` redemption's already-pulled-in quote until the

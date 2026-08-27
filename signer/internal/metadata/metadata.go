@@ -1,6 +1,6 @@
 // Package metadata validates a metadata envelope document against the
-// fixed platform schema (shared/schemas/metadata.schema.json, architecture
-// §6.2) and exposes the parsed fields the signer must cross-check against
+// fixed platform schema (shared/schemas/metadata.schema.json) and exposes
+// the parsed fields the signer must cross-check against
 // the typed attestation (issuance.amount, recordId, proof hashes).
 package metadata
 

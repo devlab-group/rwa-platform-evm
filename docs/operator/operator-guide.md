@@ -32,8 +32,7 @@ MongoDB + IPFS. Components:
   the admin wallet, so the server has no deployer/relayer key.
 - An offline machine for the auditor with the `signer` binary. **Hardware-backed signing
   (`--hardware ledger|trezor|yubikey|hsm`) is the recommended production configuration for the
-  auditor key** (`docs/adr/ADR-006-hardware-wallet-signing.md`); no device
-  has a working integration in the current build (`internal/hardware` ships only the adapter seam
+  auditor key**; no device has a working integration in the current build (`internal/hardware` ships only the adapter seam
   and `StubAdapter`), so today every production deployment runs the hardened software-keystore
   fallback (`--keystore`, either this signer's own Argon2id format or an Ethereum V3 file — see
   `internal/keystore` and `docs/auditor/auditor-guide.md` §5) until a device is wired up. Treat

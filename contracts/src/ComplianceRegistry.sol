@@ -11,8 +11,7 @@ import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 
 /// @title ComplianceRegistry
 /// @notice Wallet allowlist with optional KYC expiry. Stores no PII.
-/// @dev ADR-001: Vault and RedemptionEscrow are pinned system addresses (see
-///      docs/adr/ADR-001-compliance-system-address-protection.md) — once wired via
+/// @dev The Vault and RedemptionEscrow are pinned system addresses — once wired via
 ///      `setSystemAddresses`, `setStatus`/`setStatuses` reject any attempt to set them to a
 ///      non-Allowed status, so a fat-fingered or compromised COMPLIANCE_ROLE cannot self-DoS
 ///      the whole deployment by blocking the contracts that move RWA on every buy/claim.
