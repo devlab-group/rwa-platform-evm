@@ -53,6 +53,10 @@ investor-web-test: ## Investor example SPA typecheck + tests + build
 vectors-check: dialect-check ## Verify shared golden vectors reproduce across languages
 	cd signer && go test ./internal/attestation/... -run Vectors
 	cd contracts && forge test --match-contract Vectors
+	# ERC-7943 ABI surface: every language asserts its own fragments against
+	# shared/vectors/erc7943-abi.json, so one drifting selector fails here.
+	cd server && go test ./internal/bindings/... -run Vectors -count=1
+	cd web && npm test -- --run src/lib/abis.test.ts
 
 dialect-check: ## Cross-binary parity for the assetSchema dialect
 	# First run fails the build on any failing case; second asserts a Dialect test

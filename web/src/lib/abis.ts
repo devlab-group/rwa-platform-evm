@@ -68,6 +68,37 @@ export const accessControlAdminAbi = [
   },
 ] as const satisfies Abi;
 
+/** RWAToken's ERC-7943 (uRWA) enforcement calls, both gated on-chain by
+ * DEFAULT_ADMIN_ROLE. `setFrozenTokens` writes an absolute amount in RWA
+ * minimal units, so 0 releases a hold and a second call replaces the first
+ * rather than adding to it. `forcedTransfer` seizes tokens from a holder who
+ * cannot or will not sign: the recipient must still be compliance-Allowed, and
+ * it works while the project is paused. Signatures are pinned in
+ * shared/vectors/erc7943-abi.json (see abis.test.ts). */
+export const erc7943Abi = [
+  {
+    type: "function",
+    name: "setFrozenTokens",
+    inputs: [
+      { name: "account", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "forcedTransfer",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+] as const satisfies Abi;
+
 /** Vault calls made from the connected wallet. `withdrawProceeds`
  * (TREASURER_ROLE) pays out the vault's accumulated quote-token proceeds and
  * needs no approve — the vault holds and transfers those funds. `amount` is in

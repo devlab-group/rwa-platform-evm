@@ -1,0 +1,32 @@
+{
+  "_comment": "FROZEN ERC-7943 (uRWA) ABI surface, shared by Solidity, Go, and TypeScript. Selectors are the first 4 bytes of keccak256(signature); topic0 is the full keccak256. Regenerate with `cast sig` / `cast keccak`. Solidity asserts these against the compiled IERC7943; Go and TypeScript assert their hand-written fragments against them.",
+  "interfaceId": "0x3edbb4c4",
+  "functions": {
+    "canSend": {"signature": "canSend(address)", "selector": "0x2bc06a92"},
+    "canReceive": {"signature": "canReceive(address)", "selector": "0x90d370ba"},
+    "canTransfer": {"signature": "canTransfer(address,address,uint256)", "selector": "0xe46638e6"},
+    "getFrozenTokens": {"signature": "getFrozenTokens(address)", "selector": "0x158b1a57"},
+    "setFrozenTokens": {"signature": "setFrozenTokens(address,uint256)", "selector": "0xebe45cba"},
+    "forcedTransfer": {"signature": "forcedTransfer(address,address,uint256)", "selector": "0x9fc1d0e7"}
+  },
+  "events": {
+    "Frozen": {
+      "signature": "Frozen(address,uint256)",
+      "topic0": "0x68e0d8c112165d0949ce87205b719ed7d98c7401866c34a159f7c67c6f5620e7",
+      "indexed": ["account"],
+      "nonIndexed": ["amount"]
+    },
+    "ForcedTransfer": {
+      "signature": "ForcedTransfer(address,address,uint256)",
+      "topic0": "0x7b3ce50c216d2ccf9919c6b9f1bfb33f0350a33010f188750b4af38e00448138",
+      "indexed": ["from", "to"],
+      "nonIndexed": ["amount"]
+    }
+  },
+  "errors": {
+    "ERC7943InsufficientUnfrozenBalance": {
+      "signature": "ERC7943InsufficientUnfrozenBalance(address,uint256,uint256)",
+      "selector": "0x00384e71"
+    }
+  }
+}
