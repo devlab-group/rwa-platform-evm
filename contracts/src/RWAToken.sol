@@ -10,6 +10,7 @@ import {
 import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {IERC7943} from "./interfaces/IERC7943.sol";
 import {IRWAToken} from "./interfaces/IRWAToken.sol";
 import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
@@ -19,7 +20,14 @@ import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 /// @dev `AccessControlEnumerable` lets an off-chain verifier enumerate
 ///      `PAUSER_ROLE`/`DEFAULT_ADMIN_ROLE` holders on-chain — see ComplianceRegistry's
 ///      NatSpec for the full rationale and the diamond-override pattern reused below.
-contract RWAToken is IRWAToken, ERC20, ERC20Pausable, AccessControlEnumerable, AccessControlDefaultAdminRules {
+contract RWAToken is
+    IRWAToken,
+    IERC7943,
+    ERC20,
+    ERC20Pausable,
+    AccessControlEnumerable,
+    AccessControlDefaultAdminRules
+{
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     /// @notice The RWAFactory (or other deployer) that may set `supplyController` once.
@@ -42,6 +50,10 @@ contract RWAToken is IRWAToken, ERC20, ERC20Pausable, AccessControlEnumerable, A
     error ZeroAddress();
     error RedemptionEscrowAlreadySet();
     error OnlyRedemptionEscrow(address caller);
+    /// @dev The Vault and RedemptionEscrow move RWA on every buy, claim, and cancel; freezing
+    ///      either would wedge those flows for everyone, so they are refused outright.
+    error SystemAddressCannotBeFrozen(address account);
+    error ForcedTransferToSelf(address account);
 
     /// @dev `supplyController` cannot be known at construction time because SupplyController's
     ///      own constructor requires the Vault address, which in turn requires this token's
@@ -119,17 +131,17 @@ contract RWAToken is IRWAToken, ERC20, ERC20Pausable, AccessControlEnumerable, A
 
     // ---- ERC-7943 (uRWA) queries ----
 
-    function canSend(address account) public view returns (bool) {
+    function canSend(address account) public view override returns (bool) {
         return IComplianceRegistry(compliance).isAllowed(account);
     }
 
     /// @dev Same registry rule as `canSend` today. The two stay separate because the standard's
     ///      API is directional, so an asymmetric policy later needs no ABI change.
-    function canReceive(address account) public view returns (bool) {
+    function canReceive(address account) public view override returns (bool) {
         return IComplianceRegistry(compliance).isAllowed(account);
     }
 
-    function getFrozenTokens(address account) public view returns (uint256) {
+    function getFrozenTokens(address account) public view override returns (uint256) {
         return _frozenTokens[account];
     }
 
@@ -137,11 +149,55 @@ contract RWAToken is IRWAToken, ERC20, ERC20Pausable, AccessControlEnumerable, A
     /// @dev Deliberately silent about ERC-20 balance: an `amount` above `from`'s balance is not
     ///      a permissioned refusal, so it stays `true` here and reverts in the ERC-20 transfer
     ///      instead. That also keeps this answer aligned with what `_update` actually enforces.
-    function canTransfer(address from, address to, uint256 amount) public view returns (bool) {
+    function canTransfer(address from, address to, uint256 amount) public view override returns (bool) {
         if (paused()) return false;
         if (!canSend(from) || !canReceive(to)) return false;
         uint256 balance = balanceOf(from);
         return amount > balance || amount <= _unfrozen(from, balance);
+    }
+
+    // ---- ERC-7943 (uRWA) enforcement ----
+
+    /// @notice Overwrite `account`'s frozen amount. Absolute, so passing 0 releases everything
+    ///         and a second call replaces the first rather than adding to it.
+    /// @dev An amount above the current balance is legitimate: it withholds tokens the account
+    ///      has not received yet.
+    function setFrozenTokens(address account, uint256 amount) external override onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (account == address(0)) revert ZeroAddress();
+        if (amount > 0 && IComplianceRegistry(compliance).isSystemAddress(account)) {
+            revert SystemAddressCannotBeFrozen(account);
+        }
+        _frozenTokens[account] = amount;
+        emit Frozen(account, amount);
+    }
+
+    /// @notice Move `amount` out of `from` on the admin's authority alone, for a seizure or a
+    ///         court-ordered recovery.
+    /// @dev Three bypasses, all deliberate: `from`'s own eligibility is not checked (a blocked or
+    ///      expired wallet is precisely the one an order names), the frozen balance does not
+    ///      block the move (it reduces instead), and `ERC20._update` is called directly so an
+    ///      emergency pause cannot disable enforcement. What stays enforced: the destination
+    ///      must be compliant, neither side may be the zero address (so this can never mint or
+    ///      burn), and the balance itself comes from the ordinary ERC-20 path, which reverts if
+    ///      `from` does not hold `amount`.
+    function forcedTransfer(address from, address to, uint256 amount) external override onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (from == address(0) || to == address(0)) revert ZeroAddress();
+        // A self-transfer moves nothing but would still consume frozen tokens.
+        if (from == to) revert ForcedTransferToSelf(from);
+        if (!canReceive(to)) revert RecipientNotAllowed(to);
+
+        uint256 balance = balanceOf(from);
+        uint256 unfrozen = _unfrozen(from, balance);
+        // Over-balance amounts are left to ERC20._update to reject, so frozen state is never
+        // reduced for a transfer that cannot happen.
+        if (amount > unfrozen && amount <= balance) {
+            uint256 newFrozen = _frozenTokens[from] - (amount - unfrozen);
+            _frozenTokens[from] = newFrozen;
+            emit Frozen(from, newFrozen);
+        }
+
+        ERC20._update(from, to, amount);
+        emit ForcedTransfer(from, to, amount);
     }
 
     /// @dev `_frozenTokens` may exceed `balance`, hence the branch instead of a subtraction.
@@ -162,6 +218,12 @@ contract RWAToken is IRWAToken, ERC20, ERC20Pausable, AccessControlEnumerable, A
         if (from != address(0) && to != address(0)) {
             if (!IComplianceRegistry(compliance).isAllowed(from)) revert SenderNotAllowed(from);
             if (!IComplianceRegistry(compliance).isAllowed(to)) revert RecipientNotAllowed(to);
+            uint256 balance = balanceOf(from);
+            uint256 unfrozen = _unfrozen(from, balance);
+            // Above the balance is ERC-20's own error to raise, not a frozen-balance refusal.
+            if (value > unfrozen && value <= balance) {
+                revert ERC7943InsufficientUnfrozenBalance(from, value, unfrozen);
+            }
         }
         super._update(from, to, value);
     }
@@ -215,7 +277,7 @@ contract RWAToken is IRWAToken, ERC20, ERC20Pausable, AccessControlEnumerable, A
     function supportsInterface(bytes4 interfaceId)
         public
         view
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
+        override(AccessControlEnumerable, AccessControlDefaultAdminRules, IERC165)
         returns (bool)
     {
         return interfaceId == type(IERC7943).interfaceId || super.supportsInterface(interfaceId);
