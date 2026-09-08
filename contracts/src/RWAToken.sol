@@ -10,6 +10,7 @@ import {
 import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {IERC7943} from "./interfaces/IERC7943.sol";
 import {IRWAToken} from "./interfaces/IRWAToken.sol";
 import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 
@@ -33,6 +34,10 @@ contract RWAToken is IRWAToken, ERC20, ERC20Pausable, AccessControlEnumerable, A
     ///         `setRedemptionEscrow` and `returnEscrowedRWA`.
     address public redemptionEscrow;
     bool private _redemptionEscrowSet;
+
+    /// @notice ERC-7943 frozen amounts: absolute, not a delta, and allowed to exceed the
+    ///         holder's balance, so every read derives the unfrozen part via `_unfrozen`.
+    mapping(address account => uint256 amount) private _frozenTokens;
 
     error ZeroAddress();
     error RedemptionEscrowAlreadySet();
@@ -112,6 +117,39 @@ contract RWAToken is IRWAToken, ERC20, ERC20Pausable, AccessControlEnumerable, A
         _unpause();
     }
 
+    // ---- ERC-7943 (uRWA) queries ----
+
+    function canSend(address account) public view returns (bool) {
+        return IComplianceRegistry(compliance).isAllowed(account);
+    }
+
+    /// @dev Same registry rule as `canSend` today. The two stay separate because the standard's
+    ///      API is directional, so an asymmetric policy later needs no ABI change.
+    function canReceive(address account) public view returns (bool) {
+        return IComplianceRegistry(compliance).isAllowed(account);
+    }
+
+    function getFrozenTokens(address account) public view returns (uint256) {
+        return _frozenTokens[account];
+    }
+
+    /// @notice Whether the permissioned rules would let `from` send `amount` to `to` right now.
+    /// @dev Deliberately silent about ERC-20 balance: an `amount` above `from`'s balance is not
+    ///      a permissioned refusal, so it stays `true` here and reverts in the ERC-20 transfer
+    ///      instead. That also keeps this answer aligned with what `_update` actually enforces.
+    function canTransfer(address from, address to, uint256 amount) public view returns (bool) {
+        if (paused()) return false;
+        if (!canSend(from) || !canReceive(to)) return false;
+        uint256 balance = balanceOf(from);
+        return amount > balance || amount <= _unfrozen(from, balance);
+    }
+
+    /// @dev `_frozenTokens` may exceed `balance`, hence the branch instead of a subtraction.
+    function _unfrozen(address account, uint256 balance) private view returns (uint256) {
+        uint256 frozen = _frozenTokens[account];
+        return balance > frozen ? balance - frozen : 0;
+    }
+
     function decimals() public view override returns (uint8) {
         return _decimals;
     }
@@ -180,6 +218,6 @@ contract RWAToken is IRWAToken, ERC20, ERC20Pausable, AccessControlEnumerable, A
         override(AccessControlEnumerable, AccessControlDefaultAdminRules)
         returns (bool)
     {
-        return super.supportsInterface(interfaceId);
+        return interfaceId == type(IERC7943).interfaceId || super.supportsInterface(interfaceId);
     }
 }

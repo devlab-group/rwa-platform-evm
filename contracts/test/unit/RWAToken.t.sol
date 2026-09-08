@@ -2,13 +2,19 @@
 pragma solidity ^0.8.24;
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {IAccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
+import {stdStorage, StdStorage} from "forge-std/StdStorage.sol";
 import {TestBase} from "../helpers/TestBase.sol";
 import {RWAToken} from "../../src/RWAToken.sol";
 import {IRWAToken} from "../../src/interfaces/IRWAToken.sol";
 import {IComplianceRegistry} from "../../src/interfaces/IComplianceRegistry.sol";
+import {IERC7943} from "../../src/interfaces/IERC7943.sol";
 import {ISupplyController} from "../../src/interfaces/ISupplyController.sol";
 
 contract RWATokenTest is TestBase {
+    using stdStorage for StdStorage;
+
     function test_metadata() public view {
         assertEq(token.name(), "Gold Bar Token");
         assertEq(token.symbol(), "GBT");
@@ -193,6 +199,138 @@ contract RWATokenTest is TestBase {
             abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, outsider, pauserRole)
         );
         token.pause();
+    }
+
+    // ---- ERC-7943 (uRWA) queries ----
+
+    function test_canSendReceive_followTheComplianceRegistry() public {
+        assertTrue(token.canSend(investor));
+        assertTrue(token.canReceive(investor));
+        assertTrue(token.canTransfer(investor, investor2, 1 ether));
+
+        // Unknown wallet: never given a record at all.
+        assertFalse(token.canSend(outsider));
+        assertFalse(token.canReceive(outsider));
+        assertFalse(token.canTransfer(outsider, investor, 1 ether));
+        assertFalse(token.canTransfer(investor, outsider, 1 ether));
+    }
+
+    function test_canSendReceive_blockedWallet() public {
+        vm.prank(complianceOperator);
+        compliance.setStatus(investor, IComplianceRegistry.ComplianceStatus.Blocked, 0);
+
+        assertFalse(token.canSend(investor));
+        assertFalse(token.canReceive(investor));
+        assertFalse(token.canTransfer(investor, investor2, 1 ether));
+        assertFalse(token.canTransfer(investor2, investor, 1 ether));
+    }
+
+    function test_canSendReceive_expiredWallet() public {
+        vm.prank(complianceOperator);
+        compliance.setStatus(investor, IComplianceRegistry.ComplianceStatus.Allowed, uint64(block.timestamp + 1 days));
+        assertTrue(token.canSend(investor));
+
+        vm.warp(block.timestamp + 2 days);
+        assertFalse(token.canSend(investor));
+        assertFalse(token.canReceive(investor));
+        assertFalse(token.canTransfer(investor, investor2, 1 ether));
+        assertFalse(token.canTransfer(investor2, investor, 1 ether));
+    }
+
+    function test_canTransfer_falseWhilePausedButAccountChecksUnchanged() public {
+        vm.prank(admin);
+        token.pause();
+
+        assertTrue(token.canSend(investor), "pause is not an account-eligibility statement");
+        assertTrue(token.canReceive(investor2));
+        assertFalse(token.canTransfer(investor, investor2, 1 ether));
+    }
+
+    function test_canTransfer_unfrozenAmounts() public {
+        _mintTo(investor, 100 ether);
+        assertEq(token.getFrozenTokens(investor), 0, "nothing is frozen by default");
+        assertTrue(token.canTransfer(investor, investor2, 100 ether));
+
+        _freeze(investor, 40 ether);
+        assertEq(token.getFrozenTokens(investor), 40 ether);
+        assertTrue(token.canTransfer(investor, investor2, 60 ether), "the unfrozen part still moves");
+        assertFalse(token.canTransfer(investor, investor2, 61 ether), "one unit into the frozen part");
+        assertFalse(token.canTransfer(investor, investor2, 100 ether));
+    }
+
+    function test_canTransfer_fullyFrozen() public {
+        _mintTo(investor, 100 ether);
+        _freeze(investor, 100 ether);
+
+        assertTrue(token.canTransfer(investor, investor2, 0), "a zero-value transfer takes nothing");
+        assertFalse(token.canTransfer(investor, investor2, 1));
+        assertFalse(token.canTransfer(investor, investor2, 100 ether));
+    }
+
+    function test_canTransfer_frozenAboveBalanceDoesNotUnderflow() public {
+        _mintTo(investor, 100 ether);
+        _freeze(investor, type(uint256).max);
+
+        assertFalse(token.canTransfer(investor, investor2, 1));
+        assertFalse(token.canTransfer(investor, investor2, 100 ether));
+    }
+
+    /// @dev An amount nobody has is an ERC-20 problem, not a permissioned refusal, so the
+    ///      standard query must not answer it.
+    function test_canTransfer_overBalanceIsNotAPermissionedRefusal() public {
+        _mintTo(investor, 100 ether);
+        assertTrue(token.canTransfer(investor, investor2, 101 ether));
+        assertTrue(token.canTransfer(investor2, investor, 1 ether), "investor2 holds nothing at all");
+
+        vm.prank(investor);
+        vm.expectRevert();
+        token.transfer(investor2, 101 ether);
+    }
+
+    /// @dev `staticcall` proves it: any storage write in these paths would revert the call.
+    function test_queries_areSideEffectFree() public {
+        _mintTo(investor, 100 ether);
+        _freeze(investor, 40 ether);
+
+        _assertStaticCallSucceeds(abi.encodeCall(IERC7943.canSend, (investor)));
+        _assertStaticCallSucceeds(abi.encodeCall(IERC7943.canReceive, (investor)));
+        _assertStaticCallSucceeds(abi.encodeCall(IERC7943.getFrozenTokens, (investor)));
+        _assertStaticCallSucceeds(abi.encodeCall(IERC7943.canTransfer, (investor, investor2, 50 ether)));
+    }
+
+    function test_supportsInterface_erc7943() public view {
+        assertEq(type(IERC7943).interfaceId, bytes4(0x3edbb4c4), "final uRWA fungible interface id");
+        assertTrue(token.supportsInterface(type(IERC7943).interfaceId));
+
+        // The inherited introspection must survive the added branch.
+        assertTrue(token.supportsInterface(type(IERC165).interfaceId));
+        assertTrue(token.supportsInterface(type(IAccessControl).interfaceId));
+        assertTrue(token.supportsInterface(type(IAccessControlEnumerable).interfaceId));
+        assertFalse(token.supportsInterface(bytes4(0xdeadbeef)));
+    }
+
+    function testFuzz_canTransfer_neverReverts(address from, address to, uint256 amount) public view {
+        token.canTransfer(from, to, amount);
+    }
+
+    function testFuzz_canTransfer_falseExactlyWhenTheAmountReachesFrozenTokens(uint256 frozen, uint256 amount) public {
+        uint256 balance = 100 ether;
+        _mintTo(investor, balance);
+        _freeze(investor, bound(frozen, 0, type(uint256).max));
+        frozen = token.getFrozenTokens(investor);
+        amount = bound(amount, 0, balance);
+
+        uint256 unfrozen = balance > frozen ? balance - frozen : 0;
+        assertEq(token.canTransfer(investor, investor2, amount), amount <= unfrozen);
+    }
+
+    function _freeze(address account, uint256 amount) internal {
+        stdstore.target(address(token)).sig(token.getFrozenTokens.selector).with_key(account).checked_write(amount);
+    }
+
+    function _assertStaticCallSucceeds(bytes memory call) internal view {
+        (bool ok,) = address(token).staticcall(call);
+        assertTrue(ok, "query wrote state");
     }
 
     function _mintTo(address to, uint256 amount) internal {

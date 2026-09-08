@@ -43,8 +43,9 @@ Reads (side-effect-free, must not revert):
   standard's directional API.
 - `getFrozenTokens(a)`: the stored absolute amount.
 - `canTransfer(from,to,amount)`: false if `paused()`, `!canSend(from)`, `!canReceive(to)`, or
-  `amount > unfrozen(from)`. It does NOT report ERC-20 balance or allowance insufficiency: an
-  over-balance amount with no frozen restriction returns true and ERC-20 rejects it at execution.
+  `amount <= balanceOf(from) && amount > unfrozen(from)`. It does NOT report ERC-20 balance or
+  allowance insufficiency: an over-balance amount returns true here and the ERC-20 transfer
+  rejects it at execution. The frozen clause mirrors exactly what `_update` enforces.
 
 Writes, both `DEFAULT_ADMIN_ROLE`:
 - `setFrozenTokens(account,amount)`: overwrite (not a delta); rejects `account==0`; rejects
