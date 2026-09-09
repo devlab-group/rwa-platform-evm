@@ -17,6 +17,7 @@ import {
 } from "viem";
 import {
   accessControlAdminAbi,
+  erc7943Abi,
   fixedPriceStrategyAbi,
   pausableAbi,
   redemptionEscrowAbi,
@@ -358,6 +359,57 @@ export async function sendSetStrategyPrice(
       functionName:
         side === "purchase" ? "setPurchasePrice" : "setRedemptionPrice",
       args: [priceMinimalUnits],
+    }),
+  );
+}
+
+/**
+ * RWAToken.setFrozenTokens(account, amount) - ERC-7943. `amount` is ABSOLUTE
+ * token minimal units, not a delta: it replaces whatever was frozen before,
+ * and 0 releases the hold entirely. DEFAULT_ADMIN_ROLE authorizes; the
+ * contract also refuses a non-zero amount on the Vault or RedemptionEscrow.
+ */
+export async function sendSetFrozenTokens(
+  expectedChainId: number,
+  from: Address,
+  token: Address,
+  account: Address,
+  amountMinimalUnits: bigint,
+): Promise<Hex> {
+  return sendWrite(
+    expectedChainId,
+    from,
+    token,
+    encodeFunctionData({
+      abi: erc7943Abi,
+      functionName: "setFrozenTokens",
+      args: [account, amountMinimalUnits],
+    }),
+  );
+}
+
+/**
+ * RWAToken.forcedTransfer(from, to, amount) - ERC-7943 seizure. Moves tokens
+ * without the holder's signature, bypassing their own eligibility and an
+ * active pause; the recipient must still be compliance-Allowed, which the
+ * contract enforces. DEFAULT_ADMIN_ROLE authorizes.
+ */
+export async function sendForcedTransfer(
+  expectedChainId: number,
+  sender: Address,
+  token: Address,
+  holder: Address,
+  recipient: Address,
+  amountMinimalUnits: bigint,
+): Promise<Hex> {
+  return sendWrite(
+    expectedChainId,
+    sender,
+    token,
+    encodeFunctionData({
+      abi: erc7943Abi,
+      functionName: "forcedTransfer",
+      args: [holder, recipient, amountMinimalUnits],
     }),
   );
 }

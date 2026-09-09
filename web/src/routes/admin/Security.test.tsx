@@ -12,7 +12,9 @@ import {
   readErc20Decimals,
   sendAcceptAdminTransfer,
   sendBeginAdminTransfer,
+  sendForcedTransfer,
   sendRoleChange,
+  sendSetFrozenTokens,
   sendSetPaused,
   sendSetStrategyPrice,
 } from "../../lib/wallet";
@@ -39,6 +41,8 @@ vi.mock("../../lib/wallet", async (importOriginal) => {
     sendSetPaused: vi.fn().mockResolvedValue("0xhash"),
     sendSetStrategyPrice: vi.fn().mockResolvedValue("0xhash"),
     sendRoleChange: vi.fn().mockResolvedValue("0xhash"),
+    sendSetFrozenTokens: vi.fn().mockResolvedValue("0xhash"),
+    sendForcedTransfer: vi.fn().mockResolvedValue("0xhash"),
     sendBeginAdminTransfer: vi.fn().mockResolvedValue("0xhash"),
     sendAcceptAdminTransfer: vi.fn().mockResolvedValue("0xhash"),
     waitForTxReceipt: vi.fn().mockResolvedValue(undefined),
@@ -312,5 +316,299 @@ describe("Security accept admin role (incoming admin, not role-gated)", () => {
     expect(
       screen.queryByRole("heading", { name: "Accept admin role" }),
     ).toBeNull();
+  });
+});
+
+describe("Security frozen balances (indexed read state)", () => {
+  it("renders each frozen holder in whole tokens and keeps the staleness notice", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({
+        ...DEPLOYED,
+        decimals: 18,
+        securityAsOfBlock: 4321,
+        securityStale: true,
+        frozenBalances: {
+          "0x000000000000000000000000000000000000AAA1": "1500000000000000000",
+          // Beyond float64's exact integer range: must render digit-for-digit.
+          "0x000000000000000000000000000000000000BBB2":
+            "123456789012345678901234567890",
+        },
+      });
+
+    render(<Security />);
+    const heading = await screen.findByRole("heading", {
+      name: "Frozen balances",
+    });
+    const section = heading.closest("section") as HTMLElement;
+
+    await waitFor(() =>
+      expect(within(section).getByText("1.5")).toBeInTheDocument(),
+    );
+    expect(
+      within(section).getByText("123,456,789,012.34567890123456789"),
+    ).toBeInTheDocument();
+    expect(
+      within(section).getByText(/possibly stale/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows an empty state when nothing is frozen", async () => {
+    vi.mocked(api.getProject).mockReset().mockResolvedValue(DEPLOYED);
+
+    render(<Security />);
+    const heading = await screen.findByRole("heading", {
+      name: "Frozen balances",
+    });
+    const section = heading.closest("section") as HTMLElement;
+    await waitFor(() =>
+      expect(
+        within(section).getByText("No tokens are frozen."),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it("summarizes the last forced transfer only when one has happened", async () => {
+    vi.mocked(api.getProject).mockReset().mockResolvedValue(DEPLOYED);
+    const { unmount } = render(<Security />);
+    await screen.findByRole("heading", { name: "Frozen balances" });
+    expect(
+      screen.queryByRole("heading", { name: "Last forced transfer" }),
+    ).toBeNull();
+    unmount();
+
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({
+        ...DEPLOYED,
+        decimals: 18,
+        lastForcedTransfer: {
+          from: "0x000000000000000000000000000000000000AAA1",
+          to: "0x000000000000000000000000000000000000BBB2",
+          amount: "2000000000000000000",
+          txHash: "0xabc",
+          blockNumber: 77,
+          logIndex: 2,
+        },
+      });
+    render(<Security />);
+    const heading = await screen.findByRole("heading", {
+      name: "Last forced transfer",
+    });
+    const section = heading.closest("section") as HTMLElement;
+    expect(within(section).getByText("2")).toBeInTheDocument();
+    expect(within(section).getByText("77")).toBeInTheDocument();
+  });
+});
+
+describe("Security ERC-7943 enforcement controls", () => {
+  let wallet: ReturnType<typeof installFakeWallet>;
+  const HOLDER = "0x000000000000000000000000000000000000AAA1";
+  const RECIPIENT = "0x000000000000000000000000000000000000BBB2";
+  const AS_ADMIN = {
+    ...DEPLOYED,
+    decimals: 18,
+    roles: { DEFAULT_ADMIN_ROLE: [ADMIN] },
+  };
+
+  beforeEach(() => {
+    wallet = installFakeWallet({ account: ADMIN, chainId: 31337 });
+    vi.mocked(sendSetFrozenTokens).mockClear().mockResolvedValue("0xhash");
+    vi.mocked(sendForcedTransfer).mockClear().mockResolvedValue("0xhash");
+    vi.mocked(api.getProject).mockReset().mockResolvedValue(AS_ADMIN);
+  });
+
+  afterEach(() => {
+    wallet.uninstall();
+  });
+
+  async function freezeForm() {
+    const account = await screen.findByLabelText("Holder address");
+    const amount = screen.getByLabelText(/absolute frozen amount/i);
+    const submit = screen.getByRole("button", { name: "Set frozen amount" });
+    return { account, amount, submit };
+  }
+
+  async function forcedForm() {
+    const holder = await screen.findByLabelText(/From \(holder\)/);
+    const recipient = screen.getByLabelText(/To \(recipient\)/);
+    const amount = screen.getByLabelText(/Amount \(whole tokens\)/);
+    return { holder, recipient, amount };
+  }
+
+  it("hides both controls behind a notice when the wallet is not the admin", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({ ...DEPLOYED, roles: {} });
+    renderWithWallet(<Security />, { connected: true });
+
+    const freeze = (
+      await screen.findByRole("heading", { name: "Freeze tokens" })
+    ).closest("section") as HTMLElement;
+    expect(within(freeze).getByText("DEFAULT_ADMIN_ROLE")).toBeInTheDocument();
+    expect(
+      within(freeze).queryByRole("button", { name: "Set frozen amount" }),
+    ).toBeNull();
+
+    const forced = (
+      await screen.findByRole("heading", { name: "Forced transfer" })
+    ).closest("section") as HTMLElement;
+    expect(
+      within(forced).queryByRole("button", { name: "Force transfer" }),
+    ).toBeNull();
+  });
+
+  it("broadcasts setFrozenTokens with exact token units", async () => {
+    renderWithWallet(<Security />, { connected: true });
+    const { account, amount, submit } = await freezeForm();
+
+    fireEvent.change(account, { target: { value: HOLDER } });
+    fireEvent.change(amount, { target: { value: "1.5" } });
+    fireEvent.click(submit);
+
+    await waitFor(() =>
+      // 1.5 whole tokens at 18 decimals, as an exact bigint.
+      expect(sendSetFrozenTokens).toHaveBeenCalledWith(
+        31337,
+        ADMIN,
+        DEPLOYED.addresses.token,
+        HOLDER,
+        1500000000000000000n,
+      ),
+    );
+  });
+
+  it("treats a zero amount as a release rather than rejecting it", async () => {
+    renderWithWallet(<Security />, { connected: true });
+    const { account, amount, submit } = await freezeForm();
+
+    fireEvent.change(account, { target: { value: HOLDER } });
+    fireEvent.change(amount, { target: { value: "0" } });
+    fireEvent.click(submit);
+
+    await waitFor(() =>
+      expect(sendSetFrozenTokens).toHaveBeenCalledWith(
+        31337,
+        ADMIN,
+        DEPLOYED.addresses.token,
+        HOLDER,
+        0n,
+      ),
+    );
+    expect(await screen.findByText(/released every frozen token/i)).toBeInTheDocument();
+  });
+
+  it("says the freeze is absolute rather than additive", async () => {
+    renderWithWallet(<Security />, { connected: true });
+    const heading = await screen.findByRole("heading", {
+      name: "Freeze tokens",
+    });
+    const section = heading.closest("section") as HTMLElement;
+    expect(
+      within(section).getByText(/does not add to an existing hold/i),
+    ).toBeInTheDocument();
+  });
+
+  it("rejects a malformed address, an over-precise amount, and a system address before signing", async () => {
+    renderWithWallet(<Security />, { connected: true });
+    const { account, amount, submit } = await freezeForm();
+
+    fireEvent.change(account, { target: { value: "0xnope" } });
+    fireEvent.change(amount, { target: { value: "1" } });
+    fireEvent.click(submit);
+    expect(await screen.findByText(/is not a valid address/i)).toBeInTheDocument();
+
+    // 19 fractional digits on an 18-decimal token would silently round.
+    fireEvent.change(account, { target: { value: HOLDER } });
+    fireEvent.change(amount, { target: { value: "1.0000000000000000001" } });
+    fireEvent.click(submit);
+    expect(await screen.findByText(/is not a valid amount/i)).toBeInTheDocument();
+
+    fireEvent.change(account, { target: { value: DEPLOYED.addresses.vault } });
+    fireEvent.change(amount, { target: { value: "1" } });
+    fireEvent.click(submit);
+    expect(
+      await screen.findByText(/can never be frozen/i),
+    ).toBeInTheDocument();
+
+    expect(sendSetFrozenTokens).not.toHaveBeenCalled();
+  });
+
+  it("confirms what a forced transfer bypasses before broadcasting it", async () => {
+    renderWithWallet(<Security />, { connected: true });
+    const { holder, recipient, amount } = await forcedForm();
+
+    fireEvent.change(holder, { target: { value: HOLDER } });
+    fireEvent.change(recipient, { target: { value: RECIPIENT } });
+    fireEvent.change(amount, { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Force transfer" }));
+
+    // Nothing is signed until the operator reads the warning and confirms.
+    expect(
+      await screen.findByText(/even while trading is paused/i),
+    ).toBeInTheDocument();
+    expect(sendForcedTransfer).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm forced transfer" }),
+    );
+    await waitFor(() =>
+      expect(sendForcedTransfer).toHaveBeenCalledWith(
+        31337,
+        ADMIN,
+        DEPLOYED.addresses.token,
+        HOLDER,
+        RECIPIENT,
+        2000000000000000000n,
+      ),
+    );
+  });
+
+  it("rejects a forced transfer to the same address", async () => {
+    renderWithWallet(<Security />, { connected: true });
+    const { holder, recipient, amount } = await forcedForm();
+
+    fireEvent.change(holder, { target: { value: HOLDER } });
+    fireEvent.change(recipient, { target: { value: HOLDER.toLowerCase() } });
+    fireEvent.change(amount, { target: { value: "1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Force transfer" }));
+
+    expect(
+      await screen.findByText(/sender and recipient must differ/i),
+    ).toBeInTheDocument();
+    expect(sendForcedTransfer).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a rejected or reverted transaction instead of reporting success", async () => {
+    vi.mocked(sendSetFrozenTokens).mockRejectedValueOnce(
+      new Error("User rejected the request."),
+    );
+    renderWithWallet(<Security />, { connected: true });
+    const { account, amount, submit } = await freezeForm();
+
+    fireEvent.change(account, { target: { value: HOLDER } });
+    fireEvent.change(amount, { target: { value: "1" } });
+    fireEvent.click(submit);
+
+    expect(
+      await screen.findByText("User rejected the request."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/frozen amount for/i)).toBeNull();
+  });
+
+  it("reloads the indexed state after a confirmed freeze", async () => {
+    renderWithWallet(<Security />, { connected: true });
+    const { account, amount, submit } = await freezeForm();
+    const callsBefore = vi.mocked(api.getProject).mock.calls.length;
+
+    fireEvent.change(account, { target: { value: HOLDER } });
+    fireEvent.change(amount, { target: { value: "1" } });
+    fireEvent.click(submit);
+
+    await waitFor(() =>
+      expect(vi.mocked(api.getProject).mock.calls.length).toBeGreaterThan(
+        callsBefore,
+      ),
+    );
   });
 });
