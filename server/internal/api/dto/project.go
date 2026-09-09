@@ -77,9 +77,28 @@ type ProjectResponse struct {
 	// projection actually lags. When no projection has run yet (or governance
 	// indexing is not wired) the response falls back to the deploy-config
 	// snapshot and reports stale.
+	// FrozenBalances maps a holder address to the ERC-7943 frozen amount held
+	// against it, in token minimal units as a base-10 string. Only currently
+	// frozen holders appear; omitted entirely when nothing is frozen.
+	FrozenBalances map[string]string `json:"frozenBalances,omitempty"`
+	// LastForcedTransfer is the most recent seizure, as an audit hint. The
+	// authoritative history is the chain itself, not this field.
+	LastForcedTransfer *ForcedTransfer `json:"lastForcedTransfer,omitempty"`
+
 	SecurityAsOfBlock uint64 `json:"securityAsOfBlock,omitempty"`
 	SecurityAsOfTime  string `json:"securityAsOfTime,omitempty"`
 	SecurityStale     bool   `json:"securityStale"`
+}
+
+// ForcedTransfer mirrors components.schemas.ForcedTransfer: one ERC-7943
+// forced transfer, with the chain coordinates to find it in canonical history.
+type ForcedTransfer struct {
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Amount      string `json:"amount"`
+	TxHash      string `json:"txHash"`
+	BlockNumber uint64 `json:"blockNumber"`
+	LogIndex    uint   `json:"logIndex"`
 }
 
 // Addresses mirrors components.schemas.Addresses.
@@ -149,6 +168,13 @@ func ToProjectResponse(p *models.Project, tokenUnit string, finalityConfirmation
 		}
 		if s.RedemptionPricePerWholeToken != "" {
 			resp.RedemptionPricePerWholeToken = s.RedemptionPricePerWholeToken
+		}
+		resp.FrozenBalances = s.FrozenBalances
+		if f := s.LastForcedTransfer; f != nil {
+			resp.LastForcedTransfer = &ForcedTransfer{
+				From: f.From, To: f.To, Amount: f.Amount,
+				TxHash: f.TxHash, BlockNumber: f.BlockNumber, LogIndex: f.LogIndex,
+			}
 		}
 		resp.SecurityAsOfBlock = s.AsOfBlock
 		if !s.AsOfTime.IsZero() {

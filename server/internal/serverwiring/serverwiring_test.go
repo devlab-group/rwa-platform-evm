@@ -96,6 +96,49 @@ func TestStrictDecoderRefusesGeneric(t *testing.T) {
 	}
 }
 
+// TestTokenDecoderRoutesEnforcementAndGovernance: the token address must
+// reach BOTH its own ERC-7943 decoder and the shared governance fallback, so a
+// freeze and a pause indexed from the same contract are each typed.
+func TestTokenDecoderRoutesEnforcementAndGovernance(t *testing.T) {
+	tokenAddr := common.HexToAddress("0x00000000000000000000000000000000000f0f0f")
+	dec := BuildDecoder(models.Addresses{Token: tokenAddr.Hex()}, "")
+
+	tok := bindings.NewRWAToken()
+	amount, err := tok.ABI.Events["Frozen"].Inputs.NonIndexed().Pack(big.NewInt(100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder := common.HexToAddress("0x00000000000000000000000000000000000000a1")
+	frozenLog := types.Log{
+		Address: tokenAddr,
+		Topics:  []common.Hash{tok.EventID("Frozen"), common.BytesToHash(holder.Bytes())},
+		Data:    amount,
+	}
+	name, data, err := dec(frozenLog)
+	if err != nil {
+		t.Fatalf("decode Frozen: %v", err)
+	}
+	if name != "Frozen" || data["account"] != holder.Hex() || data["amount"] != "100" {
+		t.Fatalf("Frozen decoded as %q %+v", name, data)
+	}
+
+	// Pause still falls through to the governance decoder.
+	g := bindings.NewGovernance()
+	acct, err := g.ABI.Events["Paused"].Inputs.NonIndexed().Pack(holder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pausedLog := types.Log{Address: tokenAddr, Topics: []common.Hash{g.EventID("Paused")}, Data: acct}
+	if name, _, err := dec(pausedLog); err != nil || name != "Paused" {
+		t.Fatalf("Paused decoded as %q (err %v), want Paused", name, err)
+	}
+
+	known := KnownEventNames(models.Addresses{Token: tokenAddr.Hex()}, "")
+	if !known["Frozen"] || !known["ForcedTransfer"] || !known["Paused"] {
+		t.Fatalf("token event names = %v", known)
+	}
+}
+
 // TestKnownEventNamesEmptyWhenNoContract: with no typed
 // contract configured, only the generic decoder is available — which is what
 // opsctl uses to refuse `dlq retry` outright.

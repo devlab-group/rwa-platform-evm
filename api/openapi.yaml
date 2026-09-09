@@ -614,6 +614,24 @@ components:
             verification: every role on every deployed contract, compared against
             the deploy allowlist, so an unexpected out-of-band holder is detected. This is a
             verification-time snapshot — see securityStale.
+        frozenBalances:
+          type: object
+          additionalProperties: { type: string }
+          description: >
+            ERC-7943 (uRWA) enforcement state: holder address -> frozen amount in token
+            minimal units, as a base-10 string so a uint256 survives JSON intact. Projected
+            from RWAToken Frozen events, which carry an ABSOLUTE amount rather than a delta;
+            an amount of zero releases the hold and removes the entry, so only currently
+            frozen holders appear and the map stays bounded. A frozen amount may exceed the
+            holder's balance (it withholds tokens they have not received yet). Omitted when
+            nothing is frozen. Event-sourced like the other security fields; see securityStale.
+        lastForcedTransfer:
+          allOf:
+            - $ref: "#/components/schemas/ForcedTransfer"
+          description: >
+            The most recent ERC-7943 forced transfer (admin seizure), as a bounded audit hint
+            with the chain coordinates to look it up. NOT a history: the full record lives in
+            the indexed chain events and the transaction list. Omitted when none has occurred.
         securityAsOfBlock:
           type: integer
           description: >
@@ -642,6 +660,16 @@ components:
         redemptionEscrow: { type: string }
         strategy: { type: string }
         quoteToken: { type: string }
+    ForcedTransfer:
+      type: object
+      description: One ERC-7943 forced transfer, identified by its canonical log position.
+      properties:
+        from: { type: string, description: "Holder the tokens were seized from." }
+        to: { type: string, description: "Recipient, which had to be compliance-Allowed on-chain." }
+        amount: { type: string, description: "Amount moved, in token minimal units (base-10 string)." }
+        txHash: { type: string }
+        blockNumber: { type: integer, format: int64 }
+        logIndex: { type: integer }
     RoleHolders:
       type: object
       additionalProperties: { type: array, items: { type: string } }

@@ -157,7 +157,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Submit the wallet signature over a previously issued challenge to prove ownership. On success also mints a short-lived subject-scoped session (bound to `address` only) so an investor can read their own status without an operator API key. */
+        /** @description Submit the wallet signature over a previously issued challenge to prove ownership. On success also mints a short-lived subject-scoped session (bound to `address` only) so an investor can read their own status without an admin credential. */
         post: operations["verifyChallenge"];
         delete?: never;
         options?: never;
@@ -174,7 +174,7 @@ export interface paths {
         };
         /**
          * This session's own wallet status (subject-scoped).
-         * @description Returns the WalletStatus for the address bound to the presented wallet session only. Authenticated by the X-Wallet-Session bearer minted at challenge-verify, NOT by an operator API key. Replaces the investor page's former dependency on the operator-only global wallet list.
+         * @description Returns the WalletStatus for the address bound to the presented wallet session only. Authenticated by the X-Wallet-Session bearer minted at challenge-verify, NOT by the admin JWT. Replaces the investor page's former dependency on the admin-only global wallet list.
          */
         get: operations["getMyWalletStatus"];
         put?: never;
@@ -263,8 +263,28 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description HMAC-signed KYC provider webhook. Signature header `X-Webhook-Signature` = lowercase hex of HMAC-SHA256(rawBody, sharedSecret), constant-time compared. Replay/freshness-protected: the server requires provider + eventId + occurredAt, enforces uniqueness on (provider, eventId) in addition to raw-body-hash dedup, rejects occurredAt outside a 24h-past / 5min-future window, rejects a strictly-older decision for an address than the latest already-applied one, normalizes the address to EIP-55, and rejects negative / >100y-future validUntil before the int64→uint64 cast. The occurrence timestamp travels in-body, so it is covered by the existing HMAC-over-raw-body signature (no separate header). Not protected by ApiKeyAuth. */
+        /** @description HMAC-signed KYC provider webhook. Signature header `X-Webhook-Signature` = lowercase hex of HMAC-SHA256(rawBody, sharedSecret), constant-time compared. When a specific provider is configured this endpoint ALSO accepts that provider's own signed webhook shape instead — Sumsub's `X-Payload-Digest` or Onfido's `X-SHA2-Signature`, each verified against that provider's webhook secret and mapped server-side to the same provider-agnostic decision. The generic shape documented here remains the default (`KYC_PROVIDER=none`) and is unchanged. Replay/freshness-protected: the server requires provider + eventId + occurredAt, enforces uniqueness on (provider, eventId) in addition to raw-body-hash dedup, rejects occurredAt outside a 24h-past / 5min-future window, rejects a strictly-older decision for an address than the latest already-applied one, normalizes the address to EIP-55, and rejects negative / >100y-future validUntil before the int64→uint64 cast. The occurrence timestamp travels in-body, so it is covered by the existing HMAC-over-raw-body signature (no separate header). Not protected by BearerJwt. */
         post: operations["kycWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/compliance/kyc/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin a KYC verification for this session's own wallet.
+         * @description Begin a KYC verification with the server's configured provider for the wallet bound to the presented session. Returns the provider SDK token / hosted URL the investor SPA launches. The subject wallet is taken from the session, never a request parameter. Approval is applied on-chain asynchronously by the server when the provider's signed webhook arrives (see POST /api/v1/compliance/webhook) — this endpoint does not itself change on-chain state. 501 means no KYC provider is configured, or the configured one has no server-initiated flow (the default `none` provider).
+         */
+        post: operations["startKYC"];
         delete?: never;
         options?: never;
         head?: never;
@@ -468,7 +488,7 @@ export interface components {
              * @enum {string}
              */
             status?: "Undeployed" | "Deploying" | "Verifying" | "Active" | "Failed";
-            /** @description Why the deployment is Failed, or a non-fatal gap disclosed even when Active (e.g. no release manifest configured). Empty when verification fully succeeded. */
+            /** @description Why the deployment is Failed — e.g. a role-holder mismatch, a bytecode mismatch, or a reorg that demoted the adopted ProjectDeployed event. Empty when verification succeeded (a project is never left Active with a recorded gap). */
             verificationNote?: string;
             decimals?: number;
             /** @description Decimals of the quote/collateral token (addresses.quoteToken), read on-chain once at project setup/deploy and stored with the project settings. Lets the UI scale quote-denominated amounts to/from whole units without its own on-chain read. Omitted if not yet resolved. */
@@ -491,6 +511,12 @@ export interface components {
             bytecodeVerified?: boolean;
             /** @description Complete role-holder sets enumerated via AccessControlEnumerable at deployment verification: every role on every deployed contract, compared against the deploy allowlist, so an unexpected out-of-band holder is detected. This is a verification-time snapshot — see securityStale. */
             roles?: components["schemas"]["RoleHolders"];
+            /** @description ERC-7943 (uRWA) enforcement state: holder address -> frozen amount in token minimal units, as a base-10 string so a uint256 survives JSON intact. Projected from RWAToken Frozen events, which carry an ABSOLUTE amount rather than a delta; an amount of zero releases the hold and removes the entry, so only currently frozen holders appear and the map stays bounded. A frozen amount may exceed the holder's balance (it withholds tokens they have not received yet). Omitted when nothing is frozen. Event-sourced like the other security fields; see securityStale. */
+            frozenBalances?: {
+                [key: string]: string;
+            };
+            /** @description The most recent ERC-7943 forced transfer (admin seizure), as a bounded audit hint with the chain coordinates to look it up. NOT a history: the full record lives in the indexed chain events and the transaction list. Omitted when none has occurred. */
+            lastForcedTransfer?: components["schemas"]["ForcedTransfer"];
             /** @description Last indexed block, i.e. how current the server's chain view is when it reported the security-authority fields (paused/auditor/treasury/roles). Omitted when no indexer checkpoint exists yet. */
             securityAsOfBlock?: number;
             /**
@@ -509,6 +535,19 @@ export interface components {
             redemptionEscrow?: string;
             strategy?: string;
             quoteToken?: string;
+        };
+        /** @description One ERC-7943 forced transfer, identified by its canonical log position. */
+        ForcedTransfer: {
+            /** @description Holder the tokens were seized from. */
+            from?: string;
+            /** @description Recipient, which had to be compliance-Allowed on-chain. */
+            to?: string;
+            /** @description Amount moved, in token minimal units (base-10 string). */
+            amount?: string;
+            txHash?: string;
+            /** Format: int64 */
+            blockNumber?: number;
+            logIndex?: number;
         };
         /** @description Map of role name (DEFAULT_ADMIN_ROLE, PAUSER_ROLE, ...) to holder addresses. */
         RoleHolders: {
@@ -650,6 +689,25 @@ export interface components {
              * @description Expiry (unix seconds) for an Allowed decision; 0 = no expiry. Negative or >100y-future is rejected before the int64→uint64 cast.
              */
             validUntil?: number;
+        };
+        /** @description A verification session issued by the configured KYC provider for the session's own wallet. Exactly one of `token` (consumed by the provider's embedded web SDK) or `url` (hosted redirect flow) is set, depending on the provider. */
+        KYCSession: {
+            /**
+             * @description Which provider issued this session; tells the SPA which SDK to launch.
+             * @enum {string}
+             */
+            provider: "sumsub" | "onfido" | "generic";
+            /** @description Provider SDK/init token. */
+            token?: string;
+            /** @description Hosted-flow URL to redirect the investor to. */
+            url?: string;
+            /** @description Provider-side reference for this verification (Onfido: workflowRunId). Bound server-side to the subject wallet so the provider's webhook can be resolved back to it. */
+            ref?: string;
+            /**
+             * Format: date-time
+             * @description When the token/URL stops being usable.
+             */
+            expiresAt?: string;
         };
         WebhookEvent: {
             id?: string;
@@ -1141,8 +1199,9 @@ export interface operations {
     kycWebhook: {
         parameters: {
             query?: never;
-            header: {
-                "X-Webhook-Signature": string;
+            header?: {
+                /** @description Required for the generic shape; a configured provider sends its own header instead (X-Payload-Digest / X-SHA2-Signature). Exactly one signature header must verify. */
+                "X-Webhook-Signature"?: string;
             };
             path?: never;
             cookie?: never;
@@ -1171,6 +1230,28 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    startKYC: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Provider verification session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KYCSession"];
+                };
+            };
+            401: components["responses"]["Error"];
+            501: components["responses"]["Error"];
         };
     };
     listRecords: {

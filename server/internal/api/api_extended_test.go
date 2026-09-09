@@ -858,6 +858,58 @@ func TestProjectResponseLifecycleFields(t *testing.T) {
 	}
 }
 
+// TestProjectResponseEnforcementState confirms GET /project exposes the
+// ERC-7943 frozen balances and the bounded forced-transfer hint, and that a
+// project with no enforcement events keeps the pre-ERC-7943 response shape.
+func TestProjectResponseEnforcementState(t *testing.T) {
+	env := setupTestApp(t)
+	ctx := context.Background()
+	p, err := env.app.Repos.Projects.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No enforcement events: both fields are omitted, not rendered as empty
+	// objects, so an existing client sees exactly what it saw before.
+	p.Security = &models.SecurityState{}
+	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	w := doJSON(t, env.router, http.MethodGet, "/api/v1/project", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if body := w.Body.String(); strings.Contains(body, "frozenBalances") || strings.Contains(body, "lastForcedTransfer") {
+		t.Errorf("unfrozen project should omit both enforcement fields: %s", body)
+	}
+
+	// A uint256 beyond float64's exact range, to prove it survives the JSON
+	// round trip as a string.
+	huge := "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+	holder := "0x0000000000000000000000000000000000000A01"
+	p.Security = &models.SecurityState{
+		FrozenBalances: map[string]string{holder: huge},
+		LastForcedTransfer: &models.ForcedTransferState{
+			From: holder, To: "0x0000000000000000000000000000000000000B02", Amount: "42",
+			TxHash: "0xdeadbeef", BlockNumber: 21, LogIndex: 3,
+		},
+	}
+	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	resp := getProjectResp(t, env)
+	if resp.FrozenBalances[holder] != huge {
+		t.Errorf("frozen balance = %q, want %q", resp.FrozenBalances[holder], huge)
+	}
+	if resp.LastForcedTransfer == nil {
+		t.Fatal("lastForcedTransfer missing")
+	}
+	if resp.LastForcedTransfer.Amount != "42" || resp.LastForcedTransfer.BlockNumber != 21 ||
+		resp.LastForcedTransfer.LogIndex != 3 || resp.LastForcedTransfer.TxHash != "0xdeadbeef" {
+		t.Errorf("lastForcedTransfer = %+v", resp.LastForcedTransfer)
+	}
+}
+
 func getProjectResp(t *testing.T, env *testEnv) dto.ProjectResponse {
 	t.Helper()
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/project", nil, nil)
