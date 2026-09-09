@@ -4,6 +4,11 @@ pragma solidity ^0.8.24;
 import {TestBase} from "../helpers/TestBase.sol";
 import {ISupplyController} from "../../src/interfaces/ISupplyController.sol";
 import {IRedemptionEscrow} from "../../src/interfaces/IRedemptionEscrow.sol";
+import {IComplianceRegistry} from "../../src/interfaces/IComplianceRegistry.sol";
+import {IERC7943} from "../../src/interfaces/IERC7943.sol";
+import {IRWAToken} from "../../src/interfaces/IRWAToken.sol";
+import {RWAToken} from "../../src/RWAToken.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 /// @notice deploy -> allow -> mint(golden sig) -> buy -> requestRedemption -> fund -> claim ->
 ///         auditor burn of returned Vault inventory, plus a timeout -> cancel branch.
@@ -143,5 +148,105 @@ contract FullFlowTest is TestBase {
         bytes memory blockedBurnSig = _signBurn(blockedBurn, AUDITOR_PK);
         vm.expectRevert();
         supplyController.burn(blockedBurn, blockedBurnSig);
+    }
+
+    /// @notice The ERC-7943 enforcement lifecycle on a stack deployed exactly like production:
+    ///         mint through the untouched attestation path, buy, freeze part of a holder's
+    ///         balance, prove the query and the transfer agree, then seize from that holder
+    ///         after blocking them and pausing the project. The redemption, cancel, and pause
+    ///         behavior this must not disturb is covered by the other tests in this file, which
+    ///         still pass unchanged.
+    function test_fullFlow_erc7943EnforcementLifecycle() public {
+        assertTrue(token.supportsInterface(type(IERC7943).interfaceId), "token must advertise uRWA");
+
+        // Mint into the Vault through the unchanged EIP-712 path, then sell to the investor.
+        ISupplyController.MintAttestation memory a = _mintAttestation(auditor, 1_000 ether, "GOLD-BAR-7943", 1);
+        supplyController.mint(a, _signMint(a, AUDITOR_PK));
+        quoteToken.mint(investor, 1_000_000_000);
+        vm.prank(investor);
+        quoteToken.approve(address(vault), type(uint256).max);
+        vm.prank(investor);
+        vault.buy(100 ether, type(uint256).max, investor, uint64(block.timestamp + 1 hours));
+        assertEq(token.balanceOf(investor), 100 ether);
+
+        uint256 supplyBefore = token.totalSupply();
+
+        // Freeze 40 of the investor's 100, leaving 60 movable.
+        vm.prank(admin);
+        token.setFrozenTokens(investor, 40 ether);
+        assertEq(token.getFrozenTokens(investor), 40 ether);
+
+        // The query and the transfer agree on every amount that matters.
+        assertTrue(token.canTransfer(investor, investor2, 60 ether));
+        assertFalse(token.canTransfer(investor, investor2, 60 ether + 1));
+
+        vm.prank(investor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IERC7943.ERC7943InsufficientUnfrozenBalance.selector, investor, 60 ether + 1, 60 ether
+            )
+        );
+        token.transfer(investor2, 60 ether + 1);
+
+        vm.prank(investor);
+        token.transfer(investor2, 20 ether);
+        assertEq(token.balanceOf(investor), 80 ether);
+
+        // The investor is blocked and the whole project is paused: an ordinary transfer is
+        // impossible from here on, and only enforcement can still move these tokens.
+        vm.prank(complianceOperator);
+        compliance.setStatus(investor, IComplianceRegistry.ComplianceStatus.Blocked, 0);
+        vm.prank(admin);
+        token.pause();
+        assertFalse(token.canSend(investor));
+        assertFalse(token.canTransfer(investor, investor2, 1));
+
+        // A seizure larger than the 40 unfrozen tokens eats 10 out of the frozen 40, which the
+        // contract must record BEFORE the Transfer so an integrator reading the log stream
+        // never sees a balance move against a stale frozen amount.
+        vm.recordLogs();
+        vm.prank(admin);
+        token.forcedTransfer(investor, investor2, 50 ether);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 3);
+        assertEq(logs[0].topics[0], IERC7943.Frozen.selector);
+        assertEq(abi.decode(logs[0].data, (uint256)), 30 ether);
+        assertEq(logs[1].topics[0], keccak256("Transfer(address,address,uint256)"));
+        assertEq(logs[2].topics[0], IERC7943.ForcedTransfer.selector);
+
+        assertEq(token.getFrozenTokens(investor), 30 ether);
+        assertEq(token.balanceOf(investor), 30 ether);
+        assertEq(token.balanceOf(investor2), 70 ether);
+        assertEq(token.totalSupply(), supplyBefore, "a seizure moves tokens, it never mints or burns");
+
+        // The destination is still held to the compliance rule, blocked sender or not.
+        vm.prank(complianceOperator);
+        compliance.setStatus(investor2, IComplianceRegistry.ComplianceStatus.Blocked, 0);
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(IRWAToken.RecipientNotAllowed.selector, investor2));
+        token.forcedTransfer(investor, investor2, 1 ether);
+
+        // Neither contract that moves RWA on behalf of everyone can be frozen.
+        vm.startPrank(admin);
+        vm.expectRevert(abi.encodeWithSelector(RWAToken.SystemAddressCannotBeFrozen.selector, address(vault)));
+        token.setFrozenTokens(address(vault), 1);
+        vm.expectRevert(abi.encodeWithSelector(RWAToken.SystemAddressCannotBeFrozen.selector, address(escrow)));
+        token.setFrozenTokens(address(escrow), 1);
+        vm.stopPrank();
+
+        // Supply still answers only to a valid auditor attestation, pause included.
+        ISupplyController.MintAttestation memory blocked = _mintAttestation(auditor, 1 ether, "GOLD-BAR-7943-B", 2);
+        bytes memory blockedSig = _signMint(blocked, AUDITOR_PK);
+        vm.expectRevert();
+        supplyController.mint(blocked, blockedSig);
+
+        vm.prank(admin);
+        token.unpause();
+        ISupplyController.MintAttestation memory forged = _mintAttestation(auditor, 1 ether, "GOLD-BAR-7943-C", 3);
+        bytes memory forgedSig = _signMint(forged, INVESTOR_PK);
+        vm.expectRevert();
+        supplyController.mint(forged, forgedSig);
+        assertEq(token.totalSupply(), supplyBefore, "no path in this test changed supply");
     }
 }

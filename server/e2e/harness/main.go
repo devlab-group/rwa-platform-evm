@@ -158,6 +158,8 @@ var (
 	amount100  = mustBig("100000000000000000000")  // 100 RWA bought by the investor
 	amount40   = mustBig("40000000000000000000")   // 40 RWA redeemed in the primary request
 	amount10   = mustBig("10000000000000000000")   // 10 RWA redeemed in the timeout->cancel demo
+	amount25   = mustBig("25000000000000000000")   // 25 RWA frozen against the investor
+	amount20   = mustBig("20000000000000000000")   // the 20 RWA still frozen after the seizure
 )
 
 func mustBig(s string) *big.Int {
@@ -290,6 +292,11 @@ func run() error {
 	step("advance chain time past redemptionTimeout and cancel " + reqID2)
 	if err := timeoutAndCancel(ctx, api, chain, cfg, investorKey, investorAddr, reqID2); err != nil {
 		return fmt.Errorf("timeout/cancel: %w", err)
+	}
+
+	step("ERC-7943 enforcement: freeze, seize, release (admin wallet), projected into GET /project")
+	if err := enforcementLifecycle(ctx, api, chain, cfg, deployerKey, deployerAddr, investorAddr); err != nil {
+		return fmt.Errorf("erc-7943 enforcement: %w", err)
 	}
 
 	return nil
@@ -555,6 +562,34 @@ var redemptionEscrowMutABI = mustABIJSON(`[
 
 func packFundRedemption(id *big.Int) []byte {
 	data, err := redemptionEscrowMutABI.Pack("fundRedemption", id)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
+// ---- RWAToken ERC-7943 enforcement ABI ----------------------------------
+// Freezing and seizure are admin wallet transactions: the server only observes
+// the resulting events, and has no endpoint that signs either one. The harness
+// therefore encodes them itself, exactly as the admin console does.
+
+var erc7943MutABI = mustABIJSON(`[
+  {"type":"function","name":"setFrozenTokens","stateMutability":"nonpayable","inputs":[
+    {"name":"account","type":"address"},{"name":"amount","type":"uint256"}],"outputs":[]},
+  {"type":"function","name":"forcedTransfer","stateMutability":"nonpayable","inputs":[
+    {"name":"from","type":"address"},{"name":"to","type":"address"},{"name":"amount","type":"uint256"}],"outputs":[]}
+]`)
+
+func packSetFrozenTokens(account common.Address, amount *big.Int) []byte {
+	data, err := erc7943MutABI.Pack("setFrozenTokens", account, amount)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
+func packForcedTransfer(from, to common.Address, amount *big.Int) []byte {
+	data, err := erc7943MutABI.Pack("forcedTransfer", from, to, amount)
 	if err != nil {
 		panic(err)
 	}
@@ -1241,5 +1276,128 @@ func timeoutAndCancel(ctx context.Context, api *apiClient, chain *chainClient, c
 			return false, err
 		}
 		return rr.Status == "Cancelled", nil
+	})
+}
+
+// enforcementState is the ERC-7943 slice of GET /api/v1/project the server
+// projects from RWAToken's Frozen and ForcedTransfer events.
+type enforcementState struct {
+	FrozenBalances     map[string]string `json:"frozenBalances"`
+	LastForcedTransfer *struct {
+		From        string `json:"from"`
+		To          string `json:"to"`
+		Amount      string `json:"amount"`
+		TxHash      string `json:"txHash"`
+		BlockNumber uint64 `json:"blockNumber"`
+	} `json:"lastForcedTransfer"`
+}
+
+// frozenAmount returns the projected frozen amount for holder, case-insensitively
+// (the projection checksums its keys), and whether an entry exists at all.
+func (e enforcementState) frozenAmount(holder common.Address) (string, bool) {
+	for addr, amount := range e.FrozenBalances {
+		if strings.EqualFold(addr, holder.Hex()) {
+			return amount, true
+		}
+	}
+	return "", false
+}
+
+// enforcementLifecycle drives the ERC-7943 admin powers against the live chain
+// and proves the server's read model follows: freeze part of the investor's
+// balance, seize more than the unfrozen part (which reduces the freeze), then
+// release what is left. Every write is a wallet transaction the admin signs;
+// the server only indexes the events, so each assertion polls GET /project
+// rather than reading anything back from the transaction it just sent.
+//
+// It runs last so the redemption assertions above are made against an
+// unencumbered balance.
+func enforcementLifecycle(
+	ctx context.Context,
+	api *apiClient,
+	chain *chainClient,
+	cfg config,
+	adminKey *ecdsa.PrivateKey,
+	adminAddr, investor common.Address,
+) error {
+	// The seizure destination has to be compliance-Allowed, admin or not.
+	if err := allowRecoveryWallet(api, cfg, adminAddr); err != nil {
+		return fmt.Errorf("allow recovery wallet: %w", err)
+	}
+
+	pollProjection := func(desc string, check func(enforcementState) bool) error {
+		return poll(desc, 90*time.Second, 3*time.Second, func() (bool, error) {
+			var st enforcementState
+			if err := api.getJSON("/api/v1/project", cfg.adminBearer, &st); err != nil {
+				return false, err
+			}
+			return check(st), nil
+		})
+	}
+
+	if _, err := chain.sendTx(ctx, adminKey, cfg.tokenAddr, packSetFrozenTokens(investor, amount25)); err != nil {
+		return fmt.Errorf("submit setFrozenTokens: %w", err)
+	}
+	if err := pollProjection("25 RWA frozen against the investor in GET /project", func(st enforcementState) bool {
+		amount, ok := st.frozenAmount(investor)
+		return ok && amount == amount25.String()
+	}); err != nil {
+		return err
+	}
+
+	// The investor holds 60 RWA here (100 bought, 40 redeemed and claimed, 10
+	// escrowed and returned by the cancel), so a 25 freeze leaves 35 movable.
+	// Seizing 40 therefore has to release 5 frozen tokens first, and the
+	// projection must land on 20 rather than the original 25.
+	if _, err := chain.sendTx(ctx, adminKey, cfg.tokenAddr, packForcedTransfer(investor, adminAddr, amount40)); err != nil {
+		return fmt.Errorf("submit forcedTransfer: %w", err)
+	}
+	if err := pollProjection("seizure projected: freeze reduced to 20 RWA, forced transfer summarized",
+		func(st enforcementState) bool {
+			amount, ok := st.frozenAmount(investor)
+			if !ok || amount != amount20.String() {
+				return false
+			}
+			f := st.LastForcedTransfer
+			return f != nil && f.Amount == amount40.String() &&
+				strings.EqualFold(f.From, investor.Hex()) && strings.EqualFold(f.To, adminAddr.Hex()) &&
+				f.TxHash != "" && f.BlockNumber > 0
+		}); err != nil {
+		return err
+	}
+
+	// Zero releases the hold, and the holder drops out of the map entirely
+	// rather than lingering with a zero balance.
+	if _, err := chain.sendTx(ctx, adminKey, cfg.tokenAddr, packSetFrozenTokens(investor, big.NewInt(0))); err != nil {
+		return fmt.Errorf("submit setFrozenTokens(0): %w", err)
+	}
+	return pollProjection("freeze released: the investor is gone from frozenBalances",
+		func(st enforcementState) bool {
+			_, ok := st.frozenAmount(investor)
+			return !ok && st.LastForcedTransfer != nil
+		})
+}
+
+// allowRecoveryWallet marks addr Allowed so it can receive seized tokens. Same
+// admin compliance endpoint as the investor onboarding above, with its own
+// idempotency key.
+func allowRecoveryWallet(api *apiClient, cfg config, addr common.Address) error {
+	var tx struct{ TxHash, Status string }
+	if err := api.postJSON("/api/v1/compliance/status", cfg.adminBearer, map[string]any{
+		"address": addr.Hex(), "status": "Allowed", "validUntil": 0,
+	}, &tx, "e2e-allow-recovery-wallet"); err != nil {
+		return err
+	}
+	return poll("recovery wallet Allowed on-chain", 60*time.Second, 2*time.Second, func() (bool, error) {
+		var wallets []walletStatus
+		if err := api.getJSON("/api/v1/compliance/wallets", cfg.adminBearer, &wallets); err != nil {
+			return false, err
+		}
+		for _, w := range wallets {
+			if strings.EqualFold(w.Address, addr.Hex()) && w.Status == "Allowed" {
+				return true, nil
+			}
+		}
+		return false, nil
 	})
 }
