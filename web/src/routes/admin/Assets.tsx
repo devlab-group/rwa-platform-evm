@@ -112,11 +112,11 @@ export function Assets() {
       <section className="card">
         <h2>Signer policy (offline signing trust root)</h2>
         <p className="field__hint">
-          This is the <code className="mono">--policy policy.json</code> file the
-          auditor needs for <code className="mono">signer sign</code>. It pins the
-          chain, contracts, auditor, and project the auditor may sign for — the
-          signer refuses anything that disagrees. Download it and hand it to the
-          auditor alongside the .rwa package.
+          This is the <code className="mono">--policy policy.json</code> file
+          the auditor needs for <code className="mono">signer sign</code>. It
+          pins the chain, contracts, auditor, and project the auditor may sign
+          for — the signer refuses anything that disagrees. Download it and hand
+          it to the auditor alongside the .rwa package.
         </p>
         <SignerPolicySection
           project={project.status === "success" ? project.data : undefined}
@@ -218,9 +218,9 @@ function SignerPolicySection({
   if (!policy) {
     return (
       <p className="field__hint">
-        Deploy the project and create the asset profile first — the signer policy
-        needs the deployed contract addresses, auditor, profile digest, and
-        project ID.
+        Deploy the project and create the asset profile first — the signer
+        policy needs the deployed contract addresses, auditor, profile digest,
+        and project ID.
       </p>
     );
   }
@@ -362,7 +362,9 @@ function CreateRecordForm({
 }) {
   const [recordId, setRecordId] = useState("");
   const [amount, setAmount] = useState("");
-  const [assetJson, setAssetJson] = useState(metadataSkeleton ?? EMPTY_METADATA);
+  const [assetJson, setAssetJson] = useState(
+    metadataSkeleton ?? EMPTY_METADATA,
+  );
   const [assetEdited, setAssetEdited] = useState(false);
   const [proofsJson, setProofsJson] = useState("[]");
   const [error, setError] = useState<string | null>(null);
@@ -448,8 +450,8 @@ function CreateRecordForm({
           aria-describedby="amount-hint"
         />
         <span className="field__hint" id="amount-hint">
-          How many whole tokens this record represents (e.g. 100.5). Converted to
-          the token&apos;s minimal units on submit using the project&apos;s
+          How many whole tokens this record represents (e.g. 100.5). Converted
+          to the token&apos;s minimal units on submit using the project&apos;s
           decimals.
         </span>
       </div>
@@ -486,8 +488,8 @@ function CreateRecordForm({
           Optional references to off-chain evidence (custody attestations,
           appraisals, audit certificates). A JSON array of{" "}
           <code className="mono">{"{ type, sha256, uri? }"}</code> entries:{" "}
-          <strong>type</strong> is your own label, <strong>sha256</strong> is the
-          document&apos;s SHA-256 as 64 lowercase hex chars (no{" "}
+          <strong>type</strong> is your own label, <strong>sha256</strong> is
+          the document&apos;s SHA-256 as 64 lowercase hex chars (no{" "}
           <code className="mono">0x</code>), <strong>uri</strong> (optional) is
           where it&apos;s hosted. Leave as <code className="mono">[]</code> if
           there are none. Example:
@@ -716,10 +718,11 @@ function SignatureUploadForm({
           aria-describedby="signedResultFile-hint"
         />
         <span className="field__hint" id="signedResultFile-hint">
-          Upload the <code className="mono">signed-result.json</code> the auditor
-          produced from the .rwa package. Its signature is bound into the
-          on-chain MintAttestation and verified on-chain; its auditor address is
-          cross-checked against the project&apos;s auditor before broadcasting.
+          Upload the <code className="mono">signed-result.json</code> the
+          auditor produced from the .rwa package. Its signature is bound into
+          the on-chain MintAttestation and verified on-chain; its auditor
+          address is cross-checked against the project&apos;s auditor before
+          broadcasting.
         </span>
       </div>
 

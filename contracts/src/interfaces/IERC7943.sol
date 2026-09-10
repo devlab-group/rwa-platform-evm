@@ -21,9 +21,16 @@ interface IERC7943 is IERC165 {
     ///         `from` itself.
     event ForcedTransfer(address indexed from, address indexed to, uint256 amount);
 
+    /// @notice `account` may not send.
+    error ERC7943CannotSend(address account);
+
+    /// @notice `account` may not receive.
+    error ERC7943CannotReceive(address account);
+
+    /// @notice The permissioned rules refuse this transfer.
+    error ERC7943CannotTransfer(address from, address to, uint256 amount);
+
     /// @notice `account` tried to move `amount` while only `unfrozen` of its balance is free.
-    /// @dev The standard's other two errors are not used: this implementation keeps its own
-    ///      `SenderNotAllowed`/`RecipientNotAllowed`, which name which side failed.
     error ERC7943InsufficientUnfrozenBalance(address account, uint256 amount, uint256 unfrozen);
 
     /// @notice Whether `account` is currently eligible to send.
@@ -43,9 +50,9 @@ interface IERC7943 is IERC165 {
     function getFrozenTokens(address account) external view returns (uint256 amount);
 
     /// @notice Overwrite `account`'s frozen amount (absolute, not a delta). Emits `Frozen`.
-    function setFrozenTokens(address account, uint256 amount) external;
+    function setFrozenTokens(address account, uint256 amount) external returns (bool result);
 
     /// @notice Move `amount` from `from` to `to` on the enforcement authority's signature,
     ///         bypassing the sender's own eligibility. Emits `ForcedTransfer`.
-    function forcedTransfer(address from, address to, uint256 amount) external;
+    function forcedTransfer(address from, address to, uint256 amount) external returns (bool result);
 }

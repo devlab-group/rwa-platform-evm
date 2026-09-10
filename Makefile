@@ -55,6 +55,9 @@ vectors-check: dialect-check ## Verify shared golden vectors reproduce across la
 	cd contracts && forge test --match-contract Vectors
 	# ERC-7943 ABI surface: every language asserts its own fragments against
 	# shared/vectors/erc7943-abi.json, so one drifting selector fails here.
+	# NOTE: the web line needs web/node_modules, so a standalone run of this
+	# target on a fresh checkout wants `make bootstrap` first (inside `make ci`
+	# the web job has already installed them).
 	cd server && go test ./internal/bindings/... -run Vectors -count=1
 	cd web && npm test -- --run src/lib/abis.test.ts
 

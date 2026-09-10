@@ -7,8 +7,20 @@ import type { Abi } from "viem";
 
 /** RWAToken pause/unpause — gated on-chain by PAUSER_ROLE. */
 export const pausableAbi = [
-  { type: "function", name: "pause", inputs: [], outputs: [], stateMutability: "nonpayable" },
-  { type: "function", name: "unpause", inputs: [], outputs: [], stateMutability: "nonpayable" },
+  {
+    type: "function",
+    name: "pause",
+    inputs: [],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "unpause",
+    inputs: [],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
 ] as const satisfies Abi;
 
 /** FixedPriceStrategy price setters — gated on-chain by PRICER_ROLE. Prices are
@@ -83,7 +95,7 @@ export const erc7943Abi = [
       { name: "account", type: "address" },
       { name: "amount", type: "uint256" },
     ],
-    outputs: [],
+    outputs: [{ name: "result", type: "bool" }],
     stateMutability: "nonpayable",
   },
   {
@@ -94,8 +106,78 @@ export const erc7943Abi = [
       { name: "to", type: "address" },
       { name: "amount", type: "uint256" },
     ],
-    outputs: [],
+    outputs: [{ name: "result", type: "bool" }],
     stateMutability: "nonpayable",
+  },
+] as const satisfies Abi;
+
+/** Every error RWAToken can revert an admin action with, so a failed wallet call can be
+ * rendered as a sentence instead of the raw hex the injected wallet hands back. Only errors,
+ * no functions: `sendWrite` posts raw calldata, so this is used for decoding a revert
+ * (lib/wallet.ts describeWalletError), never for encoding a call. The ERC-7943 selectors are
+ * pinned in shared/vectors/erc7943-abi.json. */
+export const rwaTokenErrorsAbi = [
+  {
+    type: "error",
+    name: "ERC7943CannotSend",
+    inputs: [{ name: "account", type: "address" }],
+  },
+  {
+    type: "error",
+    name: "ERC7943CannotReceive",
+    inputs: [{ name: "account", type: "address" }],
+  },
+  {
+    type: "error",
+    name: "ERC7943CannotTransfer",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "ERC7943InsufficientUnfrozenBalance",
+    inputs: [
+      { name: "account", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "unfrozen", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "SenderNotAllowed",
+    inputs: [{ name: "from", type: "address" }],
+  },
+  {
+    type: "error",
+    name: "RecipientNotAllowed",
+    inputs: [{ name: "to", type: "address" }],
+  },
+  { type: "error", name: "ZeroAddress", inputs: [] },
+  {
+    type: "error",
+    name: "ForcedTransferToSelf",
+    inputs: [{ name: "account", type: "address" }],
+  },
+  {
+    type: "error",
+    name: "SystemAddressCannotBeFrozen",
+    inputs: [{ name: "account", type: "address" }],
+  },
+  {
+    type: "error",
+    name: "SystemAddressCannotBeSeized",
+    inputs: [{ name: "account", type: "address" }],
+  },
+  {
+    type: "error",
+    name: "AccessControlUnauthorizedAccount",
+    inputs: [
+      { name: "account", type: "address" },
+      { name: "neededRole", type: "bytes32" },
+    ],
   },
 ] as const satisfies Abi;
 

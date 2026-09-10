@@ -858,48 +858,73 @@ func TestProjectResponseLifecycleFields(t *testing.T) {
 	}
 }
 
-// TestProjectResponseEnforcementState confirms GET /project exposes the
-// ERC-7943 frozen balances and the bounded forced-transfer hint, and that a
-// project with no enforcement events keeps the pre-ERC-7943 response shape.
-func TestProjectResponseEnforcementState(t *testing.T) {
-	env := setupTestApp(t)
+// A uint256 beyond float64's exact integer range, used to prove amounts
+// survive the JSON round trip as strings.
+const hugeFrozenAmount = "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+
+const frozenHolder = "0x0000000000000000000000000000000000000A01"
+
+// seedEnforcementState puts a frozen holder and a seizure on the project's
+// security projection and returns the project.
+func seedEnforcementState(t *testing.T, env *testEnv) {
+	t.Helper()
 	ctx := context.Background()
 	p, err := env.app.Repos.Projects.Get(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// No enforcement events: both fields are omitted, not rendered as empty
-	// objects, so an existing client sees exactly what it saw before.
-	p.Security = &models.SecurityState{}
-	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
-		t.Fatal(err)
-	}
-	w := doJSON(t, env.router, http.MethodGet, "/api/v1/project", nil, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d", w.Code)
-	}
-	if body := w.Body.String(); strings.Contains(body, "frozenBalances") || strings.Contains(body, "lastForcedTransfer") {
-		t.Errorf("unfrozen project should omit both enforcement fields: %s", body)
-	}
-
-	// A uint256 beyond float64's exact range, to prove it survives the JSON
-	// round trip as a string.
-	huge := "115792089237316195423570985008687907853269984665640564039457584007913129639935"
-	holder := "0x0000000000000000000000000000000000000A01"
 	p.Security = &models.SecurityState{
-		FrozenBalances: map[string]string{holder: huge},
+		FrozenBalances: map[string]string{frozenHolder: hugeFrozenAmount},
 		LastForcedTransfer: &models.ForcedTransferState{
-			From: holder, To: "0x0000000000000000000000000000000000000B02", Amount: "42",
+			From: frozenHolder, To: "0x0000000000000000000000000000000000000B02", Amount: "42",
 			TxHash: "0xdeadbeef", BlockNumber: 21, LogIndex: 3,
 		},
 	}
 	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	resp := getProjectResp(t, env)
-	if resp.FrozenBalances[holder] != huge {
-		t.Errorf("frozen balance = %q, want %q", resp.FrozenBalances[holder], huge)
+}
+
+// TestProjectResponseOmitsEnforcementState: GET /project is public, so it must
+// never name the wallets an issuer has frozen, even when the projection holds
+// them.
+func TestProjectResponseOmitsEnforcementState(t *testing.T) {
+	env := setupTestApp(t)
+	seedEnforcementState(t, env)
+
+	w := doJSON(t, env.router, http.MethodGet, "/api/v1/project", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	body := w.Body.String()
+	for _, leaked := range []string{"frozenBalances", "lastForcedTransfer", frozenHolder, hugeFrozenAmount} {
+		if strings.Contains(body, leaked) {
+			t.Errorf("public /project leaked %q: %s", leaked, body)
+		}
+	}
+}
+
+// TestEnforcementEndpointIsAdminOnly confirms the enforcement view answers the
+// admin and rejects an unauthenticated caller outright.
+func TestEnforcementEndpointIsAdminOnly(t *testing.T) {
+	env := setupTestApp(t)
+	seedEnforcementState(t, env)
+
+	// Same refusal the admin-gated wallet list gives an anonymous caller.
+	if w := doJSON(t, env.router, http.MethodGet, "/api/v1/project/enforcement", nil, nil); w.Code != http.StatusForbidden {
+		t.Fatalf("unauthenticated status = %d, want 403", w.Code)
+	}
+
+	w := doJSON(t, env.router, http.MethodGet, "/api/v1/project/enforcement", nil, map[string]string{"Authorization": env.bearer})
+	if w.Code != http.StatusOK {
+		t.Fatalf("admin status = %d: %s", w.Code, w.Body.String())
+	}
+	var resp dto.EnforcementResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.FrozenBalances[frozenHolder] != hugeFrozenAmount {
+		t.Errorf("frozen balance = %q, want %q", resp.FrozenBalances[frozenHolder], hugeFrozenAmount)
 	}
 	if resp.LastForcedTransfer == nil {
 		t.Fatal("lastForcedTransfer missing")
@@ -907,6 +932,27 @@ func TestProjectResponseEnforcementState(t *testing.T) {
 	if resp.LastForcedTransfer.Amount != "42" || resp.LastForcedTransfer.BlockNumber != 21 ||
 		resp.LastForcedTransfer.LogIndex != 3 || resp.LastForcedTransfer.TxHash != "0xdeadbeef" {
 		t.Errorf("lastForcedTransfer = %+v", resp.LastForcedTransfer)
+	}
+}
+
+// TestEnforcementEndpointEmptyWhenNothingFrozen: no projection yet reports
+// empty and stale rather than 500ing or inventing state.
+func TestEnforcementEndpointEmptyWhenNothingFrozen(t *testing.T) {
+	env := setupTestApp(t)
+
+	w := doJSON(t, env.router, http.MethodGet, "/api/v1/project/enforcement", nil, map[string]string{"Authorization": env.bearer})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	var resp dto.EnforcementResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.FrozenBalances) != 0 || resp.LastForcedTransfer != nil {
+		t.Errorf("expected empty enforcement state, got %+v", resp)
+	}
+	if !resp.SecurityStale {
+		t.Error("no projection should report securityStale")
 	}
 }
 

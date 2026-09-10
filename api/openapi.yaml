@@ -41,8 +41,31 @@ paths:
     get:
       tags: [project]
       operationId: getProject
+      summary: Public project/market data.
+      description: >
+        Public, and depended on by the investor SPA. It carries no per-wallet enforcement
+        state: which wallets the issuer has frozen, and the last seizure, are admin-only
+        (GET /api/v1/project/enforcement), and a holder reads their own frozen amount from
+        GET /api/v1/me/wallet-status.
+      security: []
       responses:
         "200": { description: Project, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+
+  /api/v1/project/enforcement:
+    get:
+      tags: [project]
+      operationId: getEnforcement
+      summary: ERC-7943 enforcement state (admin only).
+      description: >
+        The frozen-balance map and the most recent forced transfer, projected from RWAToken's
+        Frozen and ForcedTransfer events. ADMIN-ONLY: naming the wallets an issuer has frozen
+        is operational compliance data, the same class as GET /api/v1/compliance/wallets,
+        even though the underlying events are public on-chain. Values are point-in-time
+        indexed state; see securityStale.
+      responses:
+        "200": { description: Enforcement state, content: { application/json: { schema: { $ref: "#/components/schemas/Enforcement" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 
   /api/v1/config:
     get:
@@ -614,24 +637,6 @@ components:
             verification: every role on every deployed contract, compared against
             the deploy allowlist, so an unexpected out-of-band holder is detected. This is a
             verification-time snapshot — see securityStale.
-        frozenBalances:
-          type: object
-          additionalProperties: { type: string }
-          description: >
-            ERC-7943 (uRWA) enforcement state: holder address -> frozen amount in token
-            minimal units, as a base-10 string so a uint256 survives JSON intact. Projected
-            from RWAToken Frozen events, which carry an ABSOLUTE amount rather than a delta;
-            an amount of zero releases the hold and removes the entry, so only currently
-            frozen holders appear and the map stays bounded. A frozen amount may exceed the
-            holder's balance (it withholds tokens they have not received yet). Omitted when
-            nothing is frozen. Event-sourced like the other security fields; see securityStale.
-        lastForcedTransfer:
-          allOf:
-            - $ref: "#/components/schemas/ForcedTransfer"
-          description: >
-            The most recent ERC-7943 forced transfer (admin seizure), as a bounded audit hint
-            with the chain coordinates to look it up. NOT a history: the full record lives in
-            the indexed chain events and the transaction list. Omitted when none has occurred.
         securityAsOfBlock:
           type: integer
           description: >
@@ -660,6 +665,41 @@ components:
         redemptionEscrow: { type: string }
         strategy: { type: string }
         quoteToken: { type: string }
+    Enforcement:
+      type: object
+      description: >
+        ERC-7943 (uRWA) enforcement state for the deployed project. Admin-only; see
+        GET /api/v1/project/enforcement.
+      properties:
+        frozenBalances:
+          type: object
+          additionalProperties: { type: string }
+          description: >
+            Holder address -> frozen amount in token minimal units, as a base-10 string so a
+            uint256 survives JSON intact. Projected from RWAToken Frozen events, which carry
+            an ABSOLUTE amount rather than a delta; an amount of zero releases the hold and
+            removes the entry, so only currently frozen holders appear and the map stays
+            bounded. A frozen amount may exceed the holder's balance (it withholds tokens
+            they have not received yet). Omitted when nothing is frozen.
+        lastForcedTransfer:
+          allOf:
+            - $ref: "#/components/schemas/ForcedTransfer"
+          description: >
+            The most recent forced transfer (admin seizure), as a bounded audit hint with the
+            chain coordinates to look it up. NOT a history: the full record lives in the
+            indexed chain events and the transaction list. Omitted when none has occurred.
+        securityAsOfBlock:
+          type: integer
+          description: Last indexed block this projection reflects. Omitted with no checkpoint.
+        securityAsOfTime:
+          type: string
+          format: date-time
+          description: Timestamp of securityAsOfBlock (RFC3339).
+        securityStale:
+          type: boolean
+          description: >
+            True when the projection may lag live chain state, computed exactly as the
+            identically-named field on Project.
     ForcedTransfer:
       type: object
       description: One ERC-7943 forced transfer, identified by its canonical log position.
@@ -708,6 +748,14 @@ components:
         status: { type: string, enum: [Unknown, Allowed, Blocked] }
         validUntil: { type: integer }
         ownershipVerified: { type: boolean }
+        frozenTokens:
+          type: string
+          description: >
+            This wallet's ERC-7943 frozen amount in token minimal units (base-10 string),
+            omitted when nothing is frozen. Frozen tokens stay in the wallet but cannot be
+            sent, so a holder needs this to tell an enforcement hold apart from a failure.
+            Only ever reported for the caller's own address on GET /me/wallet-status; the
+            aggregate map is admin-only.
     VerifyChallengeResult:
       type: object
       description: WalletStatus for the verified address plus a short-lived subject-scoped session.

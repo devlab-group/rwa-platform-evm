@@ -227,6 +227,11 @@ func NewRouter(app *App) *gin.Engine {
 	v1 := r.Group("/api/v1")
 	{
 		v1.GET("/project", app.getProject)
+		// ERC-7943 enforcement state is gated for the same reason
+		// /compliance/wallets is: which named wallets the issuer has frozen,
+		// and who was seized from, is operational compliance data rather than
+		// public market information. GET /project stays public without it.
+		v1.GET("/project/enforcement", adminOnly, app.getEnforcement)
 		// getConfig is PUBLIC: it exposes only the chain id and factory address
 		// the admin's web wallet needs to broadcast the deploy itself (the
 		// server no longer deploys — it observes ProjectDeployed).

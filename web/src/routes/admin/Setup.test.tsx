@@ -113,13 +113,11 @@ describe("Setup deploy price conversion", () => {
       .mockRejectedValue(
         new ApiError(404, { code: "not_found", message: "no profile" }),
       );
-    vi.mocked(api.getConfig)
-      .mockReset()
-      .mockResolvedValue({
-        chainId: 31337,
-        factoryAddress: FACTORY,
-        projectId: FIXED_UUID,
-      });
+    vi.mocked(api.getConfig).mockReset().mockResolvedValue({
+      chainId: 31337,
+      factoryAddress: FACTORY,
+      projectId: FIXED_UUID,
+    });
     vi.mocked(api.validateProfile)
       .mockReset()
       .mockResolvedValue({ valid: true, profileDigest: "0xdig", cid: "cid" });
@@ -195,13 +193,11 @@ describe("Setup load-existing-profile on mount", () => {
     vi.mocked(api.getProject).mockReset().mockRejectedValue(new Error("404"));
     vi.mocked(api.getProfile).mockReset();
     vi.mocked(api.createProfile).mockReset();
-    vi.mocked(api.getConfig)
-      .mockReset()
-      .mockResolvedValue({
-        chainId: 31337,
-        factoryAddress: FACTORY,
-        projectId: "proj-1",
-      });
+    vi.mocked(api.getConfig).mockReset().mockResolvedValue({
+      chainId: 31337,
+      factoryAddress: FACTORY,
+      projectId: "proj-1",
+    });
     wallet = installFakeWallet({ chainId: 31337 });
   });
 
@@ -294,13 +290,11 @@ describe("Setup deployment status gating", () => {
     vi.mocked(api.getProfile)
       .mockReset()
       .mockResolvedValue(storedProfileResponse());
-    vi.mocked(api.getConfig)
-      .mockReset()
-      .mockResolvedValue({
-        chainId: 31337,
-        factoryAddress: FACTORY,
-        projectId: "proj-1",
-      });
+    vi.mocked(api.getConfig).mockReset().mockResolvedValue({
+      chainId: 31337,
+      factoryAddress: FACTORY,
+      projectId: "proj-1",
+    });
   });
 
   it("shows the deploy form when the project is not yet deployed (Undeployed)", async () => {

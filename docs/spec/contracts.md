@@ -19,8 +19,9 @@ Two token paths are deliberately exempt so an emergency pause cannot trap them:
 
 - OZ `ERC20` + `ERC20Pausable`, fixed decimals from constructor.
 - `_update(from,to,value)`: if `from!=0 && to!=0` require `compliance.isAllowed(from)`
-  and `compliance.isAllowed(to)`, then require `value <= unfrozen(from)` else
-  `ERC7943InsufficientUnfrozenBalance`. Mint/burn (`from==0`/`to==0`) skip both checks.
+  and `compliance.isAllowed(to)`, then, for `value <= balanceOf(from)`, require
+  `value <= unfrozen(from)` else `ERC7943InsufficientUnfrozenBalance`. Above the balance, OZ's
+  own `ERC20InsufficientBalance` is what reverts. Mint/burn (`from==0`/`to==0`) skip both checks.
 - `controllerMint`/`controllerBurn`: only `supplyController` (immutable).
 - `pause()`/`unpause()`: `PAUSER_ROLE` (use OZ AccessControl on the token, or pass
   through a shared roles source - implementer choice, but PAUSER must be the factory-set holder).
@@ -43,16 +44,19 @@ Reads (side-effect-free, must not revert):
   standard's directional API.
 - `getFrozenTokens(a)`: the stored absolute amount.
 - `canTransfer(from,to,amount)`: false if `paused()`, `!canSend(from)`, `!canReceive(to)`, or
-  `amount <= balanceOf(from) && amount > unfrozen(from)`. It does NOT report ERC-20 balance or
-  allowance insufficiency: an over-balance amount returns true here and the ERC-20 transfer
-  rejects it at execution. The frozen clause mirrors exactly what `_update` enforces.
+  `frozen[from] > 0 && amount > unfrozen(from)`. It does NOT report ERC-20 balance or allowance
+  insufficiency: with nothing frozen, an over-balance amount returns true here and the ERC-20
+  transfer rejects it at execution. The frozen rule is evaluated on its own terms, so a fully
+  frozen holder answers false for any positive amount.
 
-Writes, both `DEFAULT_ADMIN_ROLE`:
+Writes, both `DEFAULT_ADMIN_ROLE`, both returning `true` on success as the ERC declares:
 - `setFrozenTokens(account,amount)`: overwrite (not a delta); rejects `account==0`; rejects
   `amount>0` when `compliance.isSystemAddress(account)`; `amount==0` on a system address stays
   allowed; emits `Frozen(account,amount)` on every successful call.
-- `forcedTransfer(from,to,amount)`: rejects `from==0`, `to==0`, `from==to`; requires
-  `canReceive(to)`; deliberately bypasses `canSend(from)`, `canTransfer`, and project pause;
+- `forcedTransfer(from,to,amount)`: rejects `from==0`, `to==0`, `from==to`, and a `from` that is
+  `compliance.isSystemAddress` (`SystemAddressCannotBeSeized`) so a seizure can never reach the
+  Vault's unsold float or a funded redemption's escrowed RWA; requires `canReceive(to)` else
+  `ERC7943CannotReceive`; deliberately bypasses `canSend(from)`, `canTransfer`, and project pause;
   never changes total supply; over-balance reverts through the ERC-20 balance path. If
   `amount` reaches into frozen tokens, reduce first (`newFrozen = frozen - max(amount -
   unfrozen, 0)`) and emit before the transfer:
@@ -61,6 +65,31 @@ Writes, both `DEFAULT_ADMIN_ROLE`:
 
 Events: `Frozen(address indexed account, uint256 amount)`,
 `ForcedTransfer(address indexed from, address indexed to, uint256 amount)`.
+
+#### Integrating with this token
+
+Two things a client written against the plain standard should know.
+
+Errors. `forcedTransfer` reverts with the standard `ERC7943CannotReceive(address)`, and an
+ordinary transfer that reaches into frozen tokens reverts with the standard
+`ERC7943InsufficientUnfrozenBalance(address,uint256,uint256)`. Everywhere else the token uses its
+own more specific errors, which the admin console decodes into plain language
+(`web/src/lib/wallet.ts` `describeWalletError`, against the error fragments in
+`web/src/lib/abis.ts`): `SenderNotAllowed(address)` and
+`RecipientNotAllowed(address)` on the ERC-20 transfer path (in place of `ERC7943CannotSend` and
+`ERC7943CannotTransfer`, which are declared but never raised), plus `ZeroAddress()`,
+`ForcedTransferToSelf(address)`, `SystemAddressCannotBeFrozen(address)`, and
+`SystemAddressCannotBeSeized(address)` on the enforcement calls. Selectors are pinned in
+`shared/vectors/erc7943-abi.json`, including the two platform errors that replace the standard's
+unraised ones, so an error table built from that file matches what actually arrives. The investor
+SPA decodes the frozen-balance error the same way (`investor-web/src/lib/wallet.ts`
+`describeTxError`), since a holder hitting a freeze otherwise sees only a failed transaction.
+
+`returnEscrowedRWA`. The one place the token moves tokens while `canTransfer` would answer false:
+it calls `ERC20._update` directly so a timed-out cancel or a claim is never trapped by a pause.
+It is not a general bypass. Only the wired RedemptionEscrow may call it, it always debits the
+escrow's own balance, both ends stay compliance-checked, and the escrow is a system address, so
+it can be neither frozen nor seized from.
 
 ## ComplianceRegistry
 

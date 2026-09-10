@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildMetadataSkeleton } from "./jsonSchemaSkeleton";
 
-const parse = (s: string | undefined) => (s === undefined ? undefined : JSON.parse(s));
+const parse = (s: string | undefined) =>
+  s === undefined ? undefined : JSON.parse(s);
 
 describe("buildMetadataSkeleton", () => {
   it("emits a type-appropriate placeholder for each declared property", () => {

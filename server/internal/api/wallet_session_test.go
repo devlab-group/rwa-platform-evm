@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,5 +170,80 @@ func TestIsAddressAllowedRejectsBadAddress(t *testing.T) {
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/compliance/allowed/not-an-address", nil, nil)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+// TestGetMyWalletStatusReportsOwnFrozenAmount: a frozen holder needs to be
+// able to tell an enforcement hold apart from a broken app, so their own
+// frozen amount travels on the subject-scoped status. Another holder's does
+// not: the aggregate map stays admin-only.
+func TestGetMyWalletStatusReportsOwnFrozenAmount(t *testing.T) {
+	env := setupTestApp(t)
+	ctx := context.Background()
+	mine := addr("0xF00D")
+	someoneElse := addr("0xBEEF")
+
+	for _, a := range []string{mine, someoneElse} {
+		if err := env.app.Repos.Investors.Upsert(ctx, &models.Investor{
+			Address: a, Status: models.ComplianceAllowed, OwnershipVerified: true,
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	p, err := env.app.Repos.Projects.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Security = &models.SecurityState{FrozenBalances: map[string]string{
+		// Lowercased on purpose: the projection checksums its keys, and the
+		// lookup must not depend on the casing either side happens to use.
+		strings.ToLower(mine): "1500000000000000000",
+		someoneElse:           "42",
+	}}
+	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+
+	token, _, err := env.app.Sessions.Issue(ctx, mine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := doJSON(t, env.router, http.MethodGet, "/api/v1/me/wallet-status", nil, map[string]string{"X-Wallet-Session": token})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+	var got dto.WalletStatus
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.FrozenTokens != "1500000000000000000" {
+		t.Errorf("frozenTokens = %q, want the caller's own 1500000000000000000", got.FrozenTokens)
+	}
+	if body := w.Body.String(); strings.Contains(body, `"42"`) {
+		t.Errorf("another holder's frozen amount leaked: %s", body)
+	}
+}
+
+// An unfrozen wallet omits the field rather than reporting "0".
+func TestGetMyWalletStatusOmitsFrozenWhenNoneHeld(t *testing.T) {
+	env := setupTestApp(t)
+	ctx := context.Background()
+	address := addr("0xF00D")
+
+	if err := env.app.Repos.Investors.Upsert(ctx, &models.Investor{
+		Address: address, Status: models.ComplianceAllowed, OwnershipVerified: true,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := env.app.Sessions.Issue(ctx, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := doJSON(t, env.router, http.MethodGet, "/api/v1/me/wallet-status", nil, map[string]string{"X-Wallet-Session": token})
+	if body := w.Body.String(); strings.Contains(body, "frozenTokens") {
+		t.Errorf("unfrozen wallet should omit frozenTokens: %s", body)
 	}
 }

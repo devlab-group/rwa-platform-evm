@@ -3,6 +3,7 @@ package project
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -317,7 +318,12 @@ func foldRoles(ctx context.Context, chainEvents repository.ChainEventRepository,
 }
 
 // foldFrozenBalances replays the token's surviving Frozen events in (block,
-// logIndex) order into the current holder -> amount map. Each event carries an
+// logIndex) order into the current holder -> amount map. Like foldRoles, this
+// is a full replay of the contract's lifetime history on every projection run.
+// That is fine at the volumes admin actions produce, but the freeze log grows
+// faster than the role log does (a freeze and its later release are two rows
+// per holder), so this is the pair to revisit together if enforcement ever
+// becomes routine. Each event carries an
 // ABSOLUTE amount, so a later one replaces an earlier one outright, and an
 // amount of zero deletes the entry rather than storing "0", which is what
 // keeps this map bounded by the number of currently-frozen holders instead of
@@ -344,8 +350,14 @@ func foldFrozenBalances(ctx context.Context, chainEvents repository.ChainEventRe
 	for _, e := range surviving {
 		account, _ := e.Data["account"].(string)
 		amount, _ := e.Data["amount"].(string)
+		// Only the token contract can emit this log and the decoder fails closed on a
+		// malformed one, so an unusable event here means something upstream is already
+		// broken. Skip it loudly rather than failing the fold: aborting would take the
+		// pause flag, roles, auditor, and prices stale along with the frozen map.
 		if account == "" || !common.IsHexAddress(account) || amount == "" {
-			return nil, fmt.Errorf("project: Frozen event %s/%d has no valid account/amount", e.TxHash, e.LogIndex)
+			log.Printf("project: skipping unusable Frozen event %s/%d (account=%q amount=%q)",
+				e.TxHash, e.LogIndex, account, amount)
+			continue
 		}
 		holder := common.HexToAddress(account).Hex()
 		if isZeroAmount(amount) {
@@ -369,31 +381,46 @@ func isZeroAmount(amount string) bool {
 // latestForcedTransfer summarizes the most recent surviving ForcedTransfer on
 // the token, so a reorg that removes the latest seizure falls back to the one
 // before it. Returns nil when no seizure survives.
+//
+// An unusable event is skipped in favour of the one before it, for the same
+// reason foldFrozenBalances skips one: failing here would take the pause flag,
+// roles, auditor, and prices stale along with the seizure summary, and the
+// pause flag is exactly what an operator reads during an incident.
 func latestForcedTransfer(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, token string) (*models.ForcedTransferState, error) {
 	if token == "" {
 		return nil, nil
 	}
-	ev, err := latestEvent(ctx, chainEvents, chainID, token, "ForcedTransfer")
+	events, err := chainEvents.ListByName(ctx, chainID, token, "ForcedTransfer")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("project: list ForcedTransfer for %s: %w", token, err)
 	}
-	if ev == nil {
-		return nil, nil
+	surviving := make([]*models.ChainEvent, 0, len(events))
+	for _, e := range events {
+		if !e.Removed {
+			surviving = append(surviving, e)
+		}
 	}
-	from, _ := ev.Data["from"].(string)
-	to, _ := ev.Data["to"].(string)
-	amount, _ := ev.Data["amount"].(string)
-	if !common.IsHexAddress(from) || !common.IsHexAddress(to) || amount == "" {
-		return nil, fmt.Errorf("project: ForcedTransfer event %s/%d has no valid from/to/amount", ev.TxHash, ev.LogIndex)
+	sort.SliceStable(surviving, func(i, j int) bool { return earlier(surviving[j], surviving[i]) })
+
+	for _, ev := range surviving {
+		from, _ := ev.Data["from"].(string)
+		to, _ := ev.Data["to"].(string)
+		amount, _ := ev.Data["amount"].(string)
+		if !common.IsHexAddress(from) || !common.IsHexAddress(to) || amount == "" {
+			log.Printf("project: skipping unusable ForcedTransfer event %s/%d (from=%q to=%q amount=%q)",
+				ev.TxHash, ev.LogIndex, from, to, amount)
+			continue
+		}
+		return &models.ForcedTransferState{
+			From:        common.HexToAddress(from).Hex(),
+			To:          common.HexToAddress(to).Hex(),
+			Amount:      amount,
+			TxHash:      ev.TxHash,
+			BlockNumber: ev.BlockNumber,
+			LogIndex:    ev.LogIndex,
+		}, nil
 	}
-	return &models.ForcedTransferState{
-		From:        common.HexToAddress(from).Hex(),
-		To:          common.HexToAddress(to).Hex(),
-		Amount:      amount,
-		TxHash:      ev.TxHash,
-		BlockNumber: ev.BlockNumber,
-		LogIndex:    ev.LogIndex,
-	}, nil
+	return nil, nil
 }
 
 type roleDelta struct {

@@ -282,6 +282,13 @@ contract RWATokenTest is TestBase {
         assertTrue(token.canTransfer(investor, investor2, 101 ether));
         assertTrue(token.canTransfer(investor2, investor, 1 ether), "investor2 holds nothing at all");
 
+        // A freeze is a permissioned refusal, and it stands on its own: an amount the holder
+        // could not afford anyway is still refused when every token they hold is frozen.
+        _freeze(investor, 100 ether);
+        assertFalse(token.canTransfer(investor, investor2, 101 ether), "fully frozen, whatever the amount");
+        _freeze(investor, 0);
+        assertTrue(token.canTransfer(investor, investor2, 101 ether));
+
         vm.prank(investor);
         vm.expectRevert();
         token.transfer(investor2, 101 ether);
@@ -550,14 +557,14 @@ contract RWATokenTest is TestBase {
 
         // Unknown wallet.
         vm.prank(admin);
-        vm.expectRevert(abi.encodeWithSelector(IRWAToken.RecipientNotAllowed.selector, outsider));
+        vm.expectRevert(abi.encodeWithSelector(IERC7943.ERC7943CannotReceive.selector, outsider));
         token.forcedTransfer(investor, outsider, 1 ether);
 
         // Blocked wallet.
         vm.prank(complianceOperator);
         compliance.setStatus(investor2, IComplianceRegistry.ComplianceStatus.Blocked, 0);
         vm.prank(admin);
-        vm.expectRevert(abi.encodeWithSelector(IRWAToken.RecipientNotAllowed.selector, investor2));
+        vm.expectRevert(abi.encodeWithSelector(IERC7943.ERC7943CannotReceive.selector, investor2));
         token.forcedTransfer(investor, investor2, 1 ether);
 
         // Expired record.
@@ -565,7 +572,7 @@ contract RWATokenTest is TestBase {
         compliance.setStatus(investor2, IComplianceRegistry.ComplianceStatus.Allowed, uint64(block.timestamp + 1 days));
         vm.warp(block.timestamp + 2 days);
         vm.prank(admin);
-        vm.expectRevert(abi.encodeWithSelector(IRWAToken.RecipientNotAllowed.selector, investor2));
+        vm.expectRevert(abi.encodeWithSelector(IERC7943.ERC7943CannotReceive.selector, investor2));
         token.forcedTransfer(investor, investor2, 1 ether);
     }
 
@@ -688,6 +695,41 @@ contract RWATokenTest is TestBase {
         vm.prank(admin);
         token.forcedTransfer(investor, investor2, 100 ether);
         assertEq(token.totalSupply(), supply);
+    }
+
+    /// @dev The mirror of test_setFrozenTokens_rejectsSystemAddresses. The Vault holds the
+    ///      unsold float and the escrow holds redemptions that are already paid for, so a
+    ///      seizure from either would move tokens out from behind that contract's own
+    ///      accounting: the float without an auditor attestation, the escrow's RWA leg out
+    ///      from under a funded claim that can then never settle.
+    function test_forcedTransfer_rejectsSystemAddressSenders() public {
+        _mintTo(address(vault), 100 ether);
+
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(RWAToken.SystemAddressCannotBeSeized.selector, address(vault)));
+        token.forcedTransfer(address(vault), investor, 1 ether);
+
+        vm.prank(address(vault));
+        token.transfer(address(escrow), 10 ether);
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(RWAToken.SystemAddressCannotBeSeized.selector, address(escrow)));
+        token.forcedTransfer(address(escrow), investor, 1 ether);
+
+        assertEq(token.balanceOf(address(vault)), 90 ether);
+        assertEq(token.balanceOf(address(escrow)), 10 ether);
+    }
+
+    function testFuzz_forcedTransfer_systemAddressBalancesAreUntouchable(uint256 amount) public {
+        _mintTo(address(vault), 100 ether);
+        address[2] memory systemAddresses = [address(vault), address(escrow)];
+        for (uint256 i = 0; i < systemAddresses.length; i++) {
+            address system = systemAddresses[i];
+            uint256 balance = token.balanceOf(system);
+            vm.prank(admin);
+            vm.expectRevert(abi.encodeWithSelector(RWAToken.SystemAddressCannotBeSeized.selector, system));
+            token.forcedTransfer(system, investor, amount);
+            assertEq(token.balanceOf(system), balance);
+        }
     }
 
     function testFuzz_forcedTransfer_neverChangesTotalSupply(uint256 frozen, uint256 amount) public {

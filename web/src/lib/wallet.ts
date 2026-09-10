@@ -8,6 +8,7 @@ import {
   createPublicClient,
   createWalletClient,
   custom,
+  decodeErrorResult,
   defineChain,
   encodeFunctionData,
   erc20Abi,
@@ -18,6 +19,7 @@ import {
 import {
   accessControlAdminAbi,
   erc7943Abi,
+  rwaTokenErrorsAbi,
   fixedPriceStrategyAbi,
   pausableAbi,
   redemptionEscrowAbi,
@@ -255,10 +257,16 @@ export async function readPreviewBuy(
 }
 
 /**
- * Blocks until a submitted transaction is mined — an ERC-20 approval must be
- * confirmed on-chain before the UI trusts it and enables the call that spends
- * it. A short polling interval is fine here: the platform targets a single,
- * fast local/permissioned chain, not mainnet.
+ * Blocks until a submitted transaction is mined AND succeeded. An ERC-20
+ * approval must be confirmed on-chain before the UI trusts it and enables the
+ * call that spends it. A short polling interval is fine here: the platform
+ * targets a single, fast local/permissioned chain, not mainnet.
+ *
+ * A mined-but-reverted transaction resolves the receipt normally, so the
+ * status has to be checked explicitly: without it a seizure the chain refused
+ * (the holder emptied the wallet first, the recipient lost compliance between
+ * the gas estimate and inclusion) would be reported to the operator as done.
+ * Every caller already surfaces a thrown message, so throwing here is enough.
  */
 export async function waitForTxReceipt(hash: Hex): Promise<void> {
   const provider = getInjectedProvider();
@@ -267,7 +275,85 @@ export async function waitForTxReceipt(hash: Hex): Promise<void> {
     transport: custom(provider),
     pollingInterval: 250,
   });
-  await client.waitForTransactionReceipt({ hash, timeout: 60_000 });
+  const receipt = await client.waitForTransactionReceipt({
+    hash,
+    timeout: 60_000,
+  });
+  if (receipt.status !== "success") {
+    throw new Error(
+      `Transaction ${hash} was mined but reverted on-chain. Nothing changed.`,
+    );
+  }
+}
+
+/**
+ * Turns a failed wallet call into a sentence, decoding the token's own revert
+ * data when the wallet passes it back. `sendWrite` posts raw calldata, so viem
+ * has no ABI attached to the call and cannot name the error by itself; the
+ * revert bytes still travel on the error object, and `rwaTokenErrorsAbi`
+ * covers every error the enforcement calls can raise.
+ *
+ * Falls back to the raw message whenever there is nothing decodable, which is
+ * the common case for a user rejection or an RPC failure.
+ */
+export function describeWalletError(err: unknown): string {
+  const data = revertData(err);
+  if (data) {
+    try {
+      const decoded = decodeErrorResult({ abi: rwaTokenErrorsAbi, data });
+      const named = explainTokenError(decoded.errorName, decoded.args);
+      if (named) return named;
+    } catch {
+      // Not one of ours (an OZ error, a plain string revert): fall through.
+    }
+  }
+  return err instanceof Error ? err.message : "Transaction failed.";
+}
+
+/** Digs the `0x`-prefixed revert payload out of whatever shape the wallet threw. */
+function revertData(err: unknown): Hex | undefined {
+  let current: unknown = err;
+  for (let depth = 0; current && depth < 6; depth++) {
+    const candidate = (current as { data?: unknown }).data;
+    if (
+      typeof candidate === "string" &&
+      candidate.startsWith("0x") &&
+      candidate.length >= 10
+    ) {
+      return candidate as Hex;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/** Plain-language text for the errors an operator can actually trigger. */
+function explainTokenError(
+  name: string,
+  args: readonly unknown[] | undefined,
+): string | undefined {
+  const first = args?.[0] as string | undefined;
+  switch (name) {
+    case "ERC7943CannotReceive":
+    case "RecipientNotAllowed":
+      return `The recipient ${first} is not Allowed in the compliance registry, so the token refused the transfer.`;
+    case "SenderNotAllowed":
+      return `${first} is not Allowed in the compliance registry and cannot send.`;
+    case "ERC7943InsufficientUnfrozenBalance":
+      return `${first} does not have that many unfrozen tokens: ${String(args?.[2])} of their balance is movable (in minimal units).`;
+    case "SystemAddressCannotBeFrozen":
+      return `${first} is the Vault or the redemption escrow, which can never be frozen.`;
+    case "SystemAddressCannotBeSeized":
+      return `${first} is the Vault or the redemption escrow, which can never be seized from.`;
+    case "ForcedTransferToSelf":
+      return "A forced transfer must have different sender and recipient.";
+    case "ZeroAddress":
+      return "The zero address is not a valid party to this call.";
+    case "AccessControlUnauthorizedAccount":
+      return `${first} does not hold the role this call requires.`;
+    default:
+      return undefined;
+  }
 }
 
 /** Sends an ERC-20 `approve(spender, amount)` from the connected wallet. */

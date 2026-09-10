@@ -224,7 +224,7 @@ contract FullFlowTest is TestBase {
         vm.prank(complianceOperator);
         compliance.setStatus(investor2, IComplianceRegistry.ComplianceStatus.Blocked, 0);
         vm.prank(admin);
-        vm.expectRevert(abi.encodeWithSelector(IRWAToken.RecipientNotAllowed.selector, investor2));
+        vm.expectRevert(abi.encodeWithSelector(IERC7943.ERC7943CannotReceive.selector, investor2));
         token.forcedTransfer(investor, investor2, 1 ether);
 
         // Neither contract that moves RWA on behalf of everyone can be frozen.
@@ -248,5 +248,58 @@ contract FullFlowTest is TestBase {
         vm.expectRevert();
         supplyController.mint(forged, forgedSig);
         assertEq(token.totalSupply(), supplyBefore, "no path in this test changed supply");
+    }
+
+    /// @notice A funded redemption is already paid for: the beneficiary's quote sits in the
+    ///         escrow and `claimRedemption` moves the RWA leg first, so anything that empties
+    ///         the escrow's balance strands the claim with no way back (both cancel and reject
+    ///         are Pending-only). This proves no enforcement action can reach it: the escrow
+    ///         cannot be frozen, cannot be seized from, and the claim still settles afterwards.
+    function test_fullFlow_enforcementCannotStrandAFundedRedemption() public {
+        ISupplyController.MintAttestation memory a = _mintAttestation(auditor, 1_000 ether, "GOLD-BAR-ESCROW", 1);
+        supplyController.mint(a, _signMint(a, AUDITOR_PK));
+        quoteToken.mint(investor, 1_000_000_000);
+        vm.prank(investor);
+        quoteToken.approve(address(vault), type(uint256).max);
+        vm.prank(investor);
+        vault.buy(100 ether, type(uint256).max, investor, uint64(block.timestamp + 1 hours));
+
+        uint256 redeemAmount = 40 ether;
+        uint256 redeemQuote = strategy.quoteRedemption(redeemAmount);
+        vm.prank(investor);
+        token.approve(address(escrow), redeemAmount);
+        vm.prank(investor);
+        uint256 requestId = escrow.requestRedemption(redeemAmount, redeemQuote, uint64(block.timestamp + 1 hours));
+
+        quoteToken.mint(treasurer, redeemQuote);
+        vm.prank(treasurer);
+        quoteToken.approve(address(escrow), redeemQuote);
+        vm.prank(treasurer);
+        escrow.fundRedemption(requestId);
+
+        // Every enforcement action an admin can aim at the escrow, refused.
+        vm.startPrank(admin);
+        vm.expectRevert(abi.encodeWithSelector(RWAToken.SystemAddressCannotBeFrozen.selector, address(escrow)));
+        token.setFrozenTokens(address(escrow), redeemAmount);
+        vm.expectRevert(abi.encodeWithSelector(RWAToken.SystemAddressCannotBeSeized.selector, address(escrow)));
+        token.forcedTransfer(address(escrow), investor2, redeemAmount);
+        vm.stopPrank();
+
+        // Freezing and seizing the investor's own remaining balance is still allowed, and
+        // touches nothing the escrow is holding for them.
+        vm.prank(admin);
+        token.setFrozenTokens(investor, 60 ether);
+        vm.prank(admin);
+        token.forcedTransfer(investor, investor2, 10 ether);
+        assertEq(token.balanceOf(address(escrow)), redeemAmount, "escrowed RWA is untouched");
+
+        // The claim still settles: RWA back to the Vault, quote to the beneficiary.
+        uint256 vaultInventoryBefore = vault.inventory();
+        uint256 investorQuoteBefore = quoteToken.balanceOf(investor);
+        escrow.claimRedemption(requestId);
+        assertEq(vault.inventory(), vaultInventoryBefore + redeemAmount);
+        assertEq(quoteToken.balanceOf(investor), investorQuoteBefore + redeemQuote);
+        IRedemptionEscrow.RedemptionRequest memory r = escrow.getRedemption(requestId);
+        assertEq(uint8(r.status), uint8(IRedemptionEscrow.RedemptionStatus.Completed));
     }
 }

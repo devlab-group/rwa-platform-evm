@@ -481,13 +481,49 @@ func TestFrozenBalancesDropReorgedEvents(t *testing.T) {
 	}
 }
 
-func TestFrozenBalancesRejectMalformedEvent(t *testing.T) {
+// A Frozen event the projector cannot read is skipped, not fatal: the rest of the
+// security state (pause, roles, auditor, prices) must not go stale because one log
+// is unusable.
+func TestFrozenBalancesSkipMalformedEvent(t *testing.T) {
 	repos := setup(t)
-	addEvent(t, repos, tokenAddr, "Frozen", 10, 0, map[string]any{"account": "not-an-address", "amount": "1"})
+	addEvent(t, repos, tokenAddr, "Frozen", 10, 0, map[string]any{"account": holderA, "amount": "100"})
+	addEvent(t, repos, tokenAddr, "Frozen", 11, 0, map[string]any{"account": "not-an-address", "amount": "1"})
+	addEvent(t, repos, tokenAddr, "Frozen", 12, 0, map[string]any{"account": holderB, "amount": ""})
 
-	err := ReconcileSecurity(context.Background(), repos.Projects, repos.ChainEvents, repos.IndexerCheckpoints, secChainID)
-	if err == nil {
-		t.Fatal("a malformed Frozen event should fail the reconcile, not project silently")
+	s := reconcile(t, repos)
+	if s.FrozenBalances[holderA] != "100" {
+		t.Errorf("holderA = %q, want the readable event's 100", s.FrozenBalances[holderA])
+	}
+	if _, ok := s.FrozenBalances[holderB]; ok {
+		t.Errorf("an amountless event should project nothing: %v", s.FrozenBalances)
+	}
+	if s.Auditor != auditorA {
+		t.Errorf("the rest of the projection went stale: auditor = %s", s.Auditor)
+	}
+}
+
+// The same for an unusable ForcedTransfer: the summary falls back to the last
+// readable seizure, and the rest of the projection is unaffected.
+func TestLastForcedTransferSkipsMalformedEvent(t *testing.T) {
+	repos := setup(t)
+	forcedTransfer(t, repos, 20, 0, holderA, holderB, "9")
+	addEvent(t, repos, tokenAddr, "ForcedTransfer", 21, 0,
+		map[string]any{"from": "not-an-address", "to": holderA, "amount": "5"})
+
+	s := reconcile(t, repos)
+	if s.LastForcedTransfer == nil || s.LastForcedTransfer.Amount != "9" {
+		t.Fatalf("summary = %+v, want the readable block-20 seizure", s.LastForcedTransfer)
+	}
+	if s.Auditor != auditorA || s.Paused {
+		t.Errorf("the rest of the projection went stale: auditor = %s paused = %v", s.Auditor, s.Paused)
+	}
+
+	// With nothing readable at all, the summary is absent rather than fatal.
+	repos2 := setup(t)
+	addEvent(t, repos2, tokenAddr, "ForcedTransfer", 20, 0,
+		map[string]any{"from": holderA, "to": holderB, "amount": ""})
+	if s := reconcile(t, repos2); s.LastForcedTransfer != nil {
+		t.Errorf("summary = %+v, want nil when no seizure is readable", s.LastForcedTransfer)
 	}
 }
 

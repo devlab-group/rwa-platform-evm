@@ -294,7 +294,7 @@ func run() error {
 		return fmt.Errorf("timeout/cancel: %w", err)
 	}
 
-	step("ERC-7943 enforcement: freeze, seize, release (admin wallet), projected into GET /project")
+	step("ERC-7943 enforcement: freeze, seize, release (admin wallet), projected into GET /project/enforcement")
 	if err := enforcementLifecycle(ctx, api, chain, cfg, deployerKey, deployerAddr, investorAddr); err != nil {
 		return fmt.Errorf("erc-7943 enforcement: %w", err)
 	}
@@ -575,9 +575,11 @@ func packFundRedemption(id *big.Int) []byte {
 
 var erc7943MutABI = mustABIJSON(`[
   {"type":"function","name":"setFrozenTokens","stateMutability":"nonpayable","inputs":[
-    {"name":"account","type":"address"},{"name":"amount","type":"uint256"}],"outputs":[]},
+    {"name":"account","type":"address"},{"name":"amount","type":"uint256"}],
+    "outputs":[{"name":"result","type":"bool"}]},
   {"type":"function","name":"forcedTransfer","stateMutability":"nonpayable","inputs":[
-    {"name":"from","type":"address"},{"name":"to","type":"address"},{"name":"amount","type":"uint256"}],"outputs":[]}
+    {"name":"from","type":"address"},{"name":"to","type":"address"},{"name":"amount","type":"uint256"}],
+    "outputs":[{"name":"result","type":"bool"}]}
 ]`)
 
 func packSetFrozenTokens(account common.Address, amount *big.Int) []byte {
@@ -1279,8 +1281,10 @@ func timeoutAndCancel(ctx context.Context, api *apiClient, chain *chainClient, c
 	})
 }
 
-// enforcementState is the ERC-7943 slice of GET /api/v1/project the server
-// projects from RWAToken's Frozen and ForcedTransfer events.
+// enforcementState is the admin-only GET /api/v1/project/enforcement view the
+// server projects from RWAToken's Frozen and ForcedTransfer events. It is not
+// on the public GET /api/v1/project: naming frozen wallets is operational
+// compliance data.
 type enforcementState struct {
 	FrozenBalances     map[string]string `json:"frozenBalances"`
 	LastForcedTransfer *struct {
@@ -1328,7 +1332,7 @@ func enforcementLifecycle(
 	pollProjection := func(desc string, check func(enforcementState) bool) error {
 		return poll(desc, 90*time.Second, 3*time.Second, func() (bool, error) {
 			var st enforcementState
-			if err := api.getJSON("/api/v1/project", cfg.adminBearer, &st); err != nil {
+			if err := api.getJSON("/api/v1/project/enforcement", cfg.adminBearer, &st); err != nil {
 				return false, err
 			}
 			return check(st), nil
@@ -1338,7 +1342,7 @@ func enforcementLifecycle(
 	if _, err := chain.sendTx(ctx, adminKey, cfg.tokenAddr, packSetFrozenTokens(investor, amount25)); err != nil {
 		return fmt.Errorf("submit setFrozenTokens: %w", err)
 	}
-	if err := pollProjection("25 RWA frozen against the investor in GET /project", func(st enforcementState) bool {
+	if err := pollProjection("25 RWA frozen against the investor in GET /project/enforcement", func(st enforcementState) bool {
 		amount, ok := st.frozenAmount(investor)
 		return ok && amount == amount25.String()
 	}); err != nil {

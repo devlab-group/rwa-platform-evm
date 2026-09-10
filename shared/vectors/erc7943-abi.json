@@ -1,13 +1,21 @@
 {
-  "_comment": "FROZEN ERC-7943 (uRWA) ABI surface, shared by Solidity, Go, and TypeScript. Selectors are the first 4 bytes of keccak256(signature); topic0 is the full keccak256. Regenerate with `cast sig` / `cast keccak`. Solidity asserts these against the compiled IERC7943; Go and TypeScript assert their hand-written fragments against them.",
+  "_comment": "FROZEN ERC-7943 (uRWA) ABI surface, shared by Solidity, Go, and TypeScript. Selectors are the first 4 bytes of keccak256(signature); topic0 is the full keccak256. `outputs` records the return types the ERC declares, which do not affect a selector but do decide whether a standard-typed caller can decode the reply. Regenerate with `cast sig` / `cast keccak`. Solidity asserts these against the compiled IERC7943; Go and TypeScript assert their hand-written fragments against them.",
   "interfaceId": "0x3edbb4c4",
   "functions": {
     "canSend": {"signature": "canSend(address)", "selector": "0x2bc06a92"},
     "canReceive": {"signature": "canReceive(address)", "selector": "0x90d370ba"},
     "canTransfer": {"signature": "canTransfer(address,address,uint256)", "selector": "0xe46638e6"},
     "getFrozenTokens": {"signature": "getFrozenTokens(address)", "selector": "0x158b1a57"},
-    "setFrozenTokens": {"signature": "setFrozenTokens(address,uint256)", "selector": "0xebe45cba"},
-    "forcedTransfer": {"signature": "forcedTransfer(address,address,uint256)", "selector": "0x9fc1d0e7"}
+    "setFrozenTokens": {
+      "signature": "setFrozenTokens(address,uint256)",
+      "selector": "0xebe45cba",
+      "outputs": ["bool"]
+    },
+    "forcedTransfer": {
+      "signature": "forcedTransfer(address,address,uint256)",
+      "selector": "0x9fc1d0e7",
+      "outputs": ["bool"]
+    }
   },
   "events": {
     "Frozen": {
@@ -24,9 +32,20 @@
     }
   },
   "errors": {
+    "ERC7943CannotSend": {"signature": "ERC7943CannotSend(address)", "selector": "0x45bae9e2"},
+    "ERC7943CannotReceive": {"signature": "ERC7943CannotReceive(address)", "selector": "0x705c1eed"},
+    "ERC7943CannotTransfer": {
+      "signature": "ERC7943CannotTransfer(address,address,uint256)",
+      "selector": "0x22dda4be"
+    },
     "ERC7943InsufficientUnfrozenBalance": {
       "signature": "ERC7943InsufficientUnfrozenBalance(address,uint256,uint256)",
       "selector": "0x00384e71"
     }
+  },
+  "_platformErrorsComment": "Not part of ERC-7943. The token raises these two on the ERC-20 transfer path in place of the standard's ERC7943CannotSend/ERC7943CannotTransfer, which it declares but never raises, so an error table built from this file matches what actually arrives.",
+  "platformErrors": {
+    "SenderNotAllowed": {"signature": "SenderNotAllowed(address)", "selector": "0xd0d25976"},
+    "RecipientNotAllowed": {"signature": "RecipientNotAllowed(address)", "selector": "0x6ee9124e"}
   }
 }

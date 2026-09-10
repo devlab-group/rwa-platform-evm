@@ -32,7 +32,11 @@ const roles = {
 describe("hasRole", () => {
   it("matches a holder case-insensitively", () => {
     expect(
-      hasRole(roles, ROLES.treasurer, "0x1111111111111111111111111111111111111111"),
+      hasRole(
+        roles,
+        ROLES.treasurer,
+        "0x1111111111111111111111111111111111111111",
+      ),
     ).toBe(true);
     // Different case, same address.
     expect(
@@ -42,14 +46,22 @@ describe("hasRole", () => {
 
   it("returns false for a non-holder", () => {
     expect(
-      hasRole(roles, ROLES.treasurer, "0x9999999999999999999999999999999999999999"),
+      hasRole(
+        roles,
+        ROLES.treasurer,
+        "0x9999999999999999999999999999999999999999",
+      ),
     ).toBe(false);
   });
 
   it("returns false for an unknown role or a role with no holders", () => {
-    expect(hasRole(roles, ROLES.pauser, "0x1111111111111111111111111111111111111111")).toBe(
-      false,
-    );
+    expect(
+      hasRole(
+        roles,
+        ROLES.pauser,
+        "0x1111111111111111111111111111111111111111",
+      ),
+    ).toBe(false);
   });
 
   it("returns false when roles or address are missing", () => {

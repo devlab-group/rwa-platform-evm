@@ -119,6 +119,15 @@ accepts after the delay, on every governance contract. The auditor is stored aut
 - **Pause / unpause**: `RWAToken.pause()/unpause()` (PAUSER_ROLE). While paused, transfers, buy,
   mint, burn, request/fund/claim all revert. Cancel is also effectively blocked (token transfer
   reverts) — see `../spec/redemption-state-machine.md` footnote.
+- **Before either enforcement call below**: both are broadcast to a public mempool, and a holder
+  watching for their own address can front-run one with an ordinary `transfer` to a fresh
+  compliant wallet, or with a `requestRedemption` that parks the balance in the escrow, where a
+  freeze does not reach it and a seizure is refused outright. The sequence that defeats both is
+  **pause the project, confirm the pause landed, freeze or seize, then unpause**. A pause stops
+  ordinary transfers and redemption requests alike, while `setFrozenTokens` and `forcedTransfer`
+  both keep working through it, so the window closes completely. Where a pause is too
+  disruptive, submit through a private relay (`eth_sendPrivateTransaction` or equivalent)
+  instead.
 - **Freeze a holder's tokens**: `RWAToken.setFrozenTokens(account, amount)` (DEFAULT_ADMIN_ROLE).
   The amount is absolute, in token minimal units: it replaces whatever was frozen before rather
   than adding to it, and 0 releases the hold. It may legitimately exceed the holder's balance,
@@ -132,7 +141,19 @@ accepts after the delay, on every governance contract. The auditor is stored aut
   which is the point; the recipient must still be Allowed, and `from == to` and the zero address
   are rejected, so it can never mint or burn. When the amount reaches past the holder's unfrozen
   balance, their frozen amount is reduced first and a `Frozen` event is emitted before the
-  `Transfer`. Security screen, behind a confirmation step.
+  `Transfer`. The Vault and the RedemptionEscrow are refused as the source
+  (`SystemAddressCannotBeSeized`): their balances are the unsold float and redemptions that are
+  already funded, and moving either behind the contract's back would strand a paid claim with no
+  way to settle it. Send seized tokens to a wallet the issuer controls and that is Allowed in the
+  registry; the Vault is a valid destination if the intent is to return them to the unsold float,
+  which raises `vault.inventory()` without a mint, so record why. Security screen, behind a
+  confirmation step.
+- **Reading enforcement state**: the frozen-balance map and the last seizure are admin-only
+  (`GET /api/v1/project/enforcement`, shown on the Security screen). `GET /api/v1/project` stays
+  public and carries neither, since naming the wallets an issuer has frozen is operational
+  compliance data rather than market data. A holder sees their own frozen amount, and nobody
+  else's, on `GET /api/v1/me/wallet-status`, which the investor SPA renders as a spendable
+  balance.
 
 ### Security notes
 

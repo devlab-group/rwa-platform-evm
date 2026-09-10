@@ -4,1532 +4,1629 @@
  */
 
 export interface paths {
-    "/healthz": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getHealth"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+  "/healthz": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/readyz": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getReady"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["getHealth"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/readyz": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/project": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getProject"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["getReady"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/project": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/config": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Bootstrap chain configuration (public).
-         * @description Non-sensitive bootstrap values the web/admin console needs before any project exists — the chain id and the RWAFactory address — so the admin can assemble and broadcast RWAFactory.deploy(ProjectConfig) directly from their own wallet (the project is deployed by the admin, not relayed by the server). Available before the first deployment, when GET /project 404s.
-         */
-        get: operations["getConfig"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /**
+     * Public project/market data.
+     * @description Public, and depended on by the investor SPA. It carries no per-wallet enforcement state: which wallets the issuer has frozen, and the last seizure, are admin-only (GET /api/v1/project/enforcement), and a holder reads their own frozen amount from GET /api/v1/me/wallet-status.
+     */
+    get: operations["getProject"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/project/enforcement": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/profile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fetch the deployment's stored asset profile, if one exists (admin-only).
-         * @description Returns the single stored Asset Profile for this deployment (one asset per project), including the raw profile document, so the admin UI can repopulate after a reload or navigation instead of forcing re-creation. 404 when no profile has been created yet.
-         */
-        get: operations["getProfile"];
-        put?: never;
-        /**
-         * Create the deployment's asset profile (admin-only, create-once).
-         * @description Persists the asset profile for this deployment exactly once (create-once / compare-and-set on projectId; immutable for the life of the deployment). Requires the admin role. Unlike POST /api/v1/profile/validate — which is pure and never persists — this is the only endpoint that stores a profile. Persistence failures are surfaced to the caller (500), never silently discarded. Every record/package/signature path additionally cross-checks the stored profile digest against the project's persisted profileDigest.
-         */
-        post: operations["createProfile"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /**
+     * ERC-7943 enforcement state (admin only).
+     * @description The frozen-balance map and the most recent forced transfer, projected from RWAToken's Frozen and ForcedTransfer events. ADMIN-ONLY: naming the wallets an issuer has frozen is operational compliance data, the same class as GET /api/v1/compliance/wallets, even though the underlying events are public on-chain. Values are point-in-time indexed state; see securityStale.
+     */
+    get: operations["getEnforcement"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/config": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/profile/validate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Validate an asset profile (pure — no persistence side effect).
-         * @description Pure validation: checks the profile against the platform schema and the operator assetSchema dialect and returns the computed digest/cid. It does NOT persist anything. Use POST /api/v1/profile to store one.
-         */
-        post: operations["validateProfile"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /**
+     * Bootstrap chain configuration (public).
+     * @description Non-sensitive bootstrap values the web/admin console needs before any project exists — the chain id and the RWAFactory address — so the admin can assemble and broadcast RWAFactory.deploy(ProjectConfig) directly from their own wallet (the project is deployed by the admin, not relayed by the server). Available before the first deployment, when GET /project 404s.
+     */
+    get: operations["getConfig"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/profile": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/compliance/wallets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listWallets"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /**
+     * Fetch the deployment's stored asset profile, if one exists (admin-only).
+     * @description Returns the single stored Asset Profile for this deployment (one asset per project), including the raw profile document, so the admin UI can repopulate after a reload or navigation instead of forcing re-creation. 404 when no profile has been created yet.
+     */
+    get: operations["getProfile"];
+    put?: never;
+    /**
+     * Create the deployment's asset profile (admin-only, create-once).
+     * @description Persists the asset profile for this deployment exactly once (create-once / compare-and-set on projectId; immutable for the life of the deployment). Requires the admin role. Unlike POST /api/v1/profile/validate — which is pure and never persists — this is the only endpoint that stores a profile. Persistence failures are surfaced to the caller (500), never silently discarded. Every record/package/signature path additionally cross-checks the stored profile digest against the project's persisted profileDigest.
+     */
+    post: operations["createProfile"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/profile/validate": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/compliance/challenge": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["createChallenge"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /**
+     * Validate an asset profile (pure — no persistence side effect).
+     * @description Pure validation: checks the profile against the platform schema and the operator assetSchema dialect and returns the computed digest/cid. It does NOT persist anything. Use POST /api/v1/profile to store one.
+     */
+    post: operations["validateProfile"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/compliance/wallets": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/compliance/challenge/verify": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** @description Submit the wallet signature over a previously issued challenge to prove ownership. On success also mints a short-lived subject-scoped session (bound to `address` only) so an investor can read their own status without an operator API key. */
-        post: operations["verifyChallenge"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["listWallets"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/compliance/challenge": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/me/wallet-status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * This session's own wallet status (subject-scoped).
-         * @description Returns the WalletStatus for the address bound to the presented wallet session only. Authenticated by the X-Wallet-Session bearer minted at challenge-verify, NOT by an operator API key. Replaces the investor page's former dependency on the operator-only global wallet list.
-         */
-        get: operations["getMyWalletStatus"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    post: operations["createChallenge"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/compliance/challenge/verify": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/compliance/allowed/{address}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Public transfer-preflight eligibility.
-         * @description Minimal, unauthenticated lookup for transfer-recipient preflight. Returns only whether a transfer to `address` would currently be permitted — deliberately not the full WalletStatus, so an anonymous caller cannot enumerate a third party's exact status / validUntil / ownership.
-         */
-        get: operations["isAddressAllowed"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /** @description Submit the wallet signature over a previously issued challenge to prove ownership. On success also mints a short-lived subject-scoped session (bound to `address` only) so an investor can read their own status without an admin credential. */
+    post: operations["verifyChallenge"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/me/wallet-status": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/compliance/webhooks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description KYC webhook history for the compliance screen. */
-        get: operations["listWebhookEvents"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /**
+     * This session's own wallet status (subject-scoped).
+     * @description Returns the WalletStatus for the address bound to the presented wallet session only. Authenticated by the X-Wallet-Session bearer minted at challenge-verify, NOT by the admin JWT. Replaces the investor page's former dependency on the admin-only global wallet list.
+     */
+    get: operations["getMyWalletStatus"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/compliance/allowed/{address}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/audit-logs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listAuditLogs"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /**
+     * Public transfer-preflight eligibility.
+     * @description Minimal, unauthenticated lookup for transfer-recipient preflight. Returns only whether a transfer to `address` would currently be permitted — deliberately not the full WalletStatus, so an anonymous caller cannot enumerate a third party's exact status / validUntil / ownership.
+     */
+    get: operations["isAddressAllowed"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/compliance/webhooks": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/compliance/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["setComplianceStatus"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** @description KYC webhook history for the compliance screen. */
+    get: operations["listWebhookEvents"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/audit-logs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/compliance/webhook": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** @description HMAC-signed KYC provider webhook. Signature header `X-Webhook-Signature` = lowercase hex of HMAC-SHA256(rawBody, sharedSecret), constant-time compared. Replay/freshness-protected: the server requires provider + eventId + occurredAt, enforces uniqueness on (provider, eventId) in addition to raw-body-hash dedup, rejects occurredAt outside a 24h-past / 5min-future window, rejects a strictly-older decision for an address than the latest already-applied one, normalizes the address to EIP-55, and rejects negative / >100y-future validUntil before the int64→uint64 cast. The occurrence timestamp travels in-body, so it is covered by the existing HMAC-over-raw-body signature (no separate header). Not protected by ApiKeyAuth. */
-        post: operations["kycWebhook"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["listAuditLogs"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/compliance/status": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/compliance/kyc/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Begin a KYC verification for this session's own wallet.
-         * @description Begin a KYC verification with the server's configured provider for the wallet bound to the presented session. Returns the provider SDK token / hosted URL the investor SPA launches. The subject wallet is taken from the session, never a request parameter. Approval is applied on-chain asynchronously by the server when the provider's signed webhook arrives (see POST /api/v1/compliance/webhook) — this endpoint does not itself change on-chain state. 501 means no KYC provider is configured, or the configured one has no server-initiated flow (the default `none` provider).
-         */
-        post: operations["startKYC"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    post: operations["setComplianceStatus"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/compliance/webhook": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/assets/records": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listRecords"];
-        put?: never;
-        post: operations["createRecord"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /** @description HMAC-signed KYC provider webhook. Signature header `X-Webhook-Signature` = lowercase hex of HMAC-SHA256(rawBody, sharedSecret), constant-time compared. When a specific provider is configured this endpoint ALSO accepts that provider's own signed webhook shape instead — Sumsub's `X-Payload-Digest` or Onfido's `X-SHA2-Signature`, each verified against that provider's webhook secret and mapped server-side to the same provider-agnostic decision. The generic shape documented here remains the default (`KYC_PROVIDER=none`) and is unchanged. Replay/freshness-protected: the server requires provider + eventId + occurredAt, enforces uniqueness on (provider, eventId) in addition to raw-body-hash dedup, rejects occurredAt outside a 24h-past / 5min-future window, rejects a strictly-older decision for an address than the latest already-applied one, normalizes the address to EIP-55, and rejects negative / >100y-future validUntil before the int64→uint64 cast. The occurrence timestamp travels in-body, so it is covered by the existing HMAC-over-raw-body signature (no separate header). Not protected by BearerJwt. */
+    post: operations["kycWebhook"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/compliance/kyc/start": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/assets/records/{recordId}/package": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["downloadPackage"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /**
+     * Begin a KYC verification for this session's own wallet.
+     * @description Begin a KYC verification with the server's configured provider for the wallet bound to the presented session. Returns the provider SDK token / hosted URL the investor SPA launches. The subject wallet is taken from the session, never a request parameter. Approval is applied on-chain asynchronously by the server when the provider's signed webhook arrives (see POST /api/v1/compliance/webhook) — this endpoint does not itself change on-chain state. 501 means no KYC provider is configured, or the configured one has no server-initiated flow (the default `none` provider).
+     */
+    post: operations["startKYC"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/assets/records": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/assets/records/{recordId}/reissue": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reissue an expired record with a fresh nonce/expiry.
-         * @description Audited recovery for a record whose attestation window lapsed before it was signed. Creates a NEW nonce and validUntil for the SAME immutable metadata identity (recordId, metadata, digests unchanged) so a stuck record can be re-attested without violating record-ID uniqueness. Admin-only. Only permitted for a record that is still Pending (never Signed/Minted).
-         */
-        post: operations["reissueRecord"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["listRecords"];
+    put?: never;
+    post: operations["createRecord"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/assets/records/{recordId}/package": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/sales/inventory": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getInventory"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["downloadPackage"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/assets/records/{recordId}/reissue": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/sales/purchases": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listPurchases"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /**
+     * Reissue an expired record with a fresh nonce/expiry.
+     * @description Audited recovery for a record whose attestation window lapsed before it was signed. Creates a NEW nonce and validUntil for the SAME immutable metadata identity (recordId, metadata, digests unchanged) so a stuck record can be re-attested without violating record-ID uniqueness. Admin-only. Only permitted for a record that is still Pending (never Signed/Minted).
+     */
+    post: operations["reissueRecord"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/sales/inventory": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/redemptions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description Public, paginated list of redemption requests. On-chain-public data (the RedemptionEscrow's events), exposed unauthenticated so issuers can build their own investor UIs. Filter by `address` (beneficiary) for a single investor's requests, and/or by `status`. */
-        get: operations["listRedemptions"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["getInventory"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/sales/purchases": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/redemptions/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getRedemption"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["listPurchases"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/redemptions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/v1/transactions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description Public, paginated list of server-tracked transactions. On-chain-public data, exposed unauthenticated so issuers can build their own investor UIs. Pass `address` to filter to a single wallet (matches from/to/beneficiary/buyer). */
-        get: operations["listTransactions"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** @description Public, paginated list of redemption requests. On-chain-public data (the RedemptionEscrow's events), exposed unauthenticated so issuers can build their own investor UIs. Filter by `address` (beneficiary) for a single investor's requests, and/or by `status`. */
+    get: operations["listRedemptions"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/redemptions/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/auth/challenge": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Request a wallet-signature challenge for admin login (step 1).
-         * @description Admin auth is wallet-signature based. The SPA sends the connected wallet address; the server returns a single-use, time-limited message for the wallet to personal_sign. Public — this is the login entry point.
-         */
-        post: operations["createAuthChallenge"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["getRedemption"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/transactions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/auth/session": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Verify a signed challenge and issue an admin JWT (step 2).
-         * @description The SPA submits the wallet address and the signature over the challenge message from POST /auth/challenge. The server recovers the signer and, if it equals the configured project admin address, returns a signed JWT to attach as `Authorization: Bearer <token>` on subsequent requests. The JWT is stateless — logout is client-side (drop the token). Public — this is the exchange endpoint.
-         */
-        post: operations["createSession"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** @description Public, paginated list of server-tracked transactions. On-chain-public data, exposed unauthenticated so issuers can build their own investor UIs. Pass `address` to filter to a single wallet (matches from/to/beneficiary/buyer). */
+    get: operations["listTransactions"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/auth/challenge": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
+    get?: never;
+    put?: never;
+    /**
+     * Request a wallet-signature challenge for admin login (step 1).
+     * @description Admin auth is wallet-signature based. The SPA sends the connected wallet address; the server returns a single-use, time-limited message for the wallet to personal_sign. Public — this is the login entry point.
+     */
+    post: operations["createAuthChallenge"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/auth/session": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Verify a signed challenge and issue an admin JWT (step 2).
+     * @description The SPA submits the wallet address and the signature over the challenge message from POST /auth/challenge. The server recovers the signer and, if it equals the configured project admin address, returns a signed JWT to attach as `Authorization: Bearer <token>` on subsequent requests. The JWT is stateless — logout is client-side (drop the token). Public — this is the exchange endpoint.
+     */
+    post: operations["createSession"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
-    schemas: {
-        Health: {
-            status?: string;
-            chainId?: number;
-            lastIndexedBlock?: number;
-        };
-        Error: {
-            code: string;
-            message: string;
-            details?: Record<string, never>;
-        };
-        Project: {
-            projectId?: string;
-            version?: string;
-            chainId?: number;
-            /**
-             * @description Deployment lifecycle state. The admin UI hides the deploy form once this is Deploying/Verifying/Active and polls GET /project until it reaches a terminal state (Active or Failed).
-             * @enum {string}
-             */
-            status?: "Undeployed" | "Deploying" | "Verifying" | "Active" | "Failed";
-            /** @description Why the deployment is Failed, or a non-fatal gap disclosed even when Active (e.g. no release manifest configured). Empty when verification fully succeeded. */
-            verificationNote?: string;
-            decimals?: number;
-            /** @description Decimals of the quote/collateral token (addresses.quoteToken), read on-chain once at project setup/deploy and stored with the project settings. Lets the UI scale quote-denominated amounts to/from whole units without its own on-chain read. Omitted if not yet resolved. */
-            quoteDecimals?: number;
-            /** @description Live on-chain purchase price per whole token, in quote-token minimal units (scale by quoteDecimals for display). Projected from FixedPriceStrategy PurchasePriceUpdated events — the current chain value, overlaying the deploy-time price. Omitted if not yet projected. */
-            purchasePricePerWholeToken?: string;
-            /** @description Live on-chain redemption price per whole token, in quote-token minimal units. See purchasePricePerWholeToken. */
-            redemptionPricePerWholeToken?: string;
-            tokenUnit?: string;
-            profileDigest?: string;
-            addresses?: components["schemas"]["Addresses"];
-            paused?: boolean;
-            auditor?: string;
-            treasury?: string;
-            redemptionManager?: string;
-            /** @description The incoming DEFAULT_ADMIN address of an in-progress two-step admin transfer (OZ AccessControlDefaultAdminRules): set from the DefaultAdminTransferScheduled event when the current admin begins a transfer, and cleared (empty/omitted) once the new admin has accepted (DEFAULT_ADMIN_ROLE moved to them) or the transfer was canceled. Event-sourced like the other security fields; see securityStale. The web shows the pending admin an "Accept admin role" action while their wallet matches this. */
-            pendingAdmin?: string;
-            finalityConfirmations?: number;
-            /** @description V1: true when non-empty code exists at all deployed addresses (presence check). Byte-for-byte / init-code-hash verification against the released artifacts is a separate hardening step and is not implied by this flag. */
-            bytecodeVerified?: boolean;
-            /** @description Complete role-holder sets enumerated via AccessControlEnumerable at deployment verification: every role on every deployed contract, compared against the deploy allowlist, so an unexpected out-of-band holder is detected. This is a verification-time snapshot — see securityStale. */
-            roles?: components["schemas"]["RoleHolders"];
-            /** @description Last indexed block, i.e. how current the server's chain view is when it reported the security-authority fields (paused/auditor/treasury/roles). Omitted when no indexer checkpoint exists yet. */
-            securityAsOfBlock?: number;
-            /**
-             * Format: date-time
-             * @description Timestamp of securityAsOfBlock (RFC3339). Omitted when no checkpoint exists.
-             */
-            securityAsOfTime?: string;
-            /** @description True when the authority fields (paused/auditor/treasury/roles) may not reflect live chain state — they are a deployment/verification-time snapshot that is not yet continuously reconciled against governance/role events, so an out-of-band pause, role grant, or auditor rotation would not appear here. Clients MUST NOT present these values as guaranteed-current while this is true. */
-            securityStale?: boolean;
-        };
-        Addresses: {
-            token?: string;
-            compliance?: string;
-            supplyController?: string;
-            vault?: string;
-            redemptionEscrow?: string;
-            strategy?: string;
-            quoteToken?: string;
-        };
-        /** @description Map of role name (DEFAULT_ADMIN_ROLE, PAUSER_ROLE, ...) to holder addresses. */
-        RoleHolders: {
-            [key: string]: string[];
-        };
-        /** @description Non-sensitive bootstrap values for the admin console. The admin assembles ProjectConfig (see IRWAFactory.ProjectConfig) client-side — using the server-configured projectId and deriving profileDigest and decimals from the stored Asset Profile — and broadcasts RWAFactory.deploy from their own wallet. The server never signs or relays the deploy; it observes the on-chain ProjectDeployed event. */
-        BootstrapConfig: {
-            /**
-             * Format: int64
-             * @description EVM chain id the factory is deployed on.
-             */
-            chainId: number;
-            /** @description RWAFactory address the admin calls deploy(ProjectConfig) on. */
-            factoryAddress: string;
-            /** @description The operator-configured projectId (UUID) this deployment is pinned to. The admin console builds its Asset Profile with this value instead of generating one, and the server rejects any profile whose projectId differs. Empty when the operator has not set project_id in the server config yet — the console then blocks profile creation. */
-            projectId: string;
-        };
-        ValidationResult: {
-            valid?: boolean;
-            errors?: string[];
-            profileDigest?: string;
-            cid?: string;
-        };
-        WalletStatus: {
-            address?: string;
-            /** @enum {string} */
-            status?: "Unknown" | "Allowed" | "Blocked";
-            validUntil?: number;
-            ownershipVerified?: boolean;
-        };
-        /** @description WalletStatus for the verified address plus a short-lived subject-scoped session. */
-        VerifyChallengeResult: {
-            address?: string;
-            /** @enum {string} */
-            status?: "Unknown" | "Allowed" | "Blocked";
-            validUntil?: number;
-            ownershipVerified?: boolean;
-            /** @description Opaque bearer for X-Wallet-Session; scoped to this address only. */
-            sessionToken?: string;
-            /**
-             * Format: date-time
-             * @description Session expiry (≈15 min TTL).
-             */
-            sessionExpiresAt?: string;
-        };
-        AllowedResult: {
-            /** @description Whether a transfer to the address is currently permitted. Nothing else is disclosed. */
-            allowed: boolean;
-        };
-        Challenge: {
-            address?: string;
-            nonce?: string;
-            message?: string;
-            expiresAt?: string;
-        };
-        SetStatusRequest: {
-            address: string;
-            /** @enum {string} */
-            status: "Unknown" | "Allowed" | "Blocked";
-            validUntil?: number;
-        };
-        /** @description recordKey, nonce and validUntil are exposed so the admin can assemble the SupplyController.MintAttestation and broadcast SupplyController.mint(attestation, signature) directly from their wallet (the server no longer relays the mint; it observes the on-chain Minted event and advances the record). */
-        AssetRecord: {
-            recordId?: string;
-            /** @enum {string} */
-            status?: "Draft" | "Pending" | "Signed" | "Minted" | "Rejected";
-            metadataDigest?: string;
-            cid?: string;
-            amount?: string;
-            createdAt?: string;
-            /** @description bytes32 recordKey bound into the MintAttestation (consumed once on-chain). */
-            recordKey?: string;
-            /** @description uint256 attestation nonce (consumed once on-chain). */
-            nonce?: string;
-            /**
-             * Format: int64
-             * @description Attestation expiry (unix seconds); block.timestamp must be <= this at mint.
-             */
-            validUntil?: number;
-        };
-        CreateRecordRequest: {
-            recordId: string;
-            asset: Record<string, never>;
-            amount: string;
-            proofs?: Record<string, never>[];
-        };
-        SignedResult: {
-            formatVersion: string;
-            auditor: string;
-            primaryType: string;
-            typedDataDigest: string;
-            signature: string;
-            signedAt: string;
-        };
-        Inventory: {
-            inventory?: string;
-            quoteBalance?: string;
-            purchasePrice?: string;
-            redemptionPrice?: string;
-        };
-        /** @description `status` is the on-chain enum. `claimable` is a server-derived convenience: true when status==Funded AND confirmations>=finalityConfirmations. There is no on-chain Claimable status. A Pending redemption is never a payment guarantee. */
-        Redemption: {
-            id?: string;
-            beneficiary?: string;
-            rwaAmount?: string;
-            quoteAmount?: string;
-            /** @enum {string} */
-            status?: "None" | "Pending" | "Funded" | "Completed" | "Rejected" | "Cancelled";
-            claimable?: boolean;
-            createdAt?: number;
-            timeoutAt?: number;
-            beneficiaryAllowed?: boolean;
-            confirmations?: number;
-        };
-        ChallengeVerify: {
-            address: string;
-            nonce: string;
-            signature: string;
-        };
-        WebhookPayload: {
-            /** @description KYC provider id; part of the (provider,eventId) uniqueness key. */
-            provider: string;
-            /** @description Provider-assigned unique event id; part of the uniqueness key. */
-            eventId: string;
-            /**
-             * Format: int64
-             * @description Provider decision time, unix seconds. Rejected if outside 24h-past / 5min-future, or older than the latest applied decision for this address.
-             */
-            occurredAt: number;
-            /** @description Subject wallet; normalized to EIP-55 checksum server-side. */
-            address: string;
-            /**
-             * @description Compliance decision.
-             * @enum {string}
-             */
-            status: "Allowed" | "Blocked" | "Pending";
-            /**
-             * Format: int64
-             * @description Expiry (unix seconds) for an Allowed decision; 0 = no expiry. Negative or >100y-future is rejected before the int64→uint64 cast.
-             */
-            validUntil?: number;
-        };
-        /** @description A verification session issued by the configured KYC provider for the session's own wallet. Exactly one of `token` (consumed by the provider's embedded web SDK) or `url` (hosted redirect flow) is set, depending on the provider. */
-        KYCSession: {
-            /**
-             * @description Which provider issued this session; tells the SPA which SDK to launch.
-             * @enum {string}
-             */
-            provider: "sumsub" | "onfido" | "generic";
-            /** @description Provider SDK/init token. */
-            token?: string;
-            /** @description Hosted-flow URL to redirect the investor to. */
-            url?: string;
-            /** @description Provider-side reference for this verification (Onfido: workflowRunId). Bound server-side to the subject wallet so the provider's webhook can be resolved back to it. */
-            ref?: string;
-            /**
-             * Format: date-time
-             * @description When the token/URL stops being usable.
-             */
-            expiresAt?: string;
-        };
-        WebhookEvent: {
-            id?: string;
-            eventId?: string;
-            address?: string;
-            provider?: string;
-            /** @enum {string} */
-            outcome?: "Allowed" | "Blocked" | "Pending";
-            /** Format: date-time */
-            occurredAt?: string;
-            receivedAt?: string;
-            /**
-             * @description Durable inbox/outbox state. Applied only after the on-chain setStatus tx confirms.
-             * @enum {string}
-             */
-            applyStatus?: "Accepted" | "Applying" | "Applied" | "Superseded" | "Failed" | "Recorded";
-            /** @description Derived convenience flag: applyStatus == Applied. */
-            applied?: boolean;
-        };
-        AuditLog: {
-            id?: string;
-            category?: string;
-            actor?: string;
-            action?: string;
-            target?: string;
-            createdAt?: string;
-            details?: Record<string, never>;
-        };
-        Purchase: {
-            txHash?: string;
-            buyer?: string;
-            recipient?: string;
-            tokenAmount?: string;
-            quoteAmount?: string;
-            blockNumber?: number;
-            confirmations?: number;
-        };
-        TxRef: {
-            txHash?: string;
-            status?: string;
-            idempotencyKey?: string;
-        };
-        Transaction: {
-            txHash?: string;
-            kind?: string;
-            /** @enum {string} */
-            status?: "pending" | "mined" | "confirmed" | "replaced" | "reverted" | "reorged" | "failed" | "broadcast_unknown" | "nonce_consumed_externally" | "needs_intervention";
-            blockNumber?: number;
-            explorerUrl?: string;
-            /** @description Signing account (from address). */
-            sender?: string;
-            /** @description Account nonce this attempt used. */
-            nonce?: number;
-            /** @description txHash of the replacement, if this attempt was replaced. */
-            replacedBy?: string;
-            /** @description How many times this nonce has been fee-bumped/replaced. */
-            replacementCount?: number;
-        };
-        /** @description The deployment's single persisted Asset Profile (GET /api/v1/profile) — the raw document plus the server-derived identity fields, enough for the admin UI to repopulate the editor and the deploy form after a reload. */
-        StoredProfile: {
-            /** @description The raw Asset Profile JSON document as stored. */
-            profile: Record<string, never>;
-            projectId: string;
-            profileDigest: string;
-            cid?: string;
-            /** @description Token decimals derived from the profile. */
-            decimals?: number;
-            tokenUnit?: string;
-        };
-        /** @description Response of POST /auth/session — the admin JWT and its metadata. */
-        AuthSession: {
-            /** @description Signed JWT — attach as `Authorization: Bearer <token>`. */
-            token: string;
-            /** @description Unix seconds; JWT expiry. */
-            expiresAt: number;
-            /** @description Always 'admin' in V1 (single-admin model). */
-            role: string;
-            /** @description The authenticated admin wallet address (checksummed). */
-            address: string;
-        };
+  schemas: {
+    Health: {
+      status?: string;
+      chainId?: number;
+      lastIndexedBlock?: number;
     };
-    responses: {
-        /** @description Error */
-        Error: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["Error"];
-            };
-        };
+    Error: {
+      code: string;
+      message: string;
+      details?: Record<string, never>;
     };
-    parameters: {
-        /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
-        IdempotencyKey: string;
-        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
-        Limit: number;
-        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
-        Cursor: string;
+    Project: {
+      projectId?: string;
+      version?: string;
+      chainId?: number;
+      /**
+       * @description Deployment lifecycle state. The admin UI hides the deploy form once this is Deploying/Verifying/Active and polls GET /project until it reaches a terminal state (Active or Failed).
+       * @enum {string}
+       */
+      status?: "Undeployed" | "Deploying" | "Verifying" | "Active" | "Failed";
+      /** @description Why the deployment is Failed — e.g. a role-holder mismatch, a bytecode mismatch, or a reorg that demoted the adopted ProjectDeployed event. Empty when verification succeeded (a project is never left Active with a recorded gap). */
+      verificationNote?: string;
+      decimals?: number;
+      /** @description Decimals of the quote/collateral token (addresses.quoteToken), read on-chain once at project setup/deploy and stored with the project settings. Lets the UI scale quote-denominated amounts to/from whole units without its own on-chain read. Omitted if not yet resolved. */
+      quoteDecimals?: number;
+      /** @description Live on-chain purchase price per whole token, in quote-token minimal units (scale by quoteDecimals for display). Projected from FixedPriceStrategy PurchasePriceUpdated events — the current chain value, overlaying the deploy-time price. Omitted if not yet projected. */
+      purchasePricePerWholeToken?: string;
+      /** @description Live on-chain redemption price per whole token, in quote-token minimal units. See purchasePricePerWholeToken. */
+      redemptionPricePerWholeToken?: string;
+      tokenUnit?: string;
+      profileDigest?: string;
+      addresses?: components["schemas"]["Addresses"];
+      paused?: boolean;
+      auditor?: string;
+      treasury?: string;
+      redemptionManager?: string;
+      /** @description The incoming DEFAULT_ADMIN address of an in-progress two-step admin transfer (OZ AccessControlDefaultAdminRules): set from the DefaultAdminTransferScheduled event when the current admin begins a transfer, and cleared (empty/omitted) once the new admin has accepted (DEFAULT_ADMIN_ROLE moved to them) or the transfer was canceled. Event-sourced like the other security fields; see securityStale. The web shows the pending admin an "Accept admin role" action while their wallet matches this. */
+      pendingAdmin?: string;
+      finalityConfirmations?: number;
+      /** @description V1: true when non-empty code exists at all deployed addresses (presence check). Byte-for-byte / init-code-hash verification against the released artifacts is a separate hardening step and is not implied by this flag. */
+      bytecodeVerified?: boolean;
+      /** @description Complete role-holder sets enumerated via AccessControlEnumerable at deployment verification: every role on every deployed contract, compared against the deploy allowlist, so an unexpected out-of-band holder is detected. This is a verification-time snapshot — see securityStale. */
+      roles?: components["schemas"]["RoleHolders"];
+      /** @description Last indexed block, i.e. how current the server's chain view is when it reported the security-authority fields (paused/auditor/treasury/roles). Omitted when no indexer checkpoint exists yet. */
+      securityAsOfBlock?: number;
+      /**
+       * Format: date-time
+       * @description Timestamp of securityAsOfBlock (RFC3339). Omitted when no checkpoint exists.
+       */
+      securityAsOfTime?: string;
+      /** @description True when the authority fields (paused/auditor/treasury/roles) may not reflect live chain state — they are a deployment/verification-time snapshot that is not yet continuously reconciled against governance/role events, so an out-of-band pause, role grant, or auditor rotation would not appear here. Clients MUST NOT present these values as guaranteed-current while this is true. */
+      securityStale?: boolean;
     };
-    requestBodies: never;
-    headers: {
-        /** @description Total items available, when cheaply known. */
-        XTotalCount: number;
-        /** @description Items actually returned in this response. */
-        XPageSize: number;
-        /** @description Pass as `cursor` to fetch the next page; absent once this was the last page. */
-        XNextCursor: string;
+    Addresses: {
+      token?: string;
+      compliance?: string;
+      supplyController?: string;
+      vault?: string;
+      redemptionEscrow?: string;
+      strategy?: string;
+      quoteToken?: string;
     };
-    pathItems: never;
+    /** @description ERC-7943 (uRWA) enforcement state for the deployed project. Admin-only; see GET /api/v1/project/enforcement. */
+    Enforcement: {
+      /** @description Holder address -> frozen amount in token minimal units, as a base-10 string so a uint256 survives JSON intact. Projected from RWAToken Frozen events, which carry an ABSOLUTE amount rather than a delta; an amount of zero releases the hold and removes the entry, so only currently frozen holders appear and the map stays bounded. A frozen amount may exceed the holder's balance (it withholds tokens they have not received yet). Omitted when nothing is frozen. */
+      frozenBalances?: {
+        [key: string]: string;
+      };
+      /** @description The most recent forced transfer (admin seizure), as a bounded audit hint with the chain coordinates to look it up. NOT a history: the full record lives in the indexed chain events and the transaction list. Omitted when none has occurred. */
+      lastForcedTransfer?: components["schemas"]["ForcedTransfer"];
+      /** @description Last indexed block this projection reflects. Omitted with no checkpoint. */
+      securityAsOfBlock?: number;
+      /**
+       * Format: date-time
+       * @description Timestamp of securityAsOfBlock (RFC3339).
+       */
+      securityAsOfTime?: string;
+      /** @description True when the projection may lag live chain state, computed exactly as the identically-named field on Project. */
+      securityStale?: boolean;
+    };
+    /** @description One ERC-7943 forced transfer, identified by its canonical log position. */
+    ForcedTransfer: {
+      /** @description Holder the tokens were seized from. */
+      from?: string;
+      /** @description Recipient, which had to be compliance-Allowed on-chain. */
+      to?: string;
+      /** @description Amount moved, in token minimal units (base-10 string). */
+      amount?: string;
+      txHash?: string;
+      /** Format: int64 */
+      blockNumber?: number;
+      logIndex?: number;
+    };
+    /** @description Map of role name (DEFAULT_ADMIN_ROLE, PAUSER_ROLE, ...) to holder addresses. */
+    RoleHolders: {
+      [key: string]: string[];
+    };
+    /** @description Non-sensitive bootstrap values for the admin console. The admin assembles ProjectConfig (see IRWAFactory.ProjectConfig) client-side — using the server-configured projectId and deriving profileDigest and decimals from the stored Asset Profile — and broadcasts RWAFactory.deploy from their own wallet. The server never signs or relays the deploy; it observes the on-chain ProjectDeployed event. */
+    BootstrapConfig: {
+      /**
+       * Format: int64
+       * @description EVM chain id the factory is deployed on.
+       */
+      chainId: number;
+      /** @description RWAFactory address the admin calls deploy(ProjectConfig) on. */
+      factoryAddress: string;
+      /** @description The operator-configured projectId (UUID) this deployment is pinned to. The admin console builds its Asset Profile with this value instead of generating one, and the server rejects any profile whose projectId differs. Empty when the operator has not set project_id in the server config yet — the console then blocks profile creation. */
+      projectId: string;
+    };
+    ValidationResult: {
+      valid?: boolean;
+      errors?: string[];
+      profileDigest?: string;
+      cid?: string;
+    };
+    WalletStatus: {
+      address?: string;
+      /** @enum {string} */
+      status?: "Unknown" | "Allowed" | "Blocked";
+      validUntil?: number;
+      ownershipVerified?: boolean;
+      /** @description This wallet's ERC-7943 frozen amount in token minimal units (base-10 string), omitted when nothing is frozen. Frozen tokens stay in the wallet but cannot be sent, so a holder needs this to tell an enforcement hold apart from a failure. Only ever reported for the caller's own address on GET /me/wallet-status; the aggregate map is admin-only. */
+      frozenTokens?: string;
+    };
+    /** @description WalletStatus for the verified address plus a short-lived subject-scoped session. */
+    VerifyChallengeResult: {
+      address?: string;
+      /** @enum {string} */
+      status?: "Unknown" | "Allowed" | "Blocked";
+      validUntil?: number;
+      ownershipVerified?: boolean;
+      /** @description Opaque bearer for X-Wallet-Session; scoped to this address only. */
+      sessionToken?: string;
+      /**
+       * Format: date-time
+       * @description Session expiry (≈15 min TTL).
+       */
+      sessionExpiresAt?: string;
+    };
+    AllowedResult: {
+      /** @description Whether a transfer to the address is currently permitted. Nothing else is disclosed. */
+      allowed: boolean;
+    };
+    Challenge: {
+      address?: string;
+      nonce?: string;
+      message?: string;
+      expiresAt?: string;
+    };
+    SetStatusRequest: {
+      address: string;
+      /** @enum {string} */
+      status: "Unknown" | "Allowed" | "Blocked";
+      validUntil?: number;
+    };
+    /** @description recordKey, nonce and validUntil are exposed so the admin can assemble the SupplyController.MintAttestation and broadcast SupplyController.mint(attestation, signature) directly from their wallet (the server no longer relays the mint; it observes the on-chain Minted event and advances the record). */
+    AssetRecord: {
+      recordId?: string;
+      /** @enum {string} */
+      status?: "Draft" | "Pending" | "Signed" | "Minted" | "Rejected";
+      metadataDigest?: string;
+      cid?: string;
+      amount?: string;
+      createdAt?: string;
+      /** @description bytes32 recordKey bound into the MintAttestation (consumed once on-chain). */
+      recordKey?: string;
+      /** @description uint256 attestation nonce (consumed once on-chain). */
+      nonce?: string;
+      /**
+       * Format: int64
+       * @description Attestation expiry (unix seconds); block.timestamp must be <= this at mint.
+       */
+      validUntil?: number;
+    };
+    CreateRecordRequest: {
+      recordId: string;
+      asset: Record<string, never>;
+      amount: string;
+      proofs?: Record<string, never>[];
+    };
+    SignedResult: {
+      formatVersion: string;
+      auditor: string;
+      primaryType: string;
+      typedDataDigest: string;
+      signature: string;
+      signedAt: string;
+    };
+    Inventory: {
+      inventory?: string;
+      quoteBalance?: string;
+      purchasePrice?: string;
+      redemptionPrice?: string;
+    };
+    /** @description `status` is the on-chain enum. `claimable` is a server-derived convenience: true when status==Funded AND confirmations>=finalityConfirmations. There is no on-chain Claimable status. A Pending redemption is never a payment guarantee. */
+    Redemption: {
+      id?: string;
+      beneficiary?: string;
+      rwaAmount?: string;
+      quoteAmount?: string;
+      /** @enum {string} */
+      status?:
+        "None" | "Pending" | "Funded" | "Completed" | "Rejected" | "Cancelled";
+      claimable?: boolean;
+      createdAt?: number;
+      timeoutAt?: number;
+      beneficiaryAllowed?: boolean;
+      confirmations?: number;
+    };
+    ChallengeVerify: {
+      address: string;
+      nonce: string;
+      signature: string;
+    };
+    WebhookPayload: {
+      /** @description KYC provider id; part of the (provider,eventId) uniqueness key. */
+      provider: string;
+      /** @description Provider-assigned unique event id; part of the uniqueness key. */
+      eventId: string;
+      /**
+       * Format: int64
+       * @description Provider decision time, unix seconds. Rejected if outside 24h-past / 5min-future, or older than the latest applied decision for this address.
+       */
+      occurredAt: number;
+      /** @description Subject wallet; normalized to EIP-55 checksum server-side. */
+      address: string;
+      /**
+       * @description Compliance decision.
+       * @enum {string}
+       */
+      status: "Allowed" | "Blocked" | "Pending";
+      /**
+       * Format: int64
+       * @description Expiry (unix seconds) for an Allowed decision; 0 = no expiry. Negative or >100y-future is rejected before the int64→uint64 cast.
+       */
+      validUntil?: number;
+    };
+    /** @description A verification session issued by the configured KYC provider for the session's own wallet. Exactly one of `token` (consumed by the provider's embedded web SDK) or `url` (hosted redirect flow) is set, depending on the provider. */
+    KYCSession: {
+      /**
+       * @description Which provider issued this session; tells the SPA which SDK to launch.
+       * @enum {string}
+       */
+      provider: "sumsub" | "onfido" | "generic";
+      /** @description Provider SDK/init token. */
+      token?: string;
+      /** @description Hosted-flow URL to redirect the investor to. */
+      url?: string;
+      /** @description Provider-side reference for this verification (Onfido: workflowRunId). Bound server-side to the subject wallet so the provider's webhook can be resolved back to it. */
+      ref?: string;
+      /**
+       * Format: date-time
+       * @description When the token/URL stops being usable.
+       */
+      expiresAt?: string;
+    };
+    WebhookEvent: {
+      id?: string;
+      eventId?: string;
+      address?: string;
+      provider?: string;
+      /** @enum {string} */
+      outcome?: "Allowed" | "Blocked" | "Pending";
+      /** Format: date-time */
+      occurredAt?: string;
+      receivedAt?: string;
+      /**
+       * @description Durable inbox/outbox state. Applied only after the on-chain setStatus tx confirms.
+       * @enum {string}
+       */
+      applyStatus?:
+        | "Accepted"
+        | "Applying"
+        | "Applied"
+        | "Superseded"
+        | "Failed"
+        | "Recorded";
+      /** @description Derived convenience flag: applyStatus == Applied. */
+      applied?: boolean;
+    };
+    AuditLog: {
+      id?: string;
+      category?: string;
+      actor?: string;
+      action?: string;
+      target?: string;
+      createdAt?: string;
+      details?: Record<string, never>;
+    };
+    Purchase: {
+      txHash?: string;
+      buyer?: string;
+      recipient?: string;
+      tokenAmount?: string;
+      quoteAmount?: string;
+      blockNumber?: number;
+      confirmations?: number;
+    };
+    TxRef: {
+      txHash?: string;
+      status?: string;
+      idempotencyKey?: string;
+    };
+    Transaction: {
+      txHash?: string;
+      kind?: string;
+      /** @enum {string} */
+      status?:
+        | "pending"
+        | "mined"
+        | "confirmed"
+        | "replaced"
+        | "reverted"
+        | "reorged"
+        | "failed"
+        | "broadcast_unknown"
+        | "nonce_consumed_externally"
+        | "needs_intervention";
+      blockNumber?: number;
+      explorerUrl?: string;
+      /** @description Signing account (from address). */
+      sender?: string;
+      /** @description Account nonce this attempt used. */
+      nonce?: number;
+      /** @description txHash of the replacement, if this attempt was replaced. */
+      replacedBy?: string;
+      /** @description How many times this nonce has been fee-bumped/replaced. */
+      replacementCount?: number;
+    };
+    /** @description The deployment's single persisted Asset Profile (GET /api/v1/profile) — the raw document plus the server-derived identity fields, enough for the admin UI to repopulate the editor and the deploy form after a reload. */
+    StoredProfile: {
+      /** @description The raw Asset Profile JSON document as stored. */
+      profile: Record<string, never>;
+      projectId: string;
+      profileDigest: string;
+      cid?: string;
+      /** @description Token decimals derived from the profile. */
+      decimals?: number;
+      tokenUnit?: string;
+    };
+    /** @description Response of POST /auth/session — the admin JWT and its metadata. */
+    AuthSession: {
+      /** @description Signed JWT — attach as `Authorization: Bearer <token>`. */
+      token: string;
+      /** @description Unix seconds; JWT expiry. */
+      expiresAt: number;
+      /** @description Always 'admin' in V1 (single-admin model). */
+      role: string;
+      /** @description The authenticated admin wallet address (checksummed). */
+      address: string;
+    };
+  };
+  responses: {
+    /** @description Error */
+    Error: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        "application/json": components["schemas"]["Error"];
+      };
+    };
+  };
+  parameters: {
+    /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
+    IdempotencyKey: string;
+    /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+    Limit: number;
+    /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+    Cursor: string;
+  };
+  requestBodies: never;
+  headers: {
+    /** @description Total items available, when cheaply known. */
+    XTotalCount: number;
+    /** @description Items actually returned in this response. */
+    XPageSize: number;
+    /** @description Pass as `cursor` to fetch the next page; absent once this was the last page. */
+    XNextCursor: string;
+  };
+  pathItems: never;
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    getHealth: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Health"];
-                };
-            };
-        };
+  getHealth: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    getReady: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Ready */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Health"];
-                };
-            };
-            /** @description Not ready */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
+        content: {
+          "application/json": components["schemas"]["Health"];
         };
+      };
     };
-    getProject: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Project */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Project"];
-                };
-            };
-        };
+  };
+  getReady: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    getConfig: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Ready */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Bootstrap config */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BootstrapConfig"];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["Health"];
         };
+      };
+      /** @description Not ready */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
     };
-    getProfile: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The stored profile. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StoredProfile"];
-                };
-            };
-            404: components["responses"]["Error"];
-        };
+  };
+  getProject: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    createProfile: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-            };
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Project */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": Record<string, never>;
-            };
+        content: {
+          "application/json": components["schemas"]["Project"];
         };
-        responses: {
-            /** @description Profile created */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ValidationResult"];
-                };
-            };
-            /** @description Invalid profile; body is a ValidationResult with valid=false and an errors array. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ValidationResult"];
-                };
-            };
-            409: components["responses"]["Error"];
-            500: components["responses"]["Error"];
-        };
+      };
     };
-    validateProfile: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": Record<string, never>;
-            };
-        };
-        responses: {
-            /** @description Validation result */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ValidationResult"];
-                };
-            };
-        };
+  };
+  getEnforcement: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    listWallets: {
-        parameters: {
-            query?: {
-                /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
-                limit?: components["parameters"]["Limit"];
-                /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Enforcement state */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Wallets (bounded/paginated, see Limit/Cursor) */
-            200: {
-                headers: {
-                    "X-Total-Count": components["headers"]["XTotalCount"];
-                    "X-Page-Size": components["headers"]["XPageSize"];
-                    "X-Next-Cursor": components["headers"]["XNextCursor"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WalletStatus"][];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["Enforcement"];
         };
+      };
+      401: components["responses"]["Error"];
+      404: components["responses"]["Error"];
     };
-    createChallenge: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    address: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Challenge */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Challenge"];
-                };
-            };
-        };
+  };
+  getConfig: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    verifyChallenge: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Bootstrap config */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ChallengeVerify"];
-            };
+        content: {
+          "application/json": components["schemas"]["BootstrapConfig"];
         };
-        responses: {
-            /** @description Verified */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VerifyChallengeResult"];
-                };
-            };
-            400: components["responses"]["Error"];
-        };
+      };
     };
-    getMyWalletStatus: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Own wallet status */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WalletStatus"];
-                };
-            };
-            401: components["responses"]["Error"];
-        };
+  };
+  getProfile: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    isAddressAllowed: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                address: string;
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description The stored profile. */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Eligibility */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AllowedResult"];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["StoredProfile"];
         };
+      };
+      404: components["responses"]["Error"];
     };
-    listWebhookEvents: {
-        parameters: {
-            query?: {
-                /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
-                limit?: components["parameters"]["Limit"];
-                /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Webhook events (bounded/paginated, see Limit/Cursor) */
-            200: {
-                headers: {
-                    "X-Total-Count": components["headers"]["XTotalCount"];
-                    "X-Page-Size": components["headers"]["XPageSize"];
-                    "X-Next-Cursor": components["headers"]["XNextCursor"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WebhookEvent"][];
-                };
-            };
-        };
+  };
+  createProfile: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
+        "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+      };
+      path?: never;
+      cookie?: never;
     };
-    listAuditLogs: {
-        parameters: {
-            query?: {
-                category?: string;
-                /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
-                limit?: components["parameters"]["Limit"];
-                /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Audit log entries (bounded/paginated; the underlying store is a most-recent-N query so X-Total-Count is omitted — only X-Page-Size/X-Next-Cursor are sent). */
-            200: {
-                headers: {
-                    "X-Page-Size": components["headers"]["XPageSize"];
-                    "X-Next-Cursor": components["headers"]["XNextCursor"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AuditLog"][];
-                };
-            };
-        };
+    requestBody: {
+      content: {
+        "application/json": Record<string, never>;
+      };
     };
-    setComplianceStatus: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-            };
-            path?: never;
-            cookie?: never;
+    responses: {
+      /** @description Profile created */
+      201: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SetStatusRequest"];
-            };
+        content: {
+          "application/json": components["schemas"]["ValidationResult"];
         };
-        responses: {
-            /** @description Submitted */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TxRef"];
-                };
-            };
+      };
+      /** @description Invalid profile; body is a ValidationResult with valid=false and an errors array. */
+      400: {
+        headers: {
+          [name: string]: unknown;
         };
+        content: {
+          "application/json": components["schemas"]["ValidationResult"];
+        };
+      };
+      409: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
-    kycWebhook: {
-        parameters: {
-            query?: never;
-            header: {
-                "X-Webhook-Signature": string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WebhookPayload"];
-            };
-        };
-        responses: {
-            /** @description Accepted and durably queued. The decision is stored and applied on-chain asynchronously by the reconciler; it is NOT yet applied when this returns. Poll the webhook events list for applyStatus. */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            400: components["responses"]["Error"];
-            401: components["responses"]["Error"];
-            /** @description Replay/stale/out-of-order decision (same code family as replay). */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-        };
+  };
+  validateProfile: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    startKYC: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Provider verification session */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["KYCSession"];
-                };
-            };
-            401: components["responses"]["Error"];
-            501: components["responses"]["Error"];
-        };
+    requestBody: {
+      content: {
+        "application/json": Record<string, never>;
+      };
     };
-    listRecords: {
-        parameters: {
-            query?: {
-                /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
-                limit?: components["parameters"]["Limit"];
-                /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
+    responses: {
+      /** @description Validation result */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Records (bounded/paginated, see Limit/Cursor) */
-            200: {
-                headers: {
-                    "X-Total-Count": components["headers"]["XTotalCount"];
-                    "X-Page-Size": components["headers"]["XPageSize"];
-                    "X-Next-Cursor": components["headers"]["XNextCursor"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AssetRecord"][];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["ValidationResult"];
         };
+      };
     };
-    createRecord: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateRecordRequest"];
-            };
-        };
-        responses: {
-            /** @description Created */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AssetRecord"];
-                };
-            };
-        };
+  };
+  listWallets: {
+    parameters: {
+      query?: {
+        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        limit?: components["parameters"]["Limit"];
+        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        cursor?: components["parameters"]["Cursor"];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    downloadPackage: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                recordId: string;
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Wallets (bounded/paginated, see Limit/Cursor) */
+      200: {
+        headers: {
+          "X-Total-Count": components["headers"]["XTotalCount"];
+          "X-Page-Size": components["headers"]["XPageSize"];
+          "X-Next-Cursor": components["headers"]["XNextCursor"];
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description .rwa package */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/zip": string;
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["WalletStatus"][];
         };
+      };
     };
-    reissueRecord: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-            };
-            path: {
-                recordId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Reissued */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AssetRecord"];
-                };
-            };
-            409: components["responses"]["Error"];
-        };
+  };
+  createChallenge: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    getInventory: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody: {
+      content: {
+        "application/json": {
+          address: string;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Inventory */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Inventory"];
-                };
-            };
-        };
+      };
     };
-    listPurchases: {
-        parameters: {
-            query?: {
-                /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
-                limit?: components["parameters"]["Limit"];
-                /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
+    responses: {
+      /** @description Challenge */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Purchases (bounded/paginated, see Limit/Cursor) */
-            200: {
-                headers: {
-                    "X-Total-Count": components["headers"]["XTotalCount"];
-                    "X-Page-Size": components["headers"]["XPageSize"];
-                    "X-Next-Cursor": components["headers"]["XNextCursor"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Purchase"][];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["Challenge"];
         };
+      };
     };
-    listRedemptions: {
-        parameters: {
-            query?: {
-                status?: string;
-                /** @description Filter to requests whose beneficiary is this wallet. */
-                address?: string;
-                /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
-                limit?: components["parameters"]["Limit"];
-                /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Redemptions (bounded/paginated, see Limit/Cursor) */
-            200: {
-                headers: {
-                    "X-Total-Count": components["headers"]["XTotalCount"];
-                    "X-Page-Size": components["headers"]["XPageSize"];
-                    "X-Next-Cursor": components["headers"]["XNextCursor"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Redemption"][];
-                };
-            };
-        };
+  };
+  verifyChallenge: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    getRedemption: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Redemption */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Redemption"];
-                };
-            };
-        };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ChallengeVerify"];
+      };
     };
-    listTransactions: {
-        parameters: {
-            query?: {
-                /** @description Filter to txs involving this wallet (from/to/beneficiary/buyer). */
-                address?: string;
-                /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
-                limit?: components["parameters"]["Limit"];
-                /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
+    responses: {
+      /** @description Verified */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Transactions (bounded/paginated, see Limit/Cursor) */
-            200: {
-                headers: {
-                    "X-Total-Count": components["headers"]["XTotalCount"];
-                    "X-Page-Size": components["headers"]["XPageSize"];
-                    "X-Next-Cursor": components["headers"]["XNextCursor"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Transaction"][];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["VerifyChallengeResult"];
         };
+      };
+      400: components["responses"]["Error"];
     };
-    createAuthChallenge: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description Connected wallet address (EIP-55 checksummed or lowercase). */
-                    address: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Challenge issued. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        /** @description The exact message the wallet must personal_sign. */
-                        message: string;
-                        /** @description Unix seconds; the challenge is single-use and expires. */
-                        expiresAt: number;
-                    };
-                };
-            };
-            429: components["responses"]["Error"];
-        };
+  };
+  getMyWalletStatus: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    createSession: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Own wallet status */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description Wallet address that signed the challenge. */
-                    address: string;
-                    /** @description personal_sign signature over the challenge message ('0x'-hex, 65 bytes). */
-                    signature: string;
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["WalletStatus"];
         };
-        responses: {
-            /** @description Authenticated; JWT issued. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AuthSession"];
-                };
-            };
-            401: components["responses"]["Error"];
-            429: components["responses"]["Error"];
-        };
+      };
+      401: components["responses"]["Error"];
     };
+  };
+  isAddressAllowed: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        address: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Eligibility */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AllowedResult"];
+        };
+      };
+    };
+  };
+  listWebhookEvents: {
+    parameters: {
+      query?: {
+        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        limit?: components["parameters"]["Limit"];
+        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        cursor?: components["parameters"]["Cursor"];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Webhook events (bounded/paginated, see Limit/Cursor) */
+      200: {
+        headers: {
+          "X-Total-Count": components["headers"]["XTotalCount"];
+          "X-Page-Size": components["headers"]["XPageSize"];
+          "X-Next-Cursor": components["headers"]["XNextCursor"];
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WebhookEvent"][];
+        };
+      };
+    };
+  };
+  listAuditLogs: {
+    parameters: {
+      query?: {
+        category?: string;
+        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        limit?: components["parameters"]["Limit"];
+        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        cursor?: components["parameters"]["Cursor"];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Audit log entries (bounded/paginated; the underlying store is a most-recent-N query so X-Total-Count is omitted — only X-Page-Size/X-Next-Cursor are sent). */
+      200: {
+        headers: {
+          "X-Page-Size": components["headers"]["XPageSize"];
+          "X-Next-Cursor": components["headers"]["XNextCursor"];
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AuditLog"][];
+        };
+      };
+    };
+  };
+  setComplianceStatus: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
+        "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SetStatusRequest"];
+      };
+    };
+    responses: {
+      /** @description Submitted */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TxRef"];
+        };
+      };
+    };
+  };
+  kycWebhook: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Required for the generic shape; a configured provider sends its own header instead (X-Payload-Digest / X-SHA2-Signature). Exactly one signature header must verify. */
+        "X-Webhook-Signature"?: string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WebhookPayload"];
+      };
+    };
+    responses: {
+      /** @description Accepted and durably queued. The decision is stored and applied on-chain asynchronously by the reconciler; it is NOT yet applied when this returns. Poll the webhook events list for applyStatus. */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      400: components["responses"]["Error"];
+      401: components["responses"]["Error"];
+      /** @description Replay/stale/out-of-order decision (same code family as replay). */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Error"];
+        };
+      };
+    };
+  };
+  startKYC: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Provider verification session */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["KYCSession"];
+        };
+      };
+      401: components["responses"]["Error"];
+      501: components["responses"]["Error"];
+    };
+  };
+  listRecords: {
+    parameters: {
+      query?: {
+        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        limit?: components["parameters"]["Limit"];
+        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        cursor?: components["parameters"]["Cursor"];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Records (bounded/paginated, see Limit/Cursor) */
+      200: {
+        headers: {
+          "X-Total-Count": components["headers"]["XTotalCount"];
+          "X-Page-Size": components["headers"]["XPageSize"];
+          "X-Next-Cursor": components["headers"]["XNextCursor"];
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssetRecord"][];
+        };
+      };
+    };
+  };
+  createRecord: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
+        "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateRecordRequest"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssetRecord"];
+        };
+      };
+    };
+  };
+  downloadPackage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        recordId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description .rwa package */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/zip": string;
+        };
+      };
+    };
+  };
+  reissueRecord: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
+        "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+      };
+      path: {
+        recordId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Reissued */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssetRecord"];
+        };
+      };
+      409: components["responses"]["Error"];
+    };
+  };
+  getInventory: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Inventory */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Inventory"];
+        };
+      };
+    };
+  };
+  listPurchases: {
+    parameters: {
+      query?: {
+        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        limit?: components["parameters"]["Limit"];
+        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        cursor?: components["parameters"]["Cursor"];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Purchases (bounded/paginated, see Limit/Cursor) */
+      200: {
+        headers: {
+          "X-Total-Count": components["headers"]["XTotalCount"];
+          "X-Page-Size": components["headers"]["XPageSize"];
+          "X-Next-Cursor": components["headers"]["XNextCursor"];
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Purchase"][];
+        };
+      };
+    };
+  };
+  listRedemptions: {
+    parameters: {
+      query?: {
+        status?: string;
+        /** @description Filter to requests whose beneficiary is this wallet. */
+        address?: string;
+        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        limit?: components["parameters"]["Limit"];
+        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        cursor?: components["parameters"]["Cursor"];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Redemptions (bounded/paginated, see Limit/Cursor) */
+      200: {
+        headers: {
+          "X-Total-Count": components["headers"]["XTotalCount"];
+          "X-Page-Size": components["headers"]["XPageSize"];
+          "X-Next-Cursor": components["headers"]["XNextCursor"];
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Redemption"][];
+        };
+      };
+    };
+  };
+  getRedemption: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Redemption */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Redemption"];
+        };
+      };
+    };
+  };
+  listTransactions: {
+    parameters: {
+      query?: {
+        /** @description Filter to txs involving this wallet (from/to/beneficiary/buyer). */
+        address?: string;
+        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        limit?: components["parameters"]["Limit"];
+        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        cursor?: components["parameters"]["Cursor"];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Transactions (bounded/paginated, see Limit/Cursor) */
+      200: {
+        headers: {
+          "X-Total-Count": components["headers"]["XTotalCount"];
+          "X-Page-Size": components["headers"]["XPageSize"];
+          "X-Next-Cursor": components["headers"]["XNextCursor"];
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Transaction"][];
+        };
+      };
+    };
+  };
+  createAuthChallenge: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": {
+          /** @description Connected wallet address (EIP-55 checksummed or lowercase). */
+          address: string;
+        };
+      };
+    };
+    responses: {
+      /** @description Challenge issued. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            /** @description The exact message the wallet must personal_sign. */
+            message: string;
+            /** @description Unix seconds; the challenge is single-use and expires. */
+            expiresAt: number;
+          };
+        };
+      };
+      429: components["responses"]["Error"];
+    };
+  };
+  createSession: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": {
+          /** @description Wallet address that signed the challenge. */
+          address: string;
+          /** @description personal_sign signature over the challenge message ('0x'-hex, 65 bytes). */
+          signature: string;
+        };
+      };
+    };
+    responses: {
+      /** @description Authenticated; JWT issued. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AuthSession"];
+        };
+      };
+      401: components["responses"]["Error"];
+      429: components["responses"]["Error"];
+    };
+  };
 }
