@@ -79,7 +79,8 @@ MongoDB + IPFS. Components:
 
 All privileged actions are wallet transactions — never role private keys in the browser. In the
 admin console the connected admin wallet performs most of them directly: pause/unpause, price
-updates, role grant/revoke, and the two-step admin transfer (Security screen); treasury withdrawal
+updates, role grant/revoke, the two-step admin transfer, and the ERC-7943 freeze and forced
+transfer (Security screen); treasury withdrawal
 (Inventory & Sales); and redemption funding/rejection (Redemptions) are each encoded client-side
 and broadcast from the wallet — the contract's `onlyRole` check is the authorization. The
 remaining admin setters (auditor/treasury/strategy/redemption-manager rotation) are direct
@@ -90,7 +91,7 @@ investor submits from their own wallet.
 
 | Role | Production holder | Powers |
 | --- | --- | --- |
-| `DEFAULT_ADMIN_ROLE` | issuer multisig | grant/revoke roles; set auditor/treasury/strategy/redemption-manager |
+| `DEFAULT_ADMIN_ROLE` | issuer multisig | grant/revoke roles; set auditor/treasury/strategy/redemption-manager; ERC-7943 freeze and forced transfer |
 | `PAUSER_ROLE` | issuer/security multisig | pause/unpause the whole project |
 | `COMPLIANCE_ROLE` | KMS server key and/or legal multisig | set wallet status/expiry |
 | `PRICER_ROLE` | issuer/pricer multisig | update fixed prices |
@@ -118,9 +119,48 @@ accepts after the delay, on every governance contract. The auditor is stored aut
 - **Pause / unpause**: `RWAToken.pause()/unpause()` (PAUSER_ROLE). While paused, transfers, buy,
   mint, burn, request/fund/claim all revert. Cancel is also effectively blocked (token transfer
   reverts) — see `../spec/redemption-state-machine.md` footnote.
+- **Before either enforcement call below**: both are broadcast to a public mempool, and a holder
+  watching for their own address can front-run one with an ordinary `transfer` to a fresh
+  compliant wallet, or with a `requestRedemption` that parks the balance in the escrow, where a
+  freeze does not reach it and a seizure is refused outright. The sequence that defeats both is
+  **pause the project, confirm the pause landed, freeze or seize, then unpause**. A pause stops
+  ordinary transfers and redemption requests alike, while `setFrozenTokens` and `forcedTransfer`
+  both keep working through it, so the window closes completely. Where a pause is too
+  disruptive, submit through a private relay (`eth_sendPrivateTransaction` or equivalent)
+  instead.
+- **Freeze a holder's tokens**: `RWAToken.setFrozenTokens(account, amount)` (DEFAULT_ADMIN_ROLE).
+  The amount is absolute, in token minimal units: it replaces whatever was frozen before rather
+  than adding to it, and 0 releases the hold. It may legitimately exceed the holder's balance,
+  which withholds tokens they have not received yet. Frozen tokens stay in the holder's wallet;
+  they simply cannot be sent, and the transfer reverts with
+  `ERC7943InsufficientUnfrozenBalance`. The Vault and RedemptionEscrow are refused outright,
+  since freezing either would stop every buy, claim, and cancel. Security screen.
+- **Forced transfer (seizure)**: `RWAToken.forcedTransfer(from, to, amount)`
+  (DEFAULT_ADMIN_ROLE). Moves tokens without the holder's signature, for a court order or a
+  recovery. It works while the project is paused and against a holder who is Blocked or expired,
+  which is the point; the recipient must still be Allowed, and `from == to` and the zero address
+  are rejected, so it can never mint or burn. When the amount reaches past the holder's unfrozen
+  balance, their frozen amount is reduced first and a `Frozen` event is emitted before the
+  `Transfer`. The Vault and the RedemptionEscrow are refused as the source
+  (`SystemAddressCannotBeSeized`): their balances are the unsold float and redemptions that are
+  already funded, and moving either behind the contract's back would strand a paid claim with no
+  way to settle it. Send seized tokens to a wallet the issuer controls and that is Allowed in the
+  registry; the Vault is a valid destination if the intent is to return them to the unsold float,
+  which raises `vault.inventory()` without a mint, so record why. Security screen, behind a
+  confirmation step.
+- **Reading enforcement state**: the frozen-balance map and the last seizure are admin-only
+  (`GET /api/v1/project/enforcement`, shown on the Security screen). `GET /api/v1/project` stays
+  public and carries neither, since naming the wallets an issuer has frozen is operational
+  compliance data rather than market data. A holder sees their own frozen amount, and nobody
+  else's, on `GET /api/v1/me/wallet-status`, which the investor SPA renders as a spendable
+  balance.
 
 ### Security notes
 
+- Freeze and forced transfer are the two most privileged token operations here, and they answer
+  only to `DEFAULT_ADMIN_ROLE`. The server has no key that can call either one, and the admin
+  console's role gate is a convenience: the contract's `onlyRole` check is the authorization.
+  Every call emits an event, so both are auditable from chain history alone.
 - Minimize hot roles. Admin/treasury/redemption-manager should be multisig, not server keys.
 - A compromised compliance key can allow/block wallets but cannot mint.
 - All role changes emit events with previous/new/caller for a full audit trail.
@@ -244,6 +284,7 @@ Document each rehearsal's date, admin, and result.
 ## 8. Honest limitations
 
 - A redemption request is not a funding guarantee; funding is an issuer policy decision.
-- De-whitelisting freezes a holder's balance in place (no force transfer in V1).
+- De-whitelisting stops a holder from sending or receiving, but leaves their balance where it is.
+  Recovering it takes an admin `forcedTransfer` to a compliant wallet.
 - The quote token can independently blacklist/fail; a funded claim stays claimable and is retryable.
 - Do not put PII in metadata or public IPFS objects.

@@ -110,6 +110,18 @@ type Project struct {
 // AsOfBlock/AsOfTime record how current this projection is (the indexer
 // checkpoint it was last folded up to), which the API turns into the
 // securityStale signal.
+// ForcedTransferState is the bounded summary of one ERC-7943 forced transfer,
+// carrying enough identity to find the event itself in canonical chain
+// history. Amount is a base-10 string in token minimal units.
+type ForcedTransferState struct {
+	From        string `json:"from" bson:"from"`
+	To          string `json:"to" bson:"to"`
+	Amount      string `json:"amount" bson:"amount"`
+	TxHash      string `json:"txHash" bson:"txHash"`
+	BlockNumber uint64 `json:"blockNumber" bson:"blockNumber"`
+	LogIndex    uint   `json:"logIndex" bson:"logIndex"`
+}
+
 type SecurityState struct {
 	Paused             bool   `json:"paused" bson:"paused"`
 	Auditor            string `json:"auditor" bson:"auditor"`
@@ -142,6 +154,17 @@ type SecurityState struct {
 	PurchasePricePerWholeToken   string              `json:"purchasePricePerWholeToken,omitempty" bson:"purchasePricePerWholeToken,omitempty"`
 	RedemptionPricePerWholeToken string              `json:"redemptionPricePerWholeToken,omitempty" bson:"redemptionPricePerWholeToken,omitempty"`
 	Roles                        map[string][]string `json:"roles,omitempty" bson:"roles,omitempty"`
-	AsOfBlock                    uint64              `json:"asOfBlock" bson:"asOfBlock"`
-	AsOfTime                     time.Time           `json:"asOfTime" bson:"asOfTime"`
+	// FrozenBalances is the ERC-7943 enforcement state: checksummed holder
+	// address -> frozen amount in token minimal units, as a base-10 string so
+	// a uint256 survives JSON without precision loss. BOUNDED by design: only
+	// currently-frozen holders appear, and a Frozen(account, 0) drops the
+	// entry rather than recording a zero. nil when nothing is frozen.
+	FrozenBalances map[string]string `json:"frozenBalances,omitempty" bson:"frozenBalances,omitempty"`
+	// LastForcedTransfer summarizes the most recent canonical ForcedTransfer,
+	// as an audit hint only. The full history stays in chain_events and the
+	// transaction index; this document never accumulates one entry per
+	// seizure.
+	LastForcedTransfer *ForcedTransferState `json:"lastForcedTransfer,omitempty" bson:"lastForcedTransfer,omitempty"`
+	AsOfBlock          uint64               `json:"asOfBlock" bson:"asOfBlock"`
+	AsOfTime           time.Time            `json:"asOfTime" bson:"asOfTime"`
 }

@@ -230,10 +230,20 @@ treating a project as usable. Qualify each target chain with
 
 ## Scope
 
-V1 deliberately leaves out: instant, pooled, or partial redemption; redemption
-fees; native-currency purchases; multiple quote tokens; Chainlink/PoR/DEX/Safe/ERC-3643
-integrations; force transfer/burn/clawback; upgradeable proxies and timelocks; cross-chain; and
-provider-specific KYC/payment adapters.
+The token implements the final [ERC-7943 (uRWA)](https://eips.ethereum.org/EIPS/eip-7943)
+fungible interface: `canSend`/`canReceive`/`canTransfer` queries, per-holder frozen amounts, and
+an admin-only `forcedTransfer` for seizure and court-ordered recovery, with ERC-165 reporting
+`0x3edbb4c4`. Freezing and forced transfers are broadcast from the admin wallet, never a server
+key, and both are indexed into the Security screen's read state (admin-only: `GET /project`
+stays public and names no frozen wallet, while a holder sees their own frozen amount on
+`GET /me/wallet-status`). These powers change what a holder can expect from the token, so the
+example investor SPA states them on its landing screen; an issuer forking it should say the same
+in its own terms.
+
+Still out of scope: instant, pooled, or partial redemption; redemption fees; native-currency
+purchases; multiple quote tokens; Chainlink/PoR/DEX/Safe/ERC-3643 integrations; forced burn and
+clawback; upgradeable proxies and timelocks; cross-chain; and provider-specific KYC/payment
+adapters.
 
 ## License
 

@@ -396,7 +396,11 @@ function RedemptionDetail({
             Each is gated on the connected wallet holding that role, and the call
             is broadcast directly from that wallet (the contract's onlyRole check
             is the real authorization). */}
-        <RoleGate roles={roles} role={ROLES.treasurer} action="fund redemptions">
+        <RoleGate
+          roles={roles}
+          role={ROLES.treasurer}
+          action="fund redemptions"
+        >
           <button
             type="button"
             className="button button--primary"

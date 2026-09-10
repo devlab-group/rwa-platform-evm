@@ -232,6 +232,19 @@ export const api = {
   ) => request<operations["getProject"]>("GET", "/api/v1/project", opts),
 
   /**
+   * ERC-7943 enforcement state: who is frozen, and the last seizure. Admin-only,
+   * unlike getProject, because it names individual wallets.
+   */
+  getEnforcement: (
+    opts: Pick<RequestOptions<operations["getEnforcement"]>, "signal"> = {},
+  ) =>
+    request<operations["getEnforcement"]>(
+      "GET",
+      "/api/v1/project/enforcement",
+      opts,
+    ),
+
+  /**
    * Public, unauthenticated bootstrap for the admin console: the chain id and
    * RWAFactory address the admin needs to assemble ProjectConfig and broadcast
    * RWAFactory.deploy from their own wallet. Used pre-first-deploy, where

@@ -40,13 +40,26 @@ func (app *App) getMyWalletStatus(c *gin.Context) {
 			// respond with the honest "nothing on file yet" status rather
 			// than an internal error if it's ever reached (e.g. the record
 			// was independently removed after the session was issued).
-			c.JSON(http.StatusOK, dto.WalletStatus{Address: address, Status: string(models.ComplianceUnknown), OwnershipVerified: true})
+			unknown := dto.WalletStatus{Address: address, Status: string(models.ComplianceUnknown), OwnershipVerified: true}
+			c.JSON(http.StatusOK, unknown.WithFrozenTokens(app.currentProject(c)))
 			return
 		}
 		failInternal(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.ToWalletStatus(inv))
+	c.JSON(http.StatusOK, dto.ToWalletStatus(inv).WithFrozenTokens(app.currentProject(c)))
+}
+
+// currentProject loads the project record for the per-wallet frozen lookup,
+// returning nil when there is none (or it cannot be read): a missing project
+// must degrade to "no frozen amount reported", never to an error on a status
+// call that is otherwise answerable.
+func (app *App) currentProject(c *gin.Context) *models.Project {
+	p, err := app.Repos.Projects.Get(c.Request.Context())
+	if err != nil {
+		return nil
+	}
+	return p
 }
 
 // isAddressAllowed implements GET /api/v1/compliance/allowed/{address}

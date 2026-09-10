@@ -33,6 +33,7 @@ import (
 	"github.com/rwa-platform/server/internal/redemption"
 	"github.com/rwa-platform/server/internal/sales"
 	"github.com/rwa-platform/server/internal/strategy"
+	"github.com/rwa-platform/server/internal/token"
 )
 
 // FeeCaps builds blockchain.FeeCaps from cfg's wei-string fields. config.Load
@@ -142,8 +143,9 @@ func NewTxManager(cfg config.Config, chainClient blockchain.Client, repos *repos
 // (RoleGranted/RoleRevoked, and the token's Paused/Unpaused), each
 // contract-specific decoder is wrapped so a log its own switch returns as
 // "unknown" falls back to the shared governance decoder before the final
-// generic topic0-only decode. The token has no contract-specific events the
-// server tracks, so it routes straight to the governance decoder. This is the
+// generic topic0-only decode. The token's own decoder covers its ERC-7943
+// enforcement events, with Paused/Unpaused and the role events reached through
+// that same governance fallback. This is the
 // SAME production dispatch the running platform uses; the recovery CLI must
 // use it too, or a DLQ retry would replay through a generic decoder that never
 // reaches the typed projectors.
@@ -194,7 +196,7 @@ func BuildDecoder(addrs models.Addresses, factoryAddr string) indexer.EventDecod
 			}
 		case tokenAddr:
 			if tokenAddr != "" {
-				return governance.DecodeLog(log)
+				return withGovernance(token.DecodeLog)(log)
 			}
 		case factory:
 			if factory != "" {
@@ -266,7 +268,7 @@ func KnownEventNames(addrs models.Addresses, factoryAddr string) map[string]bool
 	add(addrs.Vault, sales.EventNames)
 	add(addrs.RedemptionEscrow, redemption.EventNames)
 	add(addrs.Strategy, strategy.EventNames)
-	add(addrs.Token, []string{"Paused", "Unpaused"})
+	add(addrs.Token, append([]string{"Paused", "Unpaused"}, token.EventNames...))
 	// RoleGranted/RoleRevoked and the two-step DEFAULT_ADMIN transfer events
 	// can appear on any project contract.
 	for _, a := range []string{addrs.Compliance, addrs.SupplyController, addrs.Vault, addrs.RedemptionEscrow, addrs.Strategy, addrs.Token} {

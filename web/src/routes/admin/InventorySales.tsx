@@ -334,7 +334,9 @@ function WithdrawForm({
     amount !== "" &&
     (() => {
       try {
-        return BigInt(toMinimalUnits(amount, quoteDecimals)) > BigInt(availableQuote);
+        return (
+          BigInt(toMinimalUnits(amount, quoteDecimals)) > BigInt(availableQuote)
+        );
       } catch {
         return false; // malformed input — let submit-time validation report it
       }
@@ -369,7 +371,10 @@ function WithdrawForm({
     // Authoritative guard: never broadcast a withdrawal larger than the vault's
     // available quote balance — it would revert on-chain. Compared in minimal
     // units against the inventory's reported quoteBalance.
-    if (availableQuote !== undefined && BigInt(minimal) > BigInt(availableQuote)) {
+    if (
+      availableQuote !== undefined &&
+      BigInt(minimal) > BigInt(availableQuote)
+    ) {
       setError(
         `Amount exceeds the vault's available quote balance (${formatTokenAmount(
           availableQuote,

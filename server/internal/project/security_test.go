@@ -3,6 +3,7 @@ package project
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -375,5 +376,202 @@ func TestReconcileSecurityStrategySwapDropsUnverifiedBaseline(t *testing.T) {
 	s = reconcile(t, repos)
 	if s.Pricer != pricer {
 		t.Errorf("Pricer = %s after a grant on the new strategy, want %s", s.Pricer, pricer)
+	}
+}
+
+// ---- ERC-7943 enforcement projection ----
+
+var (
+	holderA = addr("0x0000000000000000000000000000000000000a01")
+	holderB = addr("0x0000000000000000000000000000000000000b02")
+)
+
+func frozen(t *testing.T, repos *repository.Repositories, block uint64, logIndex uint, account, amount string) {
+	t.Helper()
+	addEvent(t, repos, tokenAddr, "Frozen", block, logIndex, map[string]any{"account": account, "amount": amount})
+}
+
+// TestFrozenBalancesFold: absolute overwrites, a zero release, and two holders
+// coexisting, all replayed in (block, logIndex) order rather than insert order.
+func TestFrozenBalancesFold(t *testing.T) {
+	repos := setup(t)
+	if s := reconcile(t, repos); s.FrozenBalances != nil {
+		t.Errorf("baseline frozen balances = %v, want nil", s.FrozenBalances)
+	}
+
+	frozen(t, repos, 10, 0, holderA, "100")
+	if got := reconcile(t, repos).FrozenBalances[holderA]; got != "100" {
+		t.Errorf("first freeze = %q, want 100", got)
+	}
+
+	// Out-of-order insertion: block 12 is written before block 11, so a fold
+	// that trusted arrival order would settle on 250 instead of 400.
+	frozen(t, repos, 12, 0, holderA, "400")
+	frozen(t, repos, 11, 0, holderA, "250")
+	frozen(t, repos, 11, 1, holderB, "7")
+	s := reconcile(t, repos)
+	if s.FrozenBalances[holderA] != "400" {
+		t.Errorf("holderA = %q, want 400 (absolute overwrite, latest wins)", s.FrozenBalances[holderA])
+	}
+	if s.FrozenBalances[holderB] != "7" {
+		t.Errorf("holderB = %q, want 7", s.FrozenBalances[holderB])
+	}
+
+	// Zero releases the hold and drops the entry entirely, keeping the map
+	// bounded by currently-frozen holders.
+	frozen(t, repos, 13, 0, holderA, "0")
+	s = reconcile(t, repos)
+	if _, ok := s.FrozenBalances[holderA]; ok {
+		t.Errorf("released holder still present: %v", s.FrozenBalances)
+	}
+	if len(s.FrozenBalances) != 1 {
+		t.Errorf("frozen balances = %v, want only holderB", s.FrozenBalances)
+	}
+
+	// Releasing the last holder omits the map rather than leaving zeros behind.
+	frozen(t, repos, 14, 0, holderB, "0")
+	if s := reconcile(t, repos); s.FrozenBalances != nil {
+		t.Errorf("frozen balances = %v, want nil once nothing is frozen", s.FrozenBalances)
+	}
+}
+
+// A uint256 far beyond int64/float64 must survive the projection verbatim.
+func TestFrozenBalancesPreserveUint256(t *testing.T) {
+	repos := setup(t)
+	huge := "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+	frozen(t, repos, 10, 0, holderA, huge)
+	if got := reconcile(t, repos).FrozenBalances[holderA]; got != huge {
+		t.Errorf("frozen amount = %q, want %q", got, huge)
+	}
+}
+
+// Replay is idempotent and address keys are normalized to EIP-55 regardless of
+// the casing the decoded event carried.
+func TestFrozenBalancesIdempotentAndNormalized(t *testing.T) {
+	repos := setup(t)
+	frozen(t, repos, 10, 0, strings.ToLower(holderA), "100")
+
+	first := reconcile(t, repos).FrozenBalances
+	second := reconcile(t, repos).FrozenBalances
+	if len(first) != 1 || first[holderA] != "100" {
+		t.Fatalf("frozen balances = %v, want checksummed %s -> 100", first, holderA)
+	}
+	if len(second) != len(first) || second[holderA] != first[holderA] {
+		t.Errorf("replay changed the projection: %v then %v", first, second)
+	}
+}
+
+// A reorged-out freeze must not survive: the fold ignores removed events and
+// falls back to the state the surviving ones describe.
+func TestFrozenBalancesDropReorgedEvents(t *testing.T) {
+	repos := setup(t)
+	frozen(t, repos, 10, 0, holderA, "100")
+	addRemovedEvent(t, repos, tokenAddr, "Frozen", 11, 0,
+		map[string]any{"account": holderA, "amount": "500"})
+
+	if got := reconcile(t, repos).FrozenBalances[holderA]; got != "100" {
+		t.Errorf("holderA = %q, want 100 (the reorged 500 must not stick)", got)
+	}
+
+	// The same for a reorged-out release: the earlier freeze stands.
+	addRemovedEvent(t, repos, tokenAddr, "Frozen", 12, 0,
+		map[string]any{"account": holderA, "amount": "0"})
+	if got := reconcile(t, repos).FrozenBalances[holderA]; got != "100" {
+		t.Errorf("holderA = %q, want 100 after the release was reorged out", got)
+	}
+}
+
+// A Frozen event the projector cannot read is skipped, not fatal: the rest of the
+// security state (pause, roles, auditor, prices) must not go stale because one log
+// is unusable.
+func TestFrozenBalancesSkipMalformedEvent(t *testing.T) {
+	repos := setup(t)
+	addEvent(t, repos, tokenAddr, "Frozen", 10, 0, map[string]any{"account": holderA, "amount": "100"})
+	addEvent(t, repos, tokenAddr, "Frozen", 11, 0, map[string]any{"account": "not-an-address", "amount": "1"})
+	addEvent(t, repos, tokenAddr, "Frozen", 12, 0, map[string]any{"account": holderB, "amount": ""})
+
+	s := reconcile(t, repos)
+	if s.FrozenBalances[holderA] != "100" {
+		t.Errorf("holderA = %q, want the readable event's 100", s.FrozenBalances[holderA])
+	}
+	if _, ok := s.FrozenBalances[holderB]; ok {
+		t.Errorf("an amountless event should project nothing: %v", s.FrozenBalances)
+	}
+	if s.Auditor != auditorA {
+		t.Errorf("the rest of the projection went stale: auditor = %s", s.Auditor)
+	}
+}
+
+// The same for an unusable ForcedTransfer: the summary falls back to the last
+// readable seizure, and the rest of the projection is unaffected.
+func TestLastForcedTransferSkipsMalformedEvent(t *testing.T) {
+	repos := setup(t)
+	forcedTransfer(t, repos, 20, 0, holderA, holderB, "9")
+	addEvent(t, repos, tokenAddr, "ForcedTransfer", 21, 0,
+		map[string]any{"from": "not-an-address", "to": holderA, "amount": "5"})
+
+	s := reconcile(t, repos)
+	if s.LastForcedTransfer == nil || s.LastForcedTransfer.Amount != "9" {
+		t.Fatalf("summary = %+v, want the readable block-20 seizure", s.LastForcedTransfer)
+	}
+	if s.Auditor != auditorA || s.Paused {
+		t.Errorf("the rest of the projection went stale: auditor = %s paused = %v", s.Auditor, s.Paused)
+	}
+
+	// With nothing readable at all, the summary is absent rather than fatal.
+	repos2 := setup(t)
+	addEvent(t, repos2, tokenAddr, "ForcedTransfer", 20, 0,
+		map[string]any{"from": holderA, "to": holderB, "amount": ""})
+	if s := reconcile(t, repos2); s.LastForcedTransfer != nil {
+		t.Errorf("summary = %+v, want nil when no seizure is readable", s.LastForcedTransfer)
+	}
+}
+
+func forcedTransfer(t *testing.T, repos *repository.Repositories, block uint64, logIndex uint, from, to, amount string) {
+	t.Helper()
+	addEvent(t, repos, tokenAddr, "ForcedTransfer", block, logIndex,
+		map[string]any{"from": from, "to": to, "amount": amount})
+}
+
+// TestLastForcedTransferIsCanonicalLatest: the summary follows (block,
+// logIndex) order, not insert order, and carries the chain coordinates.
+func TestLastForcedTransferIsCanonicalLatest(t *testing.T) {
+	repos := setup(t)
+	if s := reconcile(t, repos); s.LastForcedTransfer != nil {
+		t.Errorf("baseline last forced transfer = %+v, want nil", s.LastForcedTransfer)
+	}
+
+	forcedTransfer(t, repos, 21, 0, holderA, holderB, "5")
+	forcedTransfer(t, repos, 20, 3, holderB, holderA, "9")
+	s := reconcile(t, repos)
+	if s.LastForcedTransfer == nil {
+		t.Fatal("no forced-transfer summary projected")
+	}
+	if s.LastForcedTransfer.From != holderA || s.LastForcedTransfer.To != holderB || s.LastForcedTransfer.Amount != "5" {
+		t.Errorf("summary = %+v, want the block-21 seizure", s.LastForcedTransfer)
+	}
+	if s.LastForcedTransfer.BlockNumber != 21 || s.LastForcedTransfer.TxHash == "" {
+		t.Errorf("summary lacks chain coordinates: %+v", s.LastForcedTransfer)
+	}
+}
+
+// A reorg that removes the latest seizure restores the previous one, and
+// removing every seizure clears the summary.
+func TestLastForcedTransferReorg(t *testing.T) {
+	repos := setup(t)
+	forcedTransfer(t, repos, 20, 0, holderA, holderB, "9")
+	addRemovedEvent(t, repos, tokenAddr, "ForcedTransfer", 21, 0,
+		map[string]any{"from": holderB, "to": holderA, "amount": "5"})
+
+	s := reconcile(t, repos)
+	if s.LastForcedTransfer == nil || s.LastForcedTransfer.Amount != "9" {
+		t.Fatalf("summary = %+v, want the surviving block-20 seizure", s.LastForcedTransfer)
+	}
+
+	repos2 := setup(t)
+	addRemovedEvent(t, repos2, tokenAddr, "ForcedTransfer", 20, 0,
+		map[string]any{"from": holderA, "to": holderB, "amount": "9"})
+	if s := reconcile(t, repos2); s.LastForcedTransfer != nil {
+		t.Errorf("summary = %+v, want nil once every seizure was reorged out", s.LastForcedTransfer)
 	}
 }

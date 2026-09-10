@@ -127,9 +127,7 @@ function appendQuery(
  * issuer console is a separate application.
  */
 function authHeaders(walletSessionToken?: string): Record<string, string> {
-  return walletSessionToken
-    ? { "X-Wallet-Session": walletSessionToken }
-    : {};
+  return walletSessionToken ? { "X-Wallet-Session": walletSessionToken } : {};
 }
 
 async function throwForErrorResponse(res: Response): Promise<never> {
@@ -306,7 +304,6 @@ export const api = {
       query: { address, limit, cursor },
     });
   },
-
 };
 
 export type { components, operations } from "./api-types";

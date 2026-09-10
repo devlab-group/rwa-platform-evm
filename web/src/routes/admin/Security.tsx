@@ -1,5 +1,9 @@
 import { useState } from "react";
-import type { Address } from "viem";
+// `isAddress` is called with strict:false throughout. Operators paste
+// addresses from block explorers and spreadsheets, where the EIP-55 casing is
+// often lost; the contract only cares that the address is well formed, so
+// checking the shape and not the checksum is what these forms need.
+import { isAddress, type Address } from "viem";
 import { AsyncSection } from "../../components/AsyncSection";
 import { RoleGate } from "../../components/RoleGate";
 import { useAsync } from "../../hooks/useAsync";
@@ -20,9 +24,12 @@ import {
   roleTargets,
 } from "../../lib/roles";
 import {
+  describeWalletError,
   sendAcceptAdminTransfer,
   sendBeginAdminTransfer,
+  sendForcedTransfer,
   sendRoleChange,
+  sendSetFrozenTokens,
   sendSetPaused,
   sendSetStrategyPrice,
   waitForTxReceipt,
@@ -31,6 +38,8 @@ import {
 type Addresses = components["schemas"]["Addresses"];
 
 type Project = components["schemas"]["Project"];
+
+type Enforcement = components["schemas"]["Enforcement"];
 
 /**
  * `securityAsOfBlock` (number), `securityAsOfTime` (ISO string), and
@@ -127,6 +136,22 @@ export function Security() {
   const quoteDecimals =
     quoteDecimalsState.status === "success"
       ? (quoteDecimalsState.data ?? undefined)
+      : undefined;
+
+  // Enforcement state is admin-gated and lives on its own endpoint, so it is a
+  // second fetch rather than a field on the project. Reloaded together with the
+  // project after any enforcement transaction confirms.
+  const enforcement = useAsync<Enforcement>(
+    (signal) => api.getEnforcement({ signal }),
+    [],
+  );
+  const reloadAll = () => {
+    project.reload();
+    enforcement.reload();
+  };
+  const lastForcedTransfer =
+    enforcement.status === "success"
+      ? enforcement.data.lastForcedTransfer
       : undefined;
 
   return (
@@ -326,6 +351,125 @@ export function Security() {
         </RoleGate>
       </section>
 
+      <section className="card">
+        <h2>Frozen balances</h2>
+        <AsyncSection
+          state={enforcement}
+          onRetry={enforcement.reload}
+          empty={(d) => Object.keys(d.frozenBalances ?? {}).length === 0}
+          emptyLabel="No tokens are frozen."
+        >
+          {(data) => (
+            <>
+              <SecurityStalenessNotice data={data} />
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Holder</th>
+                      <th>Frozen amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(data.frozenBalances ?? {}).map(
+                      ([holder, amount]) => (
+                        <tr key={holder}>
+                          <td className="mono" title={holder}>
+                            {shortenAddress(holder)}
+                          </td>
+                          <td className="mono">
+                            {formatTokenAmount(amount, proj?.decimals)}
+                          </td>
+                        </tr>
+                      ),
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <p className="field__hint">
+                A frozen amount can exceed the holder&apos;s balance, which
+                withholds tokens they have not received yet.
+              </p>
+            </>
+          )}
+        </AsyncSection>
+      </section>
+
+      {lastForcedTransfer ? (
+        <section className="card">
+          <h2>Last forced transfer</h2>
+          <dl className="tx-preview__grid">
+            <div className="tx-preview__row">
+              <dt>From</dt>
+              <dd className="mono" title={lastForcedTransfer.from}>
+                {shortenAddress(lastForcedTransfer.from ?? "")}
+              </dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>To</dt>
+              <dd className="mono" title={lastForcedTransfer.to}>
+                {shortenAddress(lastForcedTransfer.to ?? "")}
+              </dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Amount</dt>
+              <dd className="mono">
+                {formatTokenAmount(
+                  lastForcedTransfer.amount ?? "",
+                  proj?.decimals,
+                )}
+              </dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Block</dt>
+              <dd className="mono">
+                {lastForcedTransfer.blockNumber ?? "\u2014"}
+              </dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Transaction</dt>
+              <dd className="mono" title={lastForcedTransfer.txHash}>
+                {shortenAddress(lastForcedTransfer.txHash ?? "")}
+              </dd>
+            </div>
+          </dl>
+          <p className="field__hint">
+            The most recent seizure only. Every forced transfer is in the
+            transaction list and on-chain.
+          </p>
+        </section>
+      ) : null}
+
+      <section className="card">
+        <h2>Freeze tokens</h2>
+        <RoleGate
+          roles={proj?.roles}
+          role={ROLES.admin}
+          action="freeze a holder's tokens"
+        >
+          <FreezeControls
+            project={proj}
+            chainId={chainId}
+            onChanged={reloadAll}
+          />
+        </RoleGate>
+      </section>
+
+      <section className="card">
+        <h2>Forced transfer</h2>
+        <RoleGate
+          roles={proj?.roles}
+          role={ROLES.admin}
+          action="seize tokens from a holder"
+        >
+          <ForcedTransferControls
+            project={proj}
+            chainId={chainId}
+            onChanged={reloadAll}
+          />
+        </RoleGate>
+      </section>
+
       {/*
         Not RoleGate-gated: the incoming admin is NOT DEFAULT_ADMIN yet (that's
         the whole point of accepting), so it never appears in proj.roles. Shown
@@ -377,12 +521,7 @@ function PauseControls({
     }
     setBusy(true);
     try {
-      const hash = await sendSetPaused(
-        chainId,
-        from,
-        token as Address,
-        pause,
-      );
+      const hash = await sendSetPaused(chainId, from, token as Address, pause);
       await waitForTxReceipt(hash);
       setDone(pause ? "Trading paused." : "Trading unpaused.");
       onChanged();
@@ -579,6 +718,384 @@ async function runSequential(
   }
   onProgress(targets.length, targets.length);
   return null;
+}
+
+/**
+ * Parses a human-entered RWA amount into the token's minimal units, or returns
+ * the reason it can't be. The token's decimals come from the project record; a
+ * project that has not reported them blocks the transaction rather than
+ * guessing a scale.
+ */
+function parseTokenAmount(
+  value: string,
+  decimals: number | undefined,
+): { units: bigint } | { error: string } {
+  if (decimals === undefined) {
+    return {
+      error:
+        "Token decimals unavailable - reload once the project is deployed.",
+    };
+  }
+  try {
+    return { units: BigInt(toMinimalUnits(value, decimals)) };
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : "Invalid amount.",
+    };
+  }
+}
+
+/**
+ * Whether `value` is the Vault or the redemption escrow. Early feedback only: the contract
+ * refuses both a freeze and a seizure on either one, since they hold the unsold float and
+ * already-funded redemptions on the whole project's behalf.
+ */
+function isSystemAddress(
+  value: string,
+  addresses: Addresses | undefined,
+): boolean {
+  const target = value.toLowerCase();
+  return (
+    target === addresses?.vault?.toLowerCase() ||
+    target === addresses?.redemptionEscrow?.toLowerCase()
+  );
+}
+
+/** Both enforcement calls sit in a public mempool long enough for the target to react. */
+function FrontRunningWarning() {
+  return (
+    <p className="field__hint">
+      This transaction is visible in the mempool before it lands, so a holder
+      watching for it can move their balance first. Pause the project and
+      confirm the pause landed before freezing or seizing, then unpause:
+      ordinary transfers stop while these two calls keep working. On a chain
+      where a pause is too disruptive, submit through a private relay instead.
+    </p>
+  );
+}
+
+/**
+ * ERC-7943 setFrozenTokens: withholds part (or all) of a holder's balance
+ * without moving it. The amount is ABSOLUTE, which the copy here has to make
+ * unmissable - an operator who reads it as "freeze this much more" would
+ * release tokens they meant to hold.
+ */
+function FreezeControls({
+  project,
+  chainId,
+  onChanged,
+}: {
+  project: Project | undefined;
+  chainId: number;
+  onChanged: () => void;
+}) {
+  const from = useSender();
+  const [account, setAccount] = useState("");
+  const [amount, setAmount] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const token = project?.addresses?.token;
+  const addresses = project?.addresses as Addresses | undefined;
+
+  async function handle() {
+    setError(null);
+    setDone(null);
+    if (!from || !token) {
+      setError("Wallet not connected or token address unavailable.");
+      return;
+    }
+    if (!isAddress(account, { strict: false })) {
+      setError(`"${account}" is not a valid address.`);
+      return;
+    }
+    if (isSystemAddress(account, addresses)) {
+      setError(
+        "The Vault and the redemption escrow can never be frozen - freezing one would stop every buy, claim, and cancel.",
+      );
+      return;
+    }
+    const parsed = parseTokenAmount(amount, project?.decimals);
+    if ("error" in parsed) {
+      setError(parsed.error);
+      return;
+    }
+    setBusy(true);
+    try {
+      const hash = await sendSetFrozenTokens(
+        chainId,
+        from,
+        token as Address,
+        account as Address,
+        parsed.units,
+      );
+      await waitForTxReceipt(hash);
+      setDone(
+        parsed.units === 0n
+          ? `Released every frozen token held against ${account}.`
+          : `Frozen amount for ${account} set to ${amount}.`,
+      );
+      onChanged();
+    } catch (err) {
+      setError(describeWalletError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <p className="field__hint">
+        Sets the holder&apos;s <strong>absolute</strong> frozen amount,
+        replacing whatever was frozen before. It does not add to an existing
+        hold. Enter 0 to release everything. Frozen tokens stay in the
+        holder&apos;s wallet; they just cannot be sent.
+      </p>
+      <FrontRunningWarning />
+      <div className="field">
+        <label htmlFor="freeze-account">Holder address</label>
+        <input
+          id="freeze-account"
+          value={account}
+          onChange={(e) => setAccount(e.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="freeze-amount">
+          Absolute frozen amount (whole tokens)
+        </label>
+        <input
+          id="freeze-amount"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+        />
+      </div>
+      <button
+        type="button"
+        className="button button--danger"
+        onClick={handle}
+        disabled={busy || !account || amount === ""}
+      >
+        {busy ? "Submitting…" : "Set frozen amount"}
+      </button>
+      {error && (
+        <p className="async-state--error" role="alert">
+          {error}
+        </p>
+      )}
+      {done && <p role="status">{done}</p>}
+    </div>
+  );
+}
+
+/**
+ * ERC-7943 forcedTransfer: moves tokens out of a holder who cannot or will not
+ * sign. Two-step on purpose - the confirmation spells out which protections
+ * this bypasses, since nothing about the form itself signals that it moves
+ * someone else's tokens.
+ */
+function ForcedTransferControls({
+  project,
+  chainId,
+  onChanged,
+}: {
+  project: Project | undefined;
+  chainId: number;
+  onChanged: () => void;
+}) {
+  const sender = useSender();
+  const [holder, setHolder] = useState("");
+  const [recipient, setRecipient] = useState("");
+  const [amount, setAmount] = useState("");
+  // The reviewed values, frozen at the moment the operator asked to confirm.
+  // The confirmation has to be about a specific transfer, and it has to be the
+  // one that gets sent: a mistyped recipient is the mistake this step exists
+  // to catch, and re-reading the live inputs on confirm would let an edit slip
+  // past the panel the operator just read.
+  const [pending, setPending] = useState<{
+    holder: Address;
+    recipient: Address;
+    units: bigint;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const token = project?.addresses?.token;
+  const addresses = project?.addresses as Addresses | undefined;
+
+  /** Validates the form and returns the parsed amount, or null after setting an error. */
+  function validate(): bigint | null {
+    if (!sender || !token) {
+      setError("Wallet not connected or token address unavailable.");
+      return null;
+    }
+    if (!isAddress(holder, { strict: false })) {
+      setError(`"${holder}" is not a valid address.`);
+      return null;
+    }
+    if (!isAddress(recipient, { strict: false })) {
+      setError(`"${recipient}" is not a valid address.`);
+      return null;
+    }
+    if (isSystemAddress(holder, addresses)) {
+      setError(
+        "The Vault and the redemption escrow cannot be seized from - their balances are the unsold float and redemptions that are already funded.",
+      );
+      return null;
+    }
+    if (holder.toLowerCase() === recipient.toLowerCase()) {
+      setError(
+        "Sender and recipient must differ - the contract rejects a forced transfer to self.",
+      );
+      return null;
+    }
+    const parsed = parseTokenAmount(amount, project?.decimals);
+    if ("error" in parsed) {
+      setError(parsed.error);
+      return null;
+    }
+    return parsed.units;
+  }
+
+  function review() {
+    setError(null);
+    setDone(null);
+    const units = validate();
+    if (units === null) return;
+    setPending({
+      holder: holder as Address,
+      recipient: recipient as Address,
+      units,
+    });
+  }
+
+  async function handle() {
+    if (!pending) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const hash = await sendForcedTransfer(
+        chainId,
+        sender as Address,
+        token as Address,
+        pending.holder,
+        pending.recipient,
+        pending.units,
+      );
+      await waitForTxReceipt(hash);
+      setDone(
+        `Moved ${amount} from ${pending.holder} to ${pending.recipient}.`,
+      );
+      setPending(null);
+      onChanged();
+    } catch (err) {
+      setError(describeWalletError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <p className="field__hint">
+        Moves tokens out of a holder&apos;s wallet without their signature, for
+        a seizure or a court-ordered recovery.
+      </p>
+      <FrontRunningWarning />
+      <div className="field">
+        <label htmlFor="forced-from">From (holder)</label>
+        <input
+          id="forced-from"
+          value={holder}
+          disabled={pending !== null}
+          onChange={(e) => setHolder(e.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="forced-to">To (recipient)</label>
+        <input
+          id="forced-to"
+          value={recipient}
+          disabled={pending !== null}
+          onChange={(e) => setRecipient(e.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="forced-amount">Amount (whole tokens)</label>
+        <input
+          id="forced-amount"
+          value={amount}
+          disabled={pending !== null}
+          onChange={(e) => setAmount(e.target.value)}
+        />
+      </div>
+      {pending ? (
+        <div className="tx-preview" role="alert">
+          <dl className="tx-preview__grid">
+            <div className="tx-preview__row">
+              <dt>Seize from</dt>
+              <dd className="mono">{pending.holder}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Send to</dt>
+              <dd className="mono">{pending.recipient}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Amount</dt>
+              <dd className="mono">
+                {amount} ({pending.units.toString()} minimal units)
+              </dd>
+            </div>
+          </dl>
+          <p>
+            <strong>This moves someone else&apos;s tokens.</strong> It goes
+            through even if the holder is blocked or expired in the compliance
+            registry, and even while trading is paused. It also reduces their
+            frozen amount if it reaches into frozen tokens. The recipient must
+            still be Allowed on-chain, and the transfer reverts otherwise.
+          </p>
+          <p>
+            If the holder may be watching the mempool, pause the project first
+            and confirm the pause landed: this call still works while paused,
+            ordinary transfers do not.
+          </p>
+          <div className="tx-preview__actions">
+            <button
+              type="button"
+              className="button button--danger"
+              onClick={handle}
+              disabled={busy}
+            >
+              {busy ? "Submitting…" : "Confirm forced transfer"}
+            </button>
+            <button
+              type="button"
+              className="button button--secondary"
+              onClick={() => setPending(null)}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="button button--danger"
+          onClick={review}
+          disabled={busy || !holder || !recipient || amount === ""}
+        >
+          Force transfer
+        </button>
+      )}
+      {error && (
+        <p className="async-state--error" role="alert">
+          {error}
+        </p>
+      )}
+      {done && <p role="status">{done}</p>}
+    </div>
+  );
 }
 
 function RoleAdminControls({
@@ -792,7 +1309,9 @@ function AcceptAdminControls({
   const [done, setDone] = useState<string | null>(null);
 
   const isIncomingAdmin =
-    !!from && !!pendingAdmin && from.toLowerCase() === pendingAdmin.toLowerCase();
+    !!from &&
+    !!pendingAdmin &&
+    from.toLowerCase() === pendingAdmin.toLowerCase();
 
   async function handleAccept() {
     setError(null);

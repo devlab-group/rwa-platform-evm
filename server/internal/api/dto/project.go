@@ -77,9 +77,67 @@ type ProjectResponse struct {
 	// projection actually lags. When no projection has run yet (or governance
 	// indexing is not wired) the response falls back to the deploy-config
 	// snapshot and reports stale.
+	// ERC-7943 enforcement state (who is frozen, and the last seizure) is NOT
+	// here: GET /project is public market data, and naming the wallets an
+	// issuer has frozen is operational compliance data, the same class as the
+	// admin-gated wallet list. It has its own admin-only endpoint,
+	// EnforcementResponse below, and an investor learns their own frozen
+	// amount from the subject-scoped GET /me/wallet-status.
 	SecurityAsOfBlock uint64 `json:"securityAsOfBlock,omitempty"`
 	SecurityAsOfTime  string `json:"securityAsOfTime,omitempty"`
 	SecurityStale     bool   `json:"securityStale"`
+}
+
+// EnforcementResponse mirrors components.schemas.Enforcement: the ERC-7943
+// state an operator acts on. Admin-gated, because a list of which named wallets
+// the issuer has frozen is operational compliance data even though the
+// underlying events are public on-chain.
+type EnforcementResponse struct {
+	// FrozenBalances maps a holder address to the frozen amount held against
+	// it, in token minimal units as a base-10 string. Only currently frozen
+	// holders appear; omitted entirely when nothing is frozen.
+	FrozenBalances map[string]string `json:"frozenBalances,omitempty"`
+	// LastForcedTransfer is the most recent seizure, as an audit hint. The
+	// authoritative history is the chain itself, not this field.
+	LastForcedTransfer *ForcedTransfer `json:"lastForcedTransfer,omitempty"`
+	// Staleness of the projection these came from, mirroring the same three
+	// fields on ProjectResponse so the console can reuse its notice.
+	SecurityAsOfBlock uint64 `json:"securityAsOfBlock,omitempty"`
+	SecurityAsOfTime  string `json:"securityAsOfTime,omitempty"`
+	SecurityStale     bool   `json:"securityStale"`
+}
+
+// ToEnforcementResponse builds the enforcement view from the security
+// projection. A project with no projection yet reports empty state and stale.
+func ToEnforcementResponse(p *models.Project, securityStale bool) EnforcementResponse {
+	resp := EnforcementResponse{SecurityStale: securityStale}
+	s := p.Security
+	if s == nil {
+		return resp
+	}
+	resp.FrozenBalances = s.FrozenBalances
+	if f := s.LastForcedTransfer; f != nil {
+		resp.LastForcedTransfer = &ForcedTransfer{
+			From: f.From, To: f.To, Amount: f.Amount,
+			TxHash: f.TxHash, BlockNumber: f.BlockNumber, LogIndex: f.LogIndex,
+		}
+	}
+	resp.SecurityAsOfBlock = s.AsOfBlock
+	if !s.AsOfTime.IsZero() {
+		resp.SecurityAsOfTime = s.AsOfTime.UTC().Format(time.RFC3339)
+	}
+	return resp
+}
+
+// ForcedTransfer mirrors components.schemas.ForcedTransfer: one ERC-7943
+// forced transfer, with the chain coordinates to find it in canonical history.
+type ForcedTransfer struct {
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Amount      string `json:"amount"`
+	TxHash      string `json:"txHash"`
+	BlockNumber uint64 `json:"blockNumber"`
+	LogIndex    uint   `json:"logIndex"`
 }
 
 // Addresses mirrors components.schemas.Addresses.

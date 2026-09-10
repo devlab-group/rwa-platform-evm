@@ -63,6 +63,12 @@ func main() {
 		{"RedemptionEscrow", filepath.Join(root, "RedemptionEscrow.sol", "RedemptionEscrow.json"), func() abi.ABI { return bindings.NewRedemptionEscrow().ABI }},
 		{"FixedPriceStrategy", filepath.Join(root, "FixedPriceStrategy.sol", "FixedPriceStrategy.json"), func() abi.ABI { return bindings.NewFixedPriceStrategy().ABI }},
 		{"RWAFactory", filepath.Join(root, "RWAFactory.sol", "RWAFactory.json"), func() abi.ABI { return bindings.NewFactory().ABI }},
+		{"RWAToken", filepath.Join(root, "RWAToken.sol", "RWAToken.json"), func() abi.ABI { return bindings.NewRWAToken().ABI }},
+		// The ERC-20 binding is reused for the quote token, but every entry in it —
+		// the plain ERC-20 views plus IRWAToken's own compliance()/supplyController()/
+		// redemptionEscrow()/paused() getters — is declared by RWAToken, so the token
+		// artifact is the right thing to hold it to.
+		{"RWAToken (ERC-20 views)", filepath.Join(root, "RWAToken.sol", "RWAToken.json"), func() abi.ABI { return bindings.NewERC20().ABI }},
 	}
 
 	// Once contracts/out exists, every contract in `checks` is required: an

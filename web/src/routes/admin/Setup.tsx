@@ -4,10 +4,7 @@ import { AsyncSection } from "../../components/AsyncSection";
 import { useAsync } from "../../hooks/useAsync";
 import { api, ApiError } from "../../lib/client";
 import type { components } from "../../lib/api-types";
-import {
-  AmountFormatError,
-  toMinimalUnits,
-} from "../../lib/format";
+import { AmountFormatError, toMinimalUnits } from "../../lib/format";
 import { useWalletContext } from "../../context/walletContextValue";
 import {
   connectWallet,
@@ -1071,7 +1068,8 @@ function DeployForm({
             This broadcasts RWAFactory.deploy from your connected wallet on the
             deployment chain; the server then observes the on-chain
             ProjectDeployed event. Review every field before confirming —
-            deployment parameters cannot be changed after the contracts are live.
+            deployment parameters cannot be changed after the contracts are
+            live.
           </p>
           <div className="tx-preview__actions">
             <button
@@ -1102,10 +1100,9 @@ function DeployForm({
 
       {txHash && (
         <p role="status">
-          Deployment broadcast for project{" "}
-          <strong>{profile.projectId}</strong>. Transaction{" "}
-          <span className="mono">{txHash}</span>. Waiting for the server to
-          observe it — see <strong>Current project</strong> above.
+          Deployment broadcast for project <strong>{profile.projectId}</strong>.
+          Transaction <span className="mono">{txHash}</span>. Waiting for the
+          server to observe it — see <strong>Current project</strong> above.
         </p>
       )}
     </div>

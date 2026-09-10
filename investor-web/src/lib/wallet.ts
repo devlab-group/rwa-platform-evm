@@ -9,6 +9,7 @@ import {
   createPublicClient,
   createWalletClient,
   custom,
+  decodeErrorResult,
   defineChain,
   encodeFunctionData,
   erc20Abi,
@@ -17,7 +18,7 @@ import {
   type Chain,
   type Hex,
 } from "viem";
-import { redemptionEscrowAbi, vaultAbi } from "./abis";
+import { redemptionEscrowAbi, tokenErrorsAbi, vaultAbi } from "./abis";
 import { findNetwork, toAddChainParams } from "./networks";
 
 export interface InjectedProvider {
@@ -490,4 +491,48 @@ export async function sendCancelRedemption(
       args: [id],
     }),
   );
+}
+
+/**
+ * Turns a failed transaction into a sentence an investor can act on. The
+ * calls here are posted as raw calldata, so viem has no ABI attached and
+ * cannot name a revert by itself; the revert bytes still travel on the error
+ * object, and a frozen balance is the one refusal that otherwise looks like a
+ * broken app (the wallet shows the full balance, the transfer just fails).
+ */
+export function describeTxError(err: unknown, fallback: string): string {
+  const data = revertData(err);
+  if (data) {
+    try {
+      const decoded = decodeErrorResult({ abi: tokenErrorsAbi, data });
+      switch (decoded.errorName) {
+        case "ERC7943InsufficientUnfrozenBalance":
+          return `Part of your balance is frozen by the issuer: only ${String(decoded.args[2])} (in minimal units) can be moved right now. Contact the issuer if you were not expecting this.`;
+        case "SenderNotAllowed":
+          return "Your wallet is not currently Allowed in the compliance registry, so it cannot send tokens.";
+        case "RecipientNotAllowed":
+          return "The destination wallet is not Allowed in the compliance registry.";
+      }
+    } catch {
+      // Not one of the token's errors: fall through to the raw message.
+    }
+  }
+  return err instanceof Error ? err.message : fallback;
+}
+
+/** Digs the `0x`-prefixed revert payload out of whatever shape the wallet threw. */
+function revertData(err: unknown): Hex | undefined {
+  let current: unknown = err;
+  for (let depth = 0; current && depth < 6; depth++) {
+    const candidate = (current as { data?: unknown }).data;
+    if (
+      typeof candidate === "string" &&
+      candidate.startsWith("0x") &&
+      candidate.length >= 10
+    ) {
+      return candidate as Hex;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
 }

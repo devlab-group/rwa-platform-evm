@@ -29,6 +29,7 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 		{http.MethodGet, "/readyz", false},
 
 		{http.MethodGet, "/api/v1/project", false},
+		{http.MethodGet, "/api/v1/project/enforcement", true},
 		{http.MethodGet, "/api/v1/config", false},
 
 		{http.MethodPost, "/api/v1/profile/validate", false},

@@ -6,6 +6,8 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SupplyController} from "../../src/SupplyController.sol";
 import {FixedPriceStrategy} from "../../src/pricing/FixedPriceStrategy.sol";
+import {IERC7943} from "../../src/interfaces/IERC7943.sol";
+import {IRWAToken} from "../../src/interfaces/IRWAToken.sol";
 
 /// @notice Asserts the deployed contracts reproduce the FROZEN golden vectors in
 ///         shared/vectors/typehashes.json, shared/vectors/mint-eip712.json, and
@@ -159,5 +161,113 @@ contract ArithmeticVectorsTest is Test {
         assertEq(
             Math.mulDiv(tokenAmount, redemptionPrice, 10 ** tokenDecimals, Math.Rounding.Floor), expectedRedemptionQuote
         );
+    }
+}
+
+/// @notice Asserts the compiled IERC7943 surface matches the FROZEN shared vector in
+///         shared/vectors/erc7943-abi.json, which the Go bindings and the web ABI fragments
+///         assert themselves against too. A rename or a reordered argument in the interface
+///         changes a selector here and fails in all three languages at once.
+contract ERC7943VectorsTest is Test {
+    string internal vectors;
+
+    function setUp() public {
+        vectors = vm.readFile("../shared/vectors/erc7943-abi.json");
+    }
+
+    function test_fungibleInterfaceId() public view {
+        assertEq(vm.parseJsonString(vectors, ".interfaceId"), vm.toString(abi.encodePacked(type(IERC7943).interfaceId)));
+    }
+
+    function test_functionSelectors() public view {
+        _assertSelector("canSend", IERC7943.canSend.selector);
+        _assertSelector("canReceive", IERC7943.canReceive.selector);
+        _assertSelector("canTransfer", IERC7943.canTransfer.selector);
+        _assertSelector("getFrozenTokens", IERC7943.getFrozenTokens.selector);
+        _assertSelector("setFrozenTokens", IERC7943.setFrozenTokens.selector);
+        _assertSelector("forcedTransfer", IERC7943.forcedTransfer.selector);
+    }
+
+    function test_eventTopics() public view {
+        _assertTopic("Frozen", IERC7943.Frozen.selector);
+        _assertTopic("ForcedTransfer", IERC7943.ForcedTransfer.selector);
+    }
+
+    function test_errorSelectors() public view {
+        _assertSelectorAt(".errors.ERC7943CannotSend", IERC7943.ERC7943CannotSend.selector);
+        _assertSelectorAt(".errors.ERC7943CannotReceive", IERC7943.ERC7943CannotReceive.selector);
+        _assertSelectorAt(".errors.ERC7943CannotTransfer", IERC7943.ERC7943CannotTransfer.selector);
+        _assertSelectorAt(
+            ".errors.ERC7943InsufficientUnfrozenBalance", IERC7943.ERC7943InsufficientUnfrozenBalance.selector
+        );
+    }
+
+    /// @dev The two mutating functions return `bool` in the final ERC. That is invisible to a
+    ///      selector, so nothing else in this file would catch its loss - and a caller typed
+    ///      against the published interface reverts on the empty returndata, uncatchably.
+    function test_mutatingFunctionsReturnBool() public {
+        IERC7943 pinned = IERC7943(address(new ReturnsTrue()));
+        assertEq(vm.parseJsonStringArray(vectors, ".functions.setFrozenTokens.outputs")[0], "bool");
+        assertEq(vm.parseJsonStringArray(vectors, ".functions.forcedTransfer.outputs")[0], "bool");
+        assertTrue(pinned.setFrozenTokens(address(1), 1));
+        assertTrue(pinned.forcedTransfer(address(1), address(2), 1));
+    }
+
+    /// @dev The two errors the token actually raises on the ERC-20 transfer path, pinned
+    ///      beside the standard's set so an integrator's error table matches what arrives.
+    function test_platformErrorSelectors() public view {
+        _assertSelectorAt(".platformErrors.SenderNotAllowed", IRWAToken.SenderNotAllowed.selector);
+        _assertSelectorAt(".platformErrors.RecipientNotAllowed", IRWAToken.RecipientNotAllowed.selector);
+    }
+
+    function _assertSelector(string memory name, bytes4 compiled) internal view {
+        _assertSelectorAt(string.concat(".functions.", name), compiled);
+    }
+
+    function _assertSelectorAt(string memory key, bytes4 compiled) internal view {
+        string memory signature = vm.parseJsonString(vectors, string.concat(key, ".signature"));
+        assertEq(
+            vm.parseJsonString(vectors, string.concat(key, ".selector")), vm.toString(abi.encodePacked(compiled)), key
+        );
+        assertEq(bytes4(keccak256(bytes(signature))), compiled, signature);
+    }
+
+    function _assertTopic(string memory name, bytes32 compiled) internal view {
+        string memory key = string.concat(".events.", name);
+        string memory signature = vm.parseJsonString(vectors, string.concat(key, ".signature"));
+        assertEq(vm.parseJsonBytes32(vectors, string.concat(key, ".topic0")), compiled, key);
+        assertEq(keccak256(bytes(signature)), compiled, signature);
+    }
+}
+
+/// @dev A minimal IERC7943 implementation, so the compiler proves the interface's mutating
+///      functions really are declared to return a decodable `bool`.
+contract ReturnsTrue is IERC7943 {
+    function canSend(address) external pure returns (bool) {
+        return true;
+    }
+
+    function canReceive(address) external pure returns (bool) {
+        return true;
+    }
+
+    function canTransfer(address, address, uint256) external pure returns (bool) {
+        return true;
+    }
+
+    function getFrozenTokens(address) external pure returns (uint256) {
+        return 0;
+    }
+
+    function setFrozenTokens(address, uint256) external pure returns (bool) {
+        return true;
+    }
+
+    function forcedTransfer(address, address, uint256) external pure returns (bool) {
+        return true;
+    }
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IERC7943).interfaceId;
     }
 }

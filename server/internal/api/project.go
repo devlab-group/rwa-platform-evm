@@ -39,6 +39,24 @@ func (app *App) toProjectResponse(ctx context.Context, p *models.Project) dto.Pr
 	return dto.ToProjectResponse(p, tokenUnit, app.FinalityConfirmations, stale)
 }
 
+// getEnforcement implements GET /api/v1/project/enforcement (operationId
+// getEnforcement).
+// ADMIN-ONLY, unlike GET /project. The fields here name individual wallets the
+// issuer has frozen and the most recent seizure: operational compliance data,
+// the same class as the wallet list, even though the events behind it are
+// public on-chain. An investor learns their own frozen amount from the
+// subject-scoped GET /me/wallet-status instead.
+func (app *App) getEnforcement(c *gin.Context) {
+	p, err := app.Repos.Projects.Get(c.Request.Context())
+	if err != nil {
+		notFoundOrInternal(c, err)
+		return
+	}
+	cp, cpErr := app.Repos.IndexerCheckpoints.Get(c.Request.Context(), p.ChainID, indexer.CheckpointAddress)
+	stale := securityStale(p.Security, cp, cpErr, time.Now().UTC())
+	c.JSON(http.StatusOK, dto.ToEnforcementResponse(p, stale))
+}
+
 // securityStalenessWindow is how far the live governance projection may lag
 // before /project reports securityStale. It is comfortably above the 15s
 // security-reconcile ticker interval (and the 5s indexer poll), so a healthy

@@ -3,6 +3,7 @@ import { installFakeWallet, renderWithWallet } from "../../test/walletHarness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Investor } from "./Investor";
 import { api } from "../../lib/client";
+import { clearWalletSession, setWalletSession } from "../../lib/walletSession";
 import {
   readErc20Allowance,
   readPreviewBuy,
@@ -25,6 +26,7 @@ vi.mock("../../lib/client", async (importOriginal) => {
     api: {
       ...actual.api,
       getProject: vi.fn(),
+      getMyWalletStatus: vi.fn(),
       // The connected-wallet redemptions/history lists + claim/cancel flow.
       listRedemptions: vi.fn(),
       listTransactions: vi.fn(),
@@ -53,6 +55,7 @@ vi.mock("../../lib/wallet", async (importOriginal) => {
     sendErc20Approve: vi.fn().mockResolvedValue("0xapprove"),
     waitForTxReceipt: vi.fn().mockResolvedValue(undefined),
     readErc20Allowance: vi.fn().mockResolvedValue(10n ** 30n),
+    readErc20Balance: vi.fn().mockResolvedValue("100000000"),
   };
 });
 
@@ -450,5 +453,63 @@ describe("Investor buy and redemption request (client-encoded)", () => {
     await waitFor(() => expect(readErc20Allowance).toHaveBeenCalled());
     expect(request).toBeDisabled();
     expect(sendRequestRedemption).not.toHaveBeenCalled();
+  });
+});
+
+describe("Investor frozen balance", () => {
+  let wallet: ReturnType<typeof installFakeWallet>;
+
+  beforeEach(() => {
+    wallet = installFakeWallet({ account: CONNECTED, chainId: 31337 });
+    vi.mocked(api.getProject).mockReset().mockResolvedValue(PROJECT);
+    vi.mocked(api.listRedemptions).mockReset().mockResolvedValue({ items: [] });
+    vi.mocked(api.listTransactions)
+      .mockReset()
+      .mockResolvedValue({ items: [] });
+    setWalletSession(CONNECTED, {
+      token: "session-token",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+  });
+
+  afterEach(() => {
+    wallet.uninstall();
+    clearWalletSession(CONNECTED);
+  });
+
+  // A frozen holder sees their whole balance in the wallet, so without this the
+  // failed transfer that follows looks like a broken app.
+  it("shows how much of the balance is actually spendable", async () => {
+    vi.mocked(api.getMyWalletStatus).mockResolvedValue({
+      address: CONNECTED,
+      status: "Allowed",
+      ownershipVerified: true,
+      frozenTokens: "40000000", // 40 of the 100 held, at 6 decimals
+    });
+    renderWithWallet(<Investor />, { connected: true });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Read balance" }),
+    );
+    expect(
+      await screen.findByText(/60 RWA of that is available/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/frozen the other/)).toBeInTheDocument();
+    expect(screen.getByText(/40/)).toBeInTheDocument();
+  });
+
+  it("says nothing about freezing when the wallet has none", async () => {
+    vi.mocked(api.getMyWalletStatus).mockResolvedValue({
+      address: CONNECTED,
+      status: "Allowed",
+      ownershipVerified: true,
+    });
+    renderWithWallet(<Investor />, { connected: true });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Read balance" }),
+    );
+    await screen.findByText("100 RWA");
+    expect(screen.queryByText(/available to send or redeem/)).toBeNull();
   });
 });

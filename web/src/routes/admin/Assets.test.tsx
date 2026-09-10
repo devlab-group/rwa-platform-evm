@@ -108,9 +108,12 @@ describe("Assets signature upload → wallet mint", () => {
     // Wait for the record to load (so the form can find it by ID).
     await screen.findByText("record-001");
 
-    fireEvent.change(await screen.findByLabelText("Record ID", { selector: "#sigRecordId" }), {
-      target: { value: "record-001" },
-    });
+    fireEvent.change(
+      await screen.findByLabelText("Record ID", { selector: "#sigRecordId" }),
+      {
+        target: { value: "record-001" },
+      },
+    );
     fireEvent.change(screen.getByLabelText("Signed result"), {
       target: { files: [signedResultFile()] },
     });
@@ -144,9 +147,12 @@ describe("Assets signature upload → wallet mint", () => {
     renderWithWallet(<Assets />, { connected: true });
     await screen.findByText("record-001");
 
-    fireEvent.change(await screen.findByLabelText("Record ID", { selector: "#sigRecordId" }), {
-      target: { value: "record-001" },
-    });
+    fireEvent.change(
+      await screen.findByLabelText("Record ID", { selector: "#sigRecordId" }),
+      {
+        target: { value: "record-001" },
+      },
+    );
     fireEvent.change(screen.getByLabelText("Signed result"), {
       target: {
         files: [signedResultFile("0x1234567890123456789012345678901234567890")],
@@ -166,9 +172,12 @@ describe("Assets signature upload → wallet mint", () => {
     renderWithWallet(<Assets />, { connected: true });
     await screen.findByText("record-001");
 
-    fireEvent.change(await screen.findByLabelText("Record ID", { selector: "#sigRecordId" }), {
-      target: { value: "does-not-exist" },
-    });
+    fireEvent.change(
+      await screen.findByLabelText("Record ID", { selector: "#sigRecordId" }),
+      {
+        target: { value: "does-not-exist" },
+      },
+    );
     fireEvent.change(screen.getByLabelText("Signed result"), {
       target: { files: [signedResultFile()] },
     });
@@ -215,7 +224,9 @@ describe("Assets signer policy (offline signing trust root)", () => {
     expect(buildSignerPolicy(undefined, POLICY_UUID)).toBeNull();
     expect(buildSignerPolicy(PROJECT, undefined)).toBeNull();
     // Deployed addresses absent (pre-deploy) → no partial file.
-    expect(buildSignerPolicy({ ...PROJECT, addresses: {} }, POLICY_UUID)).toBeNull();
+    expect(
+      buildSignerPolicy({ ...PROJECT, addresses: {} }, POLICY_UUID),
+    ).toBeNull();
   });
 
   it("renders the policy block before Records with a download button when deployed", async () => {

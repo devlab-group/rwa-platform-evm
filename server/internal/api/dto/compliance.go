@@ -1,6 +1,8 @@
 package dto
 
 import (
+	"strings"
+
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
@@ -10,6 +12,11 @@ type WalletStatus struct {
 	Status            string `json:"status"`
 	ValidUntil        int64  `json:"validUntil"`
 	OwnershipVerified bool   `json:"ownershipVerified"`
+	// FrozenTokens is this wallet's ERC-7943 frozen amount in token minimal
+	// units (base-10 string), omitted when nothing is frozen. It tells a
+	// holder why part of their balance will not move; the aggregate map of
+	// every frozen wallet stays admin-only (see EnforcementResponse).
+	FrozenTokens string `json:"frozenTokens,omitempty"`
 }
 
 // ToWalletStatus maps one stored investor record onto its API view.
@@ -18,6 +25,22 @@ func ToWalletStatus(inv *models.Investor) WalletStatus {
 		Address: inv.Address, Status: string(inv.Status),
 		ValidUntil: inv.ValidUntil, OwnershipVerified: inv.OwnershipVerified,
 	}
+}
+
+// WithFrozenTokens returns the status with this wallet's frozen amount filled
+// in from the security projection, looked up case-insensitively since the
+// projection checksums its keys. Only ever called for the caller's OWN address.
+func (w WalletStatus) WithFrozenTokens(p *models.Project) WalletStatus {
+	if p == nil || p.Security == nil {
+		return w
+	}
+	for addr, amount := range p.Security.FrozenBalances {
+		if strings.EqualFold(addr, w.Address) {
+			w.FrozenTokens = amount
+			return w
+		}
+	}
+	return w
 }
 
 // AllowedResult mirrors components.schemas.AllowedResult. Deliberately just the

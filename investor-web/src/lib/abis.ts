@@ -77,3 +77,28 @@ export const redemptionEscrowAbi = [
     stateMutability: "view",
   },
 ] as const satisfies Abi;
+
+/** The RWAToken revert reasons an investor can actually hit, so a failed transfer or
+ * redemption reads as a sentence rather than raw hex. Errors only: every call here is
+ * encoded from the fragments above, and this is used purely for decoding a revert. */
+export const tokenErrorsAbi = [
+  {
+    type: "error",
+    name: "ERC7943InsufficientUnfrozenBalance",
+    inputs: [
+      { name: "account", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "unfrozen", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "SenderNotAllowed",
+    inputs: [{ name: "from", type: "address" }],
+  },
+  {
+    type: "error",
+    name: "RecipientNotAllowed",
+    inputs: [{ name: "to", type: "address" }],
+  },
+] as const satisfies Abi;

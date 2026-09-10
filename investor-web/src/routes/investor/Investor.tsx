@@ -31,6 +31,7 @@ import {
 import {
   formatWithDecimals,
   readErc20Allowance,
+  describeTxError,
   readErc20Balance,
   readErc20Decimals,
   readPreviewBuy,
@@ -117,6 +118,20 @@ export function Investor() {
           Connect a wallet to view balance, compliance status, and submit
           transactions.
         </p>
+        {/*
+          Stated up front rather than discovered at a failed transfer: this is a
+          permissioned token, and the issuer holds powers a plain ERC-20 holder
+          would not expect. An example SPA cannot write anyone's terms, so this
+          says plainly what the contract can do and points at the issuer for the
+          conditions.
+        */}
+        <p className="field__hint">
+          This is a permissioned token. The issuer can pause all transfers,
+          freeze part or all of a holder&apos;s balance, and move tokens out of
+          a wallet without the holder&apos;s signature, to meet its compliance
+          and legal obligations. Every such action is recorded on-chain. Ask the
+          issuer for the terms that govern when they are used.
+        </p>
       </header>
 
       <WalletSection
@@ -139,6 +154,11 @@ export function Investor() {
         project={project.status === "success" ? project.data : undefined}
         address={wallet.address}
         chainMismatch={wallet.chainMismatch}
+        frozenTokens={
+          ownWalletStatus.status === "success"
+            ? (ownWalletStatus.data?.frozenTokens ?? undefined)
+            : undefined
+        }
       />
 
       <BuySection
@@ -258,7 +278,7 @@ function WalletSection({
     try {
       setSignature(await signMessage(wallet.address, challenge.message));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Signing failed.");
+      setError(describeTxError(err, "Signing failed."));
     } finally {
       setBusy(false);
     }
@@ -449,14 +469,27 @@ function KycSection({
   );
 }
 
+/** Parses a minimal-units string, treating anything unusable as zero. */
+function safeBigInt(value: string | undefined): bigint {
+  if (!value) return 0n;
+  try {
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
+}
+
 function BalanceSection({
   project,
   address,
   chainMismatch,
+  frozenTokens,
 }: {
   project: Project | undefined;
   address: string | null | undefined;
   chainMismatch: boolean;
+  /** This wallet's own frozen amount, in token minimal units, from GET /me/wallet-status. */
+  frozenTokens: string | undefined;
 }) {
   const [balance, setBalance] = useState<{
     raw: string;
@@ -467,6 +500,11 @@ function BalanceSection({
   const token = project?.addresses?.token;
   const chainId = project?.chainId;
   const unit = project?.tokenUnit ?? "RWA";
+  // Frozen may legitimately exceed the balance (it can withhold tokens not yet
+  // received), so the spendable figure is clamped rather than subtracted.
+  const frozen = safeBigInt(frozenTokens);
+  const held = balance ? safeBigInt(balance.raw) : 0n;
+  const spendable = held > frozen ? held - frozen : 0n;
 
   async function handleLoad() {
     if (!token || !address || !chainId) return;
@@ -485,7 +523,7 @@ function BalanceSection({
       );
       setBalance({ raw, decimals });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to read balance.");
+      setError(describeTxError(err, "Failed to read balance."));
     } finally {
       setLoading(false);
     }
@@ -513,9 +551,22 @@ function BalanceSection({
             {loading ? "Reading…" : "Read balance"}
           </button>
           {balance !== null && (
-            <p>
-              {formatWithDecimals(balance.raw, balance.decimals)} {unit}
-            </p>
+            <>
+              <p>
+                {formatWithDecimals(balance.raw, balance.decimals)} {unit}
+              </p>
+              {frozen > 0n && (
+                <p className="field__hint" role="status">
+                  {formatWithDecimals(spendable.toString(), balance.decimals)}{" "}
+                  {unit} of that is available to send or redeem. The issuer has
+                  frozen the other{" "}
+                  {formatWithDecimals(frozenTokens ?? "0", balance.decimals)}{" "}
+                  {unit}. Frozen tokens stay in your wallet, but a transfer or
+                  redemption that reaches into them is rejected on-chain.
+                  Contact the issuer if you were not expecting this.
+                </p>
+              )}
+            </>
           )}
           {error && (
             <p className="async-state--error" role="alert">
@@ -599,7 +650,7 @@ function BuySection({
         side: "purchase",
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Quote request failed.");
+      setError(describeTxError(err, "Quote request failed."));
     }
   }
 
@@ -631,7 +682,7 @@ function BuySection({
       setTxState("submitted");
     } catch (err) {
       setTxState("draft");
-      setError(err instanceof Error ? err.message : "Approval failed.");
+      setError(describeTxError(err, "Approval failed."));
     }
   }
 
@@ -665,7 +716,7 @@ function BuySection({
       setTxState("submitted");
     } catch (err) {
       setTxState("draft");
-      setError(err instanceof Error ? err.message : "Buy failed.");
+      setError(describeTxError(err, "Buy failed."));
     }
   }
 
@@ -897,7 +948,7 @@ function RedemptionSection({
         side: "redemption",
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Quote request failed.");
+      setError(describeTxError(err, "Quote request failed."));
     }
   }
 
@@ -935,7 +986,7 @@ function RedemptionSection({
       setTxState("submitted");
     } catch (err) {
       setTxState("draft");
-      setError(err instanceof Error ? err.message : "Approval failed.");
+      setError(describeTxError(err, "Approval failed."));
     }
   }
 
@@ -966,9 +1017,7 @@ function RedemptionSection({
       setTxState("submitted");
     } catch (err) {
       setTxState("draft");
-      setError(
-        err instanceof Error ? err.message : "Redemption request failed.",
-      );
+      setError(describeTxError(err, "Redemption request failed."));
     }
   }
 
@@ -985,7 +1034,7 @@ function RedemptionSection({
       setClaimTx(tx);
       onSubmitted(tx, "redemption claim");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Claim failed.");
+      setError(describeTxError(err, "Claim failed."));
     }
   }
 
@@ -1002,7 +1051,7 @@ function RedemptionSection({
       setCancelTx(tx);
       onSubmitted(tx, "redemption cancel");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Cancel failed.");
+      setError(describeTxError(err, "Cancel failed."));
     }
   }
 
@@ -1306,7 +1355,7 @@ function TransferSection({
       setTx(hash);
       onSubmitted(hash, "transfer");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Transfer failed.");
+      setError(describeTxError(err, "Transfer failed."));
     } finally {
       setSending(false);
     }
