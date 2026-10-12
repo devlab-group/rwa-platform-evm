@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version: "1.25" }
+        with: { go-version: "1.26" }
       - run: cd signer && go vet ./... && go test -race ./...
 
   server:
@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version: "1.25" }
+        with: { go-version: "1.26" }
       - run: cd server && go vet ./... && go test -race ./...
       # ABI/binding drift gate: the hand-written bindings must match the
       # compiled contract artifacts.
@@ -79,7 +79,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
       - uses: actions/setup-go@v5
-        with: { go-version: "1.25" }
+        with: { go-version: "1.26" }
       - name: build web
         run: cd web && npm ci && npm run build
       # The old long-lived operator-API-key localStorage design must never ship in the
@@ -120,7 +120,7 @@ jobs:
       - name: npm audit (web, production deps)
         run: cd web && npm ci && npm audit --omit=dev --audit-level=high
       - uses: actions/setup-go@v5
-        with: { go-version: "1.25" }
+        with: { go-version: "1.26" }
       - name: govulncheck (server + signer)
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -207,7 +207,7 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@v1
       - uses: ./.github/actions/forge-deps
       - uses: actions/setup-go@v5
-        with: { go-version: "1.25" }
+        with: { go-version: "1.26" }
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
       - name: contracts on-chain e2e
@@ -231,6 +231,6 @@ jobs:
   #   - Go security/SBOM tools installed with `@latest` (govulncheck, cyclonedx-gomod
   #     here and in the Makefile) → exact `@vX.Y.Z` versions with checksums via a
   #     committed go.mod/tools.go so the version is reviewed, not floating.
-  #   - node "22"/go "1.25" → pin to exact patch releases.
+  #   - node "22"/go "1.26" → pin to exact patch releases.
   # Preserve the generated CycloneDX SBOMs (security-scan job) + source revision with
   # each release for provenance.

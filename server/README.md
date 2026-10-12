@@ -1,6 +1,6 @@
 # server — self-hosted RWA platform: Go API + chain integration
 
-Module: `github.com/rwa-platform/server`. Go 1.25. Framework: [Gin](https://github.com/gin-gonic/gin).
+Module: `github.com/rwa-platform/server`. Go 1.26.9. Framework: [Gin](https://github.com/gin-gonic/gin).
 
 This is the platform's single deployable binary (`cmd/platform`): a Gin HTTP API implementing
 every operation in the frozen `api/openapi.yaml` contract, a go-ethereum chain client and

@@ -74,7 +74,7 @@ reviewed step, since they're what keeps the Solidity, Go, and TypeScript sides i
 
 1. Docker
 2. Foundry (`forge` / `cast` / `anvil`)
-3. Go 1.25+
+3. Go 1.26.9+
 4. Node.js 22+
 
 Install every subrepo's dependencies once with `make bootstrap`.
