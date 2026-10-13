@@ -40,7 +40,9 @@ server with MongoDB and an IPFS node.
   `internal/hardware` provides an adapter interface and a `StubAdapter`. Until an adapter is
   implemented, use the hardened software keystore with `--keystore`. The signer accepts its own
   Argon2id format and Ethereum V3 files. Treat software custody as the approved fallback; see
-  `internal/keystore` and the [auditor guide, §5](../auditor/auditor-guide.md).
+  `internal/keystore` and the [auditor guide, §5](../auditor/auditor-guide.md). A Safe auditor
+  distributes signing authority among owners according to its threshold. Each contributing owner
+  reviews and signs offline ([auditor guide, §7](../auditor/auditor-guide.md)).
 
 ## 2a. Quote tokens with an allowlist or a blacklist
 
@@ -183,7 +185,9 @@ prefills 48 hours.
   its delay. Both steps are available on the Security screen.
 - Rotate the auditor with `SupplyController.setAuditor(newAuditor)`, which emits
   `AuditorChanged`. Reissue unsigned `.rwa` packages to the new auditor. Used nonces and record
-  keys remain used.
+  keys remain used. For a Safe auditor (v1.3.0 or later with `CompatibilityFallbackHandler`),
+  provision every owner with a policy naming the Safe and its current owners and threshold
+  ([auditor guide, §7](../auditor/auditor-guide.md)).
 - Change the treasury or purchase strategy with `Vault.setTreasury` or `Vault.setStrategy`.
   Both require the admin role and revert while paused. Check the Security screen afterwards.
   The escrow retains its original strategy, so continue setting redemption prices there after
@@ -316,8 +320,9 @@ Wallet-address screening is separate from screening the person. The server has n
 adapter for services such as Chainalysis, TRM Labs or Elliptic. To connect a service:
 
 - With `kyc.provider` set to `none`, post HMAC-signed Blocked decisions to
-  `POST /api/v1/compliance/webhook`. The wallet must have proved ownership. See the body format
-  in [ADR-008](../adr/ADR-008-pluggable-kyc-providers.md). When Sumsub or Onfido is configured,
+  `POST /api/v1/compliance/webhook`. The wallet must have proved ownership. The body is the
+  `WebhookPayload` schema in [`api/openapi.yaml`](../../api/openapi.yaml), signed in the
+  `X-Webhook-Signature` header. When Sumsub or Onfido is configured,
   that endpoint accepts the selected provider's deliveries instead.
 - Grant the service's key `COMPLIANCE_ROLE` and have it call `setStatus` directly. The server
   indexes the resulting `StatusChanged` events. This key can also allow wallets, so protect it

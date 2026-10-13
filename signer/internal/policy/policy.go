@@ -1,14 +1,6 @@
-// Package policy loads the auditor's independently-provisioned deployment
-// trust root: a small local JSON file, maintained by the auditor
-// themselves and never taken from the .rwa package under review, that
-// pins the chain, SupplyController, Vault, auditor address, project, and
-// profile digest; the signer refuses to sign anything that doesn't match.
-//
-// The alternative we rejected was a set of optional --expect-* flags:
-// omitting all of them would let the signer sign using only values the
-// package itself supplied, collapsing the independent air-gapped
-// verification boundary into a self-consistency check the package producer
-// fully controls. A policy file is mandatory for every sign invocation.
+// Package policy loads the auditor's local deployment policy, maintained
+// independently of the package under review. Every signing run requires it
+// to pin the chain, controller, Vault, auditor, project and profile digest.
 package policy
 
 import (
@@ -19,14 +11,15 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
-// DefaultMaxAttestationLifetime is the maximum allowed gap between
-// metadata.createdAt and typed-data validUntil when a policy file does not
-// override it via maxAttestationLifetimeHours. Roughly 30 days.
+// DefaultMaxAttestationLifetime is the 30-day expiry window used when
+// maxAttestationLifetimeHours is omitted or zero
 const DefaultMaxAttestationLifetime = 30 * 24 * time.Hour
 
-// Policy is the auditor's trust root, loaded from a local file.
+// Policy holds the auditor's trusted deployment values from a local file
 type Policy struct {
 	ChainID       string
 	Controller    string // SupplyController address (typed-data domain.verifyingContract)
@@ -34,12 +27,30 @@ type Policy struct {
 	Auditor       string
 	ProjectID     string
 	ProfileDigest string
-	// MaxAttestationLifetime bounds how far typed-data validUntil may sit
-	// after metadata.createdAt. Defaults to DefaultMaxAttestationLifetime.
+	// MaxAttestationLifetime bounds validUntil relative to both signing time
+	// and metadata.createdAt, defaulting to DefaultMaxAttestationLifetime
 	MaxAttestationLifetime time.Duration
+	// Safe is set when Auditor is a Safe multisig; nil for a single-key auditor
+	Safe *Safe
 }
 
-// fileShape is the on-disk JSON shape of a policy file.
+// Safe holds the independently verified owner list and threshold for the auditor Safe
+type Safe struct {
+	Owners    []common.Address
+	Threshold int
+}
+
+// IsOwner reports whether addr is listed in the policy
+func (s *Safe) IsOwner(addr common.Address) bool {
+	for _, owner := range s.Owners {
+		if owner == addr {
+			return true
+		}
+	}
+	return false
+}
+
+// fileShape is the policy's on-disk JSON representation
 type fileShape struct {
 	ChainID                     string  `json:"chainId"`
 	Controller                  string  `json:"controller"`
@@ -48,12 +59,14 @@ type fileShape struct {
 	ProjectID                   string  `json:"projectId"`
 	ProfileDigest               string  `json:"profileDigest"`
 	MaxAttestationLifetimeHours float64 `json:"maxAttestationLifetimeHours,omitempty"`
+	Safe                        *struct {
+		Owners    []string `json:"owners"`
+		Threshold int      `json:"threshold"`
+	} `json:"safe,omitempty"`
 }
 
-// Load reads and validates a policy file from path. Every field except
-// MaxAttestationLifetimeHours is required and must be non-empty -- there is
-// no default trust root; a missing, malformed, or incomplete policy file
-// is a hard failure, by design.
+// Load requires all six deployment fields and rejects unknown fields.
+// Lifetime and Safe settings are optional; no values are queried on-chain.
 func Load(path string) (*Policy, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -90,6 +103,30 @@ func Load(path string) (*Policy, error) {
 		return nil, fmt.Errorf("policy: %s: maxAttestationLifetimeHours must not be negative", path)
 	}
 
+	var safe *Safe
+	if f.Safe != nil {
+		if !common.IsHexAddress(f.Auditor) {
+			return nil, fmt.Errorf("policy: %s: auditor must be the Safe's address when safe is set, got %q", path, f.Auditor)
+		}
+		safe = &Safe{Threshold: f.Safe.Threshold}
+		for _, raw := range f.Safe.Owners {
+			if !common.IsHexAddress(raw) {
+				return nil, fmt.Errorf("policy: %s: safe.owners entry %q is not an address", path, raw)
+			}
+			owner := common.HexToAddress(raw)
+			if owner == (common.Address{}) || safe.IsOwner(owner) {
+				return nil, fmt.Errorf("policy: %s: safe.owners entry %s is zero or listed twice", path, owner.Hex())
+			}
+			safe.Owners = append(safe.Owners, owner)
+		}
+		if len(safe.Owners) == 0 {
+			return nil, fmt.Errorf("policy: %s: safe.owners must list at least one owner", path)
+		}
+		if safe.Threshold < 1 || safe.Threshold > len(safe.Owners) {
+			return nil, fmt.Errorf("policy: %s: safe.threshold must be between 1 and the number of owners (%d), got %d", path, len(safe.Owners), safe.Threshold)
+		}
+	}
+
 	lifetime := DefaultMaxAttestationLifetime
 	if f.MaxAttestationLifetimeHours > 0 {
 		lifetime = time.Duration(f.MaxAttestationLifetimeHours * float64(time.Hour))
@@ -103,5 +140,6 @@ func Load(path string) (*Policy, error) {
 		ProjectID:              f.ProjectID,
 		ProfileDigest:          f.ProfileDigest,
 		MaxAttestationLifetime: lifetime,
+		Safe:                   safe,
 	}, nil
 }

@@ -78,3 +78,24 @@ hashStruct(m) = keccak256(abi.encode(TYPEHASH, m.field1, ..., m.fieldN))
 
 Note: profileDigest/metadataDigest use SHA-256 (per IPFS raw/sha2-256 CID convention);
 only the EIP-712 struct/domain hashing uses keccak256.
+
+## Safe multisig auditor
+
+For a Safe auditor, set `auditor` to the Safe address and compute the attestation digest as usual.
+With Safe v1.3.0+ and `CompatibilityFallbackHandler`, each owner signs this Safe message hash:
+
+```
+safeDomainSeparator = keccak256(abi.encode(
+    keccak256("EIP712Domain(uint256 chainId,address verifyingContract)"),
+    chainId,
+    safe))
+safeMessageHash = keccak256(0x19 ‖ 0x01 ‖ safeDomainSeparator ‖ keccak256(abi.encode(
+    keccak256("SafeMessage(bytes message)"),
+    keccak256(abi.encode(digest)))))
+```
+
+`abi.encode(digest)` is the digest's 32 bytes. Owners sign `safeMessageHash` directly, without a
+personal-message prefix, using `v` in {27,28}. Pass at least `threshold` 65-byte owner signatures
+to `mint`/`burn`, concatenated in ascending owner-address order. The Safe checks its current
+owners and threshold. Golden values are in `shared/vectors/safe-auditor.json`; the
+[signer reference](../../signer/README.md#safe-multisig-auditor) links the Safe implementation.

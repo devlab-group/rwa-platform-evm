@@ -16,15 +16,14 @@ import (
 	"time"
 
 	gokeystore "github.com/ethereum/go-ethereum/accounts/keystore"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/rwa-platform/signer/internal/attestation"
 	"github.com/rwa-platform/signer/internal/canonical"
 	rwakeystore "github.com/rwa-platform/signer/internal/keystore"
 )
 
-// findGoBinary locates the go tool for building the signer binary under
-// test, falling back to this environment's known install path so the test
-// does not depend on the test runner's PATH.
+// findGoBinary locates Go through PATH or the test environment's fallback path
 func findGoBinary(t *testing.T) string {
 	t.Helper()
 	if p, err := exec.LookPath("go"); err == nil {
@@ -38,7 +37,7 @@ func findGoBinary(t *testing.T) string {
 	return ""
 }
 
-// buildSignerBinary compiles cmd/signer into dir and returns its path.
+// buildSignerBinary compiles cmd/signer into dir and returns its path
 func buildSignerBinary(t *testing.T, goBin, dir string) string {
 	t.Helper()
 	out := filepath.Join(dir, "signer")
@@ -52,11 +51,8 @@ func buildSignerBinary(t *testing.T, goBin, dir string) string {
 	return out
 }
 
-// docOverrides lets a test build a package whose profile.json and
-// metadata.json disagree on the fields the cross-document binding check ties
-// together, or whose timing sits outside the expiry policy, instead of the
-// fully self-consistent/well-timed golden pair. Zero value reproduces the
-// golden package.
+// docOverrides changes project, unit, timing or auditor values for binding tests.
+// The zero value builds the consistent default package.
 type docOverrides struct {
 	profileProjectID  string // default "4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61"
 	metadataProjectID string // default: same as profileProjectID
@@ -64,13 +60,12 @@ type docOverrides struct {
 	issuanceUnit      string // metadata.issuance.unit, default: same as tokenUnit
 
 	createdAt  time.Time // metadata.createdAt, default: now-1h
-	validUntil time.Time // typed-data validUntil, default: createdAt+7d (well inside the 30d default policy horizon)
+	validUntil time.Time // typed-data validUntil; defaults to createdAt+7d within the 30d window
+
+	auditor string // typed-data auditor; defaults to the generated key, or set to a Safe
 }
 
-// builtPackage is everything a test needs both to invoke the signer CLI
-// against a freshly built .rwa package and to construct a policy file that
-// independently matches it. --policy is mandatory, so every e2e test needs
-// one whether or not that specific test is exercising policy behavior.
+// builtPackage holds the package, signing credentials and values needed for its policy
 type builtPackage struct {
 	zipBytes      []byte
 	keystorePath  string
@@ -79,17 +74,15 @@ type builtPackage struct {
 	profileDigest string // 0x-prefixed
 }
 
-// buildGoldenPackage assembles a fully self-consistent .rwa package (real
-// canonical digests, real recordKey) for a MintAttestation, along with the
-// keystore file and password needed to sign it.
+// buildGoldenPackage assembles a consistent mint package with computed digests
+// and recordKey, plus the keystore and password needed to sign it
 func buildGoldenPackage(t *testing.T, chainID, verifyingContract, vault string) builtPackage {
 	t.Helper()
 	return buildPackageWithOverrides(t, chainID, verifyingContract, vault, docOverrides{})
 }
 
-// buildPackageWithOverrides is buildGoldenPackage generalized to let a test
-// deliberately desynchronize profile.json and metadata.json (cross-project
-// package, wrong unit) or push validUntil outside the expiry policy.
+// buildPackageWithOverrides builds a mint package with optional project, unit,
+// timing and auditor overrides
 func buildPackageWithOverrides(t *testing.T, chainID, verifyingContract, vault string, ov docOverrides) builtPackage {
 	t.Helper()
 
@@ -161,21 +154,9 @@ func buildPackageWithOverrides(t *testing.T, chainID, verifyingContract, vault s
 	metadataDigest := sha256.Sum256(metadataCanon)
 	recordKey := attestation.RecordKey("GOLD-BAR-12345")
 
-	// Generate the auditor keystore.
-	priv, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	dir := t.TempDir()
-	// keystore.MinScryptN/P, not gokeystore.LightScryptN/P: the signer
-	// enforces a KDF strength floor on every V3 load (internal/keystore/kdf.go),
-	// so a "light"-parameter keystore would be rejected before the password
-	// is even tried. See TestE2E_RejectsWeakKDFParams for the negative case.
-	ks := gokeystore.NewKeyStore(dir, rwakeystore.MinScryptN, rwakeystore.MinScryptP)
-	const password = "e2e-test-password"
-	account, err := ks.ImportECDSA(priv, password)
-	if err != nil {
-		t.Fatalf("ImportECDSA: %v", err)
+	keystorePath, password, auditorAddr := newTestKeystore(t)
+	if ov.auditor == "" {
+		ov.auditor = auditorAddr.Hex()
 	}
 
 	typedData := map[string]any{
@@ -187,7 +168,7 @@ func buildPackageWithOverrides(t *testing.T, chainID, verifyingContract, vault s
 			"verifyingContract": verifyingContract,
 		},
 		"message": map[string]any{
-			"auditor":        account.Address.Hex(),
+			"auditor":        ov.auditor,
 			"profileDigest":  "0x" + hex.EncodeToString(profileDigest[:]),
 			"recordId":       "GOLD-BAR-12345",
 			"recordKey":      "0x" + hex.EncodeToString(recordKey[:]),
@@ -250,26 +231,37 @@ func buildPackageWithOverrides(t *testing.T, chainID, verifyingContract, vault s
 
 	return builtPackage{
 		zipBytes:      zipBuf.Bytes(),
-		keystorePath:  account.URL.Path,
+		keystorePath:  keystorePath,
 		password:      password,
-		auditorAddr:   account.Address.Hex(),
+		auditorAddr:   auditorAddr.Hex(),
 		profileDigest: "0x" + hex.EncodeToString(profileDigest[:]),
 	}
 }
 
-// writePolicyFile writes a policy JSON file matching pkg's real values
-// (chain/controller/vault/auditor/projectId/profileDigest) into dir,
-// returning its path. projectID lets a test target a specific profile
-// (buildPackageWithOverrides can desync profile/metadata projectIds, so
-// the caller decides which one the policy should independently pin).
+// newTestKeystore returns a fresh V3 keystore's path, password and key address
+func newTestKeystore(t *testing.T) (string, string, common.Address) {
+	t.Helper()
+	priv, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	// Use the signer's KDF floor; light scrypt parameters are rejected before derivation
+	ks := gokeystore.NewKeyStore(t.TempDir(), rwakeystore.MinScryptN, rwakeystore.MinScryptP)
+	const password = "e2e-test-password"
+	account, err := ks.ImportECDSA(priv, password)
+	if err != nil {
+		t.Fatalf("ImportECDSA: %v", err)
+	}
+	return account.URL.Path, password, account.Address
+}
+
+// writePolicyFile pins the fixture's deployment values and the caller's project ID
 func writePolicyFile(t *testing.T, dir, chainID, controller, vault, projectID string, pkg builtPackage) string {
 	t.Helper()
 	return writePolicyFileWithOverrides(t, dir, chainID, controller, vault, pkg.auditorAddr, projectID, pkg.profileDigest, "")
 }
 
-// writePolicyFileWithOverrides is writePolicyFile generalized so a test can
-// deliberately mismatch one field or set a custom
-// maxAttestationLifetimeHours.
+// writePolicyFileWithOverrides permits deployment mismatches or a custom lifetime
 func writePolicyFileWithOverrides(t *testing.T, dir, chainID, controller, vault, auditor, projectID, profileDigest, maxLifetimeHours string) string {
 	t.Helper()
 	pol := map[string]any{
@@ -301,10 +293,8 @@ const (
 	testProjectID  = "4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61"
 )
 
-// TestE2E_SignGoldenPackage exercises the full CLI: extraction, manifest
-// verification, profile/metadata validation, digest recomputation,
-// EIP-712 signing, and signed-result.json output -- against a
-// self-consistent, freshly built .rwa package.
+// TestE2E_SignGoldenPackage runs the built CLI against a consistent package
+// and checks signed-result.json and its signature
 func TestE2E_SignGoldenPackage(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -372,9 +362,8 @@ func TestE2E_SignGoldenPackage(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsTamperedAmount proves the CLI refuses to sign when the
-// typed-data amount has been tampered to diverge from metadata's
-// issuance.amount -- the mint amount must exactly match the audited amount.
+// TestE2E_RejectsTamperedAmount checks that changing the archived amount
+// without updating manifest hashes prevents signing
 func TestE2E_RejectsTamperedAmount(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -382,8 +371,7 @@ func TestE2E_RejectsTamperedAmount(t *testing.T) {
 
 	pkg := buildGoldenPackage(t, testChainID, testController, testVault)
 
-	// Tamper: replace the archive's typed-data.json amount post-hoc by
-	// re-zipping with a mismatched amount, leaving manifest hashes stale.
+	// Change the typed-data amount while leaving the manifest hashes stale
 	zr, err := zip.NewReader(bytes.NewReader(pkg.zipBytes), int64(len(pkg.zipBytes)))
 	if err != nil {
 		t.Fatalf("zip.NewReader: %v", err)
@@ -442,10 +430,8 @@ func TestE2E_RejectsTamperedAmount(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsCrossProjectPackage guards the cross-document binding: if
-// the signer validated profile.json and metadata.json independently and never
-// checked metadata.projectId == profile.projectId, a package could mint supply
-// under one project while the signed metadata described another.
+// TestE2E_RejectsCrossProjectPackage rejects disagreement between profile
+// and metadata project IDs
 func TestE2E_RejectsCrossProjectPackage(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -480,8 +466,7 @@ func TestE2E_RejectsCrossProjectPackage(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsWrongIssuanceUnit covers the other half of the binding
-// check: metadata.issuance.unit must match profile.tokenUnit.
+// TestE2E_RejectsWrongIssuanceUnit requires metadata issuance.unit to match profile tokenUnit
 func TestE2E_RejectsWrongIssuanceUnit(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -513,8 +498,7 @@ func TestE2E_RejectsWrongIssuanceUnit(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsWorldReadablePasswordFile checks that a --password-file
-// other local accounts can read is refused rather than silently used.
+// TestE2E_RejectsWorldReadablePasswordFile refuses passwords accessible to other accounts
 func TestE2E_RejectsWorldReadablePasswordFile(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -548,9 +532,7 @@ func TestE2E_RejectsWorldReadablePasswordFile(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsWeakKDFParams checks that a V3 keystore encrypted with
-// parameters below the signer's policy floor is refused before the password
-// is ever tried, not merely "discouraged".
+// TestE2E_RejectsWeakKDFParams refuses V3 parameters below the policy floor before derivation
 func TestE2E_RejectsWeakKDFParams(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -558,9 +540,7 @@ func TestE2E_RejectsWeakKDFParams(t *testing.T) {
 
 	pkg := buildGoldenPackage(t, testChainID, testController, testVault)
 
-	// Re-encrypt the same key with go-ethereum's "light" scrypt parameters
-	// (N=2^12), well below MinScryptN (2^17), instead of using pkg's own
-	// (policy-strength) keystore.
+	// Re-encrypt the same key with light scrypt N=2^12, below MinScryptN=2^17
 	weakDir := t.TempDir()
 	keyJSON, err := os.ReadFile(pkg.keystorePath)
 	if err != nil {
@@ -599,10 +579,8 @@ func TestE2E_RejectsWeakKDFParams(t *testing.T) {
 	}
 }
 
-// TestE2E_SignsWithNativeKeystoreFormat proves the signer's own Argon2id
-// keystore format (internal/keystore/native.go, "rwa-argon2id-v1") is a
-// fully working alternative to a standard V3 file behind the same
-// --keystore flag, with no format flag needed.
+// TestE2E_SignsWithNativeKeystoreFormat signs with rwa-argon2id-v1 through --keystore
+// without a format-selection flag
 func TestE2E_SignsWithNativeKeystoreFormat(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -647,12 +625,8 @@ func TestE2E_SignsWithNativeKeystoreFormat(t *testing.T) {
 	}
 }
 
-// TestE2E_NeverExportsPrivateKey checks that the signer exports only the
-// signed result and public metadata, never the private key. It signs a real
-// package with a real key and asserts the raw private-key
-// hex appears nowhere in the process's stdout/stderr or in
-// signed-result.json -- the only channels through which key material could
-// leak out to the (non-air-gapped) side of the transfer medium.
+// TestE2E_NeverExportsPrivateKey checks that the raw private-key hex is absent
+// from stdout, stderr and signed-result.json
 func TestE2E_NeverExportsPrivateKey(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -702,10 +676,8 @@ func TestE2E_NeverExportsPrivateKey(t *testing.T) {
 	}
 }
 
-// TestE2E_SignWritesVerifiableAuditTrail checks that a real signing run
-// through the CLI leaves behind a main audit log and anchor log that
-// VerifyAuditLogAnchored accepts, with unlock_success and signed events
-// recorded.
+// TestE2E_SignWritesVerifiableAuditTrail verifies the main log and anchor after signing
+// and checks for unlock_success and signed events
 func TestE2E_SignWritesVerifiableAuditTrail(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -742,10 +714,7 @@ func TestE2E_SignWritesVerifiableAuditTrail(t *testing.T) {
 	}
 }
 
-// TestE2E_RefusesToSignWhenAuditLogIsCorrupted checks that the whole chain is
-// verified before unlock/sign, not just the last append: a keystore whose
-// pre-existing audit log has been corrupted refuses to sign at all -- it must
-// not simply extend the broken chain with a fresh-looking entry.
+// TestE2E_RefusesToSignWhenAuditLogIsCorrupted prevents signing with a broken audit chain
 func TestE2E_RefusesToSignWhenAuditLogIsCorrupted(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -780,13 +749,8 @@ func TestE2E_RefusesToSignWhenAuditLogIsCorrupted(t *testing.T) {
 	}
 }
 
-// TestE2E_ProductionFailsClosedWhenAuditLogCannotBeWritten checks the
-// fail-closed path: outside --unsafe-test-mode, a signing attempt whose
-// audit-log write cannot be durably recorded must fail rather than silently
-// proceeding to write signed-result.json. A directory the process cannot
-// write into is used as a portable stand-in for a disk-full condition, the
-// same way TestAuditLog_AppendFailsOnUnwritableDirectory uses it in
-// internal/keystore.
+// TestE2E_ProductionFailsClosedWhenAuditLogCannotBeWritten requires normal signing
+// to fail when audit writes cannot complete
 func TestE2E_ProductionFailsClosedWhenAuditLogCannotBeWritten(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permission bits do not work the same way on windows")
@@ -812,9 +776,7 @@ func TestE2E_ProductionFailsClosedWhenAuditLogCannotBeWritten(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(keystoreDir, 0o700) }) // let t.TempDir() clean up afterward
 
-	// Deliberately NOT --unsafe-test-mode: this test is specifically about
-	// production (fail-closed) behavior, so confirmation is driven via
-	// stdin instead of --yes.
+	// Confirm through stdin to exercise normal audit-write enforcement
 	cmd := exec.Command(signerBin, "sign", pkgPath, "--keystore", pkg.keystorePath, "--policy", policyPath)
 	cmd.Stdin = strings.NewReader("y\n" + pkg.password + "\n")
 	var stdout, stderr bytes.Buffer
@@ -831,9 +793,7 @@ func TestE2E_ProductionFailsClosedWhenAuditLogCannotBeWritten(t *testing.T) {
 	}
 }
 
-// TestE2E_RequiresPolicyFlag checks that the signer refuses to sign an
-// otherwise-perfect package if the operator forgot --policy entirely, rather
-// than falling back to trusting the package's own values.
+// TestE2E_RequiresPolicyFlag refuses a valid package when --policy is absent
 func TestE2E_RequiresPolicyFlag(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -863,8 +823,7 @@ func TestE2E_RequiresPolicyFlag(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsYesWithoutUnsafeTestMode checks that --yes alone does not
-// silently skip the human confirmation step.
+// TestE2E_RejectsYesWithoutUnsafeTestMode requires explicit test mode to skip confirmation
 func TestE2E_RejectsYesWithoutUnsafeTestMode(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -895,12 +854,8 @@ func TestE2E_RejectsYesWithoutUnsafeTestMode(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsPolicyProjectIDMismatch checks that the signer rejects a
-// package whose profile.json projectId does not match the operator's
-// independently-provisioned policy, even when the package is otherwise
-// internally self-consistent -- a defense the cross-document binding check
-// alone does not provide, since a wholly self-consistent but wrong-project
-// package would otherwise sign cleanly.
+// TestE2E_RejectsPolicyProjectIDMismatch refuses an internally consistent package
+// for a project other than the one pinned by policy
 func TestE2E_RejectsPolicyProjectIDMismatch(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -931,9 +886,8 @@ func TestE2E_RejectsPolicyProjectIDMismatch(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsPolicyControllerMismatch covers the typed-data-domain half
-// of the policy checks: a policy whose controller address doesn't match
-// typed-data.json's verifyingContract must hard-fail.
+// TestE2E_RejectsPolicyControllerMismatch requires the policy controller
+// to match typed-data domain.verifyingContract
 func TestE2E_RejectsPolicyControllerMismatch(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -964,9 +918,7 @@ func TestE2E_RejectsPolicyControllerMismatch(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsExpiredValidUntil checks that a typed-data validUntil that
-// has already passed is rejected, not merely displayed for the auditor to
-// notice.
+// TestE2E_RejectsExpiredValidUntil refuses a deadline that has already passed
 func TestE2E_RejectsExpiredValidUntil(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -1001,9 +953,7 @@ func TestE2E_RejectsExpiredValidUntil(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsFarFutureValidUntil covers the other end of the horizon:
-// a validUntil beyond the maximum attestation lifetime must be rejected,
-// even though it is technically still "in the future."
+// TestE2E_RejectsFarFutureValidUntil refuses a deadline beyond the policy lifetime
 func TestE2E_RejectsFarFutureValidUntil(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -1038,11 +988,8 @@ func TestE2E_RejectsFarFutureValidUntil(t *testing.T) {
 	}
 }
 
-// TestE2E_AcceptsExtendedLifetimePolicy proves a policy file's
-// maxAttestationLifetimeHours override is actually honored: a validUntil
-// that would fail the 30-day default must succeed once the policy grants a
-// longer horizon -- the policy file's ceiling is a real override, not a fixed
-// cap dressed up as configurable.
+// TestE2E_AcceptsExtendedLifetimePolicy accepts a deadline within a longer policy window
+// that would exceed the default 30 days
 func TestE2E_AcceptsExtendedLifetimePolicy(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -1074,10 +1021,8 @@ func TestE2E_AcceptsExtendedLifetimePolicy(t *testing.T) {
 	}
 }
 
-// TestE2E_KeystoreCreate_WritesUsableKeystore covers "signer keystore
-// create" end to end: it must write a keystore that internal/keystore.Load
-// can decrypt with the operator's chosen password, and it must never print
-// the generated private key.
+// TestE2E_KeystoreCreate_WritesUsableKeystore decrypts a newly created keystore
+// and checks that creation does not print the generated private key
 func TestE2E_KeystoreCreate_WritesUsableKeystore(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -1173,12 +1118,8 @@ func TestE2E_KeystoreCreate_RefusesToOverwrite(t *testing.T) {
 	}
 }
 
-// TestE2E_KeystoreCreate_RefusesToFollowDanglingSymlink guards against
-// writing through a symlink at --out. A Stat-then-WriteFile implementation
-// would happily follow a symlink there, including a *dangling* one (pointing
-// somewhere that does not yet exist), landing the new keystore at whatever
-// path the symlink names instead of --out itself. os.O_CREATE|os.O_EXCL must
-// refuse this the same way it refuses an ordinary existing file.
+// TestE2E_KeystoreCreate_RefusesToFollowDanglingSymlink checks that exclusive creation
+// refuses a dangling symlink at --out without writing its target
 func TestE2E_KeystoreCreate_RefusesToFollowDanglingSymlink(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -1207,9 +1148,8 @@ func TestE2E_KeystoreCreate_RefusesToFollowDanglingSymlink(t *testing.T) {
 	}
 }
 
-// TestE2E_KeystoreImport_RoundTrip covers "signer keystore import":
-// encrypting an existing raw private key from an owner-only-readable file
-// must produce a keystore that decrypts back to the same key and address.
+// TestE2E_KeystoreImport_RoundTrip checks that importing an owner-only hex key file
+// preserves the key and address after decryption
 func TestE2E_KeystoreImport_RoundTrip(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
