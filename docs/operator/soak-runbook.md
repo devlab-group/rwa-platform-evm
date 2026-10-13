@@ -1,47 +1,67 @@
-# Shadow replay & soak-test runbook
+# Shadow replay and soak-test runbook
 
-Load tests and short RPC-failure simulations (`testnet-qualification.md` step 5) aren't enough to
-validate a continuously running indexer and transaction-processing backend. This is the extra
-release-candidate gate before a production deployment: replay a representative event history and
-let the process run long enough to catch memory leaks, goroutine growth, and state drift.
+Before deploying a release candidate to production, replay a representative event history and
+run a live testnet soak. Short load tests and the failure drills in
+[testnet-qualification.md](testnet-qualification.md) do not establish stability over days.
+Watch for memory leaks, goroutine growth and state drift.
 
-This is an **operator-run procedure**. The repository ships the harness
-(`server/internal/shadow`, driven by `server/ops/shadow`) and proves it works end-to-end in CI
-(`server/internal/shadow/runner_test.go`); it does **not** itself run a 72-hour soak — that is a
-release-time step a human schedules and evaluates, documented here.
+The gate requires both runs:
 
-## 1. What the harness guarantees structurally
+- Shadow replay: `server/ops/shadow`, built on `server/internal/shadow`, exercises the indexer
+  against a scripted chain. CI covers the replay through `server/internal/shadow/runner_test.go`.
+- Live soak: the production `cmd/platform` binary runs against a real testnet configured through
+  the qualification runbook. It exercises platform event decoding, read models, transaction
+  management, signing and restart recovery.
 
-`server/ops/shadow` only imports `server/internal/shadow` and (transitively) `server/internal/indexer`.
-It never constructs a `blockchain.TxManager`, a `keys.Provider`, or anything else capable of
-signing — "holds no production signing keys" and "cannot submit state-changing production
-transactions" are true because the binary contains no code path that could, not because a flag is
-off. It runs the **same** event-ingestion and reorg/rollback logic (`indexer.Indexer`, wired with
-`WithBlockHashRepository` + `WithDeadLetterQueue`, identically to `cmd/platform/main.go`) against
-an isolated `repository/memory` database — never the production Mongo.
+The repository provides the harness and tests, but does not automate a 72-hour soak. The
+release operator schedules the runs and evaluates their evidence.
+
+## 1. What the harness covers
+
+`shadow.Runner` constructs the production `indexer.Indexer` with an in-memory repository and
+`indexer.FakeSource`. It constructs no transaction manager, key provider or live RPC client,
+and neither loads signing keys nor submits live transactions.
+
+The replay uses `WithBlockHashRepository` and `WithDeadLetterQueue`, as `cmd/platform` does.
+Its limits are:
+
+- State lives in `internal/dal/memory` and is lost on restart. The harness also omits production's
+  atomic MongoDB chunk commit (`WithChunkCommitter`).
+- The placeholder decoder uses the first topic as the event name when present and decodes no fields. It builds
+  no purchase, redemption or supply read models.
+- The scripted source replaces the RPC node, including simulated RPC errors.
+
+Use replay to test ingestion, duplicate redelivery, reorg rollback, dead-letter handling,
+fault recovery and resource use during those steps. Use the live run for read-model correctness,
+restart recovery and sustained activity (§3).
 
 ## 2. Building the replay dataset
 
-A scenario is a JSON file (`shadow.Scenario` — see `server/ops/shadow/testdata/scenario.json` for
-a worked example covering every required input category below at small scale) listing scripted
-`Step`s: header/log mutations to apply before each `Poll` cycle. For a real release-candidate soak,
-export a genuine recorded testnet history (not the small illustrative fixture) covering:
+A scenario is a JSON `shadow.Scenario` containing `chainId`, contract `addresses`, `startBlock`,
+optional `maxLogRange` and `steps`. Each step applies headers and logs, sets the scripted head
+and runs one indexer poll.
 
-- deployment events, mint attestations, burn attestations,
-- whitelist additions and removals,
-- transfers, direct purchases,
-- redemption requests, funding, claims, cancellations,
-- at least one simulated reorg (`removeLogsFrom` + a re-forked header — see the fixture's last two
-  steps),
-- at least one duplicate log redelivery (idempotent-replay coverage — the fixture's second step),
-- at least one malformed/undecodable event (DLQ coverage — `"decodable": false`),
-- at least one transient/oversized-response RPC fault (`"fault": "transient"` /
-  `"fault": "range_too_large"`).
+`server/ops/shadow/testdata/scenario.json` has six steps: duplicate redelivery in step 2, a
+transient RPC fault in step 3, a reorg in steps 4 and 5, and an undecodable log in step 6. Its
+logs are placeholders rather than platform events.
 
-There is no exporter for a live testnet history in this repository yet; building one (or hand-
-authoring a larger adversarial scenario) is part of preparing a specific release's soak run.
+A release-candidate dataset must include:
+
+- a reorg using `removeLogsFrom` and a replacement header, as in example steps 4 and 5;
+- duplicate log redelivery;
+- an undecodable log with `"decodable": false`;
+- a transient RPC fault with `"fault": "transient"`;
+- an oversized-response fault with `"fault": "range_too_large"`.
+
+For representative load, use recorded platform history: deployments, mints, burns, compliance
+changes, transfers, purchases, and redemption requests, funding, claims and cancellations.
+The placeholder decoder cannot validate their fields, but event volume and distribution across
+blocks and contracts still load the indexer. The repository has no live-history exporter;
+prepare one or write a larger adversarial scenario for the release.
 
 ## 3. Running a soak
+
+From `server/`:
 
 ```
 go run ./ops/shadow \
@@ -51,90 +71,113 @@ go run ./ops/shadow \
   -report soak-report.json
 ```
 
-`-idle` keeps the process alive and resource-sampling after the scripted steps finish — point a
-much longer/denser scenario at `-scenario` for genuine multi-day chain activity coverage; `-idle`
-alone only proves the process is stable while otherwise mostly quiescent, which is a real but
-partial signal, not a substitute for a busy scenario.
+The CLI replays the steps and reconciles their results first. During `-idle`, it samples
+resources; it does not poll the indexer or apply further chain activity. A larger scenario
+adds replay work, but does not schedule that work over the idle period. The live run provides
+the sustained indexer and transaction-processing coverage.
 
-**Repeated disconnect/recovery cycles**: between soak segments, kill
-and restart the `go run ./ops/shadow` process against the same scenario file with `-report`
-pointed at the same path, and confirm in the resulting log/report that scanning resumed from the
-last checkpoint state rather than re-processing or losing events — this exercises the same
-restart-recovery path as `cmd/platform`'s indexer/tx-manager startup reconciliation
-(see `operator-guide.md` §6).
+`-sample` sets the idle-phase sampling interval, defaulting to one minute. The runner also
+samples after each replay step. `-report` writes the final JSON report; without it, the report
+goes to stdout. Review `report.reconciled` and `errors`: a successful CLI exit alone does not
+prove that replay passed.
 
-Run the **actual production `cmd/platform` binary** against a real testnet in parallel per
-`testnet-qualification.md` for the transaction-manager/signing-path coverage the shadow harness
-deliberately excludes (it holds no keys) — the two runbooks are complementary, not substitutes for
-each other.
+### Live run
+
+In parallel, run `cmd/platform` against a testnet configured through
+[testnet-qualification.md](testnet-qualification.md). Both replay and live evidence are required.
+
+### Restart cycles
+
+Between live soak segments, stop and restart `cmd/platform` while preserving its database.
+Record the checkpoint before stopping, then check `lastIndexedBlock` from `GET /healthz` after
+restart. It should resume from the saved checkpoint, allowing for subsequent advancement or
+a verified reorg rewind, rather than starting over at `contract.start_block`.
+
+Confirm that `/readyz` returns 200 and, separately, that indexing catches up to the chain head.
+Readiness alone does not establish catch-up. Check the event reconciliation in §7 for losses or
+duplicates. This exercises indexer and transaction-manager startup recovery; see the
+[operator guide, §6](operator-guide.md#6-backup-and-recovery).
+
+Do restart tests on the live process. Restarting the in-memory harness starts a new replay.
 
 ## 4. Minimum duration
 
-72 hours for a release-candidate gate; longer (a week+) is preferred before a production
-deployment of a NEW release line. A patch release fixing an isolated, well-understood defect may
-use operator judgement for a shorter soak, but must still pass this runbook's disconnect/recovery
-requirement at least once.
+Run the release-candidate soak for at least 72 hours. Prefer a week or more before the first
+production deployment of a new release line. At the operator's judgment, a patch fixing an
+isolated, well-understood defect may use a shorter soak, but must still pass at least one
+restart cycle (§3). Record the elapsed duration, including any early interruption.
 
 ## 5. What to monitor
 
-From the harness's own `Report` (`finalEventCount`/`expectedEventCount`/`dlqEntries`/`reconciled`,
-`resourceSnapshots`: heap, GC count, goroutine count, best-effort open-FD count — see
-`server/internal/shadow/monitor.go`), **plus** the production server's own Prometheus `/metrics`
-when running `cmd/platform` in parallel per §3 above:
+In the harness report, compare `finalEventCount` with `expectedEventCount` and `dlqEntries`
+with `expectedDLQEntries`, and check `reconciled`. `resourceSnapshots` records heap bytes,
+heap objects, GC count, goroutines and open files. The open-file count is best effort on Linux;
+zero means unavailable on other systems or when `/proc` cannot be read. See
+`server/internal/shadow/runner.go` and `monitor.go`.
 
-- DB connections, RPC connection count, request/queue depth — standard Go/Mongo-driver/HTTP
-  metrics already exposed.
-- Event-processing lag — indexer checkpoint block vs. chain head.
-- DLQ growth — `indexer_dead_letters` collection size over time (should track known-bad injected
-  events, not grow unboundedly on its own).
-- Redemption/reconciliation backlog — `RedemptionsPendingCount`,
-  `RedemptionsFundedUnclaimedCount` (`internal/metrics`).
-- CPU usage — OS-level (`top`/`pidstat`) alongside the process.
-- Restart recovery time — wall-clock time from process start to the indexer/tx-manager's first
-  successful reconciliation pass (logged at startup — see `operator-guide.md` §6's transaction-
-  manager/indexer recovery bullets).
+For the live run, use `/metrics` and the health endpoints; see the
+[operator guide, §5](operator-guide.md#5-monitoring-and-alerts):
 
-Compare metrics across **multiple, time-separated windows** of the run (e.g. hour 1 vs. hour 36
-vs. hour 71), not just start-vs-end — `shadow.GrowthCheck` is provided as a simple first/last
-comparison helper; a genuine soak evaluation should apply it (or eyeball a plotted series) across
-several windows to distinguish "grew once during warmup then stabilized" from "still climbing."
+| Signal                                 | Source                                                                                                                                                  |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Memory, goroutines, open files and CPU | `go_goroutines`, `go_memstats_heap_alloc_bytes`, `process_resident_memory_bytes`, `process_open_fds`, `process_cpu_seconds_total`; or `top` / `pidstat` |
+| Request volume and latency             | `rwa_http_requests_total`, `rwa_http_request_duration_seconds`                                                                                          |
+| Indexer lag                            | compare `lastIndexedBlock` from `GET /healthz` with the chain head; there is no dedicated lag metric                                                    |
+| Dead-letter growth                     | size of `indexer_dead_letters` or `opsctl dlq list`; growth must correspond to injected bad events                                                      |
+| Redemption backlog                     | `rwa_redemptions_pending_count`, `rwa_redemptions_funded_unclaimed_count`                                                                               |
+| Background errors and storage health   | `rwa_read_model_reconcile_errors_total`, `rwa_storage_up`                                                                                               |
+| Restart recovery time                  | elapsed time from process start until `/readyz` returns 200 and indexing reaches the chain head                                                         |
+
+The server exports no dedicated MongoDB connection-pool, RPC-connection or queue-depth metrics.
+
+Compare separated windows, such as hours 1, 36 and 71, to distinguish startup growth from a
+continuing increase. `shadow.GrowthCheck` provides two-sample growth checks; apply it to several
+pairs or plot the series instead of relying on the first and last samples.
 
 ## 6. Failure criteria (fail the release-candidate gate)
 
-- Continuously increasing memory usage without stabilization across the monitored windows.
-- Unbounded goroutine growth.
-- Unbounded queue or DLQ growth (i.e. growth NOT explained by intentionally-scripted bad events).
-- Lost or duplicated canonical events — `report.reconciled == false`, or a live-run event count
-  that diverges from an independent chain-side count.
-- Database state diverging from an independently reconstructed chain state (see §7).
-- Inability to resume from the last verified checkpoint after a disconnect/recovery cycle (§3).
-- Incorrect redemption status after a reorg (exercise via `redemption/redemption_test.go`-style
-  scenarios folded into the scenario file, or via the live-run parallel per §3).
-- Unavailable health checks (`/healthz`-equivalent) while the process is otherwise running.
+Fail the gate for:
+
+- memory use that continues rising without stabilizing across the monitored windows;
+- unbounded goroutine growth;
+- dead-letter growth unexplained by injected bad events;
+- lost or duplicated canonical events, `report.reconciled == false`, or a live event count that
+  differs from an independent chain count;
+- database state that differs from independently reconstructed chain state (§7);
+- failure to recover the checkpoint after restart (§3);
+- an incorrect live redemption status after a reorg; the harness has no redemption read model
+  and cannot test this;
+- `/healthz` failure or persistent `/readyz` failure while the process is otherwise running.
 
 ## 7. Independent final-state reconciliation
 
-The harness's own `Runner.reconcile` step (`server/internal/shadow/runner.go`) already performs
-one independent reconciliation automatically: it derives the expected canonical event/DLQ counts
-directly from the scripted chain state (never from what the indexer itself reported) and compares
-them to what was actually persisted — `report.reconciled` is that check's pass/fail bit.
+`Runner.reconcile` in `server/internal/shadow/runner.go` derives expected event and dead-letter
+counts from the scripted source, independently of indexer results. It compares them with
+persisted counts. `report.reconciled` is true only when those counts match and there are no
+unexpected step errors.
 
-For a live parallel run against a real testnet (§3), perform a SECOND, separately-implemented
-reconciliation before sign-off: query the chain directly (e.g. `cast logs` / a block explorer API)
-for the canonical event count and compare it to `chain_events` collection counts, and independently
-recompute at least one derived read model (e.g. total minted supply from `SupplyIncreased` events)
-against the token contract's own `totalSupply()`.
+Before live sign-off, reconcile again through a separate implementation. Query the chain
+directly with `cast logs` or a block-explorer API, then compare canonical event counts with
+`chain_events` for the same chain, contracts and block range. Account separately for logs
+sent to the dead-letter queue.
+
+Independently reconstruct at least one stored read-model value, such as a redemption's status
+from its canonical events, and compare it with the database. A complementary supply check
+sums `Minted` amounts minus `Burned` amounts from `SupplyController` and compares the result
+with the token's `totalSupply()`.
 
 ## 8. Sign-off
 
-Release-candidate hardening is complete only when:
+Release-candidate hardening requires:
 
-- A representative testnet event history (§2) has been replayed and `report.reconciled == true`.
-- The soak ran for the required duration (§4) with resource usage within the failure criteria (§6).
-- At least one disconnect/recovery cycle (§3) succeeded.
-- The independent final-state reconciliation (§7) matches.
-- Any discovered leak or divergence defect is resolved (with a follow-up soak proving the fix) or
-  explicitly accepted in the release notes before shipping.
+- replay of representative history (§2) with `report.reconciled == true`;
+- the required soak duration (§4) without a failure criterion (§6);
+- at least one successful restart cycle (§3);
+- matching independent final-state reconciliation (§7).
 
-Record the scenario file used, the `-report` output, the duration actually run, and the operator
-who signed off in the release notes — same convention as `testnet-qualification.md`'s sign-off.
+For every leak or divergence found, record either a fix verified by a follow-up soak or
+explicit acceptance in the release notes before shipping. Acceptance records do not establish
+that a run passed the criteria above.
+
+Include the scenario file, `-report` output, actual duration and signing operator in the release
+notes, alongside the [testnet qualification sign-off](testnet-qualification.md#sign-off).

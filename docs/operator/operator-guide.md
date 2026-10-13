@@ -1,290 +1,532 @@
-# Operator & administrator guide — self-hosted RWA platform V1
+# Operator and administrator guide: self-hosted RWA platform V1
 
-Audience: the issuer running one deployment (one asset class). In V1 the operator and the
-administrator are the same party — the single admin is the wallet that deployed the stack — so
-this one guide covers both running the platform (provisioning, deployment, day-2 operations,
-recovery) and administering its privileged on-chain roles (§4a). Pair it with redemption
-operations (`redemption-ops.md`), the auditor guide (`../auditor/auditor-guide.md`), incident
-response (`../security/incident-response.md`), public-testnet qualification
-(`testnet-qualification.md`), and the shadow-replay/soak-test gate (`soak-runbook.md`).
+This guide covers running and administering an issuer's deployment for one asset class:
+provisioning, deployment, routine operations, privileged roles and recovery. The configured
+admin wallet deploys the stack; the issuer can then transfer on-chain administration to a
+multisig (§4a).
+
+Companion guides cover [redemption operations](redemption-ops.md),
+[auditor signing](../auditor/auditor-guide.md),
+[incident response](../security/incident-response.md),
+[public-testnet qualification](testnet-qualification.md) and
+[shadow replay and soak testing](soak-runbook.md).
 
 ## 1. Architecture recap
 
-One deployment = one token, one Asset Profile, one quote token, one auditor, one server +
-MongoDB + IPFS. Components:
+Each deployment has one RWA token, one Asset Profile, one quote token, one auditor and one
+server with MongoDB and an IPFS node.
 
-- **Contracts** (Foundry): `ComplianceRegistry`, `RWAToken`, `SupplyController`, `Vault`,
-  `FixedPriceStrategy`, `RedemptionEscrow`, wired by `RWAFactory` (deployed via 4 delegatecall
-  deployer helpers to stay under the EIP-170 code-size limit).
-- **Server** (Go/Gin): API, indexer, transaction manager, embedded SPA (`go:embed`).
-- **Signer** (Go CLI): air-gapped EIP-712 auditor signing. Never networked.
-- **Web** (React): admin + investor SPA, served by the Go binary at `/`.
+- Contracts (Foundry): `ComplianceRegistry`, `RWAToken`, `SupplyController`, `Vault`,
+  `FixedPriceStrategy` and `RedemptionEscrow`. `RWAFactory` deploys and connects them through
+  four delegatecall helpers to keep its runtime code within the EIP-170 size limit.
+- Server (Go/Gin): API, indexer, transaction manager and embedded admin console.
+- Signer (Go CLI): the auditor's EIP-712 signing tool. Run it on an offline machine.
+- Admin console (React, `web/`): embedded in the server binary and served at `/`.
+- Investor app (React, `investor-web/`): an example app that the issuer adapts, builds and hosts
+  separately. It uses the server API; the server does not host it.
 
 ## 2. Prerequisites
 
-- An EVM RPC endpoint + chain ID; confirmation depth policy.
-- One conventional ERC-20 quote token (no fee-on-transfer / rebasing).
+- An EVM RPC endpoint, its chain ID and a confirmation-depth policy.
+- An ERC-20 quote token without fee-on-transfer or rebasing behavior. Tokens with an allowlist
+  or blacklist also need the setup in §2a.
 - MongoDB and an IPFS (Kubo) node, or the bundled `docker/docker-compose.yml`.
-- Key custody plan: admin/treasury/redemption-manager/pricer are wallet/multisig actions
-  broadcast from the connected admin wallet (never server hot keys). The server holds exactly
-  **one** hot key — `compliance` (whitelists KYC'd investor wallets) — in KMS/Vault (see
-  `KeyProvider`). Project deployment and the auditor-signed mint are also broadcast from
-  the admin wallet, so the server has no deployer/relayer key.
-- An offline machine for the auditor with the `signer` binary. **Hardware-backed signing
-  (`--hardware ledger|trezor|yubikey|hsm`) is the recommended production configuration for the
-  auditor key**; no device has a working integration in the current build (`internal/hardware` ships only the adapter seam
-  and `StubAdapter`), so today every production deployment runs the hardened software-keystore
-  fallback (`--keystore`, either this signer's own Argon2id format or an Ethereum V3 file — see
-  `internal/keystore` and `docs/auditor/auditor-guide.md` §5) until a device is wired up. Treat
-  that as an explicitly-approved fallback, not the target end state.
+- A key custody plan. Use wallets or multisigs for deployment, auditor-authorized minting and
+  privileged administration. The server's signing role is `compliance`, which updates investor
+  status in the registry. Keep that key in a compatible Vault backend or an encrypted keystore
+  (§6a), separate from the admin and auditor keys.
+- An offline auditor machine with the `signer` binary. Hardware signing is the production
+  target, but `--hardware ledger|trezor|yubikey|hsm` has no working device integration:
+  `internal/hardware` provides an adapter interface and a `StubAdapter`. Until an adapter is
+  implemented, use the hardened software keystore with `--keystore`. The signer accepts its own
+  Argon2id format and Ethereum V3 files. Treat software custody as the approved fallback; see
+  `internal/keystore` and the [auditor guide, §5](../auditor/auditor-guide.md).
+
+## 2a. Quote tokens with an allowlist or a blacklist
+
+The quote-token issuer's restrictions apply in addition to the platform's RWA compliance
+checks. The platform transfers quote tokens through the ERC-20 interface; it does not consult
+the issuer's allowlist or blacklist separately. These addresses must be eligible for their
+respective transfers:
+
+| Address                      | Quote-token movement                                                | Effect of refusal                                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `Vault`                      | receives payment in `buy`; sends proceeds in `withdrawProceeds`     | the affected purchase or withdrawal reverts                                                                             |
+| `RedemptionEscrow`           | receives funding in `fundRedemption`; pays out in `claimRedemption` | funding or the claim reverts                                                                                            |
+| Treasury (`Vault.treasury`)  | receives `withdrawProceeds`                                         | withdrawal reverts; proceeds remain in the Vault until the issuer accepts the treasury or the admin calls `setTreasury` |
+| Each `TREASURER_ROLE` wallet | pays in `fundRedemption`                                            | funding reverts                                                                                                         |
+| Each investor wallet         | pays in `buy`; receives in `claimRedemption`                        | the purchase or claim reverts                                                                                           |
+
+After deployment and before opening sales, ask the quote-token issuer to accept the Vault,
+escrow, treasury and treasurer addresses. Confirm that it supports contract accounts before
+relying on the Vault or escrow to hold its token.
+
+A reverted transfer rolls back that call, but cannot undo earlier funding. A Funded request
+pays only its recorded beneficiary, and no role can withdraw or refund its quote tokens. If
+the issuer refuses that beneficiary, both the cash and RWA remain in escrow until payment can
+succeed. Check eligibility before funding; the [redemption guide](redemption-ops.md#before-funding-can-the-beneficiary-receive-the-quote-token)
+describes the checks and an atomic fund-and-claim batch.
+
+Restrictions imposed later can also strand contract balances. Blocking the escrow can stop
+Funded claims; blocking the Vault can stop withdrawal of sale proceeds. Neither contract has
+a rescue function. Recovery requires the quote-token issuer to lift the restriction.
 
 ## 3. Deploy
 
-1. Author the **Asset Profile** in the Setup screen; the server validates + canonicalizes it and
-   computes `profileDigest = SHA-256(JCS(profile))`. This digest is immutable on-chain.
-2. Choose token name/symbol/decimals, quote token, fixed purchase/redemption prices, redemption
-   timeout (14d default; factory-bounded), role holders, treasury, admin delay.
-3. Deploy the stack. Two paths:
-   - **Script** (recommended for chains at/under the 24KB limit or for reproducibility):
-     `contracts/script/Deploy.s.sol` deploys the 4 deployer helpers, the factory, and one project;
-     it logs every address.
-   - **Admin wallet** (Setup screen): the console reads the factory address from `GET /api/v1/config`,
-     assembles `ProjectConfig` client-side (deriving `projectId`/`profileDigest`/`decimals` from the
-     stored Asset Profile), and the admin **broadcasts `RWAFactory.deploy(ProjectConfig)` from their
-     own wallet** (`deploy` is permissionless; `config.admin` becomes `DEFAULT_ADMIN_ROLE`). The server
-     does not sign or relay the deploy — it observes the on-chain `ProjectDeployed` event.
-4. **Verify before use**: the server watches for the `ProjectDeployed` event whose `projectId`/
-   `profileDigest` match the stored profile, then verifies bytecode present at every address, roles
-   match the deployed config (re-derived from the signed deploy calldata), `Vault` and
-   `RedemptionEscrow` are allowlisted in the registry, and the factory holds no residual roles,
-   before marking the project `Active`. It surfaces this on the Security screen (`bytecodeVerified`,
-   `roles`).
+1. Create the Asset Profile on the Setup screen. The server validates and canonicalizes it,
+   then computes `profileDigest = SHA-256(JCS(profile))`. Deployment fixes that digest on-chain
+   for the life of the project.
+2. Choose the token name, symbol and decimals; quote token; purchase and redemption prices;
+   redemption timeout; role holders; treasury; and admin-transfer delay. The factory accepts a
+   redemption timeout from 1 to 365 days. Setup prefills 7 days; `Deploy.s.sol` defaults to 14
+   days. Set the admin-transfer delay deliberately: the contracts enforce no minimum (§4a).
+3. Deploy through either path:
+
+   - Setup screen: first run `contracts/script/DeployFactory.s.sol` to deploy the four helpers
+     and factory. It deploys no project and logs the values for `contract.factory_address` and
+     `contract.start_block`. The console reads the factory address from `GET /api/v1/config`
+     and builds `ProjectConfig` using the stored profile's `projectId`, `profileDigest` and
+     decimals. The connected admin wallet broadcasts `RWAFactory.deploy(ProjectConfig)`.
+     Deployment is permissionless; `config.admin` receives `DEFAULT_ADMIN_ROLE`. The server
+     observes `ProjectDeployed` without signing or relaying the deployment.
+   - Script: `contracts/script/Deploy.s.sol` deploys the helpers, factory and one project in a
+     single run and logs their addresses. Roles default to the deployer, and omitting
+     `QUOTE_TOKEN` deploys mock USDC. Set the script's role and quote-token variables outside a
+     local chain. For server adoption, configure the new `contract.factory_address`, broadcast
+     from `security.admin_address` and set `ADMIN` to that same address.
+
+4. Wait for verification before using the stack. With `security.admin_address` configured, the
+   server adopts only a deployment emitted by `contract.factory_address` whose transaction
+   signer and `config.admin` both match that admin address. This requires a direct factory call
+   from an externally owned account. Transfer administration to a multisig afterwards (§4a).
+   Matching-profile deployments from other senders are logged and ignored.
+
+   The server checks:
+
+   - a successful transaction receipt and a supported event version matching `factory.version()`;
+   - deploy calldata whose `projectId`, `profileDigest` and decimals match the stored profile;
+   - bytecode at each project-contract address and the expected contract wiring;
+   - role holders matching the deploy calldata, with no unexpected holders;
+   - the Vault and escrow registered as system addresses, Allowed with no expiry;
+   - no platform roles retained by the factory, including `DEFAULT_ADMIN_ROLE`.
+
+   Passing verification sets the project to `Active`. A failed check records `Failed` with a
+   reason; the Security screen shows the results, including `bytecodeVerified` and `roles`.
+   Production requires `security.admin_address`. In development, an empty value skips both
+   admin-binding checks and allows matching-profile deployments from any sender, with a log
+   warning.
 
 ## 4. Day-2 operations
 
-- **Compliance**: allow/block wallets (KYC webhook or manual). A wallet must prove ownership
-  (challenge/verify) before a KYC webhook may set it Allowed, unless a documented manual override.
-- **Assets → mint**: create a record → download the `.rwa` package → auditor signs offline →
-  in the Setup/Assets screen upload `signed-result.json`; the console assembles the `MintAttestation`
-  (record + profile/project fields) and the admin **broadcasts `SupplyController.mint(attestation,
-  signature)` from their own wallet** (`mint` is permissionless — the auditor's EIP-712 signature is
-  the authorization). Tokens go to the Vault only. The server observes the `Minted` event and advances
-  the record; it never relays the mint.
-- **Sales**: on-chain `Vault.buy` (investor calldata) only. Withdraw proceeds to treasury (TREASURER_ROLE).
-- **Redemptions**: see `redemption-ops.md`.
-- **Pricing**: PRICER_ROLE updates fixed purchase/redemption prices independently.
-- **Pause**: PAUSER_ROLE pauses all token movement + supply/sale/redemption state changes.
+- Compliance: allow or block wallets through a KYC webhook or manually on the Compliance
+  screen. Webhooks require a completed wallet-ownership challenge. Manual changes skip that
+  check, so document each override.
+- Assets and minting: create an asset record, download its `.rwa` package and have the auditor
+  sign it offline. Upload `signed-result.json` on the Assets screen. The console builds the
+  `MintAttestation`, and the admin wallet broadcasts
+  `SupplyController.mint(attestation, signature)`. The call is permissionless because the
+  auditor's EIP-712 signature authorizes the mint. Minted tokens go to the Vault. The server
+  observes `Minted` and advances the record; it does not relay the mint.
+- Sales: investors call `Vault.buy` from their wallets. A holder of `TREASURER_ROLE` withdraws
+  proceeds to the treasury.
+- Redemptions: follow the [redemption operations guide](redemption-ops.md).
+- Pricing: `PRICER_ROLE` sets purchase and redemption prices independently on
+  `FixedPriceStrategy`.
+- Pause: `PAUSER_ROLE` pauses the project. See §4a for the affected operations and exceptions.
 
-## 4a. Privileged roles & administration
+## 4a. Privileged roles and administration
 
-All privileged actions are wallet transactions — never role private keys in the browser. In the
-admin console the connected admin wallet performs most of them directly: pause/unpause, price
-updates, role grant/revoke, the two-step admin transfer, and the ERC-7943 freeze and forced
-transfer (Security screen); treasury withdrawal
-(Inventory & Sales); and redemption funding/rejection (Redemptions) are each encoded client-side
-and broadcast from the wallet — the contract's `onlyRole` check is the authorization. The
-remaining admin setters (auditor/treasury/strategy/redemption-manager rotation) are direct
-admin/multisig contract calls. Investor buy/request/claim/cancel are server-built calldata the
-investor submits from their own wallet.
+The admin console builds transaction calldata and asks the connected wallet to sign and
+broadcast it. The console does not receive that wallet's private key. Contract `onlyRole` checks
+authorize privileged calls; the console's role controls help users choose available actions.
+Compliance-screen status writes use the server's compliance key instead.
+
+| Screen            | Wallet transactions                                                                                 |
+| ----------------- | --------------------------------------------------------------------------------------------------- |
+| Security          | pause/unpause, prices, role grants/revocations, admin transfer, ERC-7943 freeze and forced transfer |
+| Inventory & Sales | treasury withdrawal                                                                                 |
+| Redemptions       | quote-token approval, funding and rejection                                                         |
+
+Call `SupplyController.setAuditor`, `Vault.setTreasury` and `Vault.setStrategy` directly from
+the admin wallet or multisig; the console has no forms for them. Investors submit purchases,
+redemption requests, claims and cancellations from their wallets through the investor app.
 
 ### Role matrix (see `../spec/roles.md`)
 
-| Role | Production holder | Powers |
-| --- | --- | --- |
-| `DEFAULT_ADMIN_ROLE` | issuer multisig | grant/revoke roles; set auditor/treasury/strategy/redemption-manager; ERC-7943 freeze and forced transfer |
-| `PAUSER_ROLE` | issuer/security multisig | pause/unpause the whole project |
-| `COMPLIANCE_ROLE` | KMS server key and/or legal multisig | set wallet status/expiry |
-| `PRICER_ROLE` | issuer/pricer multisig | update fixed prices |
-| `TREASURER_ROLE` | treasury multisig | withdraw proceeds; fund exact redemption requests |
-| `REDEMPTION_MANAGER_ROLE` | issuer/legal multisig | reject pending unfunded requests with a reason code |
+| Role                      | Hosted on                        | Recommended production holder        | Powers                                                                                      |
+| ------------------------- | -------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `DEFAULT_ADMIN_ROLE`      | each project governance contract | issuer multisig                      | grant/revoke roles; set auditor, treasury and Vault strategy; freeze and force-transfer RWA |
+| `PAUSER_ROLE`             | `RWAToken`                       | issuer or security multisig          | pause and unpause the project                                                               |
+| `COMPLIANCE_ROLE`         | `ComplianceRegistry`             | server hot key and/or legal multisig | set wallet status and expiry                                                                |
+| `PRICER_ROLE`             | `FixedPriceStrategy`             | issuer or pricer multisig            | set fixed prices                                                                            |
+| `TREASURER_ROLE`          | `Vault`, `RedemptionEscrow`      | treasury multisig                    | withdraw proceeds; fund individual redemption requests                                      |
+| `REDEMPTION_MANAGER_ROLE` | `RedemptionEscrow`               | issuer or legal multisig             | reject Pending, unfunded requests with a reason code                                        |
 
-Use OpenZeppelin `AccessControlDefaultAdminRules` for the default admin: delay ≥ 24h in
-production. The admin transfer is two-step — the current admin begins it and the incoming admin
-accepts after the delay, on every governance contract. The auditor is stored authority in
-`SupplyController`, not a tx-sending role.
+Deployment grants `PAUSER_ROLE` to `config.admin`; `ProjectConfig` has no separate pauser field.
+Grant the role after deployment if a different multisig should hold it. The auditor is an
+address stored in `SupplyController`; it authorizes attestations rather than sending privileged
+transactions under an on-chain role.
+
+Each governance contract uses OpenZeppelin `AccessControlDefaultAdminRules`. The current admin
+begins a transfer, then the incoming admin accepts after the on-chain delay. Use at least 24
+hours in production, although the contracts impose no minimum. Outside Anvil, `Deploy.s.sol`
+defaults to 24 hours and refuses zero unless `ALLOW_ZERO_ADMIN_TRANSFER_DELAY` is set. Setup
+prefills 48 hours.
 
 ### Common admin actions
 
-- **Grant/revoke a role**: `grantRole/revokeRole(role, account)` on the hosting contract (see
-  roles.md for which contract hosts which role; a role held on more than one contract is changed
-  on each). Security screen.
-- **Transfer admin**: the current admin `beginDefaultAdminTransfer(newAdmin)` on every governance
-  contract; the incoming admin then `acceptDefaultAdminTransfer()` on each after the on-chain
-  delay. Both steps are in the Security screen.
-- **Rotate auditor**: `SupplyController.setAuditor(newAuditor)` → emits `AuditorChanged`. Re-issue
-  any un-signed `.rwa` packages to the new auditor. Nonces/record keys already used stay used.
-- **Change treasury / strategy / redemption manager**: admin setters on `Vault` /
-  `RedemptionEscrow`. Verify on the Security screen afterward.
-- **Update prices**: `FixedPriceStrategy.setPurchasePrice/setRedemptionPrice` (PRICER_ROLE).
-- **Pause / unpause**: `RWAToken.pause()/unpause()` (PAUSER_ROLE). While paused, transfers, buy,
-  mint, burn, request/fund/claim all revert. Cancel is also effectively blocked (token transfer
-  reverts) — see `../spec/redemption-state-machine.md` footnote.
-- **Before either enforcement call below**: both are broadcast to a public mempool, and a holder
-  watching for their own address can front-run one with an ordinary `transfer` to a fresh
-  compliant wallet, or with a `requestRedemption` that parks the balance in the escrow, where a
-  freeze does not reach it and a seizure is refused outright. The sequence that defeats both is
-  **pause the project, confirm the pause landed, freeze or seize, then unpause**. A pause stops
-  ordinary transfers and redemption requests alike, while `setFrozenTokens` and `forcedTransfer`
-  both keep working through it, so the window closes completely. Where a pause is too
-  disruptive, submit through a private relay (`eth_sendPrivateTransaction` or equivalent)
-  instead.
-- **Freeze a holder's tokens**: `RWAToken.setFrozenTokens(account, amount)` (DEFAULT_ADMIN_ROLE).
-  The amount is absolute, in token minimal units: it replaces whatever was frozen before rather
-  than adding to it, and 0 releases the hold. It may legitimately exceed the holder's balance,
-  which withholds tokens they have not received yet. Frozen tokens stay in the holder's wallet;
-  they simply cannot be sent, and the transfer reverts with
-  `ERC7943InsufficientUnfrozenBalance`. The Vault and RedemptionEscrow are refused outright,
-  since freezing either would stop every buy, claim, and cancel. Security screen.
-- **Forced transfer (seizure)**: `RWAToken.forcedTransfer(from, to, amount)`
-  (DEFAULT_ADMIN_ROLE). Moves tokens without the holder's signature, for a court order or a
-  recovery. It works while the project is paused and against a holder who is Blocked or expired,
-  which is the point; the recipient must still be Allowed, and `from == to` and the zero address
-  are rejected, so it can never mint or burn. When the amount reaches past the holder's unfrozen
-  balance, their frozen amount is reduced first and a `Frozen` event is emitted before the
-  `Transfer`. The Vault and the RedemptionEscrow are refused as the source
-  (`SystemAddressCannotBeSeized`): their balances are the unsold float and redemptions that are
-  already funded, and moving either behind the contract's back would strand a paid claim with no
-  way to settle it. Send seized tokens to a wallet the issuer controls and that is Allowed in the
-  registry; the Vault is a valid destination if the intent is to return them to the unsold float,
-  which raises `vault.inventory()` without a mint, so record why. Security screen, behind a
-  confirmation step.
-- **Reading enforcement state**: the frozen-balance map and the last seizure are admin-only
-  (`GET /api/v1/project/enforcement`, shown on the Security screen). `GET /api/v1/project` stays
-  public and carries neither, since naming the wallets an issuer has frozen is operational
-  compliance data rather than market data. A holder sees their own frozen amount, and nobody
-  else's, on `GET /api/v1/me/wallet-status`, which the investor SPA renders as a spendable
-  balance.
+- Grant or revoke roles with `grantRole(role, account)` or `revokeRole(role, account)` on the
+  contract that hosts the role. Change `TREASURER_ROLE` on both the Vault and escrow. The
+  Security screen handles these calls.
+- Transfer administration by calling `beginDefaultAdminTransfer(newAdmin)` on each governance
+  contract, then having the incoming admin call `acceptDefaultAdminTransfer()` on each after
+  its delay. Both steps are available on the Security screen.
+- Rotate the auditor with `SupplyController.setAuditor(newAuditor)`, which emits
+  `AuditorChanged`. Reissue unsigned `.rwa` packages to the new auditor. Used nonces and record
+  keys remain used.
+- Change the treasury or purchase strategy with `Vault.setTreasury` or `Vault.setStrategy`.
+  Both require the admin role and revert while paused. Check the Security screen afterwards.
+  The escrow retains its original strategy, so continue setting redemption prices there after
+  a Vault strategy change. The split keeps `config_drift` raised (§7a).
+- Replace the redemption manager by granting `REDEMPTION_MANAGER_ROLE` on `RedemptionEscrow`
+  to the new holder and revoking it from the old holder on the Security screen.
+- Update prices with `FixedPriceStrategy.setPurchasePrice` and `setRedemptionPrice`
+  (`PRICER_ROLE`), also on the Security screen.
+
+#### Pause and unpause
+
+Call `RWAToken.pause()` or `unpause()` with `PAUSER_ROLE`.
+
+| While paused     | Operations                                                                                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Revert           | ordinary transfers, `buy`, `withdrawProceeds`, `mint`, `burn`, `requestRedemption`, `fundRedemption`, `rejectRedemption`, `claimRedemption`, `Vault.setTreasury`, `Vault.setStrategy` |
+| Remain available | timed-out `cancelRedemption`, price updates, `setAuditor`, compliance and role changes, `setFrozenTokens`, `forcedTransfer`                                                           |
+
+Cancellation uses an escrow-only RWA return path that bypasses pause but still requires an
+Allowed beneficiary. See the [redemption state machine](../spec/redemption-state-machine.md).
+
+#### Apply a freeze or seizure
+
+A holder can front-run a pending enforcement transaction by transferring to another compliant
+wallet or requesting redemption. A freeze on that holder does not reach RWA already in escrow,
+and the escrow cannot be a seizure source. Before enforcing:
+
+1. Pause the project.
+2. Confirm the pause on-chain.
+3. Freeze or seize the tokens.
+4. Unpause when the intervention is complete.
+
+Once effective, the pause stops ordinary transfers and new redemption requests while freeze
+and seizure remain available. If a pause would be too disruptive, use a private relay such as
+`eth_sendPrivateTransaction` instead of the public mempool.
+
+Use `RWAToken.setFrozenTokens(account, amount)` with `DEFAULT_ADMIN_ROLE` to freeze a balance.
+The amount is absolute, in token minimal units: it replaces the previous amount, and zero
+releases the hold. It may exceed the current balance to withhold future receipts. Tokens remain
+in the holder's wallet. The frozen-balance check rejects otherwise affordable transfers that
+spend frozen tokens with `ERC7943InsufficientUnfrozenBalance`. Nonzero freezes on the Vault or
+escrow are refused to
+protect purchases, claims and cancellations. The Security screen provides this action.
+
+Use `RWAToken.forcedTransfer(from, to, amount)` with `DEFAULT_ADMIN_ROLE` for a seizure or
+recovery without the holder's signature. It works while paused and can take tokens from a
+Blocked or expired holder. The recipient must be Allowed; zero addresses and `from == to` are
+rejected, so the call cannot mint or burn. A successful seizure above the unfrozen balance
+reduces the frozen amount and emits `Frozen` before `Transfer`.
+
+The Vault and escrow are prohibited sources (`SystemAddressCannotBeSeized`): their inventory
+and escrowed RWA must remain under the contracts' accounting. Send seized tokens to an
+issuer-controlled Allowed wallet. The Vault is also a valid destination for returning tokens
+to unsold inventory. This increases `vault.inventory()` without minting; record the reason.
+The Security screen requires confirmation before a forced transfer.
+
+#### Read enforcement state
+
+`GET /api/v1/project/enforcement` is admin-only and supplies the frozen-balance map and latest
+seizure to the Security screen. The public `GET /api/v1/project` response omits both. A wallet
+session's `GET /api/v1/me/wallet-status` response includes that holder's frozen amount, which
+the investor app uses to show spendable balance. These API restrictions do not make contract
+queries or on-chain enforcement events private.
 
 ### Security notes
 
-- Freeze and forced transfer are the two most privileged token operations here, and they answer
-  only to `DEFAULT_ADMIN_ROLE`. The server has no key that can call either one, and the admin
-  console's role gate is a convenience: the contract's `onlyRole` check is the authorization.
-  Every call emits an event, so both are auditable from chain history alone.
-- Minimize hot roles. Admin/treasury/redemption-manager should be multisig, not server keys.
-- A compromised compliance key can allow/block wallets but cannot mint.
-- All role changes emit events with previous/new/caller for a full audit trail.
+- Keep `DEFAULT_ADMIN_ROLE` separate from the server's compliance key. Freeze and forced
+  transfer require that admin role, and each emits an on-chain event for audit.
+- Use multisigs for the admin, treasurer and redemption manager to limit hot-key authority.
+- A key holding only `COMPLIANCE_ROLE` can allow or block wallets, but cannot authorize supply
+  changes without an auditor attestation.
+- Role changes emit events. Auditor, treasury, strategy, price and compliance setters also
+  record the previous value, new value and caller.
 
-## 5. Monitoring & alerts
+## 4b. Allowlisting a contract (pool, lending market, settlement contract)
 
-Scrape the server `/metrics` (Prometheus). Alert on: pending-redemption SLA breach (age over
-threshold), funded-but-unclaimed redemptions, indexer lag / checkpoint staleness, RPC errors,
-and transaction-manager stuck nonces. Treat indexer data as unconfirmed until the finality depth.
+The registry applies the same eligibility rule to contract and wallet addresses. Allowlisting
+a liquidity pool, lending market or DvP settlement contract lets it hold and transfer RWA
+without a platform code change. Ordinary transfers still check both sender and recipient.
 
-## 6. Backup & recovery
+On the Compliance screen, use **Manual allow / block**, select Allowed and leave Valid until
+empty. This skips the ownership challenge, which uses EOA signature recovery rather than
+contract-wallet signature validation. Allowlist the exact deployed address you reviewed.
 
-- **MongoDB**: scheduled `mongodump`; test `mongorestore` regularly (see `server/ops/`).
-- **IPFS replication** (`internal/ipfs.ReplicationManager`): a CID proves
-  integrity, not availability, so a lone local Kubo node is NOT a production-safe configuration.
-  Set `IPFS_BACKUP_ARCHIVE_DIR` (a local-filesystem reproducible content archive — no external
-  commercial pinning service required) and/or `IPFS_BACKUP_KUBO_URL` (a second, independent Kubo
-  node) to configure at least one backup destination; `IPFS_REPLICATION_THRESHOLD` (default 1) is
-  how many of them must succeed before a package is treated as durably published
-  (`PublicationReplicated`, not just `PinnedLocally`). Leaving both unset keeps the earlier
-  single-node behavior — a documented gap, not silently hardened. The server verifies every known
-  publication against every configured destination on a 30-minute ticker (fetch + digest match,
-  not just a prior API success) and demotes a publication whose content can no longer actually be
-  retrieved. Recover a lost local Kubo repository with an operator-triggered
-  `ReplicationManager.RestoreLocal` call (re-pulls from whichever backup still has the content);
-  a failed backup is retried with `ReplicationManager.Retry` once it's back.
-- **Chain reindex**: read models are reconstructable from chain events. To rebuild, drop the
-  read-model collections and replay from the last safe checkpoint (or genesis). Redemption status
-  is derived only from events; server records annotate but never override chain state.
-- **Reorgs**: the indexer rewinds to a safe checkpoint on parent-hash change and replays; a
-  divergence deeper than `WithMaxAutoReorgDepth` (default 100 blocks) enters
-  `ReconciliationRequired` and freezes derived state until an operator calls
-  `ResetToTrustedCheckpoint` with an out-of-band-verified block.
-- **Indexer sync range / DLQ**: historical and routine `eth_getLogs` scans
-  are chunked (`WithMaxLogRange`, default 2000 blocks) and shrink automatically on an
-  oversized-response error from the RPC provider, with bounded exponential backoff on transient
-  failures; a persistent failure never advances the checkpoint, so a retried `Poll` always resumes
-  correctly. A log the indexer cannot decode is recorded to the dead-letter queue
-  (`indexer_dead_letters`, `WithDeadLetterQueue`) instead of blocking every later canonical event
-  behind it — inspect/retry entries via `Indexer.RetryDeadLetter`.
-- **Transaction-manager nonce recovery**: on every restart the transaction
-  manager reconciles the account's pending AND latest on-chain nonce against its own persisted
-  records before allocating or resubmitting anything (`RefreshStatuses` now also runs once
-  synchronously at startup, not just on the first ticker interval). A transaction whose nonce gets
-  consumed by something other than itself is marked `nonce_consumed_externally` and its
-  idempotency key becomes retryable; a transaction that exhausts its replacement-attempt limit
-  (`maxReplacementAttempts`, default 10) is marked `needs_intervention` and blocks further
-  submissions for that signer until an operator resolves it — see §7a below for the
-  single-writer-per-hot-key constraint this all still operates within.
+- Leave the approval without expiry. An expired contract cannot send RWA, so users cannot
+  withdraw their RWA until its approval is renewed.
+- Before blocking a venue, stop deposits and let users withdraw. Blocking prevents ordinary
+  RWA withdrawals just as expiry does.
+- Do not freeze or seize a venue's shared balance. A freeze restricts withdrawals for its
+  users; a seizure removes tokens and can leave its accounting overstated. Act on tokens after
+  they return to an individual wallet, or use the venue's own controls. Only the Vault and
+  escrow have protection against a nonzero freeze, seizure or registry block.
+- A wallet freeze does not follow the holder's positions into a venue. Check for those
+  positions when enforcing a freeze.
+- Traders, liquidity providers, liquidators and settlement counterparties receiving RWA must
+  each be Allowed. Without an eligible liquidator, RWA collateral cannot be transferred through
+  an ordinary liquidation, exposing lenders to bad debt.
+- Routers and settlement agents that hold RWA, even briefly, also need Allowed records.
+- Venue prices can differ from the Vault's purchase price and escrow's redemption price.
+  Prices above the purchase price encourage buying from the Vault and selling into the venue;
+  prices below the redemption price encourage venue purchases followed by redemption requests.
+  Account for both when setting prices and deciding which requests to fund.
+- A proxy administrator can change venue behavior after allowlisting. Prefer immutable
+  deployments and review each upgrade.
+- One venue address may represent many beneficial owners. Assess applicable holder limits
+  against those owners rather than relying on the address count.
+- A project pause stops ordinary RWA transfers into and out of the venue.
+
+## 4c. Sanctions screening
+
+Screen off-chain and apply a confirmed match through
+`ComplianceRegistry.setStatus(wallet, Blocked, validUntil)`. The token does not consult
+sanctions lists. The registry block takes effect when its transaction is included on-chain;
+keep the interval between a confirmed match and the block short.
+
+The KYC adapters map these provider decisions to Blocked. Webhook signature, ownership and
+acceptance checks still apply before a decision is relayed:
+
+| Provider | Decision mapped to Blocked                                                      | Deliveries with no on-chain status change                       |
+| -------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Sumsub   | `applicantReviewed` with answer RED and reject type FINAL                       | RETRY rejections and event types other than `applicantReviewed` |
+| Onfido   | a workflow-run delivery with status `declined` and a valid completion timestamp | nonterminal workflow statuses and non-workflow events           |
+
+Ongoing monitoring alone does not ensure a registry block. For Sumsub, a match held for manual
+review leaves the existing approval in place until a compliance officer issues a FINAL
+rejection. Include that review in the officer's routine. Onfido watchlist events are not
+workflow runs; the server acknowledges and ignores them, so block confirmed matches manually.
+
+Wallet-address screening is separate from screening the person. The server has no built-in
+adapter for services such as Chainalysis, TRM Labs or Elliptic. To connect a service:
+
+- With `kyc.provider` set to `none`, post HMAC-signed Blocked decisions to
+  `POST /api/v1/compliance/webhook`. The wallet must have proved ownership. See the body format
+  in [ADR-008](../adr/ADR-008-pluggable-kyc-providers.md). When Sumsub or Onfido is configured,
+  that endpoint accepts the selected provider's deliveries instead.
+- Grant the service's key `COMPLIANCE_ROLE` and have it call `setStatus` directly. The server
+  indexes the resulting `StatusChanged` events. This key can also allow wallets, so protect it
+  like the server's compliance key.
+- Block manually on the Compliance screen with **Manual allow / block**, status Blocked.
+
+A registry block stops ordinary RWA transfers to and from the wallet while leaving its
+balance in place. Recovering those tokens requires an admin `forcedTransfer` to an
+issuer-controlled Allowed wallet (§4a). Funding, rejection and cancellation of its Pending
+redemptions also fail their beneficiary-compliance checks.
+
+Funded claims remain permissionless and do not re-check beneficiary compliance. A project
+pause stops claims; the quote token's restrictions can also prevent payment. Discuss whether
+to pause with legal counsel: funded cash can only go to the recorded beneficiary. See the
+[redemption guide](redemption-ops.md#edge-cases).
+
+Keep the provider's decision consistent with a manual block. A later accepted approval
+webhook, including one from re-verification, can restore Allowed status. Sumsub and Onfido
+approvals have no expiry; manual approval and the generic webhook accept `validUntil` for
+periodic review. Once a nonzero expiry passes, ordinary RWA transfers and Pending redemption
+operations require renewed approval. Expiry does not stop an already Funded claim.
+
+## 5. Monitoring and alerts
+
+Scrape `/metrics` on `http.metrics_addr` (§7a). The platform exports:
+
+- `rwa_http_requests_total` and `rwa_http_request_duration_seconds`;
+- `rwa_sales_inventory_tokens`;
+- `rwa_redemptions_pending_count`, `rwa_redemptions_pending_oldest_age_seconds` and
+  `rwa_redemptions_funded_unclaimed_count`;
+- `rwa_alerts_fired_total{kind}`, `rwa_storage_up` and `rwa_config_drift`;
+- `rwa_idempotency_outbox_errors_total` and `rwa_read_model_reconcile_errors_total`.
+
+`rwa_sales_inventory_tokens` divides Vault inventory by `10^18`. It reports whole tokens for
+an 18-decimal RWA token; account for that scale if your token uses different decimals.
+
+Each alert finding writes a log line, increments `rwa_alerts_fired_total` and attempts an
+audit-log write. Repeated findings are counted on each check rather than deduplicated.
+
+| Kind                     | Condition                                                                                                                       | Check interval                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| `pending_redemption_sla` | Pending age reaches `alerts.pending_redemption_sla` (default 48h)                                                               | 5 minutes                      |
+| `funded_claim_failure`   | Funded, unclaimed age reaches `alerts.funded_claim_failure_sla` (default 24h), measured from the read model's last state update | 5 minutes                      |
+| `config_drift`           | contract wiring differs from the expected project state (§7a)                                                                   | 5 minutes                      |
+| `storage_degraded`       | MongoDB ping fails                                                                                                              | 30 seconds, when using MongoDB |
+
+The platform has no dedicated metrics for indexer lag, RPC errors or stuck nonces. Check the
+Security screen's stale-data warning (`securityStale` on `GET /api/v1/project`) and the
+Transactions screen for `needs_intervention`. Treat indexed data as unconfirmed until it
+reaches the configured finality depth.
+
+## 6. Backup and recovery
+
+### MongoDB and local IPFS backups
+
+Schedule `mongodump` and regularly test `mongorestore`. `server/ops/backup.sh` backs up the
+database and exports IPFS pins as CAR archives; `server/ops/restore.sh` restores both. These
+scripts read `MONGO_URI`, `MONGO_DB` and `IPFS_API_URL` from the environment, not the server
+configuration file.
+
+### IPFS replication
+
+A CID verifies content integrity, but a single Kubo node does not provide a backup. Configure
+an independent destination with `ipfs.backup_archive_dir`, `ipfs.backup_kubo_url`, or both.
+The archive is local reproducible storage and needs no commercial pinning service; the second
+Kubo node should be independent of the primary.
+
+`ipfs.replication_threshold` (default 1) sets the number of verified backups required for
+`Replicated` status. `PinnedLocally` is an intermediate publication stage; an unmet backup
+threshold produces `ReplicationPending` or `ReplicationFailed`.
+In production, setting `ipfs.api_url` requires at least one backup destination and a threshold
+between 1 and the number of destinations.
+
+With replication configured, `internal/ipfs.ReplicationManager` checks recorded publications
+every 30 minutes by retrieving content from the local node and backup destinations and
+matching its digest. Backups that fail verification no longer count toward the threshold;
+losing enough backups demotes a publication from `Replicated`.
+
+Recover a lost local Kubo repository with
+`opsctl --config <path> ipfs restore-local --id=<id>`. It retrieves matching content from an
+available backup. When a failed backup returns, retry replication with
+`opsctl --config <path> ipfs retry --id=<id> --file=<path>`.
+
+### Chain reindex
+
+`cmd/reindex --config <path>` requests confirmation; `--yes` skips the prompt. It deletes
+indexed events for the project's contracts, resets the chain's checkpoint and retained block
+hashes, and clears purchases and redemption requests. The affected stores are `chain_events`,
+`indexer_checkpoints`, `indexer_block_hashes`, `purchases` and `redemption_requests`.
+
+The running platform's indexer and reconciliation loops rebuild the read models. Asset
+profiles, investor ownership flags and audit logs are preserved. Use
+`server/ops/reindex_rehearsal.sh` to compare collection counts before and after recovery.
+Redemption status comes from chain events; server annotations do not override it.
+
+### Reorgs
+
+When checkpoint hashes disagree with the canonical chain, the indexer finds a trusted
+checkpoint, rewinds and replays. If automatic recovery cannot establish a checkpoint under
+the built-in 100-block recovery policy, it marks `ReconciliationRequired` and stops indexer
+advancement and dependent reconciliation. Verify a block out of band, then run
+`opsctl --config <path> indexer reset-checkpoint --trusted-block=<n> --trusted-hash=0x...`.
+The command rejects a hash that disagrees with the RPC. The recovery depth is not a server
+configuration setting.
+
+### Log scanning and the dead-letter queue
+
+The platform indexer requests `eth_getLogs` in chunks of up to 2000 blocks. Oversized responses
+and timeouts shrink the range; transient failures use bounded exponential backoff with a
+default five-attempt limit. A failed chunk leaves its checkpoint unchanged, so the next poll
+resumes there.
+
+Undecodable logs enter `indexer_dead_letters`, allowing later events to be processed. Use
+`opsctl --config <path> dlq list`, then `inspect`, `retry` or `dismiss`. Retry decodes the retained
+log again and leaves it unresolved if decoding still fails. Dismiss marks it resolved without
+ingesting the event.
+
+### Transaction-manager nonce recovery
+
+The platform calls `RefreshStatuses` at startup and repeats it on a ticker. Before allocating
+a nonce, the transaction manager compares the signer's pending and latest on-chain nonces
+with its stored transactions.
+
+An externally consumed nonce produces `nonce_consumed_externally`. Compliance status writes
+opt into retry under the same idempotency key; transactions without that opt-in require
+operator review before the signer can submit again. Exceeding `maxReplacementAttempts`
+(default 10) produces `needs_intervention` and blocks further submissions from that signer
+until resolved. Configure signing-key coordination as described in §7a.
 
 ## 6a. Hot-key provider (KeyProvider)
 
-The server holds exactly one hot key — `compliance` — and `keys.provider_mode` in the config file
-selects the backend it comes from:
+`keys.provider_mode` selects the backend for the server's `compliance` signing key:
 
-- `vault` — HashiCorp Vault Transit. Requires a Transit key with **sign** capability and a policy
-  granting only `transit/sign/<key>` and `transit/keys/<key>` (read, for the public key) — never
-  key export. The server never holds the private key; it caches only the public key + address.
-- `local-keystore` — password-encrypted Ethereum keystore file (`keys.keystore_dir` +
-  `keys.keystore_password_file`). Acceptable for smaller deployments; the key is still decrypted
-  into this process's memory.
-- `raw` — **development only.** The plaintext hex key sits in `keys.compliance_key` in the config
-  file itself, readable by anyone who can read that file or inspect the process. The server logs a
-  startup warning whenever this mode is active, and `environment: production` refuses to start on
-  `raw` with a compliance key configured.
-- `kms-mock` — a deterministic, loudly-logged stand-in for a real KMS, for CI and local dev only.
-  Refused outright in production.
+- `vault`: a HashiCorp Vault Transit-compatible signing backend supporting secp256k1 and
+  the public-key response format required by `server/internal/keys/vault.go`. Set `keys.vault_addr` and
+  `keys.vault_token`. The key name is `<keys.vault_key_prefix>compliance`, with default prefix
+  `rwa-`. Limit the token to signing at `transit/sign/<key>` and reading the public key at
+  `transit/keys/<key>`; deny key export. Private key material stays in the backend; the server
+  caches the public key and address.
+- `local-keystore`: a password-encrypted Ethereum keystore at
+  `<keys.keystore_dir>/compliance.json`, with its password in `keys.keystore_password_file`.
+  This is acceptable for smaller deployments, but decrypts the key into server memory.
+- `raw`: development only. `keys.compliance_key` or its environment override supplies a
+  plaintext hex key. Anyone able to read that configuration or inspect process memory can
+  obtain it. Loading a configured raw key logs a warning; `environment: production` refuses
+  `raw` when a compliance key is configured.
+- `kms-mock`: a logged test backend that derives deterministic keys when given a seed.
+  Use it only for CI or local development; production refuses it.
 
-Production MUST use `vault` or (at minimum) `local-keystore`. Set `keys.provider_mode` explicitly
-— do not rely on the default, which is `raw`.
+For production hot-key signing, use `vault` or `local-keystore`. Set `keys.provider_mode`
+explicitly because it defaults to `raw`.
 
 ## 7. Key rotation
 
-Admin/auditor/treasury/redemption-manager/strategy are all rotatable by the admin (§4a). Hot keys
-rotate via `KeyProvider`: provision the new key, grant its on-chain role, cut over, then revoke
-the old. Rehearse rotation on a testnet before production. Auditor rotation emits `AuditorChanged`;
-in-flight unsigned packages must be re-issued to the new auditor.
+The admin can replace the auditor, treasury and Vault strategy and change role holders (§4a).
+For the compliance key, provision the replacement through the key provider, grant it
+`COMPLIANCE_ROLE`, switch the server to it and revoke the old key's role. Rehearse the cutover
+on a testnet first. Auditor rotation emits `AuditorChanged`; reissue in-flight unsigned
+packages to the new auditor.
 
-### Rotation & recovery rehearsal
+### Rotation and recovery rehearsal
 
-1. On a testnet copy, rotate each role and confirm the old holder loses power, the new gains it.
-2. Rotate the auditor; sign + mint with the new auditor key end-to-end.
-3. Rotate a hot key via `KeyProvider`; confirm the server signs with the new key and old is revoked.
-4. Rehearse a **funded-redemption recovery**: blacklist a beneficiary at the quote-token level,
-   confirm the funded claim reverts but the request stays Funded, lift the blacklist, retry claim.
-Document each rehearsal's date, admin, and result.
+1. Rotate each role on a testnet copy. Confirm that the old holder loses its authority and the
+   new holder gains it.
+2. Rotate the auditor, then complete signing and minting with the replacement key.
+3. Rotate the compliance key through its provider. Confirm that the server signs with the new
+   key and the old key's role is revoked.
+4. Blacklist a Funded request's beneficiary at the quote-token level. Confirm that its claim
+   reverts and remains Funded, then lift the restriction and retry (§2a).
 
-## 7a. Deployment topology & observability
+Record the date, admin and result for each rehearsal.
 
-- **Hot-key coordination — two modes** (`TX_COORDINATION_MODE`, default `in-process`; documented
-  on `blockchain.TxManager`):
-  - `in-process` (default): the transaction manager serializes nonces with an in-process per-key
-    lock only. Running two server instances that share the same hot key WILL race nonces and
-    double-broadcast. Run exactly one platform process per hot signing key in this mode (scale
-    reads separately if needed).
-  - `mongo-lease`: additionally acquires a distributed, fenced
-    lease (`nonce_leases` collection, `internal/dal/repository.NonceLeaseRepository`) for
-    `chainId:signerAddress` before touching a signer's nonce sequence — safe for multiple replicas
-    sharing the same hot key. Requires `PERSISTENCE_MODE=mongo`. A replica that loses the race (or
-    stalls long enough for `TX_LEASE_TTL`, default 30s, to expire and another replica to take
-    over) fails the affected `Submit`/`Replace` call fast with a retryable error rather than
-    double-broadcasting; the fencing token is stamped on the transaction record for audit but the
-    actual reject-a-superseded-writer check happens live against the lease store, not by trusting
-    that stored value later. Prefer `in-process` unless you specifically need to scale a hot key
-    across replicas — it has one fewer moving part (no lease round-trip on every submission).
-- **Trusted proxies.** `TRUSTED_PROXIES` defaults to none (trust no proxy), so `X-Forwarded-For`
-  cannot be spoofed to bypass per-IP rate limits. If you run behind a real reverse proxy, set it
-  to that proxy's address only.
-- **Metrics** are served on a **separate** listener (`METRICS_ADDR`, default `:9090`), never the
-  public API port — scrape it from your monitoring network only. Business gauges include Vault
-  inventory, pending-redemption count/oldest-age, and funded-unclaimed count; alert evaluators
-  (pending-redemption SLA, funded-claim-failure) fire on a 5-minute ticker into logs + audit log +
-  the `rwa_alerts_fired_total` counter. A `config_drift` alert on the same ticker means the
-  deployed stack's on-chain wiring stopped matching the project record — `rwa_config_drift` stays
-  1 until it matches again. Deliberate rotations (treasury, auditor, strategy) and price moves are
-  not drift; a rewired cross-contract pointer is.
-- **Reindex**: `cmd/reindex` drops only reconstructable read models (chain_events, checkpoints,
-  purchases, redemption_requests) — never asset profiles, ownership flags, or audit
-  logs. `server/ops/reindex_rehearsal.sh` proves before/after collection parity.
+## 7a. Deployment topology and observability
+
+Choose `tx.coordination_mode` for your signing topology:
+
+- `in-process` (default): the transaction manager locks nonce operations within one process.
+  Run one platform process per hot signing key; separate processes sharing the key can race
+  nonces and broadcasts. Scale reads separately if needed.
+- `mongo-lease`: replicas sharing a key coordinate through a distributed lease on
+  `chainId:signerAddress` in `nonce_leases`. This requires `mongo.persistence_mode: mongo`
+  (the default) and shared repositories. Failure to acquire or renew the lease returns a
+  retryable submit/replace error. The lease expires after `tx.lease_ttl` (default `30s`), so a
+  stalled replica can lose it to another. Transaction records carry a fencing token, and the
+  manager checks the live lease store before persisting a submission or replacement.
+
+Prefer `in-process` unless replicas need to share a hot key; it avoids the distributed lease
+and its per-submission store calls.
+
+`http.trusted_proxies` is empty by default. Gin then ignores `X-Forwarded-For` client-IP claims
+from untrusted peers for rate limiting. Behind a reverse proxy, list only its trusted address.
+
+Metrics use a separate listener, `http.metrics_addr`, defaulting to `127.0.0.1:9090`. They are
+not served on the public API port. Scrape from the host or monitoring network; §5 lists the
+metrics and alerts.
+
+Every 5 minutes, the server checks an Active project's contract wiring against the expected
+project state. A mismatch raises `config_drift` and sets `rwa_config_drift` to 1; a successful
+matching check clears it. An RPC error leaves the previous gauge value unchanged. Treasury
+and auditor changes are compared with their indexed state, and price changes are excluded.
+Changing a cross-contract pointer can cause drift. `Vault.setStrategy` also raises it because
+the escrow retains its immutable strategy, leaving purchases and redemptions priced by
+different contracts.
 
 ## 8. Honest limitations
 
-- A redemption request is not a funding guarantee; funding is an issuer policy decision.
-- De-whitelisting stops a holder from sending or receiving, but leaves their balance where it is.
-  Recovering it takes an admin `forcedTransfer` to a compliant wallet.
-- The quote token can independently blacklist/fail; a funded claim stays claimable and is retryable.
-- Do not put PII in metadata or public IPFS objects.
+- A redemption request does not guarantee funding; the issuer decides under its policy.
+- A registry block leaves the wallet's RWA balance in place. Recovery requires an admin
+  `forcedTransfer` to an Allowed wallet.
+- Quote-token restrictions can prevent payment. A failed funded claim remains Funded and can
+  be retried after the restriction is resolved; §2a covers permanent refusals.
+- Keep PII out of metadata and public IPFS objects.
