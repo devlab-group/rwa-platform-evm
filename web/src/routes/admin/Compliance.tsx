@@ -6,6 +6,11 @@ import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { api, ApiError } from "../../lib/client";
 import type { components } from "../../lib/api-types";
 import { formatUnixSeconds, shortenAddress } from "../../lib/format";
+import {
+  COMPLIANCE_STATUS_LABEL,
+  complianceDisplayStatus,
+  type ComplianceDisplayStatus,
+} from "../../lib/status";
 
 type WalletStatus = components["schemas"]["WalletStatus"];
 type Challenge = components["schemas"]["Challenge"];
@@ -14,11 +19,20 @@ type AuditLog = components["schemas"]["AuditLog"];
 type ComplianceStatus = NonNullable<WalletStatus["status"]>;
 type WebhookOutcome = NonNullable<WebhookEvent["outcome"]>;
 
-const STATUS_TONE: Record<ComplianceStatus, string> = {
-  Unknown: "badge--neutral",
+const STATUS_TONE: Record<ComplianceDisplayStatus, string> = {
+  NotOnboarded: "badge--neutral",
   Allowed: "badge--success",
+  Expired: "badge--warning",
   Blocked: "badge--danger",
 };
+
+function ComplianceBadge({ status }: { status: ComplianceDisplayStatus }) {
+  return (
+    <span className={`badge ${STATUS_TONE[status]}`}>
+      {COMPLIANCE_STATUS_LABEL[status]}
+    </span>
+  );
+}
 
 const WEBHOOK_TONE: Record<WebhookOutcome, string> = {
   Allowed: "badge--success",
@@ -78,11 +92,12 @@ export function Compliance() {
                           {shortenAddress(w.address)}
                         </td>
                         <td>
-                          {w.status && (
-                            <span className={`badge ${STATUS_TONE[w.status]}`}>
-                              {w.status}
-                            </span>
-                          )}
+                          <ComplianceBadge
+                            status={complianceDisplayStatus(
+                              w.status,
+                              w.validUntil,
+                            )}
+                          />
                         </td>
                         <td>{formatUnixSeconds(w.validUntil)}</td>
                         <td>{w.ownershipVerified ? "Yes" : "No"}</td>
@@ -279,7 +294,7 @@ function SetStatusForm({ onSubmitted }: { onSubmitted: () => void }) {
         >
           <option value="Allowed">Allowed</option>
           <option value="Blocked">Blocked</option>
-          <option value="Unknown">Unknown</option>
+          <option value="Unknown">Unknown (not onboarded)</option>
         </select>
       </div>
       <div className="field">

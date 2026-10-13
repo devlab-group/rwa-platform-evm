@@ -29,6 +29,10 @@ import {
   MAX_SLIPPAGE_BPS,
 } from "../../lib/slippage";
 import {
+  COMPLIANCE_STATUS_LABEL,
+  complianceDisplayStatus,
+} from "../../lib/status";
+import {
   formatWithDecimals,
   readErc20Allowance,
   describeTxError,
@@ -406,7 +410,13 @@ function WalletSection({
           {verified && (
             <p className="field__hint" role="status">
               Ownership verified: {verified.ownershipVerified ? "Yes" : "No"}.
-              Compliance status: {verified.status ?? "Unknown"}.
+              Compliance status:{" "}
+              {
+                COMPLIANCE_STATUS_LABEL[
+                  complianceDisplayStatus(verified.status, verified.validUntil)
+                ]
+              }
+              .
             </p>
           )}
           {error && (
@@ -447,7 +457,13 @@ function KycSection({
         <dl className="tx-preview__grid">
           <div className="tx-preview__row">
             <dt>Status</dt>
-            <dd>{status.status}</dd>
+            <dd>
+              {
+                COMPLIANCE_STATUS_LABEL[
+                  complianceDisplayStatus(status.status, status.validUntil)
+                ]
+              }
+            </dd>
           </div>
           <div className="tx-preview__row">
             <dt>Valid until</dt>

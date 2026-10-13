@@ -265,6 +265,38 @@ describe("KycVerificationSection", () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
+  it("keeps an expired wallet awaiting approval after verification is resubmitted", async () => {
+    giveSession();
+    vi.mocked(api.startKYC).mockResolvedValue({
+      provider: "sumsub",
+      token: "t",
+    });
+    const expired = {
+      status: "success" as const,
+      data: { address: ADDRESS, status: "Allowed" as const, validUntil: 1 },
+      reload: vi.fn(),
+    };
+
+    render(
+      <KycVerificationSection
+        walletAddress={ADDRESS}
+        ownWalletStatus={expired}
+      />,
+    );
+    expect(
+      screen.getByText(/Your verification has expired/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/already Allowed/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start verification" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "finish sumsub" }),
+    );
+    // The expired Allowed record does not count as renewed approval
+    await screen.findByText(/awaiting approval/);
+    expect(screen.queryByText(/Approved/)).toBeNull();
+  });
+
   it("gives up polling after a few minutes and offers a manual re-check", async () => {
     const reload = vi.fn();
     await renderSubmitted(reload);

@@ -3,6 +3,10 @@ import { OnfidoVerification } from "../../components/OnfidoVerification";
 import { SumsubVerification } from "../../components/SumsubVerification";
 import { api, ApiError } from "../../lib/client";
 import type { components } from "../../lib/api-types";
+import {
+  complianceDisplayStatus,
+  type ComplianceDisplayStatus,
+} from "../../lib/status";
 import { clearWalletSession, getWalletSession } from "../../lib/walletSession";
 
 type KYCSession = components["schemas"]["KYCSession"];
@@ -73,7 +77,10 @@ export function KycVerificationSection({
   // verification without one.
   const hasSession =
     ownWalletStatus.status === "success" && ownWalletStatus.data != null;
-  const status = ownWalletStatus.data?.status;
+  const status = complianceDisplayStatus(
+    ownWalletStatus.data?.status,
+    ownWalletStatus.data?.validUntil,
+  );
   const decided = status === "Allowed" || status === "Blocked";
 
   // Reset when the connected wallet changes — a session and a verification both
@@ -176,11 +183,19 @@ export function KycVerificationSection({
               This wallet is already Allowed — no further verification needed.
             </p>
           ) : (
-            <p className="field__hint">
-              Your documents go directly to the verification provider. Approval
-              is applied to your wallet automatically once the provider reports
-              the result — you won&apos;t need to submit anything on-chain.
-            </p>
+            <>
+              {status === "Expired" && (
+                <p className="async-state--error" role="status">
+                  Your verification has expired. To buy, transfer or redeem with
+                  this wallet, verify again and wait for approval.
+                </p>
+              )}
+              <p className="field__hint">
+                Your documents go directly to the verification provider. After
+                approval, wait for your wallet&apos;s status to update — you
+                won&apos;t need to submit anything on-chain.
+              </p>
+            </>
           )}
 
           {(phase.kind === "idle" ||
@@ -313,7 +328,7 @@ function ReviewProgress({
   timedOut,
   onRefresh,
 }: {
-  status: WalletStatus["status"];
+  status: ComplianceDisplayStatus;
   timedOut: boolean;
   onRefresh: () => void;
 }) {

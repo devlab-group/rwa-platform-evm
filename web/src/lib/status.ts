@@ -170,3 +170,39 @@ export function redemptionBlockedByCompliance(
 ): boolean {
   return status === "Pending" && beneficiaryAllowed === false;
 }
+
+export type ComplianceChainStatus = NonNullable<
+  components["schemas"]["WalletStatus"]["status"]
+>;
+
+export type ComplianceDisplayStatus =
+  "Allowed" | "Expired" | "Blocked" | "NotOnboarded";
+
+/**
+ * Returns the compliance status for display, checking expiry at `nowSeconds`.
+ * An `Allowed` record stays `Allowed` in storage after a nonzero `validUntil`
+ * passes, but the registry's `isAllowed` returns false. Showing `Expired`
+ * avoids implying that the wallet can still buy, transfer and redeem.
+ */
+export function complianceDisplayStatus(
+  status: ComplianceChainStatus | undefined,
+  validUntil: number | undefined,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
+): ComplianceDisplayStatus {
+  switch (status) {
+    case "Allowed":
+      return validUntil && validUntil < nowSeconds ? "Expired" : "Allowed";
+    case "Blocked":
+      return "Blocked";
+    default:
+      return "NotOnboarded";
+  }
+}
+
+export const COMPLIANCE_STATUS_LABEL: Record<ComplianceDisplayStatus, string> =
+  {
+    Allowed: "Allowed",
+    Expired: "Expired",
+    Blocked: "Blocked",
+    NotOnboarded: "Not onboarded",
+  };
