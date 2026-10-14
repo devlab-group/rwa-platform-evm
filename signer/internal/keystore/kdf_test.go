@@ -16,6 +16,9 @@ func TestCheckV3KDFStrength_RejectsWeakScrypt(t *testing.T) {
 		t.Fatal("expected rejection of scrypt N=4096 (below policy floor)")
 	} else if !strings.Contains(err.Error(), "weaker than the minimum policy") {
 		t.Errorf("unexpected error: %v", err)
+	} else if !strings.Contains(err.Error(), "signer keystore import") {
+		// create would make a new key, so the hint must name import, which keeps it
+		t.Errorf("error does not point to signer keystore import: %v", err)
 	}
 }
 
@@ -48,11 +51,8 @@ func TestCheckV3KDFStrength_AcceptsPolicyStrengthPBKDF2(t *testing.T) {
 	}
 }
 
-// TestLoad_RejectsLightScryptKeystore is the end-to-end version of
-// TestCheckV3KDFStrength_RejectsWeakScrypt: a real keystore file encrypted
-// with go-ethereum's own "light" parameters (used by wallets that
-// prioritize unlock speed over brute-force resistance) must be refused by
-// Load before the password is even tried.
+// TestLoad_RejectsLightScryptKeystore checks that a real V3 file with light scrypt
+// parameters is refused before key derivation
 func TestLoad_RejectsLightScryptKeystore(t *testing.T) {
 	key, err := crypto.GenerateKey()
 	if err != nil {
@@ -112,8 +112,7 @@ func TestCheckV3KDFStrength_RejectsExtremeScryptN(t *testing.T) {
 }
 
 func TestCheckV3KDFStrength_RejectsExtremeScryptRProduct(t *testing.T) {
-	// N and P individually within their own ceilings, but N*r pushes
-	// scrypt's ~128*N*r memory usage past the absolute backstop.
+	// N and r meet their individual bounds, but their product exceeds the memory cap
 	extreme := `{"crypto":{"kdf":"scrypt","kdfparams":{"n":4194304,"r":64,"p":1}}}` // N=2^22, r=64
 	if err := checkV3KDFStrength([]byte(extreme)); err == nil {
 		t.Fatal("expected rejection of a scrypt N*r product exceeding the memory ceiling")
@@ -184,15 +183,8 @@ func TestLoad_RejectsMalformedJSONWithoutPanicking(t *testing.T) {
 	}
 }
 
-// TestLoad_RejectsV3WithPanickyDecryptKeyParams is a belt-and-suspenders
-// check that even if checkV3KDFStrength somehow let a bad set of
-// parameters through, Load's recover in decryptV3Recovered turns any
-// resulting panic from go-ethereum's DecryptKey into an ordinary error.
-// It directly exercises decryptV3Recovered against a keystore JSON whose
-// kdfparams are policy-strength-valid but otherwise structurally odd
-// (missing ciphertext), which go-ethereum's own scrypt/passphrase code
-// must handle -- this test's job is only to confirm that whatever happens
-// inside DecryptKey, Load never panics.
+// TestLoad_RejectsV3WithPanickyDecryptKeyParams checks that malformed V3 data
+// passed directly to decryptV3Recovered returns an error without escaping as a panic
 func TestDecryptV3Recovered_NeverPanics(t *testing.T) {
 	bogus := []byte(`{"crypto":{"kdf":"scrypt","kdfparams":{"n":131072,"r":8,"p":1,"salt":"00","dklen":32},"ciphertext":"","mac":"","cipher":"aes-128-ctr","cipherparams":{"iv":"00"}},"version":3}`)
 	defer func() {

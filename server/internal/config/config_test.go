@@ -94,8 +94,7 @@ func TestLoadTrustedProxies(t *testing.T) {
 	}
 }
 
-// TestLoadCORSAllowedOrigins covers the parse: a comma-separated list becomes
-// discrete origins, with surrounding whitespace and empty entries dropped.
+// TestLoadCORSAllowedOrigins trims and splits origin lists, dropping empty entries
 func TestLoadCORSAllowedOrigins(t *testing.T) {
 	cfg, err := LoadFromMap(map[string]string{
 		"CORS_ALLOWED_ORIGINS": " http://localhost:5173 , https://investor.example ,, ",
@@ -114,10 +113,7 @@ func TestLoadCORSAllowedOrigins(t *testing.T) {
 	}
 }
 
-// TestLoadCORSDefaultsToDisabled: the default must be no cross-origin access at
-// all. A deployment serving only the embedded (same-origin) console needs none,
-// and defaulting to anything permissive would hand every such deployment a
-// cross-origin surface it never asked for.
+// TestLoadCORSDefaultsToDisabled keeps same-origin deployments from enabling CORS implicitly
 func TestLoadCORSDefaultsToDisabled(t *testing.T) {
 	cfg, err := LoadFromMap(map[string]string{})
 	if err != nil {
@@ -128,15 +124,7 @@ func TestLoadCORSDefaultsToDisabled(t *testing.T) {
 	}
 }
 
-// TestLoadRejectsBadCORSOrigins is the fail-closed half, enforced in EVERY
-// environment rather than production only.
-//
-// "*" is the load-bearing case: this API accepts an Authorization bearer, so a
-// wildcard origin would let any page on the internet drive an authenticated
-// admin session out of a victim's browser. The malformed cases matter for a
-// duller reason — a browser's Origin header is exactly scheme+host+port, so a
-// trailing slash or a missing scheme silently never matches, and the operator
-// sees "CORS is broken" with nothing explaining why.
+// TestLoadRejectsBadCORSOrigins rejects wildcards and malformed origins in every environment
 func TestLoadRejectsBadCORSOrigins(t *testing.T) {
 	for name, value := range map[string]string{
 		"wildcard":              "*",
@@ -155,16 +143,19 @@ func TestLoadRejectsBadCORSOrigins(t *testing.T) {
 
 func TestLoadInvalid(t *testing.T) {
 	tests := map[string]map[string]string{
-		"bad chain id":         {"CHAIN_ID": "not-a-number"},
-		"zero chain id":        {"CHAIN_ID": "0"},
-		"bad confirmations":    {"CHAIN_CONFIRMATIONS": "-1"},
-		"bad fee mode":         {"CHAIN_FEE_MODE": "bogus"},
-		"bad idempotency ttl":  {"IDEMPOTENCY_TTL": "not-a-duration"},
-		"bad environment":      {"ENVIRONMENT": "staging"},
-		"bad persistence mode": {"PERSISTENCE_MODE": "redis"},
-		"bad tx coordination":  {"TX_COORDINATION_MODE": "raft"},
-		"bad tx lease ttl":     {"TX_LEASE_TTL": "not-a-duration"},
-		"bad kyc provider":     {"KYC_PROVIDER": "jumio"},
+		"bad chain id":          {"CHAIN_ID": "not-a-number"},
+		"zero chain id":         {"CHAIN_ID": "0"},
+		"bad confirmations":     {"CHAIN_CONFIRMATIONS": "-1"},
+		"bad fee mode":          {"CHAIN_FEE_MODE": "bogus"},
+		"explorer url script":   {"CHAIN_EXPLORER_URL": "javascript:alert(1)"},
+		"explorer url relative": {"CHAIN_EXPLORER_URL": "etherscan.io"},
+		"explorer url query":    {"CHAIN_EXPLORER_URL": "https://etherscan.io/?network=x"},
+		"bad idempotency ttl":   {"IDEMPOTENCY_TTL": "not-a-duration"},
+		"bad environment":       {"ENVIRONMENT": "staging"},
+		"bad persistence mode":  {"PERSISTENCE_MODE": "redis"},
+		"bad tx coordination":   {"TX_COORDINATION_MODE": "raft"},
+		"bad tx lease ttl":      {"TX_LEASE_TTL": "not-a-duration"},
+		"bad kyc provider":      {"KYC_PROVIDER": "jumio"},
 		"sumsub missing app token": {"KYC_PROVIDER": "sumsub",
 			"KYC_SUMSUB_SECRET_KEY": "s", "KYC_SUMSUB_WEBHOOK_SECRET": "w"},
 		"onfido missing workflow": {"KYC_PROVIDER": "onfido",
@@ -181,8 +172,7 @@ func TestLoadInvalid(t *testing.T) {
 	}
 }
 
-// TestLoadMongoLeaseRequiresMongoPersistence: a distributed lease with no
-// durable shared backing store cannot coordinate anything.
+// TestLoadMongoLeaseRequiresMongoPersistence requires shared durable lease storage
 func TestLoadMongoLeaseRequiresMongoPersistence(t *testing.T) {
 	_, err := LoadFromMap(map[string]string{
 		"TX_COORDINATION_MODE": "mongo-lease",
@@ -193,7 +183,7 @@ func TestLoadMongoLeaseRequiresMongoPersistence(t *testing.T) {
 	}
 }
 
-// TestLoadMongoLeaseAcceptedWithMongoPersistence is the positive case.
+// TestLoadMongoLeaseAcceptedWithMongoPersistence accepts the supported backend pairing
 func TestLoadMongoLeaseAcceptedWithMongoPersistence(t *testing.T) {
 	cfg, err := LoadFromMap(map[string]string{
 		"TX_COORDINATION_MODE": "mongo-lease",
@@ -210,9 +200,7 @@ func TestLoadMongoLeaseAcceptedWithMongoPersistence(t *testing.T) {
 	}
 }
 
-// TestLoadDefaultsAreDevelopment pins the safe-for-local-dev defaults: no
-// ENVIRONMENT/PERSISTENCE_MODE set at all must not accidentally trip the
-// production-only checks below.
+// TestLoadDefaultsAreDevelopment keeps production checks opt-in through environment selection
 func TestLoadDefaultsAreDevelopment(t *testing.T) {
 	cfg, err := LoadFromMap(map[string]string{})
 	if err != nil {
@@ -226,18 +214,14 @@ func TestLoadDefaultsAreDevelopment(t *testing.T) {
 	}
 }
 
-// TestLoadDevelopmentAllowsEmptyWebhookSecret documents the intended
-// non-production behavior: an unset secret is allowed (the feature is
-// disabled by cmd/platform's buildApp, not by config.Load).
+// TestLoadDevelopmentAllowsEmptyWebhookSecret permits disabling generic KYC outside production
 func TestLoadDevelopmentAllowsEmptyWebhookSecret(t *testing.T) {
 	if _, err := LoadFromMap(map[string]string{"ENVIRONMENT": "development"}); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 }
 
-// TestLoadRejectsWeakWebhookSecretAnyEnvironment: the entropy floor
-// applies whenever a secret is configured at all, not just in production —
-// a placeholder like "changeme" should never silently pass.
+// TestLoadRejectsWeakWebhookSecretAnyEnvironment applies the configured-secret length floor
 func TestLoadRejectsWeakWebhookSecretAnyEnvironment(t *testing.T) {
 	_, err := LoadFromMap(map[string]string{"KYC_WEBHOOK_HMAC_SECRET": "too-short"})
 	if err == nil {
@@ -245,8 +229,7 @@ func TestLoadRejectsWeakWebhookSecretAnyEnvironment(t *testing.T) {
 	}
 }
 
-// TestLoadProductionRequiresWebhookSecret checks that starting the
-// production configuration with an empty secret fails at startup.
+// TestLoadProductionRequiresWebhookSecret rejects a missing active generic secret
 func TestLoadProductionRequiresWebhookSecret(t *testing.T) {
 	_, err := LoadFromMap(map[string]string{"ENVIRONMENT": "production"})
 	if err == nil {
@@ -254,25 +237,17 @@ func TestLoadProductionRequiresWebhookSecret(t *testing.T) {
 	}
 }
 
-// TestLoadProductionAcceptsStrongWebhookSecret is the positive counterpart:
-// production with a secret meeting the documented minimum must start.
-// prodEnv is a minimal production config that PASSES every fail-closed
-// check, so a test can drop one required field and confirm it (and only it)
-// makes Load fail.
+// TestLoadProductionAcceptsStrongWebhookSecret accepts the fixture's valid production settings
 func prodEnv() map[string]string {
 	return map[string]string{
 		"ENVIRONMENT":             "production",
-		"KYC_WEBHOOK_HMAC_SECRET": "01234567890123456789012345678901", // 33 bytes
+		"KYC_WEBHOOK_HMAC_SECRET": "01234567890123456789012345678901", // 32 bytes
 		"ADMIN_ADDRESS":           "0x00000000000000000000000000000000000000A1",
 		"JWT_SECRET":              "jwt-secret-0000000000000000000000000000000",
 		"PROJECT_ID":              "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
-		// IPFS_API_URL defaults to a non-empty value, so production's
-		// "at least one independent backup destination" requirement (see
-		// Load's IPFSReplicationThreshold checks) always applies unless
-		// explicitly opted out — a fixed path is enough here since
-		// config.Load never touches the filesystem itself.
+		// Configure one backup; loading validates settings without accessing this path
 		"IPFS_BACKUP_ARCHIVE_DIR": "./testdata/ipfs-archive",
-		// Production requires at least one fee cap set.
+		// Provide a production fee cap
 		"TX_MAX_FEE_PER_GAS_WEI": "500000000000",
 	}
 }
@@ -283,10 +258,8 @@ func TestLoadProductionAcceptsStrongWebhookSecret(t *testing.T) {
 	}
 }
 
-// TestLoadProductionSumsubDoesNotRequireGenericSecret: with a real provider
-// active, the generic KYC_WEBHOOK_HMAC_SECRET is unused, so production must NOT
-// require it — but it MUST require that provider's own webhook secret to meet
-// the strength floor.
+// TestLoadProductionSumsubDoesNotRequireGenericSecret validates the active Sumsub secret
+// without requiring an unused generic secret
 func TestLoadProductionSumsubProvider(t *testing.T) {
 	env := prodEnv()
 	delete(env, "KYC_WEBHOOK_HMAC_SECRET") // not needed when a provider is configured
@@ -309,10 +282,7 @@ func TestLoadProductionSumsubProvider(t *testing.T) {
 	}
 }
 
-// TestLoadProductionRequiresAdminAuth is the admin-auth regression test:
-// admin routes authenticate a wallet-signature JWT, so production requires a
-// configured admin wallet address AND a JWT signing secret; either missing is
-// a startup failure.
+// TestLoadProductionRequiresAdminAuth requires both the login wallet and JWT signing secret
 func TestLoadProductionRequiresAdminAuth(t *testing.T) {
 	env := prodEnv()
 	delete(env, "ADMIN_ADDRESS")
@@ -331,8 +301,7 @@ func TestLoadProductionRequiresAdminAuth(t *testing.T) {
 	}
 }
 
-// TestLoadProductionRejectsMockAndRawKeyProviders is the regression test
-// for unsafe hot-key providers.
+// TestLoadProductionRejectsMockAndRawKeyProviders rejects mock providers and configured raw keys
 func TestLoadProductionRejectsMockAndRawKeyProviders(t *testing.T) {
 	env := prodEnv()
 	env["KEY_PROVIDER_MODE"] = "kms-mock"
@@ -347,8 +316,7 @@ func TestLoadProductionRejectsMockAndRawKeyProviders(t *testing.T) {
 	}
 }
 
-// TestLoadProductionRejectsMemoryPersistence: production must never
-// silently run on volatile in-memory repositories.
+// TestLoadProductionRejectsMemoryPersistence requires durable repositories
 func TestLoadProductionRejectsMemoryPersistence(t *testing.T) {
 	env := map[string]string{
 		"ENVIRONMENT":             "production",
@@ -360,9 +328,7 @@ func TestLoadProductionRejectsMemoryPersistence(t *testing.T) {
 	}
 }
 
-// TestLoadProductionRequiresProjectID: production must not start without a
-// pinned projectId — the gate that fixes which Asset Profile the deployment
-// will accept has to be armed before any profile can be created.
+// TestLoadProductionRequiresProjectID requires a pinned profile identity before startup
 func TestLoadProductionRequiresProjectID(t *testing.T) {
 	env := prodEnv()
 	delete(env, "PROJECT_ID")
@@ -371,8 +337,7 @@ func TestLoadProductionRequiresProjectID(t *testing.T) {
 	}
 }
 
-// TestLoadRejectsMalformedProjectID: a non-UUID projectId is caught at load in
-// any environment, not deferred to the first profile create.
+// TestLoadRejectsMalformedProjectID rejects invalid UUID settings at load
 func TestLoadRejectsMalformedProjectID(t *testing.T) {
 	env := map[string]string{"PROJECT_ID": "not-a-uuid"}
 	if _, err := LoadFromMap(env); err == nil {
@@ -380,11 +345,7 @@ func TestLoadRejectsMalformedProjectID(t *testing.T) {
 	}
 }
 
-// TestLoadProductionRequiresIPFSBackupDestination: IPFS_API_URL defaults
-// to a non-empty value, so
-// production must refuse to start without at least one independent
-// replication destination configured, rather than silently falling back to
-// a single bare local Kubo node with no durable-publication tracking.
+// TestLoadProductionRequiresIPFSBackupDestination rejects primary-only publication settings
 func TestLoadProductionRequiresIPFSBackupDestination(t *testing.T) {
 	env := prodEnv()
 	delete(env, "IPFS_BACKUP_ARCHIVE_DIR")
@@ -393,8 +354,7 @@ func TestLoadProductionRequiresIPFSBackupDestination(t *testing.T) {
 	}
 }
 
-// TestLoadProductionRejectsReplicationThresholdOutOfRange covers both
-// directions of "validate 1 <= threshold <= destination count."
+// TestLoadProductionRejectsReplicationThresholdOutOfRange enforces 1 through backup count
 func TestLoadProductionRejectsReplicationThresholdOutOfRange(t *testing.T) {
 	tests := map[string]string{"zero": "0", "negative": "-1", "exceeds destination count": "2"}
 	for name, threshold := range tests {
@@ -408,8 +368,7 @@ func TestLoadProductionRejectsReplicationThresholdOutOfRange(t *testing.T) {
 	}
 }
 
-// TestLoadProductionAcceptsReplicationThresholdWithinRange is the positive
-// case, including a second backup destination raising the valid ceiling.
+// TestLoadProductionAcceptsReplicationThresholdWithinRange includes multiple backups
 func TestLoadProductionAcceptsReplicationThresholdWithinRange(t *testing.T) {
 	env := prodEnv()
 	env["IPFS_BACKUP_KUBO_URL"] = "http://backup-kubo:5001"
@@ -419,16 +378,14 @@ func TestLoadProductionAcceptsReplicationThresholdWithinRange(t *testing.T) {
 	}
 }
 
-// TestLoadDevelopmentAllowsMemoryPersistence: memory is a supported,
-// explicit opt-in outside production (local smoke tests, CI).
+// TestLoadDevelopmentAllowsMemoryPersistence permits explicit local/test memory mode
 func TestLoadDevelopmentAllowsMemoryPersistence(t *testing.T) {
 	if _, err := LoadFromMap(map[string]string{"PERSISTENCE_MODE": "memory"}); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 }
 
-// TestLoadDefaultMetricsAddrIsLoopback: metrics must not listen on all
-// interfaces by default.
+// TestLoadDefaultMetricsAddrIsLoopback limits default metrics exposure
 func TestLoadDefaultMetricsAddrIsLoopback(t *testing.T) {
 	cfg, err := LoadFromMap(map[string]string{})
 	if err != nil {
@@ -439,8 +396,7 @@ func TestLoadDefaultMetricsAddrIsLoopback(t *testing.T) {
 	}
 }
 
-// TestLoadDefaultHTTPHardening: every listener gets non-zero timeouts and a
-// header-size cap out of the box.
+// TestLoadDefaultHTTPHardening checks non-zero timeout and header-size defaults
 func TestLoadDefaultHTTPHardening(t *testing.T) {
 	cfg, err := LoadFromMap(map[string]string{})
 	if err != nil {
@@ -463,8 +419,7 @@ func TestLoadDefaultHTTPHardening(t *testing.T) {
 	}
 }
 
-// TestLoadFeeCapsMustBeNonNegativeIntegers is the fee-cap config-validation
-// regression test.
+// TestLoadFeeCapsMustBeNonNegativeIntegers checks decimal wei inputs
 func TestLoadFeeCapsMustBeNonNegativeIntegers(t *testing.T) {
 	for _, key := range []string{"TX_MAX_FEE_PER_GAS_WEI", "TX_MAX_TIP_PER_GAS_WEI", "TX_MAX_TOTAL_COST_WEI"} {
 		t.Run(key, func(t *testing.T) {
@@ -483,9 +438,7 @@ func TestLoadFeeCapsMustBeNonNegativeIntegers(t *testing.T) {
 
 // --- Production config hardening ---
 
-// TestLoadProductionRejectsTrivialSecrets is a table-driven regression test:
-// every known placeholder, and every too-short value, must be rejected for
-// the JWT signing secret.
+// TestLoadProductionRejectsTrivialSecrets covers weak placeholders and short JWT keys
 func TestLoadProductionRejectsTrivialSecrets(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -511,20 +464,15 @@ func TestLoadProductionRejectsTrivialSecrets(t *testing.T) {
 	}
 }
 
-// TestLoadProductionAcceptsStrongSecrets is the positive counterpart,
-// already implicitly covered by prodEnv()-based tests, made explicit here.
+// TestLoadProductionAcceptsStrongSecrets accepts the valid secret fixture
 func TestLoadProductionAcceptsStrongSecrets(t *testing.T) {
 	if _, err := LoadFromMap(prodEnv()); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 }
 
-// TestLoadProductionRejectsNonPositiveDurationsAndLimits is a table-driven
-// test that positive lower/upper bounds are enforced for every security
-// duration, body/header limit, rate/burst, and confirmation count. Each
-// entry sets exactly one previously-unbounded knob to a disabling/invalid
-// value on top of an otherwise-valid prodEnv() and expects Load to reject
-// it.
+// TestLoadProductionRejectsNonPositiveDurationsAndLimits varies one invalid bound
+// at a time against an otherwise valid configuration
 func TestLoadProductionRejectsNonPositiveDurationsAndLimits(t *testing.T) {
 	tests := map[string]string{
 		"IDEMPOTENCY_TTL":          "0",
@@ -552,10 +500,8 @@ func TestLoadProductionRejectsNonPositiveDurationsAndLimits(t *testing.T) {
 	}
 }
 
-// TestLoadProductionDisabledControlsRequireExplicitOverride covers the
-// three genuinely "disabled" controls (body limit, rate limit, fee cap):
-// rejected by default, accepted only with their narrowly-named
-// PRODUCTION_ALLOW_* override set.
+// TestLoadProductionDisabledControlsRequireExplicitOverride requires the named
+// override for disabled body, rate or fee controls
 func TestLoadProductionDisabledControlsRequireExplicitOverride(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -601,9 +547,7 @@ func TestLoadProductionDisabledControlsRequireExplicitOverride(t *testing.T) {
 	})
 }
 
-// TestLoadProductionRejectsZeroBurstWhenRateLimitEnabled is the specific
-// cross-field constraint: a positive RPS with a non-positive burst is
-// still a broken (self-inflicted-DoS-prone) configuration.
+// TestLoadProductionRejectsZeroBurstWhenRateLimitEnabled checks positive-RPS burst bounds
 func TestLoadProductionRejectsZeroBurstWhenRateLimitEnabled(t *testing.T) {
 	env := prodEnv()
 	env["RATE_LIMIT_RPS"] = "50"
@@ -613,10 +557,7 @@ func TestLoadProductionRejectsZeroBurstWhenRateLimitEnabled(t *testing.T) {
 	}
 }
 
-// TestLoadProductionRejectsOverflowAndGarbageDurations proves malformed
-// duration/int inputs (not just semantically zero/negative ones) are
-// caught by the underlying parse step for every newly-bounded field, not
-// only the pre-existing ones already covered by TestLoadInvalid.
+// TestLoadProductionRejectsOverflowAndGarbageDurations checks parsing before semantic bounds
 func TestLoadProductionRejectsOverflowAndGarbageDurations(t *testing.T) {
 	tests := map[string]string{
 		"HTTP_MAX_HEADER_BYTES": "99999999999999999999999999", // overflows int64
@@ -630,5 +571,15 @@ func TestLoadProductionRejectsOverflowAndGarbageDurations(t *testing.T) {
 				t.Fatalf("expected production startup to reject %s=%q", key, value)
 			}
 		})
+	}
+}
+
+func TestLoadExplorerURLTrimsTrailingSlash(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]string{"CHAIN_EXPLORER_URL": "https://sepolia.etherscan.io/"})
+	if err != nil {
+		t.Fatalf("LoadFromMap: %v", err)
+	}
+	if cfg.ExplorerURL != "https://sepolia.etherscan.io" {
+		t.Fatalf("ExplorerURL = %q", cfg.ExplorerURL)
 	}
 }

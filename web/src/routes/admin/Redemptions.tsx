@@ -13,8 +13,10 @@ import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { api } from "../../lib/client";
 import type { components } from "../../lib/api-types";
 import { resolveQuoteDecimals } from "../../lib/decimals";
-import { encodeReasonCode } from "../../lib/redemption";
+import { encodeReasonCode, fundBatchCalls } from "../../lib/redemption";
 import { ROLES } from "../../lib/roles";
+import { exportSafeBatch } from "../../lib/safeBatch";
+import type { TxRoute } from "../../lib/txRoute";
 import {
   formatTokenAmount,
   formatUnixSeconds,
@@ -24,6 +26,7 @@ import { redemptionBlockedByCompliance } from "../../lib/status";
 import {
   readErc20Allowance,
   sendErc20Approve,
+  rejectRedemptionCall,
   sendFundRedemption,
   sendRejectRedemption,
   waitForTxReceipt,
@@ -44,9 +47,8 @@ const STATUS_FILTERS = [
 ] as const;
 
 /**
- * Redemptions: pending/funded/completed requests, beneficiary compliance,
- * snapshotted quote, timeout, funding/rejection (broadcast from the connected
- * wallet), and claim status.
+ * Shows redemption status, compliance, fixed quotes and timeout.
+ * Privileged funding and rejection use wallet submissions or Safe batches.
  */
 export function Redemptions() {
   const [statusFilter, setStatusFilter] =
@@ -65,10 +67,8 @@ export function Redemptions() {
   const proj = project.status === "success" ? project.data : undefined;
   const chainId = proj?.chainId ?? 0;
   const finalityConfirmations = proj?.finalityConfirmations;
-  // RWA amount scales by Project.decimals; the snapshotted quote is a
-  // quote-token amount, whose decimals aren't in the HTTP contract, so they're
-  // read on-chain best-effort for DISPLAY (falls back to grouped raw integer
-  // when no wallet/RPC is available).
+  // Use project decimals for RWA and API-or-chain decimals for quote display;
+  // fall back to raw quote units if resolution fails
   const rwaDecimals = proj?.decimals;
   const quoteDecimalsState = useAsync<number | null>(async () => {
     if (!proj || !chainId) return null;
@@ -230,6 +230,8 @@ function RedemptionDetail({
   const from = useWalletContext().address;
   const detail = useAsync<Redemption>(() => api.getRedemption(id), [id]);
   const [reasonCode, setReasonCode] = useState("");
+  // Include claim by default so atomic payout failure also reverts funding
+  const [claimInBatch, setClaimInBatch] = useState(true);
   const [busy, setBusy] = useState<"fund" | "reject" | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -247,15 +249,13 @@ function RedemptionDetail({
     setProgress(null);
   }
 
-  // Funding pulls the recorded quoteAmount from the treasurer via
-  // safeTransferFrom, so the escrow must be approved for that amount of the
-  // quote token first: read the current allowance, approve + wait only when
-  // it's short, then fundRedemption + wait. Blocked (beneficiary not Allowed)
-  // funding stays blocked — it would revert on-chain.
-  async function handleFund() {
+  // Wallet funding waits for sufficient quote allowance and then a funding receipt.
+  // Safe export combines approval and funding, optionally with claim;
+  // a beneficiary blocked in the read model cannot be funded here.
+  async function handleFund(route: TxRoute) {
     begin();
     if (blocked) return;
-    if (!from) {
+    if (route.kind === "wallet" && !from) {
       setError("Wallet not connected.");
       return;
     }
@@ -269,6 +269,24 @@ function RedemptionDetail({
       );
       return;
     }
+    if (route.kind === "safe") {
+      setDone(
+        exportSafeBatch(
+          chainId,
+          route.safe,
+          claimInBatch ? "Fund and claim redemption" : "Fund redemption",
+          fundBatchCalls(
+            quoteToken as Address,
+            escrow as Address,
+            BigInt(id),
+            BigInt(quoteAmount),
+            claimInBatch,
+          ),
+        ),
+      );
+      return;
+    }
+    if (!from) return;
     setBusy("fund");
     try {
       const amount = BigInt(quoteAmount);
@@ -308,9 +326,9 @@ function RedemptionDetail({
     }
   }
 
-  async function handleReject() {
+  async function handleReject(route: TxRoute) {
     begin();
-    if (!from) {
+    if (route.kind === "wallet" && !from) {
       setError("Wallet not connected.");
       return;
     }
@@ -326,6 +344,15 @@ function RedemptionDetail({
       setError(err instanceof Error ? err.message : "Invalid reason code.");
       return;
     }
+    if (route.kind === "safe") {
+      setDone(
+        exportSafeBatch(chainId, route.safe, "Reject redemption", [
+          rejectRedemptionCall(escrow as Address, BigInt(id), encoded),
+        ]),
+      );
+      return;
+    }
+    if (!from) return;
     setBusy("reject");
     try {
       setProgress("Rejecting redemption…");
@@ -392,50 +419,73 @@ function RedemptionDetail({
       </AsyncSection>
 
       <div className="tx-preview__actions u-mt-4">
-        {/* Funding is a TREASURER_ROLE action; rejection is REDEMPTION_MANAGER_ROLE.
-            Each is gated on the connected wallet holding that role, and the call
-            is broadcast directly from that wallet (the contract's onlyRole check
-            is the real authorization). */}
+        {/* Route funding and rejection through their role holder's wallet or Safe batch */}
         <RoleGate
           roles={roles}
           role={ROLES.treasurer}
           action="fund redemptions"
         >
-          <button
-            type="button"
-            className="button button--primary"
-            onClick={handleFund}
-            disabled={busy !== null || blocked}
-            title={
-              blocked
-                ? "The recorded beneficiary is not currently Allowed. Funding will revert until compliance status is restored."
-                : undefined
-            }
-          >
-            {busy === "fund" ? "Submitting…" : "Fund redemption"}
-          </button>
+          {(route) => (
+            <>
+              {route.kind === "safe" && (
+                <label className="field__hint">
+                  <input
+                    type="checkbox"
+                    checked={claimInBatch}
+                    onChange={(e) => setClaimInBatch(e.target.checked)}
+                  />{" "}
+                  Claim in the same batch to roll back funding if payment fails
+                </label>
+              )}
+              <button
+                type="button"
+                className="button button--primary"
+                onClick={() => handleFund(route)}
+                disabled={busy !== null || blocked}
+                title={
+                  blocked
+                    ? "The recorded beneficiary is not currently Allowed. Funding will revert until compliance status is restored."
+                    : undefined
+                }
+              >
+                {busy === "fund"
+                  ? "Submitting…"
+                  : route.kind === "safe"
+                    ? "Save funding batch"
+                    : "Fund redemption"}
+              </button>
+            </>
+          )}
         </RoleGate>
         <RoleGate
           roles={roles}
           role={ROLES.redemptionManager}
           action="reject redemptions"
         >
-          <div className="field field--narrow">
-            <label htmlFor="reasonCode">Rejection reason code</label>
-            <input
-              id="reasonCode"
-              value={reasonCode}
-              onChange={(e) => setReasonCode(e.target.value)}
-            />
-          </div>
-          <button
-            type="button"
-            className="button button--danger"
-            onClick={handleReject}
-            disabled={busy !== null || !reasonCode}
-          >
-            {busy === "reject" ? "Submitting…" : "Reject redemption"}
-          </button>
+          {(route) => (
+            <>
+              <div className="field field--narrow">
+                <label htmlFor="reasonCode">Rejection reason code</label>
+                <input
+                  id="reasonCode"
+                  value={reasonCode}
+                  onChange={(e) => setReasonCode(e.target.value)}
+                />
+              </div>
+              <button
+                type="button"
+                className="button button--danger"
+                onClick={() => handleReject(route)}
+                disabled={busy !== null || !reasonCode}
+              >
+                {busy === "reject"
+                  ? "Submitting…"
+                  : route.kind === "safe"
+                    ? "Save rejection batch"
+                    : "Reject redemption"}
+              </button>
+            </>
+          )}
         </RoleGate>
         <button
           type="button"

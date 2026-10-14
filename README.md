@@ -36,19 +36,42 @@ every redemption is funded — those remain issuer and jurisdiction responsibili
 ## How the pieces fit together
 
 ```
-                        ┌───────────────────────── Issuer operator ─────────────────────────┐
-   Offline / air-gapped │   React admin SPA               ── embedded in ──►  Go server       │
-   ┌───────────────┐    │        │                                              │  │  │        │
-   │  Signer (CLI) │    │        ▼ HTTP (OpenAPI)                               │  │  └► IPFS  │
-   │  EIP-712 sign │    │   Go server: API · indexer · tx-manager · KeyProvider │  └───► Mongo │
-   └──────┬────────┘    └────────┼──────────────────────────────────────────────┘             │
-          │ signed-result.json    │ JSON-RPC (submit compliance status only)
-          ▼                       ▼
-   ┌──────────────────────────────────────── EVM chain ─────────────────────────────────────┐
-   │  RWAFactory → ComplianceRegistry · RWAToken · SupplyController · Vault ·                 │
-   │               FixedPriceStrategy · RedemptionEscrow                                     │
-   └────────────────────────────────────────────────────────────────────────────────────────┘
+ Auditor (offline machine)
+ ┌─────────────────────────┐
+ │ signer CLI              │
+ │ EIP-712 signing         │
+ └──────▲───────────┬──────┘
+   .rwa │           │ signed-result.json
+        │           │
+        │           ▼
+ ┌──────┴──────────────────┐      ┌──────────────────────┐        ┌─────────────────────────┐
+ │ Issuer operator         │      │ KYC provider         │        │ Investor (optional)     │
+ │ admin console (browser) │      │ Sumsub, Onfido or    │        │ investor app (browser)  │
+ │ admin wallet or Safe    │      │ generic webhook      │        │ investor wallet         │
+ └──┬───────────────┬──────┘      └──────────┬───────────┘        └─────┬───────────────┬───┘
+    │ wallet txs    │ HTTP, JWT              │ webhooks                 │ HTTP, session │
+    │               │                        │                          │               │
+    │               ▼                        ▼                          ▼               │
+    │     ┌───────────────────────────────────────────────────────────────────┐         │
+    │     │ Go server: API · indexer · tx manager · KeyProvider               │         │
+    │     │ serves the admin console · MongoDB · IPFS                         │         │
+    │     └──────────────┬──────────────────────────────────▲─────────────────┘         │
+    │                    │                                  │                           │
+    │                    │ setStatus only                   │ events        wallet txs  │
+    │                    │ (compliance key)                 │ (JSON-RPC)                │
+    ▼                    ▼                                  │                           ▼
+ ┌─────────────────────────────────────── EVM chain ────────┴───────────────────────────────┐
+ │ RWAFactory deploys ComplianceRegistry · RWAToken · SupplyController ·                    │
+ │ Vault · FixedPriceStrategy · RedemptionEscrow                                            │
+ └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+The admin console encodes the privileged transactions (deploy, mint, roles, pause, prices,
+redemption funding and rejection, proceeds withdrawal) and sends them from the admin's wallet;
+when a Safe holds the role, it saves a Safe batch instead. A burn is submitted by calling
+`SupplyController.burn` directly. Investors send purchases, redemption requests, claims and
+cancels from their own wallets. The server encodes and submits compliance status transactions with its only
+on-chain key.
 
 ## Monorepo layout
 
@@ -61,7 +84,7 @@ every redemption is funded — those remain issuer and jurisdiction responsibili
 | `investor-web/`    | Standalone example investor SPA — a self-contained reference to fork for your own investor UI (not served by the binary) | [investor-web/README.md](investor-web/README.md) |
 | `shared/`          | EIP-712 types, golden vectors, JSON schemas, deployment manifests                                                        | —                                                |
 | `api/openapi.yaml` | HTTP contract                                                                                                            | —                                                |
-| `docs/`            | Specs, design decisions, operator/auditor/security guides                                                                            | [docs index](#documentation)                     |
+| `docs/`            | Specs, design decisions, operator/auditor/security guides                                                                | [docs index](#documentation)                     |
 | `docker/`          | Local anvil + MongoDB + IPFS compose (dev only)                                                                          | —                                                |
 
 `shared/`, `contracts/src/interfaces/`, `api/openapi.yaml`, `docs/spec/`, the `Makefile`, and the
@@ -121,9 +144,9 @@ Wipes the local chain, database, and IPFS state for a clean run:
 
 Production runs the same binary against a real EVM chain, managed MongoDB, and durable IPFS pinning,
 with `environment: production` — which turns on fail-closed startup checks (the server refuses to
-start if any of the below is missing or weak). Work through
-[`docs/security/release-checklist.md`](docs/security/release-checklist.md) and qualify the chain with
-[`docs/operator/testnet-qualification.md`](docs/operator/testnet-qualification.md) first.
+start if any of the below is missing or weak). Before deployment, complete
+[testnet qualification](docs/operator/testnet-qualification.md) and the
+[shadow replay and soak tests](docs/operator/soak-runbook.md).
 
 1. Copy `server/config.example.yaml` to `server/config.yaml` and set `environment: production`.
 2. `security.admin_address` — the real admin wallet (a multisig is strongly recommended).

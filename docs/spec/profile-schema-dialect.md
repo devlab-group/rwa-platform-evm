@@ -1,17 +1,10 @@
 # Asset `assetSchema` dialect (V1)
 
-Governs the **operator-supplied `assetSchema`** field of an Asset
-Profile only. It does **not** govern the platform's own JSON Schemas in
-`shared/schemas/` (those are platform-controlled and validated with a full
-Draft 2020-12 validator; e.g. `asset-profile.schema.json` legitimately uses
-`format: uuid`).
+This dialect applies to an asset profile's operator-supplied `assetSchema`. Platform envelope
+schemas in `shared/schemas/` use Draft 2020-12; see `asset-profile.md`.
 
-The reason it exists: the server compiled operator `assetSchema`
-documents with a full Draft 2020-12 implementation while the offline signer
-implemented a hand-written subset that **silently ignored** unknown keywords.
-A schema using e.g. `multipleOf`, `format`, or `patternProperties` was therefore
-enforced by the server but ignored by the signer — a real divergence. Both binaries
-now enforce this single closed dialect and reject anything outside it.
+The server and offline signer must agree on every asset schema. Both reject unsupported keywords
+so one validator cannot silently ignore a rule the other enforces.
 
 ## Dialect id
 
@@ -19,132 +12,75 @@ now enforce this single closed dialect and reject anything outside it.
 
 ## Rule
 
-Every **schema object** in the `assetSchema` tree may contain only keys drawn
-from the **allowlist** below. Any key that is neither a supported validation
-keyword nor an allowed annotation MUST cause the schema to be **rejected at
-compile/guard time**, even if it appears only as an unused sibling. Rejection
-is deterministic and identical in the server and the signer; validator parity
-against `shared/vectors/schema-dialect-conformance.json` is a **release gate**.
+Every schema object may contain only the keys listed below. Any other key MUST reject the schema
+at compile time, including unused definitions. Rejection must be deterministic and identical in
+both implementations; `shared/vectors/schema-dialect-conformance.json` parity is a release gate.
 
 ### Schema position vs. data position
 
-The allowlist is enforced on **schema objects only**. The *values* of `enum`,
-`const`, `default`, and `examples` are opaque data, not schemas — they are NOT
-walked and may contain any keys (e.g. a `const` whose value is
-`{"oneOf": 1}` is data and is accepted).
+The allowlist applies to schema objects. Values of `enum`, `const`, `default` and `examples` are
+opaque data and may contain arbitrary keys. For example, `{"oneOf": 1}` is a valid `const` value.
 
-## Allowlist — supported validation keywords (enforced identically)
+## Allowlist: validation keywords
 
-- Structural/applicator: `type`, `properties`, `required`,
-  `additionalProperties` (boolean or schema), `items`, `$ref`
+- Structural and applicator: `type`, `properties`, `required`, `additionalProperties` (boolean or
+  schema), `items`, `$ref`
 - Value: `enum`, `const`
 - String: `minLength`, `maxLength`, `pattern`
-- Number/integer: `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
+- Number and integer: `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
 - Array: `minItems`, `maxItems`, `uniqueItems`
 
-`type` values are restricted to: `object`, `array`, `string`, `integer`,
-`number`, `boolean`, `null` (string or array-of-strings). Absent `type` = any.
+`type` accepts `object`, `array`, `string`, `integer`, `number`, `boolean`, `null`, or a non-empty
+array of unique members of that set. `type: []` is rejected. Omitting `type` permits any type.
 
-## Allowlist — annotations (permitted, ignored for validation)
+## Allowlist: annotations
 
-`title`, `description`, `default`, `examples`, `$comment`, `$defs`, `$id`,
-`$schema`, `deprecated`, `readOnly`, `writeOnly`.
+Permitted without validation effects: `title`, `description`, `default`, `examples`, `$comment`,
+`$defs`, `$id`, `$schema`, `deprecated`, `readOnly`, `writeOnly`.
 
-`$defs` is a container: its members are schema objects, compiled only when
-reached via `$ref`, and each MUST itself satisfy this dialect.
+## `$defs`
+
+Every `$defs` member MUST compile under this dialect, even when no `$ref` reaches it. A
+definition containing `multipleOf`, for example, rejects the schema. A definition validates
+instance data only when referenced.
 
 ## `$ref` rule
 
-- `$ref` MUST be a local JSON pointer: exactly `#` or a string starting `#/`.
-  Any remote/relative/absolute reference (`http…`, `./…`, `urn:…`, a bare name)
-  is **rejected**.
-- `$ref` MUST be the **sole member** of its object. A `$ref` accompanied by any
-  other key (validation keyword OR annotation) is **rejected**. (This removes
-  the Draft 2020-12 `$ref`-with-siblings ambiguity that the two validators
-  resolved differently.)
-- The pointer MUST resolve within the same document; an unresolvable pointer is
-  rejected. Reference cycles (direct or indirect) MUST be detected and rejected
-  deterministically with a bounded depth/visited set, never
-  by unbounded recursion.
+- `$ref` MUST be exactly `#` or start with `#/`. Reject remote, relative, absolute and bare-name
+  references, including `http…`, `./…` and `urn:…`.
+- `$ref` MUST be its object's only member. Validation and annotation siblings are both rejected.
+- The pointer MUST resolve within the document. Reject unresolved pointers and direct or indirect
+  cycles with bounded depth or a visited set; never recurse without a bound.
 
-## Explicitly rejected keywords (non-exhaustive; the closed allowlist is authoritative)
+## Explicitly rejected keywords
 
-Composition/conditional: `oneOf`, `anyOf`, `allOf`, `not`, `if`, `then`, `else`.
-Dynamic: `$dynamicRef`, `$dynamicAnchor`, `$anchor`,
-`unevaluatedProperties`, `unevaluatedItems`.
-Unsupported validation: `multipleOf`, `minProperties`, `maxProperties`,
-`patternProperties`, `propertyNames`, `dependentRequired`, `dependentSchemas`,
-`contains`, `minContains`, `maxContains`, `format`, `prefixItems`,
-`additionalItems`, `contentEncoding`, `contentMediaType`, `contentSchema`.
+Any key outside the allowlists is rejected. Common examples are:
 
-Anything not on the allowlist is rejected regardless of whether it is listed
-here.
+- Composition and conditionals: `oneOf`, `anyOf`, `allOf`, `not`, `if`, `then`, `else`.
+- Dynamic: `$dynamicRef`, `$dynamicAnchor`, `$anchor`, `unevaluatedProperties`,
+  `unevaluatedItems`.
+- Unsupported validation: `multipleOf`, `minProperties`, `maxProperties`, `patternProperties`,
+  `propertyNames`, `dependentRequired`, `dependentSchemas`, `contains`, `minContains`,
+  `maxContains`, `format`, `prefixItems`, `additionalItems`, `contentEncoding`,
+  `contentMediaType`, `contentSchema`.
 
 ## Structural limits
 
-Both the server and the signer MUST enforce **exactly** these limits, from
-`shared/schemas/structural-limits.json`, when parsing/validating any operator
-profile, metadata, or assetSchema JSON (and the asset-data instances validated
-against an assetSchema):
-
-| limit | value |
-| --- | ---: |
-| max uncompressed bytes | 1,048,576 (1 MiB) |
-| max nesting depth | 32 |
-| max string length (UTF-8 bytes) | 32,768 |
-| max array items | 4,096 |
-| max object properties | 4,096 |
-
-Each binary hardcodes these and asserts equality against
-`shared/schemas/structural-limits.json` in a test. Divergent limits let a
-hand-built package pass one validator and fail the other.
-
-**Max string length unit:** measured in UTF-8 bytes
-(Go `len(string)`), not Unicode runes/scalar values and not UTF-16 code
-units, and applies identically to string values AND object property keys.
-See docs/spec/asset-profile.md's "Max string length unit" note. An earlier
-version of the signer measured string VALUES in runes and never bounded object
-KEYS at all, so a 10,000-emoji value (10,000 runes, ~40,000 UTF-8 bytes) or
-a 32,769-byte object key that the server rejected was silently accepted by
-the signer — the byte-based rule closes that gap.
-
-## `$defs` are recursively validated
-
-Every member of a `$defs` object is a schema and MUST satisfy this dialect at
-compile time **even if it is never reached through `$ref`**. A `$defs` entry
-containing a forbidden keyword (e.g. `multipleOf`) is rejected. (The signer
-previously ignored unreferenced `$defs`; it no longer does.)
-
-## `type` must be non-empty
-
-`type` is a string or a **non-empty** array of unique valid type strings. An
-empty `type: []` is rejected (it must not silently compile to "any type").
-
-## Strict document envelopes
-
-Profile and metadata documents (and their nested `displayFields[]`,
-`issuance`, and `proofs[]` objects) MUST be decoded strictly on both sides:
-an unknown field anywhere in the envelope is rejected, not ignored. The server
-previously unmarshalled nested envelope objects loosely; it now rejects unknown
-fields to match the signer.
+Schema documents and asset instances also follow `asset-profile.md`'s structural limits,
+including its UTF-8 byte bound on strings and object keys.
 
 ## Conformance vectors (differential)
 
-`shared/vectors/schema-dialect-conformance.json` is a **differential** corpus,
-not compile-only. Both binaries run every array and must agree:
+Both binaries run each part of `shared/vectors/schema-dialect-conformance.json`:
 
-- `cases[]` — `{ schema, expect: "accept"|"reject" }`: does the assetSchema
-  **compile** under the dialect.
-- `instanceCases[]` — `{ schema, instance, expectValid: "valid"|"invalid" }`:
-  the schema compiles; both validators must **validate the instance** to the
-  same verdict. (Compile-only parity is insufficient — this is the security
-  boundary: the assetSchema validates the asset data the signature attests.)
-- `limitCases[]` — `{ kind, limit }`: each binary constructs the same at-limit
-  input (accept) and limit+1 input (reject) per the documented construction
-  rule and asserts the structural limit above.
-- `envelopeCases[]` — `{ target, document, expectValid }`: strict-envelope
-  decoding of a full profile/metadata document (unknown nested field ⇒
-  invalid).
+- `cases[]`, `{ schema, expect: "accept"|"reject" }`: schema compilation verdict.
+- `instanceCases[]`, `{ schema, instance, expectValid: "valid"|"invalid" }`: instance verdict
+  after compilation. Compile-only parity does not establish matching asset validation.
+- `limitCases[]`, `{ kind, limit }`: construct the documented at-limit input (accept) and
+  limit+1 input (reject).
+- `envelopeCases[]`, `{ target, document, expectValid }`: profile or metadata envelope verdict,
+  including rejection of unknown nested fields.
+- `limits`: the copy of `shared/schemas/structural-limits.json` checked against each binary's
+  hardcoded constants.
 
-Any disagreement between the two real binaries on any case is a release-blocking
-failure (gated by `make dialect-check`).
+Any case disagreement blocks a release. Run the gate with `make dialect-check`.

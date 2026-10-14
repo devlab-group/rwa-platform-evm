@@ -20,10 +20,8 @@ import (
 	"time"
 )
 
-// SumsubConfig configures the Sum&Substance provider. AppToken + SecretKey
-// authenticate our outbound API calls; WebhookSecret verifies inbound webhooks
-// (a separate value set in the Sumsub dashboard's webhook settings). BaseURL
-// and LevelName have sensible defaults.
+// SumsubConfig separates outbound AppToken/SecretKey credentials from WebhookSecret.
+// BaseURL and LevelName use defaults when omitted.
 type SumsubConfig struct {
 	AppToken      string
 	SecretKey     string
@@ -69,11 +67,8 @@ func newSumsubProvider(cfg SumsubConfig) (Provider, error) {
 
 func (p *sumsubProvider) Name() string { return "sumsub" }
 
-// StartVerification requests a WebSDK access token bound to the wallet address
-// as externalUserId. Sumsub auto-creates the applicant on first use of the
-// token, and — critically — echoes that externalUserId back in every webhook,
-// so the subject address rides in the signed webhook and needs no server-side
-// lookup.
+// StartVerification requests a WebSDK token with the wallet as externalUserId,
+// which identifies the subject in applicant webhooks
 func (p *sumsubProvider) StartVerification(ctx context.Context, address string) (Session, error) {
 	path := "/resources/accessTokens?" + url.Values{
 		"userId":    {address},
@@ -99,9 +94,8 @@ func (p *sumsubProvider) StartVerification(ctx context.Context, address string) 
 	}, nil
 }
 
-// do performs a signed Sumsub API call. The signature is
-// HMAC-SHA256(secretKey, ts + METHOD + path + body) as lowercase hex, where
-// path includes the query string and body is the exact bytes sent.
+// do signs ts + METHOD + path + body with HMAC-SHA256, including query parameters
+// and the exact transmitted body bytes
 func (p *sumsubProvider) do(ctx context.Context, method, path string, body []byte, out any) error {
 	req, err := http.NewRequestWithContext(ctx, method, p.cfg.BaseURL+path, bytes.NewReader(body))
 	if err != nil {
@@ -136,7 +130,7 @@ func (p *sumsubProvider) do(ctx context.Context, method, path string, body []byt
 	return json.Unmarshal(respBody, out)
 }
 
-// sumsubWebhook is the subset of an applicant webhook payload we consume.
+// sumsubWebhook contains the applicant fields used by this adapter
 type sumsubWebhook struct {
 	ApplicantID    string `json:"applicantId"`
 	InspectionID   string `json:"inspectionId"`
@@ -144,6 +138,7 @@ type sumsubWebhook struct {
 	ExternalUserID string `json:"externalUserId"`
 	Type           string `json:"type"`
 	ReviewStatus   string `json:"reviewStatus"`
+	ReviewMode     string `json:"reviewMode"` // ongoingAml identifies an ongoing AML review
 	ReviewResult   struct {
 		ReviewAnswer     string `json:"reviewAnswer"`     // GREEN | RED
 		ReviewRejectType string `json:"reviewRejectType"` // FINAL | RETRY
@@ -161,9 +156,7 @@ func (p *sumsubProvider) VerifyWebhook(rawBody []byte, headers http.Header) (Dec
 		return Decision{}, err
 	}
 	if wh.ExternalUserID == "" {
-		// Without the externalUserId we set at start time, there is no subject
-		// to bind the decision to — treat as an event we don't act on rather
-		// than fabricate one.
+		// Ignore deliveries that cannot identify a subject wallet
 		return Decision{}, ErrUnhandledEvent
 	}
 
@@ -173,11 +166,19 @@ func (p *sumsubProvider) VerifyWebhook(rawBody []byte, headers http.Header) (Dec
 		case "GREEN":
 			status = "Allowed"
 		case "RED":
-			// A RETRY rejection is recoverable (the applicant can resubmit), so
-			// it is not a terminal on-chain block — only a FINAL rejection is.
+			// Only FINAL rejection blocks on-chain; RETRY leaves review Pending
 			if strings.EqualFold(wh.ReviewResult.ReviewRejectType, "FINAL") {
 				status = "Blocked"
 			}
+		}
+	}
+
+	// Flag on-hold or ongoing-AML pending reviews for the API's Allowed-wallet check
+	var hit string
+	if wh.Type == "applicantOnHold" || (wh.Type == "applicantPending" && wh.ReviewMode == "ongoingAml") {
+		hit = "sumsub " + wh.Type
+		if wh.ReviewMode != "" {
+			hit += " (" + wh.ReviewMode + ")"
 		}
 	}
 
@@ -191,18 +192,18 @@ func (p *sumsubProvider) VerifyWebhook(rawBody []byte, headers http.Header) (Dec
 	}
 
 	return Decision{
-		Provider:   p.Name(),
-		EventID:    eventID,
-		Ref:        wh.ExternalUserID,
-		Address:    wh.ExternalUserID, // Sumsub carries the subject wallet directly
-		Status:     status,
-		OccurredAt: occurredAt,
+		Provider:      p.Name(),
+		EventID:       eventID,
+		Ref:           wh.ExternalUserID,
+		Address:       wh.ExternalUserID, // Sumsub carries the subject wallet directly
+		Status:        status,
+		OccurredAt:    occurredAt,
+		MonitoringHit: hit,
 	}, nil
 }
 
-// verifyDigest checks the X-Payload-Digest header against the configured
-// webhook secret, honoring the algorithm named in X-Payload-Digest-Alg
-// (defaulting to HMAC_SHA256_HEX).
+// verifyDigest checks X-Payload-Digest with the selected algorithm,
+// defaulting to HMAC_SHA256_HEX
 func (p *sumsubProvider) verifyDigest(body []byte, headers http.Header) bool {
 	var newHash func() hash.Hash
 	switch strings.ToUpper(headers.Get(sumsubHeaderDigestAlgo)) {
@@ -225,18 +226,9 @@ func (p *sumsubProvider) verifyDigest(body []byte, headers http.Header) bool {
 	return hmac.Equal(expected, given)
 }
 
-// sumsubEventID derives a stable-per-decision identity. Sumsub has no single
-// guaranteed unique delivery id, so prefer correlationId when present and
-// otherwise combine the applicant id, event type, and creation timestamp — a
-// later re-review of the same applicant is a genuinely new decision (different
-// createdAtMs) and must not be deduped against the earlier one.
-//
-// The timestamp is what makes that composite key discriminate at all: with no
-// correlationId and no creation timestamp, two genuinely distinct re-reviews of
-// the same applicant collapse to the identical key, and internal/compliance's
-// (provider,eventId) uniqueness constraint discards the second as a replay — so
-// a real Blocked decision would be silently dropped. Refuse to build a key that
-// cannot distinguish, rather than emitting a colliding one.
+// sumsubEventID prefers correlationId, otherwise combining applicant, event type,
+// review status and timestamp. A timestamp prevents distinct re-reviews from
+// colliding under provider/event-ID deduplication.
 func sumsubEventID(wh sumsubWebhook) (string, error) {
 	if wh.CorrelationID != "" {
 		return wh.CorrelationID, nil
@@ -253,12 +245,8 @@ func sumsubEventID(wh sumsubWebhook) (string, error) {
 	return strings.Join([]string{wh.ApplicantID, wh.Type, wh.ReviewStatus, ts}, "|"), nil
 }
 
-// sumsubOccurredAt extracts the provider's own decision timestamp (Unix
-// seconds), preferring the millisecond epoch field and falling back to the
-// RFC-style createdAt. When neither is present or parseable this is an error,
-// never a substituted time.Now() — see ErrMissingTimestamp for why fabricating
-// one silently defeats both the delivery-freshness window and the
-// newest-decision-wins ordering downstream.
+// sumsubOccurredAt parses createdAtMs or the provider's createdAt into Unix seconds,
+// refusing an unusable timestamp instead of substituting local time
 func sumsubOccurredAt(wh sumsubWebhook) (int64, error) {
 	if wh.CreatedAtMs != "" {
 		if ms, err := strconv.ParseInt(wh.CreatedAtMs, 10, 64); err == nil {

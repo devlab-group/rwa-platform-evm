@@ -4,26 +4,18 @@
 #     ./bin/platform --config /etc/rwa/config.yaml
 #     ./bin/opsctl   --config /etc/rwa/config.yaml <group> <action> ...
 #
-# ALL configuration lives here, INCLUDING SECRETS (hot-key private keys, the
-# KYC webhook HMAC secret, the admin JWT signing key). Treat this file exactly
-# like a .env or supervisor config: restrict its filesystem permissions
-# (e.g. chmod 600, owned by the service user) and keep it out of version
-# control. Every value below is OPTIONAL unless noted; an omitted key takes
-# the documented default shown as its value here. Unknown keys are rejected
-# at startup, so a typo can never silently fall back to a default.
+# This file contains secrets, including compliance credentials and webhook/JWT keys.
+# Restrict it to the service user (chmod 600) and keep deployed copies out of version control.
+# Omitted keys use defaults; unknown keys fail startup. Production adds requirements below.
 #
-# environment gates the production fail-closed startup checks. "development"
-# keeps permissive local defaults; "production" refuses to start on a config
-# that would silently degrade a security or durability guarantee (weak/empty
-# secrets, in-memory persistence, uncontrolled fees, disabled rate limiting,
-# unverifiable deployments, single-point-of-failure IPFS, etc.).
+# development permits local defaults; production validates credentials, persistence,
+# request limits, finality, fee caps and publication backups.
 environment: development
 
 http:
   addr: ":8080"
-  # metrics_addr serves Prometheus /metrics on its own listener. Loopback by
-  # default (the endpoint has no auth of its own); set to a routable address
-  # only behind your own auth/firewall.
+  # Unauthenticated metrics use a separate, loopback listener by default.
+  # Protect a remote metrics_addr with your own access controls.
   metrics_addr: "127.0.0.1:9090"
   # Slowloris / slow-client hardening for both listeners.
   read_header_timeout: "5s"
@@ -32,18 +24,15 @@ http:
   idle_timeout: "120s"
   max_header_bytes: 32768        # 32 KiB
   max_request_body_bytes: 2097152 # 2 MiB; 0 disables (production requires an override)
-  # trusted_proxies is passed to gin's SetTrustedProxies. Empty (default)
-  # trusts NO proxies, so the rate limiter keys on the raw TCP peer address
-  # and X-Forwarded-For cannot be spoofed. Set to your reverse proxy / load
-  # balancer addresses when running behind one.
+  # Empty trusts no forwarding proxies; client-IP limits use the TCP peer.
+  # Behind a proxy, list its actual addresses or CIDRs.
   trusted_proxies: []
   # trusted_proxies:
   #   - "10.0.0.1"
   #   - "172.16.0.0/12"
-  # cors_allowed_origins lists the exact browser origins allowed to call this
-  # API cross-origin. Empty (default) disables CORS: the embedded admin console
-  # is same-origin and needs none. Set it to the standalone investor SPA's
-  # origin(s). "*", a trailing slash, or a missing scheme is refused at startup.
+  # List exact browser origins, such as the standalone investor SPA's origin.
+  # Empty disables CORS; the same-origin console needs none.
+  # Wildcards, trailing slashes and missing schemes fail startup.
   cors_allowed_origins: []
   # cors_allowed_origins: ["http://localhost:5173"]
 
@@ -52,30 +41,24 @@ chain:
   id: 31337
   confirmations: 3               # 0 treats a tx as final the instant it is mined (rejected in production)
   fee_mode: "eip1559"            # "eip1559" or "legacy"
+  # Optional HTTP(S) explorer base, e.g. "https://sepolia.etherscan.io".
+  # Links append /tx/<hash>; queries, fragments and credentials are rejected.
+  explorer_url: ""
   # Absolute transaction-fee caps (base-10 wei strings; empty means no cap).
   # Production requires at least one of max_fee_per_gas_wei / max_tx_total_cost_wei.
   max_fee_per_gas_wei: ""
   max_tip_per_gas_wei: ""
   max_tx_total_cost_wei: ""
 
-# Contract bootstrap (BOOTSTRAP-ONLY). The server holds ONLY the factory
-# address + the indexer start block here; every DEPLOYED contract address
-# (token/compliance/supply-controller/vault/redemption-escrow/strategy/
-# quote-token) and the auditor are read from the DB Project record, kept live
-# by the indexer, so a redeploy never requires editing this file.
+# Bootstrap deployment settings; deployed addresses and auditor come from the
+# indexed DB Project record.
 contract:
-  # factory_address is the one-time deploy entry point. Empty is valid for a
-  # server that only serves an already-deployed project (addresses then come
-  # purely from the DB record).
+  # Deployment entry point; may be empty when serving an existing project.
   factory_address: ""
-  # start_block is the block the indexer begins scanning from when it has no
-  # checkpoint yet — the factory deploy block. 0 scans from genesis (correct
-  # for a fresh local chain; wasteful against a long-lived network).
+  # Initial scan height before a checkpoint exists; 0 scans from genesis.
   start_block: 0
-  # project_id is the UUID this deployment is pinned to. Set it BEFORE running
-  # the platform: the admin web reads it from GET /api/v1/config to build the
-  # Asset Profile, and the server rejects any profile whose projectId differs.
-  # Empty leaves the gate off (development/test); production requires it.
+  # Pin the profile UUID before startup. Setup reads it and creation requires a match.
+  # Empty disables the gate outside production; production requires it.
   project_id: ""
 
 mongo:
@@ -102,10 +85,8 @@ security:
   wallet_challenge_ttl: "15m"
   wallet_session_ttl: "15m"
   jwt_ttl: "24h"                 # admin JWT lifetime; a lapsed token costs one wallet re-login
-  # Admin auth is wallet-signature -> JWT (single-admin model). admin_address
-  # is the admin wallet (the deployer / live DEFAULT_ADMIN_ROLE holder); a
-  # personal_sign over the /auth/challenge message whose signer equals it is
-  # exchanged for an admin JWT at /auth/session. Production requires both.
+  # Wallet authorized for API login: sign /auth/challenge to obtain an admin JWT.
+  # Production requires admin_address and jwt_secret.
   admin_address: ""             # 0x-prefixed wallet address of the single admin
   # SECRET. HMAC key that signs admin JWTs. Production requires at least 32
   # bytes and not a known placeholder.
@@ -118,10 +99,8 @@ keys:
   # below), "local-keystore", "vault", or "kms-mock". In production, "raw"
   # with any hot key configured, and "kms-mock", are refused.
   provider_mode: "raw"
-  # SECRET (raw mode). Hex-encoded private key of the ONLY server hot key.
-  # Empty = compliance status-writes disabled. Deployment and the auditor-
-  # signed mint are broadcast from the admin's wallet, so there is no relayer
-  # or pricer key.
+  # SECRET in raw mode: compliance private key; empty disables status writes.
+  # Admin, mint, treasury and pricing transactions use wallets or Safes.
   compliance_key: ""
   keystore_dir: ""
   keystore_password_file: ""
@@ -130,10 +109,8 @@ keys:
   vault_key_prefix: "rwa-"
   kms_mock_seed: ""             # test-only
 
-# KYC provider. Selects which identity-verification backend the platform loads
-# (internal/kyc). An approved verification result flips the wallet to Allowed
-# on-chain automatically via the compliance hot key — the same webhook →
-# reconciler path the generic webhook already uses.
+# Authenticated KYC decisions pass replay, freshness and ownership checks before
+# asynchronous compliance relay. Monitoring signals require officer review.
 kyc:
   # "none" (default): no server-initiated verification; the KYC webhook accepts
   #   the generic HMAC shape signed with security.kyc_webhook_hmac_secret.
@@ -154,8 +131,8 @@ kyc:
     referrer: ""               # SDK token referrer pattern; default "*://*/*"
 
 tx:
-  # "in-process" (default, single process per hot key) or "mongo-lease"
-  # (multi-replica safe; requires persistence_mode: mongo).
+  # in-process requires one process per hot key; mongo-lease adds shared nonce coordination
+  # and requires persistence_mode: mongo.
   coordination_mode: "in-process"
   lease_ttl: "30s"
 

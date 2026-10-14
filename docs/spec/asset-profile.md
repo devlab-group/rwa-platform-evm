@@ -1,68 +1,88 @@
-# Asset Profile & metadata limits
+# Asset profile and metadata limits
 
-Schema: `shared/schemas/asset-profile.schema.json`, `shared/schemas/metadata.schema.json`.
-A Draft 2020-12 subset. This file pins down the cross-language limits and derivation conventions
-the signer, server, and TS client MUST all enforce identically.
+An asset profile defines a project's asset class; metadata describes one issuance record.
+Their envelopes are `shared/schemas/asset-profile.schema.json` and
+`shared/schemas/metadata.schema.json`, using JSON Schema Draft 2020-12 with `format: uuid` and
+`format: date-time`. The signer and server MUST enforce the same limits and derivations.
+TypeScript implementations MUST reproduce the shared vectors.
 
-## JSON Schema subset (operator `assetSchema`)
+## Documents
 
-Allowed keywords: `type`, `properties`, `required`, `additionalProperties`, `items`,
-`title`, `description`, `default`, `enum`, `const`, `minLength`, `maxLength`, `pattern`,
-`minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `minItems`, `maxItems`,
-`uniqueItems`, and local `$ref` (`#/...` within the bundled profile only).
+Profile fields: `profileVersion` (`"1.0"`), UUID `projectId` (the server requires its configured
+`contract.project_id`), `assetType` (1 to 128 characters), `tokenUnit` (1 to 64), integer
+`tokenDecimals` (0 to 36), `recordIdLabel` (1 to 128), optional `displayFields[]` (`label` and
+`pointer` starting with `/`), and `assetSchema`.
 
-Rejected (validation error, not ignored): `oneOf`, `anyOf`, `allOf`, `not`,
-`if`/`then`/`else`, `$dynamicRef`, `$dynamicAnchor`, `unevaluatedProperties`,
-`unevaluatedItems`, recursive schemas, and any remote/network `$ref`.
+Metadata fields: `platformVersion` (`"1.0"`), UUID `projectId`, `recordId`
+(`^[A-Za-z0-9._:-]{1,128}$`), `asset` validated against `assetSchema`, `issuance` (`amount`, a
+positive base-unit decimal string at most 2^256-1; non-empty `unit`), optional `proofs[]` (`type`,
+64-character lowercase hex `sha256`, optional `uri`), and RFC 3339 `createdAt`.
 
-## Structural limits (enforced even when the schema omits them)
+Unknown envelope fields reject the document, including inside `displayFields[]`, `issuance` and
+`proofs[]`. The operator's `assetSchema` follows the closed dialect in
+`profile-schema-dialect.md`, rather than full Draft 2020-12.
 
-| Limit                         | Value                     |
-| ----------------------------- | ------------------------- |
-| Max document size (bytes)     | 1,048,576 (1 MiB)         |
-| Max object/array nesting depth| 32                        |
-| Max string length (UTF-8 bytes) | 32,768                  |
-| Max array length              | 4,096                     |
-| Max object keys               | 4,096                     |
-| Encoding                      | valid UTF-8 only          |
-| Duplicate JSON object keys    | forbidden (parse error)   |
+## Structural limits
 
-**Max string length unit:** the 32,768 bound is measured
-in **UTF-8 bytes**, i.e. Go `len(string)`/the length of the value's UTF-8
-encoding -- NOT Unicode scalar values/runes and NOT UTF-16 code units. It
-applies IDENTICALLY to every JSON string token in the document, including
-**object property keys**, not only string values. This was chosen (over a
-rune/codepoint count) because it is the cheaper, DoS-relevant bound and
-because it is what the server already enforced; the offline signer MUST
-enforce the exact same byte-length check on both keys and values (see
-`shared/schemas/structural-limits.json`, `signer/internal/canonical/canonical.go`,
-`server/internal/auditpkg/limits.go`). A document with a string value or
-object key whose UTF-8 encoding is longer than 32,768 bytes is rejected even
-if its rune/codepoint count is at or below 32,768 (e.g. a 32,769-byte object
-key, or a value made of enough multi-byte characters to exceed 32,768 bytes
-while having far fewer than 32,768 runes).
+These limits apply to profile, metadata and `assetSchema` documents and their asset data, even
+when the asset schema specifies no limits. `shared/schemas/structural-limits.json` defines them:
+
+| Limit | Key | Value |
+| --- | --- | --- |
+| Max document size (bytes) | `maxUncompressedBytes` | 1,048,576 (1 MiB) |
+| Max object/array nesting depth | `maxDepth` | 32 |
+| Max string length (UTF-8 bytes) | `maxStringLength` | 32,768 |
+| Max array length | `maxArrayItems` | 4,096 |
+| Max object keys | `maxObjectProperties` | 4,096 |
+| Encoding | | valid UTF-8 only |
+| Duplicate JSON object keys | | forbidden (parse error) |
+
+Each binary hardcodes the limits and tests them against the `limits` copy in
+`shared/vectors/schema-dialect-conformance.json`. Differences can make a package pass one
+validator and fail the other.
+
+The string bound counts UTF-8 bytes, including object keys, rather than code points or UTF-16
+units. A 32,769-byte key fails; so does a shorter sequence of multibyte characters whose encoding
+exceeds 32,768 bytes. The byte bound limits parsing resources. Its implementations are
+`server/internal/auditpkg/limits.go` and `signer/internal/canonical/canonical.go`.
 
 ## Numeric rules
 
-- Every value that affects an on-chain amount MUST be a JSON **string**, never a JSON number
-  (e.g. `issuance.amount`, decimal weights/prices). Contracts and signer treat these as exact.
-- JSON integers that DO appear MUST stay within the cross-language safe range
-  **[-(2^53-1), 2^53-1]** = [-9007199254740991, 9007199254740991] so Go/TS/JSON agree. Values
-  outside this range MUST be strings.
+- Values affecting on-chain amounts MUST be JSON strings, including `issuance.amount`, decimal
+  weights and prices, so they retain their exact value.
+- JSON integers MUST remain within [-(2^53-1), 2^53-1] = [-9007199254740991, 9007199254740991].
+  Values outside this cross-language safe range MUST be strings.
+
+The range requirement is not fully enforced: the server rejects out-of-range plain integer
+literals, but skips literals containing a fraction or exponent; the signer's canonical parser
+does not apply the range check. Package producers must follow the rule regardless of which
+validator accepts their input.
 
 ## Derivation conventions
 
-- `metadataDigest` / `profileDigest` = `SHA-256(RFC 8785 canonical bytes)`, 0x-hex. Golden
-  reference: `shared/vectors/jcs-cid.json` (canonical bytes → sha256 → CIDv1 raw/sha2-256).
-- CIDv1 = multibase base32-lower, `0x01`(v1) `0x55`(raw) `0x12`(sha2-256) `0x20`(len) ‖ digest.
+- `metadataDigest` / `profileDigest` = `SHA-256(RFC 8785 canonical bytes)`, as 0x-hex.
+  `shared/vectors/jcs-cid.json` pins canonical bytes, SHA-256 and CIDv1.
+- CIDv1 is base32-lower multibase of `0x01` (v1), `0x55` (raw), `0x12` (sha2-256), `0x20`
+  (length), followed by the digest.
 - `recordKey` = `keccak256(utf8(recordId))`.
-- On-chain `ProjectConfig.projectId` (bytes32) = `keccak256(utf8(profile.projectId))` where
-  `profile.projectId` is the UUID string. The UUID string remains the off-chain identity;
-  the bytes32 is its on-chain binding.
+- On-chain `ProjectConfig.projectId` (bytes32) = `keccak256(utf8(profile.projectId))`.
+  The UUID remains the off-chain identity; the hash binds it on-chain.
 
 ## Webhook authentication
 
-- KYC webhook HMAC signature header: **`X-Webhook-Signature`**, value = lowercase hex of
-  `HMAC-SHA256(rawBody, sharedSecret)`. Verify with a constant-time compare. Replay-protected
-  via a per-event id + timestamp window. The server MUST NOT accept a wallet address from a
-  webhook unless that wallet previously proved ownership, or a documented manual override is used.
+`POST /api/v1/compliance/webhook` authenticates the configured provider's deliveries:
+
+| `kyc.provider` | Header | Value |
+| --- | --- | --- |
+| `none` (generic) | `X-Webhook-Signature` | hex `HMAC-SHA256(rawBody, sharedSecret)`, optionally `0x`-prefixed |
+| `sumsub` | `X-Payload-Digest` | hex HMAC of the raw body; `X-Payload-Digest-Alg` selects SHA-256 (default), SHA-1 or SHA-512 |
+| `onfido` | `X-SHA2-Signature` | hex HMAC-SHA256 of the raw body |
+
+Signature comparison is constant time. Decisions require a unique provider event ID, a timestamp
+no older than 24 hours and no more than five minutes ahead, and prior wallet-ownership proof.
+The server MUST NOT act on an unproved wallet from a webhook; that path has no override. The
+admin API's manual allow or block is the documented alternative.
+
+Walletless Onfido watchlist-monitor signals raise an alert without entering the decision replay
+or freshness checks. Repeated deliveries can therefore repeat that alert; they change no
+on-chain status.

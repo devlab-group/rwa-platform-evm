@@ -149,6 +149,12 @@ Compliance-screen status writes use the server's compliance key instead.
 | Inventory & Sales | treasury withdrawal                                                                                 |
 | Redemptions       | quote-token approval, funding and rejection                                                         |
 
+For a Safe role holder, select its address under the action to export the calls as a Safe{Wallet}
+Transaction Builder batch. Import it into that Safe, review the calls, and have the owners approve
+and execute it. Multi-contract actions, such as role changes or admin transfer, execute atomically
+when submitted as one batch. The Security screen also exports acceptance for a pending Safe
+admin. Verify the chain ID in the filename and batch before import; use the Safe on that chain.
+
 Call `SupplyController.setAuditor`, `Vault.setTreasury` and `Vault.setStrategy` directly from
 the admin wallet or multisig; the console has no forms for them. Investors submit purchases,
 redemption requests, claims and cancellations from their wallets through the investor app.
@@ -311,10 +317,15 @@ acceptance checks still apply before a decision is relayed:
 | Sumsub   | `applicantReviewed` with answer RED and reject type FINAL                       | RETRY rejections and event types other than `applicantReviewed` |
 | Onfido   | a workflow-run delivery with status `declined` and a valid completion timestamp | nonterminal workflow statuses and non-workflow events           |
 
-Ongoing monitoring alone does not ensure a registry block. For Sumsub, a match held for manual
-review leaves the existing approval in place until a compliance officer issues a FINAL
-rejection. Include that review in the officer's routine. Onfido watchlist events are not
-workflow runs; the server acknowledges and ignores them, so block confirmed matches manually.
+Monitoring raises `kyc_monitoring_hit` (§5) for officer review; it does not itself block a wallet:
+
+- Sumsub: `applicantOnHold` or `applicantPending` with `reviewMode` `ongoingAml` raises an alert
+  after accepted, deduplicated delivery when the wallet's read model is still Allowed and unexpired.
+  A first review without existing approval raises none. Review the applicant and issue a FINAL
+  rejection in Sumsub or block it here when warranted. These signals leave registry status unchanged.
+- Onfido: `watchlist_monitor.matches_updated` identifies a monitor rather than a wallet.
+  Use its ID from the alert to find the applicant in Onfido, then block confirmed matches manually.
+  This signal bypasses decision replay checks, so repeated deliveries may repeat the alert.
 
 Wallet-address screening is separate from screening the person. The server has no built-in
 adapter for services such as Chainalysis, TRM Labs or Elliptic. To connect a service:
@@ -368,6 +379,7 @@ audit-log write. Repeated findings are counted on each check rather than dedupli
 | `funded_claim_failure`   | Funded, unclaimed age reaches `alerts.funded_claim_failure_sla` (default 24h), measured from the read model's last state update | 5 minutes                      |
 | `config_drift`           | contract wiring differs from the expected project state (§7a)                                                                   | 5 minutes                      |
 | `storage_degraded`       | MongoDB ping fails                                                                                                              | 30 seconds, when using MongoDB |
+| `kyc_monitoring_hit`     | an accepted Sumsub monitoring decision concerns a projected Allowed wallet, or an Onfido monitor reports changed matches (§4c) | accepted Sumsub decisions; each Onfido signal delivery |
 
 The platform has no dedicated metrics for indexer lag, RPC errors or stuck nonces. Check the
 Security screen's stale-data warning (`securityStale` on `GET /api/v1/project`) and the

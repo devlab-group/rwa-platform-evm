@@ -13,6 +13,7 @@ endpoints; CI's local-chain tests do not replace it.
    - `chain.confirmations`, chosen for the network's reorg profile;
    - `chain.fee_mode`, either `eip1559` or `legacy`;
    - a fee cap through `chain.max_fee_per_gas_wei`, `chain.max_tx_total_cost_wei`, or both;
+   - optional `chain.explorer_url`, the block explorer base URL used for transaction links;
    - `security.admin_address` and `contract.project_id`.
 
    With `environment: production`, startup rejects zero confirmations and requires a fee cap

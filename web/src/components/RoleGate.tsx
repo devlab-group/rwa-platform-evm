@@ -1,14 +1,15 @@
-import type { ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
+import type { Address } from "viem";
 import type { components } from "../lib/api-types";
 import { useHasRole } from "../lib/roles";
+import { TxRouteContext, type TxRoute } from "../lib/txRoute";
 
 type RoleHolders = components["schemas"]["RoleHolders"];
 
 /**
- * Renders `children` only when the connected wallet holds `role`; otherwise a
- * muted notice naming the role required to perform `action`. Gates admin
- * actions in the UI — the underlying on-chain authorization is still enforced
- * by the contract when the built calldata is submitted (see lib/roles.ts).
+ * Routes authorized wallet actions directly, or renders Safe-batch actions for a selected holder.
+ * Nested forms use useTxRoute; function children receive the route explicitly.
+ * The selection does not verify Safe bytecode; contracts enforce role authorization.
  */
 export function RoleGate({
   roles,
@@ -17,17 +18,52 @@ export function RoleGate({
   children,
 }: {
   roles: RoleHolders | undefined;
-  /** On-chain role name, e.g. ROLES.treasurer ("TREASURER_ROLE"). */
+  /** On-chain role name, such as ROLES.treasurer */
   role: string;
-  /** Short verb phrase used in the fallback notice, e.g. "build treasury withdrawal calldata". */
+  /** Short verb phrase describing the action in the fallback notice */
   action: string;
-  children: ReactNode;
+  children: ReactNode | ((route: TxRoute) => ReactNode);
 }) {
   const allowed = useHasRole(roles, role);
-  if (allowed) return <>{children}</>;
+  const [safe, setSafe] = useState("");
+  const selectId = useId();
+
+  function render(route: TxRoute) {
+    return (
+      <TxRouteContext.Provider value={route}>
+        {typeof children === "function" ? children(route) : children}
+      </TxRouteContext.Provider>
+    );
+  }
+
+  if (allowed) return render({ kind: "wallet" });
+  const holders = roles?.[role] ?? [];
   return (
-    <p className="field__hint" role="status">
-      Connect a wallet holding <code className="mono">{role}</code> to {action}.
-    </p>
+    <>
+      <p className="field__hint" role="status">
+        Connect a wallet holding <code className="mono">{role}</code> to{" "}
+        {action}.
+      </p>
+      {holders.length > 0 && (
+        <div className="field">
+          <label htmlFor={selectId}>
+            Save a Safe{"{Wallet}"} batch using a Safe holding {role}
+          </label>
+          <select
+            id={selectId}
+            value={safe}
+            onChange={(e) => setSafe(e.target.value)}
+          >
+            <option value="">Choose a Safe…</option>
+            {holders.map((holder) => (
+              <option key={holder} value={holder}>
+                {holder}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {safe && render({ kind: "safe", safe: safe as Address })}
+    </>
   );
 }

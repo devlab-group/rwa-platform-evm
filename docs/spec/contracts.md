@@ -1,161 +1,204 @@
 # Contract specification
 
-The Solidity interfaces in `contracts/src/interfaces/*.sol`, together with this file, describe
-how the contracts behave. Implementations follow them; changing an interface is a
-frozen-contract change and needs a written, reviewed decision first.
+This file and `contracts/src/interfaces/*.sol` define contract behavior. Interface changes are
+frozen-contract changes and require a written, reviewed decision.
 
-Solidity `^0.8.24`, OpenZeppelin Contracts 5.x. All contracts non-upgradeable.
+The contracts use Solidity `^0.8.24` and OpenZeppelin Contracts 5.x, without upgrades.
+ComplianceRegistry, RWAToken, SupplyController, Vault, FixedPriceStrategy and RedemptionEscrow
+each use `AccessControlEnumerable` and `AccessControlDefaultAdminRules`. Role holders are
+enumerable; admin transfer takes two steps and an on-chain delay. See `roles.md`.
 
 ## Project pause
 
-`RWAToken.paused()` is the single project-wide emergency flag (from `ERC20Pausable`
-+ a `PAUSER_ROLE`-gated `pause()/unpause()`). `SupplyController`, `Vault`, and
-`RedemptionEscrow` MUST read `token.paused()` and revert state-changing calls while paused.
-Two token paths are deliberately exempt so an emergency pause cannot trap them:
-`RWAToken.returnEscrowedRWA` (redemption cancel/claim recovery) and `RWAToken.forcedTransfer`
-(ERC-7943 enforcement). Both are documented under RWAToken below.
+`RWAToken.paused()` is the project emergency flag, controlled by `PAUSER_ROLE` through
+`pause()` / `unpause()`.
+
+| While paused | Functions |
+| --- | --- |
+| Revert | every RWA transfer (OpenZeppelin `EnforcedPause`), `SupplyController.mint`/`burn`, `Vault.buy`, `withdrawProceeds`, `setStrategy`, `setTreasury`, `RedemptionEscrow.requestRedemption`, `fundRedemption`, `rejectRedemption`, `claimRedemption` (all `ProjectPaused` except the transfers) |
+| Keep working | `RedemptionEscrow.cancelRedemption` (through `RWAToken.returnEscrowedRWA`), `RWAToken.setFrozenTokens`, `forcedTransfer`, `SupplyController.setAuditor`, `FixedPriceStrategy` price setters, `ComplianceRegistry.setStatus`/`setStatuses`, role grants and revocations, admin transfers |
+
+The two token transfer paths available during pause are `returnEscrowedRWA` and `forcedTransfer`,
+described below. Ordinary token compliance and frozen-balance checks precede its pause check,
+so an ineligible transfer can return a more specific error first.
 
 ## RWAToken
 
-- OZ `ERC20` + `ERC20Pausable`, fixed decimals from constructor.
-- `_update(from,to,value)`: if `from!=0 && to!=0` require `compliance.isAllowed(from)`
-  and `compliance.isAllowed(to)`, then, for `value <= balanceOf(from)`, require
-  `value <= unfrozen(from)` else `ERC7943InsufficientUnfrozenBalance`. Above the balance, OZ's
-  own `ERC20InsufficientBalance` is what reverts. Mint/burn (`from==0`/`to==0`) skip both checks.
-- `controllerMint`/`controllerBurn`: only `supplyController` (immutable).
-- `pause()`/`unpause()`: `PAUSER_ROLE` (use OZ AccessControl on the token, or pass
-  through a shared roles source - implementer choice, but PAUSER must be the factory-set holder).
-- `returnEscrowedRWA(to,value)`: only the wired `redemptionEscrow`; both ends still
-  `isAllowed`; calls `ERC20._update` directly so it works while paused. The escrow is a
-  system address and therefore never frozen.
+- OpenZeppelin `ERC20` and `ERC20Pausable`, with decimals fixed at construction.
+- Immutable `compliance`; deployer-only, one-time `setSupplyController` and
+  `setRedemptionEscrow` wiring (`OnlyTokenDeployer`, `SupplyControllerAlreadySet`,
+  `RedemptionEscrowAlreadySet`, `ZeroAddress`). The factory sets both during `deploy`.
+- Ordinary `_update` transfers (`from != 0 && to != 0`) require Allowed sender
+  (`SenderNotAllowed`) and recipient (`RecipientNotAllowed`), then enough unfrozen balance
+  (`ERC7943InsufficientUnfrozenBalance`) when `value <= balanceOf(from)`. Otherwise permitted
+  above-balance transfers fail with OpenZeppelin `ERC20InsufficientBalance`.
+  Mint and burn skip these eligibility checks.
+- `controllerMint` / `controllerBurn` require `supplyController` (`OnlySupplyController`).
+- `pause()` / `unpause()` require `PAUSER_ROLE`, initially granted to the project admin.
+- `returnEscrowedRWA(to, value)` requires the wired escrow (`OnlyRedemptionEscrow`) and both
+  endpoints to be Allowed. It debits the escrow and calls `ERC20._update` directly, bypassing pause.
 
 ### ERC-7943 (uRWA)
 
-RWAToken implements the final ERC-7943 fungible interface (`contracts/src/interfaces/IERC7943.sol`).
-`supportsInterface(0x3edbb4c4)` is true, alongside the AccessControl interface IDs. The obsolete
-draft names from the ERC's draft period (`isUserAllowed`, `isTransferAllowed`, `getFrozen`,
-`setFrozen`, `forceTransfer`) are not implemented and not aliased.
+RWAToken implements the final [ERC-7943](https://eips.ethereum.org/EIPS/eip-7943) fungible
+interface in `contracts/src/interfaces/IERC7943.sol`. `supportsInterface(0x3edbb4c4)` returns
+true, alongside AccessControl interface IDs. Draft names `isUserAllowed`, `isTransferAllowed`,
+`getFrozen`, `setFrozen` and `forceTransfer` have no implementations or aliases.
 
-Frozen amounts are absolute per holder, default 0, and may exceed the holder's balance, so every
-consumer computes `unfrozen(a) = balanceOf(a) > frozen[a] ? balanceOf(a) - frozen[a] : 0`.
+Frozen amounts are absolute, default to 0 and may exceed a balance:
+`unfrozen(a) = balanceOf(a) > frozen[a] ? balanceOf(a) - frozen[a] : 0`.
 
-Reads (side-effect-free, must not revert):
-- `canSend(a)` / `canReceive(a)`: both `compliance.isAllowed(a)`. Kept separate for the
-  standard's directional API.
-- `getFrozenTokens(a)`: the stored absolute amount.
-- `canTransfer(from,to,amount)`: false if `paused()`, `!canSend(from)`, `!canReceive(to)`, or
-  `frozen[from] > 0 && amount > unfrozen(from)`. It does NOT report ERC-20 balance or allowance
-  insufficiency: with nothing frozen, an over-balance amount returns true here and the ERC-20
-  transfer rejects it at execution. The frozen rule is evaluated on its own terms, so a fully
-  frozen holder answers false for any positive amount.
+Read-only queries on the deployed stack do not change state or revert:
 
-Writes, both `DEFAULT_ADMIN_ROLE`, both returning `true` on success as the ERC declares:
-- `setFrozenTokens(account,amount)`: overwrite (not a delta); rejects `account==0`; rejects
-  `amount>0` when `compliance.isSystemAddress(account)`; `amount==0` on a system address stays
-  allowed; emits `Frozen(account,amount)` on every successful call.
-- `forcedTransfer(from,to,amount)`: rejects `from==0`, `to==0`, `from==to`, and a `from` that is
-  `compliance.isSystemAddress` (`SystemAddressCannotBeSeized`) so a seizure can never reach the
-  Vault's unsold float or a funded redemption's escrowed RWA; requires `canReceive(to)` else
-  `ERC7943CannotReceive`; deliberately bypasses `canSend(from)`, `canTransfer`, and project pause;
-  never changes total supply; over-balance reverts through the ERC-20 balance path. If
-  `amount` reaches into frozen tokens, reduce first (`newFrozen = frozen - max(amount -
-  unfrozen, 0)`) and emit before the transfer:
-  `Frozen(from,newFrozen)`, `Transfer(from,to,amount)`, `ForcedTransfer(from,to,amount)`.
-  With nothing frozen consumed, the `Frozen` event is omitted.
+- `canSend(a)` / `canReceive(a)` both return `compliance.isAllowed(a)`; the directional API
+  keeps them separate.
+- `getFrozenTokens(a)` returns the stored amount.
+- `canTransfer(from, to, amount)` returns false for pause, disallowed endpoints, or
+  `frozen[from] > 0 && amount > unfrozen(from)`. It does not check ERC-20 balance or allowance:
+  an above-balance amount can return true when nothing is frozen and fail at execution.
+  A fully frozen holder returns false for every positive amount.
 
-Events: `Frozen(address indexed account, uint256 amount)`,
+Both writes require `DEFAULT_ADMIN_ROLE` and return `true` on success:
+
+- `setFrozenTokens(account, amount)` replaces the amount. It rejects zero `account`
+  (`ZeroAddress`) and positive amounts for system addresses (`SystemAddressCannotBeFrozen`).
+  Setting a system address to 0 is allowed. Every successful call emits `Frozen(account, amount)`.
+- `forcedTransfer(from, to, amount)` rejects zero endpoints (`ZeroAddress`), self-transfer
+  (`ForcedTransferToSelf`) and a system-address source (`SystemAddressCannotBeSeized`).
+  The destination must pass `canReceive` (`ERC7943CannotReceive`). It bypasses sender eligibility,
+  frozen-transfer restrictions and pause, preserves total supply, and lets ERC-20 reject
+  above-balance amounts. Consuming frozen tokens reduces the amount by `amount - unfrozen`,
+  then emits `Frozen(from, newFrozen)`, `Transfer(from, to, amount)` and
+  `ForcedTransfer(from, to, amount)` in that order. Otherwise it emits no `Frozen` event.
+
+Events: `Frozen(address indexed account, uint256 amount)` and
 `ForcedTransfer(address indexed from, address indexed to, uint256 amount)`.
 
 #### Integrating with this token
 
-Two things a client written against the plain standard should know.
+`forcedTransfer` uses `ERC7943CannotReceive(address)`. Ordinary transfers into frozen balance
+use `ERC7943InsufficientUnfrozenBalance(address,uint256,uint256)`. They use platform errors
+`SenderNotAllowed(address)` and `RecipientNotAllowed(address)` for eligibility; declared standard
+errors `ERC7943CannotSend` and `ERC7943CannotTransfer` are never raised. Enforcement also uses
+`ZeroAddress()`, `ForcedTransferToSelf(address)`, `SystemAddressCannotBeFrozen(address)` and
+`SystemAddressCannotBeSeized(address)`.
 
-Errors. `forcedTransfer` reverts with the standard `ERC7943CannotReceive(address)`, and an
-ordinary transfer that reaches into frozen tokens reverts with the standard
-`ERC7943InsufficientUnfrozenBalance(address,uint256,uint256)`. Everywhere else the token uses its
-own more specific errors, which the admin console decodes into plain language
-(`web/src/lib/wallet.ts` `describeWalletError`, against the error fragments in
-`web/src/lib/abis.ts`): `SenderNotAllowed(address)` and
-`RecipientNotAllowed(address)` on the ERC-20 transfer path (in place of `ERC7943CannotSend` and
-`ERC7943CannotTransfer`, which are declared but never raised), plus `ZeroAddress()`,
-`ForcedTransferToSelf(address)`, `SystemAddressCannotBeFrozen(address)`, and
-`SystemAddressCannotBeSeized(address)` on the enforcement calls. Selectors are pinned in
-`shared/vectors/erc7943-abi.json`, including the two platform errors that replace the standard's
-unraised ones, so an error table built from that file matches what actually arrives. The investor
-SPA decodes the frozen-balance error the same way (`investor-web/src/lib/wallet.ts`
-`describeTxError`), since a holder hitting a freeze otherwise sees only a failed transaction.
+`shared/vectors/erc7943-abi.json` pins selectors, including the platform eligibility errors.
+The admin console decodes them with `web/src/lib/wallet.ts`'s `describeWalletError` and
+`web/src/lib/abis.ts`; the investor app decodes frozen-balance errors with
+`investor-web/src/lib/wallet.ts`'s `describeTxError`.
 
-`returnEscrowedRWA`. The one place the token moves tokens while `canTransfer` would answer false:
-it calls `ERC20._update` directly so a timed-out cancel or a claim is never trapped by a pause.
-It is not a general bypass. Only the wired RedemptionEscrow may call it, it always debits the
-escrow's own balance, both ends stay compliance-checked, and the escrow is a system address, so
-it can be neither frozen nor seized from.
+`returnEscrowedRWA` can transfer when pause makes `canTransfer` false, allowing timeout
+cancellation. Claim uses it after the escrow's own pause check. Only the wired escrow can call
+it, only its own balance is debited, and both endpoints remain compliance-checked. The escrow's
+system-address status prevents freezing or seizure of its balance.
 
 ## ComplianceRegistry
 
-- OZ `AccessControl`, `COMPLIANCE_ROLE` gates `setStatus`/`setStatuses`.
-- `isAllowed`: status\==Allowed && (validUntil\==0 || validUntil>=block.timestamp).
-- `setStatuses`: revert `ArrayLengthMismatch` if lengths differ; each element emits `StatusChanged`.
-- Emits previous + new status/expiry + caller.
+- `COMPLIANCE_ROLE` controls `setStatus` / `setStatuses`, initially granted to the compliance
+  operator and deployer. The factory renounces its grant before `deploy` returns.
+- `isAllowed(a)` is `status == Allowed && (validUntil == 0 || validUntil >= block.timestamp)`.
+  `getRecord(a)` returns stored status and expiry.
+- Batch array-length mismatch raises `ArrayLengthMismatch`. Both setters reject zero accounts
+  (`ZeroAddressAccount`) and emit
+  `StatusChanged(account, previousStatus, newStatus, previousValidUntil, newValidUntil, caller)`.
+- `setSystemAddresses(vault, redemptionEscrow)` is deployer-only and callable once
+  (`OnlyRegistryDeployer`, `SystemAddressesAlreadySet`, `ZeroAddressAccount`).
+  `isSystemAddress(a)` identifies the pinned addresses. They accept only Allowed with
+  `validUntil == 0`; other status or expiry values raise `SystemAddressCannotBeBlocked`.
 
 ## SupplyController
 
-Immutable: `token`, `vault`, `profileDigest`. Mutable via `DEFAULT_ADMIN_ROLE`: `auditor`.
-Uses OZ `EIP712` + `SignatureChecker.isValidSignatureNow` (EOA + ERC-1271).
+`token`, `vault` and `profileDigest` are immutable. Admin-only `setAuditor(newAuditor)` works
+while paused, rejects zero (`ZeroAddressAuditor`) and emits `AuditorChanged(previous, new, caller)`.
+The constructor rejects zero token or Vault (`ZeroAddress`) and zero auditor
+(`ZeroAddressAuditor`). OpenZeppelin `EIP712` uses name `RWA-Supply-Attestation`, version `1`.
+`SignatureChecker.isValidSignatureNowCalldata` accepts EOA and ERC-1271 auditors, including a Safe.
 
-`mint(attestation, signature)` checks IN ORDER:
-1. `!token.paused()` else `ProjectPaused`
-2. `attestation.auditor == auditor` else `WrongAuditor`
-3. `attestation.profileDigest == profileDigest` else `WrongProfileDigest`
-4. `attestation.vault == vault` else `WrongVault`
-5. `block.timestamp <= validUntil` else `AttestationExpired`
-6. `!nonceUsed[nonce]` else `NonceAlreadyUsed`
-7. `!recordKeyUsed[recordKey]` else `RecordKeyAlreadyUsed`
-8. `amount > 0` else `ZeroAmount`
-9. `SignatureChecker.isValidSignatureNow(auditor, digest, signature)` else `InvalidSignature`
-10. set `nonceUsed[nonce]=true`, `recordKeyUsed[recordKey]=true` (effects before interaction)
+`mint(attestation, signature)` runs these checks and effects in order:
+
+1. `!token.paused()`, else `ProjectPaused`
+2. `attestation.auditor == auditor`, else `WrongAuditor`
+3. `attestation.profileDigest == profileDigest`, else `WrongProfileDigest`
+4. `attestation.vault == vault`, else `WrongVault`
+5. `block.timestamp <= validUntil`, else `AttestationExpired`
+6. `!nonceUsed[nonce]`, else `NonceAlreadyUsed`
+7. `!recordKeyUsed[recordKey]`, else `RecordKeyAlreadyUsed`
+8. `amount > 0`, else `ZeroAmount`
+9. the signature verifies for `auditor` over the EIP-712 digest, else `InvalidSignature`
+10. sets `nonceUsed[nonce]` and `recordKeyUsed[recordKey]` (effects before the interaction)
 11. `token.controllerMint(vault, amount)`
-12. emit `Minted`
+12. emits `Minted(recordKey, metadataDigest, vault, amount, nonce, auditor)`
 
-`burn(attestation, signature)`: same 1-6, 8, 9; replace record-key check with
-`!operationIdUsed[operationId]`; additionally require `amount <= token.balanceOf(vault)`
-else `InsufficientVaultInventory`; set nonce+operationId used; `token.controllerBurn(vault, amount)`; emit `Burned`.
+`burn(attestation, signature)` uses checks 1 to 6, then unused `operationId`
+(`OperationIdAlreadyUsed`), positive amount (`ZeroAmount`), sufficient Vault balance
+(`InsufficientVaultInventory`), and valid signature (`InvalidSignature`). It marks nonce and operation ID used, calls
+`token.controllerBurn(vault, amount)` and emits
+`Burned(operationId, metadataDigest, vault, amount, nonce, auditor)`.
 
-Nonce namespace is shared across mint and burn. Distinct type hashes prevent cross-type replay.
-`mint`/`burn` are permissionless to call.
+Mint and burn share the nonce namespace; distinct type hashes prevent cross-type replay.
+Anyone may submit either: the auditor signature authorizes it.
 
 ## FixedPriceStrategy
 
 `quote = Math.mulDiv(tokenAmount, price, 10**tokenDecimals, rounding)`.
-- `quotePurchase` / `previewBuy`: `Math.Rounding.Ceil`.
-- `quoteRedemption` / `previewRedeem`: `Math.Rounding.Floor`.
-- `setPurchasePrice`/`setRedemptionPrice`: `PRICER_ROLE`; revert `ZeroPrice` on 0.
+
+- `quotePurchase` / `previewBuy` use `Math.Rounding.Ceil`.
+- `quoteRedemption` / `previewRedeem` use `Math.Rounding.Floor`.
+- `setPurchasePrice` / `setRedemptionPrice` require `PRICER_ROLE`, including for an admin.
+  Zero prices raise `ZeroPrice`, as in construction. They emit
+  `PurchasePriceUpdated` / `RedemptionPriceUpdated(previous, new, caller)`.
+- Getters: `purchasePricePerWholeToken`, `redemptionPricePerWholeToken`, `tokenDecimals`.
 
 ## Vault
 
-Immutable: `token`, `quoteToken`. Mutable: `strategy`, `treasury` (admin). Holds RWA inventory
-(`inventory()==token.balanceOf(this)`). `nonReentrant` + `SafeERC20`. `buy` is the only inbound
-token flow: there is no off-chain payment distribution (`distribute`, `distributionCap`,
-`DISTRIBUTOR_ROLE` do not exist).
+`token` and `quoteToken` are immutable. Admin-only `setStrategy` / `setTreasury` reject pause
+(`ProjectPaused`) and zero addresses (`ZeroAddress`), emitting
+`StrategyChanged` / `TreasuryChanged(previous, new, caller)`; `inventory() == token.balanceOf(vault)`.
+The Vault uses `nonReentrant` and `SafeERC20`. Inventory is sold through `buy`; there is no
+off-chain distribution, `distribute`, `distributionCap` or `DISTRIBUTOR_ROLE`.
 
-`buy(tokenAmount, maxQuoteAmount, recipient, deadline)`:
-- `!paused`; caller & recipient `isAllowed`; `deadline>=block.timestamp`;
-  `tokenAmount>0 && <=inventory`; `quote=strategy.quotePurchase(tokenAmount)`;
-  `quote<=maxQuoteAmount`; pull quote via `safeTransferFrom` and assert exact balance delta;
-  then `token.transfer(recipient, tokenAmount)`; emit `Purchased`.
+`buy(tokenAmount, maxQuoteAmount, recipient, deadline)` checks, in order: not paused
+(`ProjectPaused`), Allowed caller (`CallerNotAllowed`), Allowed recipient (`RecipientNotAllowed`),
+`deadline >= block.timestamp` (`DeadlineExpired`), positive amount (`ZeroAmount`), sufficient
+inventory (`InsufficientInventory`), and `strategy.quotePurchase(tokenAmount) <= maxQuoteAmount`
+(`QuoteAboveMax`). It pulls the quote with `safeTransferFrom`, checks the Vault's exact balance
+delta (`QuoteDeltaMismatch`), sends RWA to the recipient and emits
+`Purchased(buyer, recipient, tokenAmount, quote, strategy)`.
 
-`withdrawProceeds(amount)`: `TREASURER_ROLE`; transfer quoteToken to `treasury`; emit `ProceedsWithdrawn`.
-`setStrategy`/`setTreasury` admin.
+`withdrawProceeds(amount)` requires `TREASURER_ROLE` and an unpaused project (`ProjectPaused`).
+It pays `treasury`, checks its exact quote-token balance delta (`QuoteDeltaMismatch`) and emits
+`ProceedsWithdrawn(treasury, amount, caller)`.
 
 ## RedemptionEscrow
 
-See `redemption-state-machine.md`. Immutable: `token`, `quoteToken`, `vault`, `strategy`,
-`redemptionTimeout`. `nonReentrant`, `SafeERC20`, exact balance-delta checks on every transfer.
+See `redemption-state-machine.md` for transition guards. `token`, `quoteToken`, `vault`,
+`strategy` and `redemptionTimeout` are immutable. Changing `Vault.strategy` leaves redemption
+pricing on the original strategy. The escrow uses `nonReentrant` and `SafeERC20`; views are
+`getRedemption(id)`, `previewRedeem(rwaAmount)` and `nextId`.
 
 ## RWAFactory
 
-`deploy(ProjectConfig)` deploys the full stack in one tx, wires addresses, registers `vault`
-and `redemptionEscrow` as `Allowed` in the registry, grants final roles, revokes all temporary
-factory permissions, and emits a single `ProjectDeployed`. Validates config (nonzero addresses,
-timeout within bounds, nonzero prices, decimals<=36) else `InvalidConfig(field)`.
-`version()` returns a constant like `"rwa-v2"`.
+The constructor requires four nonzero stateless helper addresses (`ZeroAddressDeployer`).
+Fixed-selector `delegatecall`s keep factory runtime code under the EIP-170 limit and make each
+child constructor see the factory as `msg.sender`.
+
+Permissionless `deploy(ProjectConfig)` performs these steps in one transaction:
+
+1. Validate config (`InvalidConfig(field)`): nonzero `quoteToken`, `admin`, `auditor`,
+   `complianceOperator`, `pricer`, `treasurer`, `redemptionManager` and `treasury`;
+   `decimals <= 36`; positive purchase and redemption prices;
+   `1 day <= redemptionTimeout <= 365 days`. It does not validate `name`, `symbol`, `projectId`,
+   `profileDigest` or `adminTransferDelay`.
+2. Deploy ComplianceRegistry and RWAToken, FixedPriceStrategy and Vault, SupplyController, then
+   RedemptionEscrow. Constructors grant configured roles, with admin authority on each contract
+   and `PAUSER_ROLE` on the token assigned to `config.admin`.
+3. Wire `setSupplyController`, `setRedemptionEscrow` and `setSystemAddresses(vault, escrow)`;
+   allowlist Vault and escrow without expiry.
+4. Renounce bootstrap `COMPLIANCE_ROLE`.
+5. Emit `ProjectDeployed(projectId, profileDigest, token, compliance, supplyController, vault,
+   redemptionEscrow, strategy, version)` with the first two fields indexed, and return addresses.
+
+The platform derives `projectId` and `profileDigest` from the profile (`asset-profile.md`).
+The factory emits both unchanged; the digest also becomes SupplyController's immutable value.
+`version()` returns `"rwa-v2"`.

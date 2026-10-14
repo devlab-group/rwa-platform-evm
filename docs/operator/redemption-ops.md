@@ -55,6 +55,10 @@ back as well. No other transaction can run between funding and claiming within t
 Safe's [MultiSendCallOnly implementation](https://github.com/safe-fndn/safe-smart-account/blob/main/contracts/libraries/MultiSendCallOnly.sol)
 reverts the batch when a call fails.
 
+On a redemption, select the Safe holding `TREASURER_ROLE` and save the funding batch. Leave
+"Claim in the same batch" checked (the default) to include payout. The approval covers exactly
+the request's quote amount.
+
 ### Simulate a payment
 
 The following call simulates a one-unit transfer without sending tokens:

@@ -1,11 +1,8 @@
-// Minimal ABI fragments for the contract writes this console encodes and
-// broadcasts from the connected admin wallet, including the actions on the
-// Security page (web-only — the contract's onlyRole check is the real
-// authorization, see lib/roles.ts). Only the functions actually encoded here
-// are declared; full ABIs live in the server's generated bindings.
+// ABI fragments for console-encoded wallet writes and Safe batches.
+// Contracts enforce authorization; interfaces live in contracts/src/interfaces.
 import type { Abi } from "viem";
 
-/** RWAToken pause/unpause — gated on-chain by PAUSER_ROLE. */
+/** RWAToken pause controls, requiring PAUSER_ROLE */
 export const pausableAbi = [
   {
     type: "function",
@@ -23,8 +20,7 @@ export const pausableAbi = [
   },
 ] as const satisfies Abi;
 
-/** FixedPriceStrategy price setters — gated on-chain by PRICER_ROLE. Prices are
- * quote-token minimal units per whole RWA token. */
+/** PRICER_ROLE price setters, using quote-token minimal units per whole RWA token */
 export const fixedPriceStrategyAbi = [
   {
     type: "function",
@@ -42,7 +38,7 @@ export const fixedPriceStrategyAbi = [
   },
 ] as const satisfies Abi;
 
-/** AccessControl role management + AccessControlDefaultAdminRules admin transfer. */
+/** Role management and delayed admin transfer */
 export const accessControlAdminAbi = [
   {
     type: "function",
@@ -80,13 +76,11 @@ export const accessControlAdminAbi = [
   },
 ] as const satisfies Abi;
 
-/** RWAToken's ERC-7943 (uRWA) enforcement calls, both gated on-chain by
- * DEFAULT_ADMIN_ROLE. `setFrozenTokens` writes an absolute amount in RWA
- * minimal units, so 0 releases a hold and a second call replaces the first
- * rather than adding to it. `forcedTransfer` seizes tokens from a holder who
- * cannot or will not sign: the recipient must still be compliance-Allowed, and
- * it works while the project is paused. Signatures are pinned in
- * shared/vectors/erc7943-abi.json (see abis.test.ts). */
+/**
+ * Admin-only ERC-7943 enforcement: setFrozenTokens replaces the absolute RWA amount;
+ * forcedTransfer bypasses sender eligibility and pause while checking the recipient.
+ * Selectors are pinned in shared/vectors/erc7943-abi.json.
+ */
 export const erc7943Abi = [
   {
     type: "function",
@@ -111,11 +105,10 @@ export const erc7943Abi = [
   },
 ] as const satisfies Abi;
 
-/** Every error RWAToken can revert an admin action with, so a failed wallet call can be
- * rendered as a sentence instead of the raw hex the injected wallet hands back. Only errors,
- * no functions: `sendWrite` posts raw calldata, so this is used for decoding a revert
- * (lib/wallet.ts describeWalletError), never for encoding a call. The ERC-7943 selectors are
- * pinned in shared/vectors/erc7943-abi.json. */
+/**
+ * Known token and access-control errors for describeWalletError; these fragments encode no calls.
+ * Shared ERC-7943 vectors pin selectors, and unlisted errors fall back to wallet messages.
+ */
 export const rwaTokenErrorsAbi = [
   {
     type: "error",
@@ -181,12 +174,11 @@ export const rwaTokenErrorsAbi = [
   },
 ] as const satisfies Abi;
 
-/** Vault calls made from the connected wallet. `withdrawProceeds`
- * (TREASURER_ROLE) pays out the vault's accumulated quote-token proceeds and
- * needs no approve — the vault holds and transfers those funds. `amount` is in
- * quote-token minimal units. `previewBuy` is the read the sales-quote widget
- * uses: it asks the vault's strategy what a purchase of `tokenAmount` RWA
- * minimal units costs, in quote-token minimal units. */
+/**
+ * Vault preview and treasury withdrawal calls.
+ * previewBuy returns quote-token minimal units; withdrawProceeds uses those units,
+ * pays configured treasury and requires TREASURER_ROLE without an approval.
+ */
 export const vaultAbi = [
   {
     type: "function",
@@ -204,12 +196,11 @@ export const vaultAbi = [
   },
 ] as const satisfies Abi;
 
-/** RWAFactory.deploy(ProjectConfig) — the permissionless factory call the admin
- * broadcasts from their own wallet to stand up a project (the `admin` field
- * inside the config becomes DEFAULT_ADMIN_ROLE; there is no on-chain role gate
- * on deploy itself). Field order mirrors IRWAFactory.ProjectConfig exactly; the
- * server observes the resulting ProjectDeployed event. The Deployment return
- * tuple is declared so viem can decode it, though the UI only needs the tx. */
+/**
+ * Permissionless factory deployment; config.admin receives admin authority.
+ * Field order follows IRWAFactory.ProjectConfig, with a Deployment result tuple.
+ * The console uses the transaction hash and the server observes ProjectDeployed.
+ */
 export const rwaFactoryAbi = [
   {
     type: "function",
@@ -257,12 +248,10 @@ export const rwaFactoryAbi = [
   },
 ] as const satisfies Abi;
 
-/** SupplyController.mint(MintAttestation, signature) — the admin broadcasts the
- * auditor-signed mint from their own wallet. Field order mirrors
- * ISupplyController.MintAttestation exactly; the auditor's EIP-712 signature is
- * verified on-chain (the server no longer relays; it observes the Minted event).
- * No on-chain role gate — a valid auditor signature over an unused nonce is the
- * authorization. */
+/**
+ * Wallet-submitted mint with fields matching ISupplyController.MintAttestation.
+ * The contract checks the auditor signature and unused nonce; the server observes Minted.
+ */
 export const supplyControllerAbi = [
   {
     type: "function",
@@ -289,10 +278,11 @@ export const supplyControllerAbi = [
   },
 ] as const satisfies Abi;
 
-/** RedemptionEscrow writes broadcast from the connected admin wallet:
- * fundRedemption (TREASURER_ROLE — pulls quoteAmount via safeTransferFrom, so
- * the treasurer must approve the escrow first) and rejectRedemption
- * (REDEMPTION_MANAGER_ROLE). */
+/**
+ * Redemption funding and rejection calls plus permissionless claim.
+ * Funding requires TREASURER_ROLE and quote allowance; rejection requires REDEMPTION_MANAGER_ROLE.
+ * A Safe batch can claim immediately after funding.
+ */
 export const redemptionEscrowAbi = [
   {
     type: "function",
@@ -308,6 +298,13 @@ export const redemptionEscrowAbi = [
       { name: "id", type: "uint256" },
       { name: "reasonCode", type: "bytes32" },
     ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "claimRedemption",
+    inputs: [{ name: "id", type: "uint256" }],
     outputs: [],
     stateMutability: "nonpayable",
   },

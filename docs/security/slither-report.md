@@ -1,165 +1,133 @@
-# Slither static analysis — contracts/
+# Slither static analysis (contracts/)
 
-- Tool: `slither-analyzer` 0.11.3 (installed via `pip install slither-analyzer`; not
-  preinstalled in this environment).
-- Command: `slither . --exclude-dependencies` (run from `contracts/`).
-- Scope: `contracts/src/**` (7 contracts + 4 stateless deploy helpers + 8 frozen interfaces).
-  `--exclude-dependencies` filters findings whose primary location is inside
-  `lib/openzeppelin-contracts/**` — OZ 5.6.1 is treated as a trusted, separately-audited
-  dependency, not re-reviewed here. `contracts/script/*.s.sol` (deployment scripts) are not
-  picked up by slither's default compilation scope for this repo layout; they were reviewed
-  manually instead (see "Deployment-script hardening" below).
-- Result: **24 → 16 findings** during this pass, verified unchanged (still 16, no new findings)
-  after the later `ComplianceRegistry.setSystemAddresses` change. The 8 that were
-  fixed were all missing-zero-address-validation findings (see below); every remaining finding
-  was reviewed and is either intentional-by-design or purely informational/stylistic. None
-  represent an exploitable vulnerability.
+This report records a local `slither-analyzer` 0.11.3 run, last updated 2026-08-27, with 16
+findings. The recorded triage classified none as exploitable. It predates the ERC-7943 paths
+`setFrozenTokens`, `forcedTransfer`, `returnEscrowedRWA` and `setRedemptionEscrow`; those paths
+have not been covered by a subsequent run recorded here. Rerun Slither and update this report
+before release.
 
-Re-run anytime with:
+## How Slither runs
 
-```sh
-cd contracts
-pip install slither-analyzer   # if not already installed
-slither . --exclude-dependencies
-```
+- CI runs `crytic/slither-action@v0.4.2` against `contracts` with `--exclude-dependencies` in
+  `.github/workflows/ci.yml`. A High finding fails the job.
+- Locally:
 
-## Fixed this pass
+  ```sh
+  cd contracts
+  pip install slither-analyzer   # if not already installed
+  slither . --exclude-dependencies
+  ```
 
-### Missing zero-address validation (8 findings → 0)
+Dependency findings under `lib/openzeppelin-contracts/**` are excluded. OpenZeppelin 5.6.1 is
+treated as trusted for this triage; the exclusion does not assess its security. The report covers
+`contracts/src/**`: contracts, pricing strategy, four stateless deploy helpers, interfaces and
+test token. Deployment-script guards are reviewed separately below.
 
-Several constructors accepted an `address` parameter and stored it without checking it was
-non-zero: `RWAToken`'s `compliance_` (constructor) and `controller` (`setSupplyController`);
-`RedemptionEscrow`'s `token_`/`quoteToken_`/`vault_`/`strategy_`; `SupplyController`'s
-`token_`/`vault_`.
+The workflow also runs Mythril symbolic execution weekly and on demand, with findings failing
+that job.
 
-In the actual `RWAFactory.deploy()` flow none of these can ever be zero in practice — every
-value comes from either a freshly-`new`'d contract's address (never `address(0)`) or from
-`ProjectConfig` fields RWAFactory's own `_validateConfig` already zero-checks. The realistic
-risk was therefore a **misuse footgun**: something deploying `RWAToken`/`RedemptionEscrow`/
-`SupplyController` directly (bypassing the factory) with a wrong/omitted address would get a
-silently-broken contract (e.g. every `isAllowed` call reverting or misbehaving) instead of an
-immediate, clear revert at construction time.
+## Accepted findings
 
-**Fix:** added a local `error ZeroAddress();` to each of `RWAToken.sol`, `RedemptionEscrow.sol`,
-`SupplyController.sol` (not part of the frozen interfaces — pure constructor-time defense in
-depth) and a zero-check on each parameter listed above. `SupplyController` already had a
-dedicated `ZeroAddressAuditor` for the auditor param; `token_`/`vault_` now use the new generic
-error. Covered by new tests: `RWAToken.t.sol::test_constructor_zeroComplianceReverts`,
-`::test_setSupplyController_zeroAddressReverts`; `SupplyController.t.sol::test_constructor_zeroTokenReverts`,
-`::test_constructor_zeroVaultReverts`; `RedemptionEscrow.t.sol::test_constructor_zeroAddressReverts`.
+### `controlled-delegatecall`, `low-level-calls`, `assembly-usage`: `RWAFactory._delegateDeploy`
 
-(`Vault` already had its own `ZeroAddress()` check in the frozen `IVault` error set and needed
-no change. `ComplianceRegistry`'s constructor params are role addresses used only for
-`_grantRole`, which is a no-op-safe operation for `address(0)` — not flagged by Slither and left
-as-is.)
+Each target is one of four immutable, nonzero helper addresses supplied at construction. Calls
+use fixed `abi.encodeCall(SomeDeployer.deploy, (...))` selectors; callers cannot redirect the
+target or function. This assumes the factory was deployed with the intended helpers.
 
-## Reviewed and accepted (remaining 16 findings)
+Helpers keep factory runtime code below EIP-170's 24,576-byte limit (see
+`src/factory/ComplianceTokenDeployer.sol`). `delegatecall` makes child constructors see the
+factory as `msg.sender`, preserving bootstrap `COMPLIANCE_ROLE` and deployer-only wiring for
+`setSupplyController`, `setRedemptionEscrow` and `setSystemAddresses`.
 
-### `controlled-delegatecall` (1) + `low-level-calls` (1) + `assembly-usage` (1) — all `RWAFactory._delegateDeploy`
+The `memory-safe` assembly bubbles helper reverts with `revert(add(ret, 0x20), mload(ret))`.
+`RWAFactory.sol` suppresses `controlled-delegatecall` with
+`// slither-disable-next-line controlled-delegatecall`; the low-level-call and assembly findings
+are accepted on the same reviewed path.
 
-Slither flags `target.delegatecall(data)` in `RWAFactory._delegateDeploy` because the function
-selector inside `data` isn't statically provable to Slither's heuristic as fixed. In fact it
-always is: `target` is one of four `immutable` addresses set once in `RWAFactory`'s constructor
-and validated non-zero (`complianceTokenDeployer`, `marketDeployer`,
-`supplyControllerDeployer`, `redemptionEscrowDeployer` — see
-`src/factory/ComplianceTokenDeployer.sol`'s NatSpec for why these exist: splitting `new` calls
-across helper contracts to keep `RWAFactory` under the EIP-170 24,576-byte runtime limit), and
-`data` is always built via `abi.encodeCall(SomeDeployer.deploy, (...))` with a
-compile-time-fixed selector — never from caller-supplied calldata. No external party can
-redirect `target` or the called function. `delegatecall` (not `call`) is required here
-specifically so each child contract's constructor sees `msg.sender == address(RWAFactory)`
-(needed for `ComplianceRegistry`'s bootstrap `COMPLIANCE_ROLE` grant and `RWAToken`'s
-deployer-gated `setSupplyController`). The inline assembly is the standard, `memory-safe`
-revert-bubbling pattern (`revert(add(ret, 0x20), mload(ret))`) so a failure inside a deploy
-helper surfaces its real revert reason instead of a generic one. Accepted; no change.
+### `reentrancy-events`: `SupplyController.mint`/`burn`, `RWAFactory.deploy`
 
-### `reentrancy-events` (3) — `SupplyController.mint`/`burn`, `RWAFactory.deploy`
+These informational findings mark events emitted after external calls. `controllerMint` and
+`controllerBurn` call internal `_mint` / `_burn` without callbacks. Factory deployment uses the
+intended helpers and newly created platform contracts, which do not call back into it. The
+factory stores no shared mutable project state; each deployment creates an independent stack.
 
-Informational "event emitted after external call(s)" pattern, not a state-changing reentrancy
-vulnerability: `RWAToken.controllerMint`/`controllerBurn` only call internal `_mint`/`_burn` (no
-external calls or hooks of their own), so there is no way to reenter `SupplyController`
-mid-`mint`/`burn` through that path. `RWAFactory.deploy()`'s external calls are all to its own
-`immutable` deploy-helper addresses (via `delegatecall`, so no separate contract context to
-reenter through) or to the just-created `ComplianceRegistry`/`RWAToken`, neither of which calls
-back into `RWAFactory`. `deploy()` isn't reentrancy-guarded because there's no shared, mutable
-`RWAFactory` state a reentrant call to `deploy()` could corrupt — each call deploys an
-independent project. Accepted; no change.
+### `block-timestamp`: expiry and deadline checks
 
-### `block-timestamp` (6) — attestation `validUntil`, `deadline`, `cancelRedemption` timeout, ComplianceRegistry `validUntil`
+Attestation expiry, purchase and redemption-request deadlines, redemption timeout and compliance
+expiry intentionally use chain timestamps. Their checks are specified in `docs/spec/contracts.md`
+and `docs/spec/redemption-state-machine.md`. Caller-selected deadlines may be close to execution
+time; they are not all hours-long windows. Block-number deadlines would depend on each chain's
+block interval.
 
-Every flagged comparison is an intentional, spec-required expiry/deadline check
-(`docs/spec/contracts.md`'s check-ordering tables, `redemption-state-machine.md`'s
-`redemptionTimeout`). These operate on day/hour-scale windows; a miner's few-seconds of
-`block.timestamp` manipulation latitude is immaterial at that granularity and there is no
-alternative (block-number-based deadlines aren't portable across chains with different block
-times). Accepted; no change.
+### `different-pragma-directives`
 
-### `different-pragma-directives` (informational)
+OpenZeppelin uses floor pragmas including `^0.8.20`, `>=0.8.4`, `>=0.6.2` and `>=0.4.16`; platform
+contracts use `^0.8.24`. `foundry.toml` pins the compiler to solc 0.8.24 for the whole build.
 
-OpenZeppelin's own files pin conservative floor pragmas (`^0.8.20`, `>=0.8.4`, `>=0.6.2`,
-`>=0.4.16` for pure interfaces) while our own contracts use `^0.8.24`. This is normal for any
-project consuming OZ as a dependency — everything still compiles to a single `0.8.24` solc run
-(`foundry.toml`'s `solc_version = "0.8.24"`); the differing pragma *declarations* don't mean
-different compiler *versions* actually ran. Accepted; no change.
+### `cyclomatic-complexity`: `RWAFactory._validateConfig`
 
-### `cyclomatic-complexity` (1) — `RWAFactory._validateConfig`
+The function has twelve sequential, unnested `if (...) revert InvalidConfig(...)` checks.
+`RWAFactoryTest` covers them with `test_deploy_zero*Reverts`, `test_deploy_decimalsTooHighReverts`
+and `test_deploy_redemptionTimeoutTooShort/LongReverts`. Keeping the checks together makes the
+configuration boundary visible in one place.
 
-13 independent, unnested `if (...) revert InvalidConfig(...)` checks in a row — a wide, flat
-validation function, not deeply-nested/tangled control flow. Every branch is individually
-covered by `RWAFactoryTest`'s `test_deploy_zero*Reverts` / `test_deploy_*TooShort/LongReverts`
-tests. Splitting it into several smaller functions would move lines around without changing
-behavior or improving real reviewability. Left as one function; non-blocking readability nit.
+### `naming-convention`: `MINT_ATTESTATION_TYPEHASH()` / `BURN_ATTESTATION_TYPEHASH()`
 
-### `naming-convention` (2) — `ISupplyController.MINT_ATTESTATION_TYPEHASH()` / `BURN_ATTESTATION_TYPEHASH()`
+These `ISupplyController` functions expose `public constant` EIP-712 type hashes from
+`SupplyController`. Their constant-style names and interface are frozen (`shared/eip712/types.md`).
 
-Flagged because a `function` name in ALL_CAPS looks like it should be `mixedCase`. These are
-part of the `ISupplyController` interface (`docs/spec/contracts.md`,
-`shared/eip712/types.md`) matching the on-chain `public constant` getters `SupplyController`
-implements for the EIP-712 typehashes — the naming is intentional (constant-style name
-for a compile-time-constant value) and the interface is fixed. Accepted; no change possible
-without an interface change.
+## Zero-address validation
 
-## Deployment-script hardening (manual review, not slither-covered)
+The recorded run's eight missing-zero-address findings were fixed. Direct deployment needs these
+guards even when factory deployment already supplies created or validated addresses. The guarded
+arguments now include:
 
-`contracts/script/Deploy.s.sol` and `E2EFlow.s.sol` hardcode anvil's well-known, publicly
-documented dev-account private keys (`ANVIL_ACCT0_PK`, `ANVIL_ACCT1_PK`) as local-dev
-convenience fallbacks for `DEPLOYER_PK`/`INVESTOR_PK`. Manual review found these were
-previously used via a bare `vm.envOr(..., ANVIL_ACCT_PK)`, meaning a run against a **real**
-chain without explicitly setting the env var would silently deploy using a key anyone can
-derive from this repository — handing admin/auditor/treasurer/etc control on the whole project
-to anyone who reads it.
+- `RWAToken`: constructor `compliance_`, `setSupplyController` and `setRedemptionEscrow` raise
+  `ZeroAddress` (`test_constructor_zeroComplianceReverts`,
+  `test_setSupplyController_zeroAddressReverts`, `test_setRedemptionEscrow_zeroAddressReverts`).
+- `RedemptionEscrow`: constructor `token_`, `quoteToken_`, `vault_` and `strategy_`
+  (`test_constructor_zeroAddressReverts`).
+- `SupplyController`: constructor `token_` and `vault_` raise `ZeroAddress`
+  (`test_constructor_zeroTokenReverts`, `test_constructor_zeroVaultReverts`);
+  the auditor uses `ZeroAddressAuditor`.
 
-**Fix:** `DeployBase._deployerPrivateKey()` / `E2EFlow._investorPrivateKey()` now only allow the
-anvil-key fallback when `block.chainid == 31337` (anvil's default chain id); on any other chain
-id, an unset `DEPLOYER_PK`/`INVESTOR_PK` reverts with `RefusingAnvilKeyFallbackOnNonAnvilChain`
-instead of deploying. Covered by `test/unit/DeployScript.t.sol` (anvil-chain fallback still
-works; non-anvil chain without the env var reverts; non-anvil chain with it set explicitly
-succeeds).
+`Vault` already declares `ZeroAddress` in `IVault`. ComplianceRegistry constructor addresses
+receive roles: OpenZeppelin rejects a zero admin, and the factory validates the compliance
+operator. They were not flagged in the recorded run.
+
+## Deployment scripts
+
+`Deploy.s.sol` and `E2EFlow.s.sol` use public Anvil keys `ANVIL_ACCT0_PK` / `ANVIL_ACCT1_PK` when
+`DEPLOYER_PK` / `INVESTOR_PK` is unset. `DeployBase._deployerPrivateKey()` and
+`E2EFlow._investorPrivateKey()` restrict that fallback to chain ID 31337, otherwise raising
+`RefusingAnvilKeyFallbackOnNonAnvilChain`. Deploying with public keys on a real network would
+expose their assigned authority.
+
+A zero admin-transfer delay off Anvil raises `RefusingZeroAdminTransferDelayOnNonAnvilChain`
+unless `ALLOW_ZERO_ADMIN_TRANSFER_DELAY=true`. `test/unit/DeployScript.t.sol`'s
+`test_deployScripts_anvilKeyFallbackAndAdminDelayGuards` checks both guards.
 
 ## ComplianceRegistry system-address pin
 
-Not a Slither finding — surfaced
-by the security review (`COMPLIANCE_ROLE` could `Blocked` the Vault or
-RedemptionEscrow, freezing settled investor funds in a `Funded` redemption). Remediated with a
-one-time `setSystemAddresses(vault, redemptionEscrow)` wiring call plus a guard in
-`ComplianceRegistry._setStatus` rejecting any non-`Allowed` status for a pinned system address.
-Regression tests in `test/unit/ComplianceRegistry.t.sol` (11 tests) prove: blocking Vault/Escrow
-reverts (`setStatus` and batch `setStatuses`), setting them to `Unknown` also reverts (only
-`Allowed` is ever accepted), re-`Allowed`-ing succeeds, `setSystemAddresses` is deployer-gated
-and one-time, and `buy`/`claimRedemption` all still complete normally after an attempted
-(and rejected) block.
+The deployer's one-time `setSystemAddresses(vault, redemptionEscrow)` protects both addresses
+from compliance blocking. Only Allowed with no expiry is accepted; other values raise
+`SystemAddressCannotBeBlocked`. This protects purchases and funded claims from a compromised
+compliance key and is separate from the recorded Slither findings.
+
+`test/unit/ComplianceRegistry.t.sol` checks both status setters, expiry rejection, re-allowing,
+deployer-only and one-time wiring, and purchases and redemptions after rejected blocking attempts.
 
 ## Gas baseline
 
-`contracts/.gas-snapshot` (generated via `forge snapshot`) is the committed per-test gas
-baseline — re-run `forge snapshot --diff` before merging any change to `src/` to catch
-unintended gas regressions.
+`contracts/.gas-snapshot` is the committed per-test baseline from `forge snapshot`. Run
+`forge snapshot --diff` before merging `src/` changes to check for gas regressions.
 
-## Failure-injection / recovery tests
+## Failure-injection and recovery tests
 
-`test/adversarial/FailureRecovery.t.sol`: underfunded treasurer (fund reverts, request stays
-`Pending`, RWA stays escrowed), fee-on-transfer quote token rejected at funding
-(`QuoteDeltaMismatch`), and the funded-redemption recovery rehearsal — a quote token blacklists
-the beneficiary after funding, `claimRedemption` reverts atomically (status, escrow balances,
-and Vault inventory all provably unchanged), then once the blacklist lifts a plain retry of the
-same call succeeds.
+`test/adversarial/FailureRecovery.t.sol` checks:
+
+- Underfunded treasury: funding reverts; the request stays Pending with RWA escrowed.
+- Fee-on-transfer quote token: funding raises `QuoteDeltaMismatch`.
+- Beneficiary blacklisted after funding: claim reverts without changing status, escrow balances
+  or Vault inventory, then succeeds after the blacklist lifts.
+- Transfer fee enabled after funding: claim reverts, then succeeds after the fee is disabled.

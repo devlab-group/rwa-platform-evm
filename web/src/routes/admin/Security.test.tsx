@@ -8,7 +8,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Security } from "./Security";
 import { api } from "../../lib/client";
-import { encodeErrorResult } from "viem";
+import { encodeErrorResult, type Address } from "viem";
 import { rwaTokenErrorsAbi } from "../../lib/abis";
 import {
   readErc20Decimals,
@@ -17,15 +17,16 @@ import {
   sendForcedTransfer,
   sendRoleChange,
   sendSetFrozenTokens,
+  pauseCall,
   sendSetPaused,
   sendSetStrategyPrice,
   waitForTxReceipt,
 } from "../../lib/wallet";
 import { roleHash, ROLES } from "../../lib/roles";
+import { exportSafeBatch } from "../../lib/safeBatch";
 import { installFakeWallet, renderWithWallet } from "../../test/walletHarness";
 
-// The live prices are quote-token MINIMAL units and must render as HUMAN whole
-// units scaled by the QUOTE token's decimals (6 here). "2000000" -> "2".
+// Scale quote prices with quote decimals: 2000000 at six decimals displays as 2
 vi.mock("../../lib/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/client")>();
   return {
@@ -34,8 +35,16 @@ vi.mock("../../lib/client", async (importOriginal) => {
   };
 });
 
-// readErc20Decimals is stubbed; the admin write helpers are spied so the
-// role-gated action tests can assert the exact broadcast without a chain.
+// Spy on the batch export without downloading a browser file
+vi.mock("../../lib/safeBatch", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/safeBatch")>();
+  return {
+    ...actual,
+    exportSafeBatch: vi.fn().mockReturnValue("Saved batch."),
+  };
+});
+
+// Stub decimals and spy on writes to verify privileged calls without a chain
 vi.mock("../../lib/wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/wallet")>();
   return {
@@ -49,12 +58,11 @@ vi.mock("../../lib/wallet", async (importOriginal) => {
     sendBeginAdminTransfer: vi.fn().mockResolvedValue("0xhash"),
     sendAcceptAdminTransfer: vi.fn().mockResolvedValue("0xhash"),
     waitForTxReceipt: vi.fn().mockResolvedValue(undefined),
-    // describeWalletError is the real one: it is the thing under test in the
-    // revert-reason case, and it falls back to err.message for everything else.
+    // Keep the real revert decoder for error-message assertions
   };
 });
 
-/** Default for tests that do not care about enforcement state. */
+// Default enforcement fixture
 const NO_ENFORCEMENT = { securityStale: false };
 
 const BASE = {
@@ -64,7 +72,7 @@ const BASE = {
   redemptionPricePerWholeToken: "5500000",
 };
 
-/** The <dd> value of the row whose <dt> matches `label`. */
+// priceValue finds the value paired with a definition-list label
 function priceValue(label: RegExp): string {
   const dt = screen.getByText(label);
   const dd = dt.parentElement?.querySelector("dd");
@@ -162,7 +170,7 @@ describe("Security admin actions (role-gated, connected wallet broadcasts)", () 
   });
 
   it("hides an action behind a notice when the connected wallet lacks the role", async () => {
-    // Connected wallet holds no roles → the pause action is gated out.
+    // No connected role holder; pause requires a route selection
     vi.mocked(api.getProject)
       .mockReset()
       .mockResolvedValue({
@@ -175,7 +183,7 @@ describe("Security admin actions (role-gated, connected wallet broadcasts)", () 
       name: "Pause / unpause trading",
     });
     const section = heading.closest("section") as HTMLElement;
-    // The gate renders a notice naming the required role instead of the button.
+    // Name the required role before a Safe is selected
     expect(within(section).getByText("PAUSER_ROLE")).toBeInTheDocument();
     expect(
       within(section).queryByRole("button", { name: "Pause trading" }),
@@ -258,8 +266,7 @@ describe("Security admin actions (role-gated, connected wallet broadcasts)", () 
 describe("Security accept admin role (incoming admin, not role-gated)", () => {
   let wallet: ReturnType<typeof installFakeWallet>;
 
-  // The six governance contracts an admin transfer is accepted on, in the order
-  // adminTransferTargets() resolves them from DEPLOYED.addresses.
+  // Acceptance targets in adminTransferTargets order
   const GOVERNANCE_TARGETS = [
     DEPLOYED.addresses.token,
     DEPLOYED.addresses.compliance,
@@ -301,6 +308,57 @@ describe("Security accept admin role (incoming admin, not role-gated)", () => {
         target,
       );
     }
+  });
+
+  it("saves a pause batch for a Safe holding PAUSER_ROLE instead of broadcasting", async () => {
+    const safe = "0x9a7F3dfDEeBb51eAbBbA3c8eCCf8cF2a983A1C72";
+    vi.mocked(exportSafeBatch).mockClear();
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({ ...DEPLOYED, roles: { PAUSER_ROLE: [safe] } });
+    renderWithWallet(<Security />, { connected: true });
+
+    fireEvent.change(await screen.findByLabelText(/Safe holding PAUSER_ROLE/), {
+      target: { value: safe },
+    });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Pause trading" }),
+    );
+
+    await screen.findByText("Saved batch.");
+    expect(exportSafeBatch).toHaveBeenCalledWith(31337, safe, "Pause trading", [
+      pauseCall(DEPLOYED.addresses.token as Address, true),
+    ]);
+    expect(sendSetPaused).not.toHaveBeenCalled();
+  });
+
+  it("saves one acceptance batch covering every governance contract for an incoming Safe admin", async () => {
+    const safe = "0x9a7F3dfDEeBb51eAbBbA3c8eCCf8cF2a983A1C72";
+    vi.mocked(exportSafeBatch).mockClear();
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({ ...DEPLOYED, roles: {}, pendingAdmin: safe });
+    renderWithWallet(<Security />, { connected: true });
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Save acceptance batch for the incoming admin",
+      }),
+    );
+
+    await screen.findByText("Saved batch.");
+    const [chainId, target, name, calls] =
+      vi.mocked(exportSafeBatch).mock.calls[0];
+    expect([chainId, target, name]).toEqual([31337, safe, "Accept admin role"]);
+    expect(calls.map((c) => c.to)).toEqual([
+      DEPLOYED.addresses.token,
+      DEPLOYED.addresses.compliance,
+      DEPLOYED.addresses.supplyController,
+      DEPLOYED.addresses.vault,
+      DEPLOYED.addresses.redemptionEscrow,
+      DEPLOYED.addresses.strategy,
+    ]);
+    expect(sendAcceptAdminTransfer).not.toHaveBeenCalled();
   });
 
   it("shows a read-only note (no accept button) when the pending admin is someone else", async () => {
@@ -544,7 +602,7 @@ describe("Security ERC-7943 enforcement controls", () => {
       await screen.findByText(/is not a valid address/i),
     ).toBeInTheDocument();
 
-    // 19 fractional digits on an 18-decimal token would silently round.
+    // Reject precision beyond the token's 18 decimals
     fireEvent.change(account, { target: { value: HOLDER } });
     fireEvent.change(amount, { target: { value: "1.0000000000000000001" } });
     fireEvent.click(submit);
@@ -652,8 +710,7 @@ describe("Security ERC-7943 enforcement controls", () => {
     fireEvent.change(amount, { target: { value: "2" } });
     fireEvent.click(screen.getByRole("button", { name: "Force transfer" }));
 
-    // The confirmation names the parties in full, not shortened, since a
-    // mistyped-but-well-formed address is the mistake it exists to catch.
+    // Confirm full addresses so transcription errors remain visible
     const panel = (await screen.findByRole("alert")) as HTMLElement;
     expect(within(panel).getByText(HOLDER)).toBeInTheDocument();
     expect(within(panel).getByText(RECIPIENT)).toBeInTheDocument();

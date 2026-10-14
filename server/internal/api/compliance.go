@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -16,15 +17,10 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 	"github.com/rwa-platform/server/internal/dal/repository"
 	"github.com/rwa-platform/server/internal/kyc"
+	"github.com/rwa-platform/server/internal/metrics"
 )
 
-// listWallets implements GET /api/v1/compliance/wallets (operationId
-// listWallets).
-// Admin-only, keyset-paginated page of investor wallet/KYC statuses.
-//
-// Uses repository-level keyset pagination (InvestorRepository.ListPage) — see
-// api.listPurchases' doc comment for the same reasoning (bounded query,
-// X-Total-Count omitted).
+// listWallets serves admin-only wallet/KYC history with repository keyset pagination
 func (app *App) listWallets(c *gin.Context) {
 	cursor, limit := cursorLimitParams(c)
 	page, next, err := app.Repos.Investors.ListPage(c.Request.Context(), cursor, limit)
@@ -40,10 +36,8 @@ func (app *App) listWallets(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
-// createChallenge implements POST /api/v1/compliance/challenge (operationId
-// createChallenge).
-// Public: issues a single-use nonce message for an investor wallet to sign,
-// under its own strict per-IP limiter plus a per-address active-challenge cap.
+// createChallenge issues a public single-use ownership challenge under per-IP
+// rate limits and a per-wallet active-challenge cap
 func (app *App) createChallenge(c *gin.Context) {
 	if app.Challenges == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "wallet challenges are not configured on this server")
@@ -59,10 +53,7 @@ func (app *App) createChallenge(c *gin.Context) {
 	ch, err := app.Challenges.Create(c.Request.Context(), body.Address)
 	if err != nil {
 		if errors.Is(err, compliance.ErrTooManyActiveChallenges) {
-			// 429, not 400: this is a quota/storage-growth guard, not a
-			// malformed-request rejection — the caller
-			// should back off and retry once an existing challenge for this
-			// address is used or expires, exactly like a rate limit.
+			// Return 429 so callers retry after an existing challenge is used or expires
 			fail(c, http.StatusTooManyRequests, CodeTooManyActiveChallenges, err.Error())
 			return
 		}
@@ -79,10 +70,7 @@ type ChallengeVerifyBody struct {
 	Signature string `json:"signature" binding:"required"`
 }
 
-// verifyChallenge implements POST /api/v1/compliance/challenge/verify
-// (operationId verifyChallenge).
-// Public: verifies the signed challenge, marks the wallet ownership-verified,
-// and mints the subject-scoped X-Wallet-Session bearer returned with the status.
+// verifyChallenge records ownership proof and returns wallet status and a scoped session
 func (app *App) verifyChallenge(c *gin.Context) {
 	if app.Challenges == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "wallet challenges are not configured on this server")
@@ -106,12 +94,7 @@ func (app *App) verifyChallenge(c *gin.Context) {
 	}
 	app.recordAudit(c.Request.Context(), "compliance", caller(c), "compliance.verifyChallenge", body.Address, nil)
 
-	// Proving wallet ownership mints a short-lived, subject-scoped
-	// session so the investor page can read ITS OWN status via
-	// GET /me/wallet-status without an admin credential. If no
-	// SessionManager is wired (reduced deployment) we still return the
-	// verified status — the token fields simply stay empty and the client
-	// falls back to re-verifying when it next needs a session.
+	// Issue a wallet-scoped session when configured; reduced deployments return status only
 	result := dto.VerifyChallengeResult{
 		Address: inv.Address, Status: string(inv.Status),
 		ValidUntil: inv.ValidUntil, OwnershipVerified: inv.OwnershipVerified,
@@ -128,10 +111,7 @@ func (app *App) verifyChallenge(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// listWebhookEvents implements GET /api/v1/compliance/webhooks (operationId
-// listWebhookEvents).
-// Admin-only, offset-paginated page of received KYC webhook deliveries and
-// their outbox apply state.
+// listWebhookEvents serves admin-only delivery history and outbox state
 func (app *App) listWebhookEvents(c *gin.Context) {
 	events, err := app.Repos.KYCEvents.List(c.Request.Context())
 	if err != nil {
@@ -149,9 +129,8 @@ func (app *App) listWebhookEvents(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
-// listAuditLogs implements GET /api/v1/audit-logs (operationId listAuditLogs).
-// Admin-only, offset-paginated page of the operational audit trail, optionally
-// filtered by `category`; an unwired audit logger yields an empty list.
+// listAuditLogs serves the admin audit trail, optionally filtered by category;
+// an unwired logger returns an empty list
 func (app *App) listAuditLogs(c *gin.Context) {
 	if app.Audit == nil {
 		setPaginationHeaders(c, 0, 0, "")
@@ -160,8 +139,7 @@ func (app *App) listAuditLogs(c *gin.Context) {
 	}
 	category := c.Query("category")
 	offset, limit := paginationParams(c)
-	// Recent's limit is always > 0 and hard-capped (maxAuditLogFetch), never
-	// an unbounded 0 that would fetch the whole collection.
+	// Bound the repository fetch even when client pagination asks for later rows
 	fetchLimit := offset + limit
 	if fetchLimit > maxAuditLogFetch {
 		fetchLimit = maxAuditLogFetch
@@ -172,10 +150,7 @@ func (app *App) listAuditLogs(c *gin.Context) {
 		return
 	}
 	start, end, next := paginateWindow(len(entries), offset, limit)
-	// A next cursor only means "there may be more" here (entries was
-	// already itself limited to fetchLimit, not the true collection size);
-	// suppress it once the fetch itself came back short of fetchLimit,
-	// since that means Recent genuinely ran out of matching rows.
+	// Offer another cursor only when the bounded fetch might have additional rows
 	if len(entries) < fetchLimit {
 		next = ""
 	}
@@ -195,10 +170,8 @@ type SetStatusRequestBody struct {
 	ValidUntil uint64 `json:"validUntil"`
 }
 
-// setComplianceStatus implements POST /api/v1/compliance/status (operationId
-// setComplianceStatus).
-// Admin-only: broadcasts the ComplianceRegistry status change with the server's
-// compliance hot key and returns 202 with the submitted TxRef.
+// setComplianceStatus submits an admin-authorized status write with the server key
+// and returns 202 with its TxRef
 func (app *App) setComplianceStatus(c *gin.Context) {
 	if app.Status == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "compliance hot key is not configured on this server")
@@ -219,11 +192,7 @@ func (app *App) setComplianceStatus(c *gin.Context) {
 		return
 	}
 
-	// Persist a durable audit INTENT BEFORE broadcasting the compliance
-	// transaction, and FAIL CLOSED if it cannot be made durable — a Mongo
-	// fault must not let a privileged status change go on-chain with no
-	// actor/action trail. Recording the audit only AFTER submission (and
-	// swallowing a failure) would be fail-open.
+	// Persist intent before broadcast; an audit failure must abort the privileged action
 	actor := caller(c)
 	intentID, err := app.recordAuditIntent(c.Request.Context(), "compliance", actor, "compliance.setStatus", body.Address,
 		map[string]any{"status": body.Status, "validUntil": body.ValidUntil})
@@ -239,32 +208,21 @@ func (app *App) setComplianceStatus(c *gin.Context) {
 		return
 	}
 
-	// The compliance operation write is logged rather than silently
-	// discarded. The transaction itself is already durably submitted
-	// (app.Status.SetStatus
-	// persisted it before this point — see blockchain.TxManager.Submit); this
-	// record is a convenience read-model row, so a failure here does not need
-	// to fail the request, only be visible.
+	// The transaction is already persisted; log a convenience read-model write failure
+	// without changing its submission result
 	if err := app.Repos.ComplianceOperations.Create(c.Request.Context(), &models.ComplianceOperation{
 		ID: tx.ID, Address: body.Address, Status: models.ComplianceStatus(body.Status), ValidUntil: int64(body.ValidUntil),
 		TxHash: tx.TxHash, Caller: actor, CreatedAt: tx.SubmittedAt,
 	}); err != nil {
 		log.Printf("api: persist compliance operation record failed (txId=%s address=%s): %v", tx.ID, body.Address, err)
 	}
-	// Link the completion (with the broadcast txHash) to the intent recorded
-	// above.
+	// Link the broadcast result to the recorded intent
 	app.recordAuditResult(c.Request.Context(), intentID, "compliance", actor, "compliance.setStatus", body.Address, true, map[string]any{"txHash": tx.TxHash})
 
 	c.JSON(http.StatusAccepted, dto.ToTxRef(tx))
 }
 
-// startKYC implements POST /api/v1/compliance/kyc/start (operationId startKYC).
-// Wallet-session-gated: begins a KYC verification with the configured provider
-// for the session's OWN wallet and returns the provider session (SDK token /
-// hosted URL) the investor SPA launches. The subject wallet comes from the
-// session (auth.WalletSessionAddress), never a request parameter. Approval is
-// applied on-chain asynchronously when the provider's signed webhook arrives —
-// this endpoint changes no on-chain state.
+// startKYC starts verification for the session wallet without changing on-chain status
 func (app *App) startKYC(c *gin.Context) {
 	if app.KYC == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "KYC provider is not configured on this server")
@@ -272,7 +230,7 @@ func (app *App) startKYC(c *gin.Context) {
 	}
 	address, ok := auth.WalletSessionAddress(c)
 	if !ok {
-		// Unreachable behind RequireWalletSession (wired in api.go); fail closed.
+		// Reject a missing session even if middleware wiring changes
 		fail(c, http.StatusUnauthorized, CodeUnauthorized, "no wallet session")
 		return
 	}
@@ -282,15 +240,12 @@ func (app *App) startKYC(c *gin.Context) {
 			fail(c, http.StatusNotImplemented, CodeNotImplemented, "the configured KYC provider does not support server-initiated verification")
 			return
 		}
-		// An upstream provider API failure is a bad-gateway condition, not a
-		// fault in this server's own logic.
+		// Map upstream verification failure to bad gateway
 		failErr(c, http.StatusBadGateway, CodeInternal, err)
 		return
 	}
-	// Persist the provider reference -> wallet binding so a later webhook whose
-	// payload carries only that reference (Onfido's workflow-run id) resolves
-	// back to this subject. Sumsub embeds the address in its webhook and needs
-	// no lookup, but recording the binding uniformly is a useful audit trail.
+	// Persist the provider reference for webhook resolution and audit history;
+	// Sumsub includes the wallet directly, while Onfido requires this binding
 	if sess.Ref != "" {
 		if err := app.Repos.KYCVerifications.Upsert(c.Request.Context(), &models.KYCVerification{
 			Provider: app.KYC.Name(), Ref: sess.Ref, Address: address, CreatedAt: time.Now().UTC(),
@@ -313,15 +268,9 @@ func kycExpiresAt(t time.Time) string {
 	return t.Format(time.RFC3339)
 }
 
-// kycWebhook implements POST /api/v1/compliance/webhook (operationId
-// kycWebhook).
-// Authenticated NOT by a role but by the configured provider's own webhook
-// signature scheme over the raw body — the generic X-Webhook-Signature
-// HMAC-SHA256 for provider "none", or a provider-native scheme (Sumsub
-// X-Payload-Digest, Onfido X-SHA2-Signature) when a provider is configured. The
-// provider adapter verifies the signature and maps the delivery to a
-// provider-agnostic decision; the shared replay/freshness/ownership/outbox
-// logic and the async on-chain relay (WebhookReconciler) are unchanged.
+// kycWebhook authenticates the configured provider's signature over the raw body.
+// Decisions enter shared replay, freshness, ownership and outbox checks;
+// walletless monitoring signals are handled separately without a status relay.
 func (app *App) kycWebhook(c *gin.Context) {
 	if app.KYC == nil || app.Webhooks == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "KYC webhook is not configured on this server")
@@ -339,16 +288,14 @@ func (app *App) kycWebhook(c *gin.Context) {
 		case errors.Is(err, kyc.ErrInvalidSignature):
 			fail(c, http.StatusUnauthorized, CodeUnauthorized, err.Error())
 		case errors.Is(err, kyc.ErrUnhandledEvent):
-			// Correctly signed but not a decision we act on (a non-terminal
-			// status, an event type we ignore). Acknowledge so the provider
-			// stops retrying; record nothing.
+			// Acknowledge irrelevant signed events without recording them
+			c.Status(http.StatusAccepted)
+		case errors.Is(err, kyc.ErrMonitoringSignal):
+			app.alertKYCMonitoringHit(c.Request.Context(), "", err.Error())
 			c.Status(http.StatusAccepted)
 		case errors.Is(err, kyc.ErrMissingTimestamp):
-			// A real decision we can't safely order, so we drop it. Still 202:
-			// retrying can't fix a payload that has no timestamp, and Sumsub
-			// disables a webhook that keeps failing — one bad delivery would
-			// then block every good one behind it. The audit entry is how an
-			// operator finds it (and can apply the status by hand).
+			// Drop and audit decisions with no usable timestamp; return 202 because
+			// redelivery cannot repair the missing ordering information
 			app.recordAudit(c.Request.Context(), "compliance", "kyc-webhook", "compliance.webhookDroppedNoTimestamp", "",
 				map[string]any{"provider": app.KYC.Name(), "reason": err.Error()})
 			log.Printf("api: kyc webhook dropped, provider sent no usable decision timestamp (provider=%s): %v", app.KYC.Name(), err)
@@ -359,16 +306,13 @@ func (app *App) kycWebhook(c *gin.Context) {
 		return
 	}
 
-	// Resolve the subject wallet. Providers that embed it (Sumsub's
-	// externalUserId) set dec.Address; otherwise resolve the provider reference
-	// to the address bound when verification was started.
+	// Use the embedded wallet or resolve the provider reference recorded at verification start
 	address := dec.Address
 	if address == "" {
 		v, gerr := app.Repos.KYCVerifications.GetByRef(c.Request.Context(), dec.Provider, dec.Ref)
 		if gerr != nil {
 			if errors.Is(gerr, repository.ErrNotFound) {
-				// A signed decision for a verification this server never started
-				// (or whose binding is gone): acknowledge but apply nothing.
+				// Reject an unknown verification without applying its decision
 				fail(c, http.StatusUnprocessableEntity, CodeBadRequest, "kyc webhook references an unknown verification")
 				return
 			}
@@ -382,16 +326,14 @@ func (app *App) kycWebhook(c *gin.Context) {
 		EventID: dec.EventID, Address: address, Provider: dec.Provider,
 		Status: dec.Status, OccurredAt: dec.OccurredAt, ValidUntil: dec.ValidUntil,
 	}
-	// ProcessDecision durably records the decision (Accepted, or Recorded for a
-	// "Pending" outcome); the on-chain compliance transaction is submitted
-	// asynchronously by the WebhookReconciler, never synchronously here. 202
-	// reflects the true state: durably queued, not yet applied.
+	// Persist the inbox/outbox decision before acknowledging it; the reconciler
+	// relays actionable statuses asynchronously, so 202 does not mean applied on-chain
 	if _, perr := app.Webhooks.ProcessDecision(c.Request.Context(), body, wp, false); perr != nil {
 		switch {
 		case errors.Is(perr, compliance.ErrReplayed):
 			fail(c, http.StatusConflict, CodeConflict, perr.Error())
 		case errors.Is(perr, compliance.ErrStale):
-			// 409 (not 400): the delivery is valid, just too old or superseded.
+			// Return conflict for an old or superseded decision
 			fail(c, http.StatusConflict, CodeConflict, perr.Error())
 		case errors.Is(perr, compliance.ErrOwnershipNotVerified):
 			fail(c, http.StatusUnprocessableEntity, CodeBadRequest, perr.Error())
@@ -402,14 +344,29 @@ func (app *App) kycWebhook(c *gin.Context) {
 	}
 
 	app.recordAudit(c.Request.Context(), "compliance", "kyc-webhook", "compliance.webhookAccepted", wp.Address, map[string]any{"status": wp.Status, "provider": wp.Provider})
+	// Alert after deduplicated acceptance only when the projected wallet is still Allowed
+	if dec.MonitoringHit != "" {
+		if inv, err := app.Repos.Investors.Get(c.Request.Context(), address); err == nil && investorAllowed(inv, time.Now()) {
+			app.alertKYCMonitoringHit(c.Request.Context(), address, dec.MonitoringHit)
+		}
+	}
 	c.Status(http.StatusAccepted)
 }
 
-// caller identifies the API caller for audit logging: the admin wallet address
-// from the request's JWT, or "anonymous". It reuses the principal
-// auth.Authenticate already resolved (the same value auth.Idempotency scopes
-// its cache by) rather than re-deriving one, so the audit trail and the
-// idempotency namespace can never disagree about who made a request.
+// investorAllowed checks Allowed status and expiry in the read model
+func investorAllowed(inv *models.Investor, now time.Time) bool {
+	return inv.Status == models.ComplianceAllowed && (inv.ValidUntil == 0 || inv.ValidUntil >= now.Unix())
+}
+
+// alertKYCMonitoringHit logs and counts a monitoring signal and attempts an audit append;
+// address is empty for walletless deliveries
+func (app *App) alertKYCMonitoringHit(ctx context.Context, address, detail string) {
+	log.Printf("api: ALERT [kyc_monitoring_hit] wallet=%q: %s", address, detail)
+	metrics.AlertsFiredTotal.WithLabelValues("kyc_monitoring_hit").Inc()
+	app.recordAudit(ctx, "alerts", "kyc-webhook", "alerts.kyc_monitoring_hit", address, map[string]any{"detail": detail})
+}
+
+// caller reuses the authenticated principal for audit attribution, matching idempotency scope
 func caller(c *gin.Context) string {
 	return auth.PrincipalFromContext(c)
 }

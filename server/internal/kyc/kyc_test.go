@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -139,11 +140,8 @@ func TestSumsubWebhookBadSignature(t *testing.T) {
 	}
 }
 
-// A signed decision with no usable provider timestamp must be REFUSED, never
-// stamped with time.Now(): OccurredAt drives both internal/compliance's
-// delivery-freshness window and its newest-decision-wins claim, so a fabricated
-// "now" would make any such delivery unconditionally fresh and unconditionally
-// the newest for its address.
+// Refuse provider decisions without usable timestamps rather than fabricating
+// freshness or newer-decision ordering from local time
 func TestSumsubWebhookRejectsMissingTimestamp(t *testing.T) {
 	p := newTestSumsub(t)
 	addr := "0x1111111111111111111111111111111111111111"
@@ -174,8 +172,7 @@ func TestSumsubWebhookRejectsMissingTimestamp(t *testing.T) {
 			if !errors.Is(err, ErrMissingTimestamp) {
 				t.Fatalf("err = %v, want ErrMissingTimestamp (decision was %+v)", err, dec)
 			}
-			// Not ErrUnhandledEvent: that maps to a 202 that would silently
-			// drop a genuine decision instead of surfacing it.
+			// Distinguish a dropped decision from an irrelevant delivery
 			if errors.Is(err, ErrUnhandledEvent) {
 				t.Fatal("a real decision with no timestamp must not be reported as an unhandled event")
 			}
@@ -183,9 +180,7 @@ func TestSumsubWebhookRejectsMissingTimestamp(t *testing.T) {
 	}
 }
 
-// createdAt (the RFC-style field) is the documented fallback when createdAtMs
-// is absent — it must still be honored, so the rejection above is specifically
-// about "no usable timestamp", not about dropping the fallback path.
+// Preserve createdAt fallback when the millisecond timestamp is absent
 func TestSumsubWebhookAcceptsCreatedAtFallback(t *testing.T) {
 	p := newTestSumsub(t)
 	addr := "0x1111111111111111111111111111111111111111"
@@ -201,16 +196,12 @@ func TestSumsubWebhookAcceptsCreatedAtFallback(t *testing.T) {
 	}
 }
 
-// Without correlationId AND without any creation timestamp, the composite event
-// id degenerates to applicantId|type|reviewStatus — identical for two genuinely
-// distinct re-reviews of the same applicant, so the second would be discarded
-// by internal/compliance's (provider,eventId) uniqueness as a replay. Refusing
-// the delivery is what keeps a real decision from being silently dropped.
+// Without correlation ID or timestamp, distinct applicant reviews would share an event key
 func TestSumsubEventIDRefusesToCollide(t *testing.T) {
 	if _, err := sumsubEventID(sumsubWebhook{ApplicantID: "a1", Type: "applicantReviewed"}); !errors.Is(err, ErrMissingTimestamp) {
 		t.Fatalf("err = %v, want ErrMissingTimestamp", err)
 	}
-	// correlationId alone is enough — it is Sumsub's own per-delivery id.
+	// Correlation ID provides the event identity without the composite fallback
 	id, err := sumsubEventID(sumsubWebhook{ApplicantID: "a1", Type: "applicantReviewed", CorrelationID: "corr-1"})
 	if err != nil || id != "corr-1" {
 		t.Fatalf("sumsubEventID(correlationId) = %q, %v; want \"corr-1\", nil", id, err)
@@ -240,7 +231,7 @@ func TestOnfidoWebhookRejectsMissingTimestamp(t *testing.T) {
 	}
 }
 
-// The happy path still carries the PROVIDER's timestamp through verbatim.
+// Keep the provider timestamp in the accepted decision
 func TestOnfidoWebhookUsesProviderTimestamp(t *testing.T) {
 	p := newTestOnfido(t)
 	body := []byte(`{"payload":{"resource_type":"workflow_run","action":"workflow_run.completed","object":{"id":"run-123","status":"approved","completed_at_iso8601":"2023-01-02T03:04:05Z"}}}`)
@@ -339,5 +330,54 @@ func TestOnfidoBaseURL(t *testing.T) {
 	}
 	if _, err := onfidoBaseURL("mars"); err == nil {
 		t.Fatal("bad region should error")
+	}
+}
+
+func TestSumsubWebhookFlagsMonitoringHits(t *testing.T) {
+	p := newTestSumsub(t)
+	addr := "0x1111111111111111111111111111111111111111"
+	cases := map[string]struct {
+		body    string
+		wantHit string
+	}{
+		"on hold":           {`{"externalUserId":"` + addr + `","type":"applicantOnHold","createdAtMs":"1700000000000"}`, "sumsub applicantOnHold"},
+		"ongoing AML":       {`{"externalUserId":"` + addr + `","type":"applicantPending","reviewMode":"ongoingAml","createdAtMs":"1700000000000"}`, "sumsub applicantPending (ongoingAml)"},
+		"plain pending":     {`{"externalUserId":"` + addr + `","type":"applicantPending","createdAtMs":"1700000000000"}`, ""},
+		"expired documents": {`{"externalUserId":"` + addr + `","type":"applicantPending","reviewMode":"ongoingDocExpired","createdAtMs":"1700000000000"}`, ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			body := []byte(tc.body)
+			h := http.Header{}
+			h.Set(sumsubHeaderDigest, hexHMAC("whsecret", body))
+			dec, err := p.VerifyWebhook(body, h)
+			if err != nil {
+				t.Fatalf("VerifyWebhook: %v", err)
+			}
+			if dec.MonitoringHit != tc.wantHit {
+				t.Fatalf("MonitoringHit = %q, want %q", dec.MonitoringHit, tc.wantHit)
+			}
+			// A hit never changes on-chain status by itself
+			if dec.Status != "Pending" {
+				t.Fatalf("status = %q, want Pending", dec.Status)
+			}
+		})
+	}
+}
+
+func TestOnfidoWatchlistMonitorIsAMonitoringSignal(t *testing.T) {
+	p := newTestOnfido(t)
+	body := []byte(`{"payload":{"resource_type":"watchlist_monitor","action":"watchlist_monitor.matches_updated","object":{"id":"wm-1","href":"https://api.onfido.com/v3.6/watchlist_monitors/wm-1"}}}`)
+	h := http.Header{}
+	h.Set(onfidoSigHeader, hexHMAC("whtok", body))
+	_, err := p.VerifyWebhook(body, h)
+	if !errors.Is(err, ErrMonitoringSignal) || !strings.Contains(err.Error(), "wm-1") {
+		t.Fatalf("err = %v, want ErrMonitoringSignal naming the monitor", err)
+	}
+	// The signature is still checked first
+	bad := http.Header{}
+	bad.Set(onfidoSigHeader, hexHMAC("nope", body))
+	if _, err := p.VerifyWebhook(body, bad); !errors.Is(err, ErrInvalidSignature) {
+		t.Fatalf("err = %v, want ErrInvalidSignature", err)
 	}
 }

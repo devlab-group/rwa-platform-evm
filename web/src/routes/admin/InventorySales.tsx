@@ -10,6 +10,8 @@ import { api } from "../../lib/client";
 import type { components } from "../../lib/api-types";
 import { resolveQuoteDecimals } from "../../lib/decimals";
 import { ROLES } from "../../lib/roles";
+import { exportSafeBatch } from "../../lib/safeBatch";
+import { useTxRoute } from "../../lib/txRoute";
 import {
   formatTokenAmount,
   shortenAddress,
@@ -18,6 +20,7 @@ import {
 import {
   readPreviewBuy,
   sendWithdrawProceeds,
+  withdrawProceedsCall,
   waitForTxReceipt,
 } from "../../lib/wallet";
 
@@ -25,18 +28,16 @@ type Inventory = components["schemas"]["Inventory"];
 type Project = components["schemas"]["Project"];
 type Purchase = components["schemas"]["Purchase"];
 
-/** A purchase quote read straight off the vault; both amounts are minimal units. */
+// Vault purchase preview in RWA and quote-token minimal units
 interface BuyQuote {
   tokenAmount: string;
   quoteAmount: string;
 }
 
 /**
- * Inventory & Sales: vault inventory, quote balance, purchase price, custom
- * strategy address, purchase quote preview, purchase history, and treasury
- * withdrawal (Vault.withdrawProceeds broadcast from the connected wallet).
- * Off-chain distribution was removed — only on-chain payment via Vault `buy`
- * remains.
+ * Shows inventory, pricing, purchase previews and history.
+ * Treasury withdrawals submit from a role-holding wallet or export for a Safe;
+ * inventory sales require on-chain Vault.buy payment.
  */
 export function InventorySales() {
   const inventory = useAsync<Inventory>(
@@ -51,11 +52,8 @@ export function InventorySales() {
 
   const proj = project.status === "success" ? project.data : undefined;
   const chainId = proj?.chainId ?? 0;
-  // RWA decimals come straight from the project (authoritative). Quote-token
-  // decimals have no field in the HTTP contract, so they're read on-chain
-  // best-effort for DISPLAY — a missing wallet/RPC just falls back to the
-  // grouped raw integer rather than mis-scaling. The withdrawal form resolves
-  // them itself at submit time and errors instead of guessing (input safety).
+  // Use project RWA decimals and resolve quote decimals from the API or chain.
+  // Display falls back to raw units; submission requires a known scale.
   const rwaDecimals = proj?.decimals;
   const quoteDecimalsState = useAsync<number | null>(async () => {
     if (!proj || !chainId) return null;
@@ -240,9 +238,7 @@ function BuyQuotePreview({
     setLoading(true);
     setError(null);
     try {
-      // Human whole units -> the RWA token's minimal units, then straight to
-      // the vault's own view: the price lives on-chain, so the quote is read
-      // through the connected wallet rather than through the server.
+      // Convert RWA units before reading the Vault's live purchase preview
       const minimal = toMinimalUnits(tokenAmount, rwaDecimals);
       const quoteAmount = await readPreviewBuy(
         chainId,
@@ -291,7 +287,7 @@ function BuyQuotePreview({
             <dd>{formatTokenAmount(quote.quoteAmount, quoteDecimals)}</dd>
           </div>
           <div className="tx-preview__row">
-            {/* Vault.previewBuy only ever quotes the purchase side. */}
+            {/* Vault.previewBuy quotes purchases */}
             <dt>Side</dt>
             <dd>purchase</dd>
           </div>
@@ -310,24 +306,22 @@ function WithdrawForm({
 }: {
   project: Project | undefined;
   chainId: number;
-  /** The vault's withdrawable quote-token balance, in minimal units (from inventory). */
+  // Vault quote balance in minimal units from the inventory response
   availableQuote: string | undefined;
-  /** Quote-token decimals for display + the live over-balance check (best-effort). */
+  // Quote decimals for display and early balance validation, when available
   quoteDecimals: number | undefined;
   onWithdrawn: () => void;
 }) {
   const from = useWalletContext().address;
+  const route = useTxRoute();
   const [amount, setAmount] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Live, best-effort check that the entered amount doesn't exceed the vault's
-  // available quote balance — for immediate feedback + to disable the button.
-  // It needs the quote decimals (to scale) client-side; when those aren't
-  // available the button stays enabled and the authoritative check at submit
-  // (which resolves decimals on-chain) still blocks an over-withdrawal.
+  // Check the entered amount early when quote decimals are available;
+  // submission resolves the scale and validates against the reported balance again
   const overBalance =
     availableQuote !== undefined &&
     quoteDecimals !== undefined &&
@@ -338,7 +332,7 @@ function WithdrawForm({
           BigInt(toMinimalUnits(amount, quoteDecimals)) > BigInt(availableQuote)
         );
       } catch {
-        return false; // malformed input — let submit-time validation report it
+        return false; // report malformed input at submission
       }
     })();
 
@@ -346,7 +340,7 @@ function WithdrawForm({
     setError(null);
     setDone(null);
     setProgress(null);
-    if (!from) {
+    if (route.kind === "wallet" && !from) {
       setError("Wallet not connected.");
       return;
     }
@@ -355,11 +349,7 @@ function WithdrawForm({
       setError("Missing vault address — project not deployed?");
       return;
     }
-    // withdrawProceeds pays out the QUOTE token, so the entered whole-unit
-    // amount is scaled by the quote token's decimals — never the RWA token's.
-    // There's no quote-decimals field in the HTTP contract, so it's read
-    // on-chain; if that read fails (no wallet/RPC) we error rather than guess
-    // and mis-scale the withdrawal.
+    // Resolve quote-token decimals before scaling the withdrawal amount
     let minimal: string;
     try {
       const decimals = await resolveQuoteDecimals(project, chainId);
@@ -368,9 +358,8 @@ function WithdrawForm({
       setError(err instanceof Error ? err.message : "Invalid amount.");
       return;
     }
-    // Authoritative guard: never broadcast a withdrawal larger than the vault's
-    // available quote balance — it would revert on-chain. Compared in minimal
-    // units against the inventory's reported quoteBalance.
+    // Compare with the reported quote balance before submission or export;
+    // the contract remains authoritative if that snapshot changes
     if (
       availableQuote !== undefined &&
       BigInt(minimal) > BigInt(availableQuote)
@@ -383,6 +372,15 @@ function WithdrawForm({
       );
       return;
     }
+    if (route.kind === "safe") {
+      setDone(
+        exportSafeBatch(chainId, route.safe, "Withdraw proceeds", [
+          withdrawProceedsCall(vault as Address, BigInt(minimal)),
+        ]),
+      );
+      return;
+    }
+    if (!from) return;
     setBusy(true);
     try {
       setProgress("Submitting withdrawal…");

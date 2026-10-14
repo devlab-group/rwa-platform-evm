@@ -215,7 +215,7 @@ jobs:
       - name: server HTTP-API e2e
         run: cd server && bash e2e/run_e2e.sh
 
-  # Residual supply-chain pinning (tracked in docs/security/release-checklist.md).
+  # Residual supply-chain pinning.
   # Every item below must be pinned to an
   # IMMUTABLE reference in a reviewed dependency PR; doing so requires a
   # network-resolvable registry to resolve tags→SHAs/digests, which the review
