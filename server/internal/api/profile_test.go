@@ -14,9 +14,9 @@ import (
 	"github.com/rwa-platform/server/internal/dal/memory"
 )
 
-// TestGetProfileReturnsStoredProfile: after a profile is stored (setupTestApp
-// seeds one), GET /api/v1/profile returns it — the raw document plus the
-// server-derived identity fields — so the admin UI can repopulate after reload.
+// TestGetProfileReturnsStoredProfile checks that GET /api/v1/profile returns the
+// stored profile (setupTestApp seeds one): the raw document plus the derived
+// identity fields, so the admin console can repopulate after a reload
 func TestGetProfileReturnsStoredProfile(t *testing.T) {
 	env := setupTestApp(t)
 
@@ -39,8 +39,8 @@ func TestGetProfileReturnsStoredProfile(t *testing.T) {
 	if resp.Decimals != 18 || resp.TokenUnit != "gram" {
 		t.Errorf("decimals=%d tokenUnit=%q, want 18/gram", resp.Decimals, resp.TokenUnit)
 	}
-	// profile is the raw stored document — it must round-trip to an object
-	// carrying the original fields.
+	// profile is the raw stored document and must round-trip to an object with the
+	// original fields
 	var doc map[string]any
 	if err := json.Unmarshal(resp.Profile, &doc); err != nil {
 		t.Fatalf("profile is not a JSON object: %v", err)
@@ -50,8 +50,8 @@ func TestGetProfileReturnsStoredProfile(t *testing.T) {
 	}
 }
 
-// TestGetProfileAdminOnly: the endpoint is gated like createProfile — a caller
-// with no admin JWT is rejected, the admin is allowed.
+// TestGetProfileAdminOnly checks that the endpoint is gated like createProfile:
+// a caller without an admin JWT is rejected and the admin is allowed
 func TestGetProfileAdminOnly(t *testing.T) {
 	env := setupTestApp(t)
 
@@ -66,7 +66,7 @@ func TestGetProfileAdminOnly(t *testing.T) {
 	}
 }
 
-// TestGetProfileNotFound: with no profile stored, the admin gets a clean 404.
+// TestGetProfileNotFound checks that the admin gets 404 when no profile is stored
 func TestGetProfileNotFound(t *testing.T) {
 	repos := memory.New()
 	adminKey, _ := crypto.GenerateKey()

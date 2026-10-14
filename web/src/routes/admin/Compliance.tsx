@@ -156,7 +156,7 @@ export function Compliance() {
                         <td className="mono" title={w.address}>
                           {shortenAddress(w.address)}
                         </td>
-                        <td>{w.provider ?? "—"}</td>
+                        <td>{w.provider ?? "-"}</td>
                         <td>
                           {w.outcome && (
                             <span
@@ -167,7 +167,7 @@ export function Compliance() {
                           )}
                         </td>
                         <td>{w.applied ? "Yes" : "No"}</td>
-                        <td>{w.receivedAt ?? "—"}</td>
+                        <td>{w.receivedAt ?? "-"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -210,15 +210,15 @@ export function Compliance() {
                   <tbody>
                     {data.map((entry) => (
                       <tr key={entry.id}>
-                        <td>{entry.category ?? "—"}</td>
+                        <td>{entry.category ?? "-"}</td>
                         <td className="mono" title={entry.actor}>
                           {shortenAddress(entry.actor)}
                         </td>
-                        <td>{entry.action ?? "—"}</td>
+                        <td>{entry.action ?? "-"}</td>
                         <td className="mono" title={entry.target}>
-                          {entry.target ? shortenAddress(entry.target) : "—"}
+                          {entry.target ? shortenAddress(entry.target) : "-"}
                         </td>
-                        <td>{entry.createdAt ?? "—"}</td>
+                        <td>{entry.createdAt ?? "-"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -312,7 +312,7 @@ function SetStatusForm({ onSubmitted }: { onSubmitted: () => void }) {
         reviewLabel="Review status change"
         confirmLabel="Confirm set status"
         confirmHeading="Confirm compliance status change"
-        confirmWarning="This calls the server's compliance hot key directly and takes effect immediately — no wallet signature step follows to catch a mistake."
+        confirmWarning="This submits a transaction using the server's compliance key. It takes effect when mined; no wallet approval follows this confirmation."
         disabled={!address}
         submitting={submitting}
         onConfirm={handleSubmit}

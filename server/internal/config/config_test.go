@@ -74,7 +74,7 @@ func TestLoadDefaultsTrustNoProxies(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if cfg.TrustedProxies != nil {
-		t.Errorf("TrustedProxies = %v, want nil by default (trust no proxies — see the field's doc comment)", cfg.TrustedProxies)
+		t.Errorf("TrustedProxies = %v, want nil by default (trust no proxies - see the field's doc comment)", cfg.TrustedProxies)
 	}
 }
 

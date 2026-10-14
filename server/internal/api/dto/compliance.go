@@ -6,20 +6,19 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// WalletStatus mirrors components.schemas.WalletStatus.
+// WalletStatus mirrors components.schemas.WalletStatus
 type WalletStatus struct {
 	Address           string `json:"address"`
 	Status            string `json:"status"`
 	ValidUntil        int64  `json:"validUntil"`
 	OwnershipVerified bool   `json:"ownershipVerified"`
 	// FrozenTokens is this wallet's ERC-7943 frozen amount in token minimal
-	// units (base-10 string), omitted when nothing is frozen. It tells a
-	// holder why part of their balance will not move; the aggregate map of
-	// every frozen wallet stays admin-only (see EnforcementResponse).
+	// units (base-10 string), omitted when nothing is frozen. The map of all
+	// frozen wallets is admin-only (see EnforcementResponse).
 	FrozenTokens string `json:"frozenTokens,omitempty"`
 }
 
-// ToWalletStatus maps one stored investor record onto its API view.
+// ToWalletStatus maps one stored investor record onto its API view
 func ToWalletStatus(inv *models.Investor) WalletStatus {
 	return WalletStatus{
 		Address: inv.Address, Status: string(inv.Status),
@@ -28,8 +27,9 @@ func ToWalletStatus(inv *models.Investor) WalletStatus {
 }
 
 // WithFrozenTokens returns the status with this wallet's frozen amount filled
-// in from the security projection, looked up case-insensitively since the
-// projection checksums its keys. Only ever called for the caller's OWN address.
+// in from the security projection. The lookup is case-insensitive because the
+// projection stores checksummed addresses. Callers pass only the session
+// wallet's own status.
 func (w WalletStatus) WithFrozenTokens(p *models.Project) WalletStatus {
 	if p == nil || p.Security == nil {
 		return w
@@ -43,18 +43,17 @@ func (w WalletStatus) WithFrozenTokens(p *models.Project) WalletStatus {
 	return w
 }
 
-// AllowedResult mirrors components.schemas.AllowedResult. Deliberately just the
-// one boolean: the endpoint behind it is public, so it must not disclose a
-// third party's full WalletStatus (see api.isAddressAllowed).
+// AllowedResult mirrors components.schemas.AllowedResult. It holds one boolean
+// because the endpoint is public and must not disclose a third party's full
+// WalletStatus (see isAddressAllowed in package api).
 type AllowedResult struct {
 	Allowed bool `json:"allowed"`
 }
 
-// VerifyChallengeResult mirrors components.schemas.VerifyChallengeResult:
-// the verified address's WalletStatus plus the subject-scoped session
-// bearer minted on successful ownership proof. SessionToken /
-// SessionExpiresAt are omitempty so a deployment with no SessionManager
-// wired renders a plain status with no empty-looking session fields.
+// VerifyChallengeResult mirrors components.schemas.VerifyChallengeResult: the
+// verified address's WalletStatus plus the wallet session issued after a
+// successful ownership proof. SessionToken and SessionExpiresAt are omitted when
+// no SessionManager is configured.
 type VerifyChallengeResult struct {
 	Address           string `json:"address"`
 	Status            string `json:"status"`
@@ -64,7 +63,7 @@ type VerifyChallengeResult struct {
 	SessionExpiresAt  string `json:"sessionExpiresAt,omitempty"`
 }
 
-// TxRef mirrors components.schemas.TxRef.
+// TxRef mirrors components.schemas.TxRef
 type TxRef struct {
 	TxHash         string `json:"txHash"`
 	Status         string `json:"status"`
@@ -72,16 +71,16 @@ type TxRef struct {
 }
 
 // ToTxRef maps a submitted transaction record onto the minimal reference an
-// accepted (202) side-effecting response returns.
+// accepted (202) side-effecting response returns
 func ToTxRef(tx *models.Transaction) TxRef {
 	return TxRef{TxHash: tx.TxHash, Status: string(tx.Status), IdempotencyKey: tx.IdempotencyKey}
 }
 
-// KYCSession mirrors components.schemas.KYCSession — what POST
-// /compliance/kyc/start returns for the investor SPA to launch the provider's
-// verification flow. Exactly one of Token (an SDK/init token) or URL (a hosted
-// redirect) is populated depending on the provider; Ref is the provider-side
-// reference (Onfido: workflowRunId) the SPA may need to init the SDK.
+// KYCSession mirrors components.schemas.KYCSession: what POST
+// /compliance/kyc/start returns so the investor app can launch the provider's
+// verification flow. Depending on the provider, Token is an SDK token or URL is
+// a hosted link. Ref is the provider-side reference (for Onfido, the workflow
+// run id)
 type KYCSession struct {
 	Provider  string `json:"provider"`
 	Token     string `json:"token,omitempty"`
@@ -90,7 +89,7 @@ type KYCSession struct {
 	ExpiresAt string `json:"expiresAt,omitempty"`
 }
 
-// ChallengeResponse mirrors components.schemas.Challenge.
+// ChallengeResponse mirrors components.schemas.Challenge
 type ChallengeResponse struct {
 	Address   string `json:"address"`
 	Nonce     string `json:"nonce"`
@@ -98,7 +97,7 @@ type ChallengeResponse struct {
 	ExpiresAt string `json:"expiresAt"`
 }
 
-// ToChallengeResponse maps a freshly issued wallet challenge onto its API view.
+// ToChallengeResponse maps a freshly issued wallet challenge onto its API view
 func ToChallengeResponse(ch *models.WalletChallenge) ChallengeResponse {
 	return ChallengeResponse{
 		Address: ch.Address, Nonce: ch.Nonce, Message: ch.Message,
@@ -107,15 +106,11 @@ func ToChallengeResponse(ch *models.WalletChallenge) ChallengeResponse {
 }
 
 // WebhookEventResponse mirrors components.schemas.WebhookEvent. EventID and
-// OccurredAt are additive fields; omitempty keeps an older record with no
-// EventID from rendering an empty required-looking field.
+// OccurredAt are omitted for records that lack them.
 //
-// ApplyStatus is the outbox state (see models.KYCApplyStatus). Applied is kept
-// as a derived convenience field
-// (true only once ApplyStatus == "Applied", i.e. the linked on-chain
-// transaction actually confirmed) so any existing consumer reading the old
-// boolean still gets an accurate answer instead of the old "accepted, not
-// necessarily applied" approximation.
+// ApplyStatus is the outbox state (see models.KYCApplyStatus). Applied is true
+// only when ApplyStatus is "Applied", that is, the linked on-chain transaction
+// confirmed.
 type WebhookEventResponse struct {
 	ID          string `json:"id"`
 	Address     string `json:"address"`
@@ -143,7 +138,7 @@ func ToWebhookEventResponse(e *models.KYCEvent) WebhookEventResponse {
 	return out
 }
 
-// AuditLogResponse mirrors components.schemas.AuditLog.
+// AuditLogResponse mirrors components.schemas.AuditLog
 type AuditLogResponse struct {
 	ID        string         `json:"id"`
 	Category  string         `json:"category"`
@@ -154,7 +149,7 @@ type AuditLogResponse struct {
 	Details   map[string]any `json:"details,omitempty"`
 }
 
-// ToAuditLogResponse maps one operational audit entry onto its API view.
+// ToAuditLogResponse maps one operational audit entry onto its API view
 func ToAuditLogResponse(e *models.AuditLogEntry) AuditLogResponse {
 	return AuditLogResponse{
 		ID: e.ID, Category: e.Category, Actor: e.Actor, Action: e.Action, Target: e.Target,

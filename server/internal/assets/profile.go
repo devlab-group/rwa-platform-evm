@@ -1,10 +1,12 @@
-// Package assets validates Asset Profiles and metadata records against the
-// FROZEN envelope schemas in shared/schemas/*.json (mirrored here in Go
-// since the envelopes are small and fixed; the operator-defined
-// `assetSchema` inside a profile is genuinely dynamic and is validated with
-// a real JSON Schema compiler, see schema_guard.go). See package
-// internal/auditpkg_test's cross-check against the actual shared/schemas
-// files, and internal/assets' own equivalent below, for drift protection.
+// Package assets validates Asset Profiles and metadata records, creates asset
+// records and their .rwa packages, and projects indexed SupplyController events
+// onto record status and the live auditor address.
+//
+// The profile and metadata envelopes are checked by Go code that mirrors
+// shared/schemas/asset-profile.schema.json and metadata.schema.json. The
+// operator's assetSchema is first checked against a closed keyword allowlist
+// (schema_guard.go) and then compiled and applied with
+// github.com/santhosh-tekuri/jsonschema (Draft 2020-12).
 package assets
 
 import (
@@ -22,7 +24,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
-// ValidationResult mirrors components.schemas.ValidationResult in api/openapi.yaml.
+// ValidationResult mirrors components.schemas.ValidationResult in api/openapi.yaml
 type ValidationResult struct {
 	Valid         bool     `json:"valid"`
 	Errors        []string `json:"errors"`
@@ -30,13 +32,13 @@ type ValidationResult struct {
 	CID           string   `json:"cid,omitempty"`
 }
 
-// DisplayField is one profile.displayFields entry.
+// DisplayField is one profile.displayFields entry
 type DisplayField struct {
 	Label   string `json:"label"`
 	Pointer string `json:"pointer"`
 }
 
-// Profile is the parsed, validated Asset Profile.
+// Profile is the parsed, validated Asset Profile
 type Profile struct {
 	ProfileVersion string          `json:"profileVersion"`
 	ProjectID      string          `json:"projectId"`
@@ -61,25 +63,23 @@ var profileAllowedTopLevelKeys = map[string]bool{
 	"tokenDecimals": true, "recordIdLabel": true, "displayFields": true, "assetSchema": true,
 }
 
-// lengthInRange counts Unicode code points, as JSON Schema's minLength/maxLength do and as the
+// lengthInRange counts Unicode code points, as JSON Schema's minLength and maxLength do and as the
 // signer does, so a multi-byte name is not rejected for its UTF-8 byte length
 func lengthInRange(s string, min, max int) bool {
 	n := utf8.RuneCountInString(s)
 	return n >= min && n <= max
 }
 
-// ValidateProfile parses and validates a raw Asset Profile document against
-// shared/schemas/asset-profile.schema.json. It always returns a non-nil
-// ValidationResult; a nil *Profile means the document was invalid (see
-// Errors). Structural/semantic problems are collected as errors rather than a
-// Go error, matching the always-200 validateProfile API.
+// ValidateProfile validates a raw Asset Profile document against
+// shared/schemas/asset-profile.schema.json. Problems are listed in
+// ValidationResult.Errors and not returned as a Go error, matching the
+// validateProfile API, which answers 200 either way. The returned *Profile is
+// nil when the document is invalid.
 func ValidateProfile(raw []byte) (ValidationResult, *Profile) {
 	var errs []string
 
-	// Enforce the document size/depth/string/array/object limits BEFORE
-	// guardAssetSchema/compileAssetSchema get a chance to recurse into the
-	// (still fully untrusted) assetSchema tree via a generic `any` unmarshal —
-	// see auditpkg.CheckLimits' doc comment.
+	// the structural limits must hold before guardAssetSchema and
+	// compileAssetSchema recurse into the untrusted assetSchema
 	if err := auditpkg.CheckLimits(raw); err != nil {
 		return ValidationResult{Valid: false, Errors: []string{err.Error()}}, nil
 	}
@@ -126,10 +126,8 @@ func ValidateProfile(raw []byte) (ValidationResult, *Profile) {
 	}
 	if raw, ok := top["displayFields"]; ok {
 		var fields []DisplayField
-		// Strict: shared/schemas/asset-profile.schema.json declares
-		// displayFields[] items additionalProperties:false; the signer rejects
-		// an unknown field here and the server must too, instead of silently
-		// dropping it via a lenient json.Unmarshal.
+		// displayFields[] items set additionalProperties to false and the signer
+		// rejects an unknown field, so a plain json.Unmarshal that drops it is not enough
 		if err := unmarshalStrict(raw, &fields); err != nil {
 			errs = append(errs, "displayFields must be an array of {label, pointer} with no additional fields")
 		} else {
@@ -177,10 +175,9 @@ func ValidateProfile(raw []byte) (ValidationResult, *Profile) {
 func compileAssetSchema(raw json.RawMessage) (*jsonschema.Schema, error) {
 	c := jsonschema.NewCompiler()
 	c.Draft = jsonschema.Draft2020
-	// LoadURL is overridden (rather than left at the library default) so a
-	// $ref requiring network I/O fails closed with an explicit error instead
-	// of depending on the http loader never having been imported elsewhere
-	// in the binary. Local $ref (starting with '#') never calls LoadURL.
+	// a $ref to another resource fails with an explicit error instead of
+	// depending on which loaders the binary happens to register; a local $ref
+	// starting with '#' never calls LoadURL
 	c.LoadURL = func(s string) (io.ReadCloser, error) {
 		return nil, errors.New("remote schema references are forbidden: " + s)
 	}
@@ -190,7 +187,8 @@ func compileAssetSchema(raw json.RawMessage) (*jsonschema.Schema, error) {
 	return c.Compile("assetSchema.json")
 }
 
-// isRFC3339 validates the metadata.createdAt "date-time" format.
+// isRFC3339 reports whether s parses as an RFC 3339 timestamp with time.RFC3339,
+// the check for the "date-time" format of metadata createdAt
 func isRFC3339(s string) bool {
 	_, err := time.Parse(time.RFC3339, s)
 	return err == nil

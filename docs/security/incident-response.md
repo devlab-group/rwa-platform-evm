@@ -1,9 +1,9 @@
 # Incident response guide
 
-Use this guide to detect, contain and recover from key compromises and platform failures.
-Read the [role matrix](../spec/roles.md) first. Contracts are non-upgradeable and have no wallet
-recovery module. Admin freezing and forced transfers (`setFrozenTokens`, `forcedTransfer`) can
-contain an incident, but cannot reverse a completed mint, purchase or payout.
+Detect, contain and recover from key compromises and platform failures using this guide
+and the [role matrix](../spec/roles.md). Contracts are non-upgradeable and have no wallet
+recovery module. Admin freezing and forced transfers (`setFrozenTokens`, `forcedTransfer`)
+can contain incidents but cannot reverse completed mints, purchases or payouts.
 
 ## 0. General principles
 
@@ -147,7 +147,7 @@ Detection: `pending_redemption_sla` (default 48 hours),
    operations, purchases and most redemption transitions. For affected paths that remain
    available, such as timeout cancellation, compliance or enforcement, restrict their applicable
    roles or wallet eligibility instead; consult the pause matrix.
-2. Fixed contracts cannot be patched in place. Stop further damage, quantify it from events and
+2. Deployed contracts cannot be patched in place. Stop further damage, quantify it from events and
    deploy a corrected, audited version as a new project. Balance and state migration is manual;
    the platform does not automate it.
 3. Review and audit the fix before deployment, even under incident pressure.

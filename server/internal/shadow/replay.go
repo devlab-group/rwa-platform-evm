@@ -1,12 +1,9 @@
-// Package shadow implements the shadow-replay / soak-test harness: drive
-// the SAME indexer/reconciliation logic the production server runs against
-// a scripted replay of chain
-// state, in an isolated in-memory database, with no signing key and no
-// ability to submit a state-changing production transaction — structurally
-// guaranteed by never constructing a blockchain.TxManager, keys.Provider,
-// or anything else capable of signing, not merely by configuration. See
-// docs/operator/soak-runbook.md for how to run this against a real
-// recorded testnet history for a release-candidate soak.
+// Package shadow implements the shadow-replay and soak-test harness. It runs
+// the production indexer against a scripted replay of chain state in an
+// isolated in-memory database. The package has no signing key and cannot submit
+// a transaction, because it never constructs a blockchain.TxManager,
+// keys.Provider or anything else that can sign. See
+// docs/operator/soak-runbook.md for running it for a release-candidate soak.
 package shadow
 
 import (
@@ -20,8 +17,7 @@ import (
 	"github.com/rwa-platform/server/internal/indexer"
 )
 
-// LogSpec is one scripted log entry, the JSON-friendly shape of a
-// types.Log.
+// LogSpec is one scripted log entry, a JSON-friendly form of types.Log
 type LogSpec struct {
 	Address     string   `json:"address"`
 	BlockNumber uint64   `json:"blockNumber"`
@@ -29,11 +25,8 @@ type LogSpec struct {
 	LogIndex    uint     `json:"logIndex"`
 	Topics      []string `json:"topics"`
 	Data        string   `json:"data,omitempty"`
-	// Decodable, when explicitly set false, makes this log fail EventDecoder
-	// (see Runner's decoder) — a scripted "malformed RPC response" /
-	// undecodable-event scenario exercising the indexer's DLQ path end to end,
-	// rather than taking the indexer's own unit-tested decode-failure path on
-	// faith here too.
+	// Decodable, when explicitly false, makes the Runner's decoder reject this
+	// log, which sends it through the indexer's dead-letter path
 	Decodable *bool `json:"decodable,omitempty"`
 }
 
@@ -53,10 +46,9 @@ func (s LogSpec) decodable() bool {
 	return s.Decodable == nil || *s.Decodable
 }
 
-// HeaderSpec is one scripted block header. A reorg is expressed by two
-// steps setting the SAME Number with a different Seed — indexer.FakeSource
-// derives the header's hash from Seed, so this changes what the "canonical"
-// block at that height hashes to, exactly like a real reorg would.
+// HeaderSpec is one scripted block header. A reorg is two steps that set the
+// same Number with different Seeds: indexer.FakeSource derives the header hash
+// from Seed, so the canonical block at that height changes hash
 type HeaderSpec struct {
 	Number uint64 `json:"number"`
 	Seed   byte   `json:"seed"`
@@ -66,30 +58,31 @@ type HeaderSpec struct {
 type FaultKind string
 
 const (
-	FaultNone           FaultKind = ""
-	FaultRangeTooLarge  FaultKind = "range_too_large"
-	FaultTransient      FaultKind = "transient"
+	FaultNone          FaultKind = ""
+	FaultRangeTooLarge FaultKind = "range_too_large"
+	FaultTransient     FaultKind = "transient"
+	// FaultMalformedNoise injects the same error as FaultTransient
 	FaultMalformedNoise FaultKind = "malformed"
 )
 
-// Step is one scripted unit of replay: chain-state mutations to apply
-// before the next Poll cycle, plus what's expected to happen.
+// Step is one scripted unit of replay: the chain-state changes to apply before
+// the next Poll, plus whether that Poll is expected to fail
 type Step struct {
 	Description string       `json:"description"`
 	Headers     []HeaderSpec `json:"headers,omitempty"`
-	// RemoveLogsFrom, if set, drops every previously-added log at/after
-	// this block number before adding this step's new Logs — models a
-	// reorg's old-chain logs disappearing.
+	// RemoveLogsFrom, if set, drops every previously added log at or after this
+	// block number before the step's Logs are added, modeling the old chain's
+	// logs disappearing in a reorg
 	RemoveLogsFrom *uint64   `json:"removeLogsFrom,omitempty"`
 	Logs           []LogSpec `json:"logs,omitempty"`
 	Head           uint64    `json:"head"`
-	// Fault, if set, is injected as this step's FIRST FilterLogs response
-	// (see indexer.FakeSource.FilterLogsErrors) — the indexer's own bounded
-	// retry/backoff must recover from it within the same Poll call.
+	// Fault, if set, is returned as the step's first FilterLogs response (see
+	// indexer.FakeSource.FilterLogsErrors). The indexer's bounded retry is
+	// expected to recover within the same Poll call.
 	Fault FaultKind `json:"fault,omitempty"`
-	// ExpectPollError documents that THIS step's Poll call is scripted to
-	// fail outright (e.g. a reorg deeper than the configured automatic
-	// policy) — Runner does not treat that as a harness failure when set.
+	// ExpectPollError marks this step's Poll as expected to fail, for example on
+	// a reorg deeper than the automatic recovery policy. The Runner then treats
+	// a failure as a pass and a success as an error.
 	ExpectPollError bool `json:"expectPollError,omitempty"`
 }
 
@@ -102,10 +95,8 @@ type Scenario struct {
 	Steps       []Step   `json:"steps"`
 }
 
-// LoadScenario reads a Scenario from a JSON file — the on-disk form of a
-// replay of real testnet blocks, logs, and transactions. A real
-// recorded-testnet-history exporter is an ops-side concern outside this
-// package's scope.
+// LoadScenario reads a Scenario from a JSON file. The package has no exporter
+// that records testnet history into this format.
 func LoadScenario(path string) (*Scenario, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -118,7 +109,7 @@ func LoadScenario(path string) (*Scenario, error) {
 	return &sc, nil
 }
 
-// addressList converts Scenario.Addresses to common.Address.
+// addressList converts Scenario.Addresses to common.Address values
 func (sc *Scenario) addressList() []common.Address {
 	out := make([]common.Address, len(sc.Addresses))
 	for i, a := range sc.Addresses {
@@ -127,7 +118,7 @@ func (sc *Scenario) addressList() []common.Address {
 	return out
 }
 
-// applyStep mutates source per step, ahead of the caller's next idx.Poll.
+// applyStep applies step to source before the caller's next Poll
 func applyStep(source *indexer.FakeSource, step Step) {
 	for _, h := range step.Headers {
 		source.SetHeader(h.Number, h.Seed)

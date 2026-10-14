@@ -50,8 +50,8 @@ describe("Login (wallet-signature)", () => {
     });
 
     renderWithWallet(<Login />, { connected: true });
-    // The harness connects the wallet on mount (as the real admin does during
-    // login), so the sign-in button (not the connect button) appears.
+    // The harness connects the wallet on mount, so the sign-in button appears
+    // instead of the connect button
     const signIn = await screen.findByRole("button", {
       name: /sign in with wallet/i,
     });
@@ -64,7 +64,7 @@ describe("Login (wallet-signature)", () => {
     expect(sessionBody.address).toBe(ADMIN);
     expect(sessionBody.signature).toBe(wallet.signature);
 
-    // Persisted to IndexedDB, not localStorage/sessionStorage.
+    // Stored in IndexedDB, not in localStorage or sessionStorage
     await flush();
     expect(await idbGet<{ token: string }>("authSession")).toMatchObject({
       token: "admin-jwt",

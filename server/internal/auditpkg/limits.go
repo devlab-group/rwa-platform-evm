@@ -9,21 +9,19 @@ import (
 )
 
 // safeIntegerBound is 2^53-1, the edge of the cross-language safe integer range in
-// docs/spec/asset-profile.md "Numeric rules"
-var safeIntegerBound = new(big.Int).SetInt64(9007199254740991) // 2^53 - 1
+// docs/spec/asset-profile.md ("Numeric rules")
+var safeIntegerBound = new(big.Int).SetInt64(9007199254740991)
 
-// container tracks one open JSON object or array while walking tokens, so
-// object key-value pairs and array elements can be counted (and bounded)
-// separately per docs/spec/asset-profile.md's distinct
-// "Max array length" / "Max object keys" limits.
+// container tracks one open JSON object or array during the token walk, so
+// object pairs and array elements are counted against the separate "Max object
+// keys" and "Max array length" limits in docs/spec/asset-profile.md
 type container struct {
 	isObject      bool
 	count         int
 	awaitingValue bool // for objects: true once a key has been read and its value is pending
 }
 
-// limitDecoder walks JSON tokens to enforce platform-wide depth/length
-// bounds independent of any JSON Schema the caller may also apply.
+// limitDecoder walks JSON tokens and enforces the structural limits
 type limitDecoder struct {
 	dec   *json.Decoder
 	depth int
@@ -80,24 +78,22 @@ func (d *limitDecoder) handle(tok json.Token) error {
 		}
 		return d.recordElement(true)
 	default:
-		// bools, null
+		// booleans and null
 		return d.recordElement(true)
 	}
 }
 
-// recordElement accounts for tok having just been consumed as either an
-// object key/value or an array element, and enforces the matching limit.
-// isLeaf distinguishes a scalar token from a just-closed nested container
-// (both count as one "element" of their parent, but only a leaf can be an
-// object key).
+// recordElement counts the token just consumed against its parent container and
+// enforces the matching limit. A scalar or a just-closed nested container is one
+// element of its parent. Only a scalar (isLeaf) can be an object key.
 func (d *limitDecoder) recordElement(isLeaf bool) error {
 	if len(d.stack) == 0 {
-		return nil // top-level scalar/closed document; nothing to bound
+		return nil // outside any container, nothing to bound
 	}
 	top := &d.stack[len(d.stack)-1]
 	if top.isObject {
 		if isLeaf && !top.awaitingValue {
-			// This token is a key; the pair completes when its value arrives.
+			// a key; the pair completes when its value arrives
 			top.awaitingValue = true
 			return nil
 		}
@@ -114,10 +110,9 @@ func (d *limitDecoder) recordElement(isLeaf bool) error {
 	return nil
 }
 
-// checkSafeInteger enforces docs/spec/asset-profile.md's cross-language
-// safe integer range on any JSON number literal that has no fractional or
-// exponent part (i.e. is actually an integer, not a float the range doesn't
-// govern).
+// checkSafeInteger rejects an integer literal outside the cross-language safe
+// range in docs/spec/asset-profile.md ("Numeric rules"). A literal with a
+// fraction or exponent is not checked.
 func checkSafeInteger(n json.Number) error {
 	s := string(n)
 	if strings.ContainsAny(s, ".eE") {

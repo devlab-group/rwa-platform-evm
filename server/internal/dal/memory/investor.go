@@ -43,11 +43,9 @@ func (r *InvestorRepository) List(ctx context.Context) ([]*models.Investor, erro
 	return out, nil
 }
 
-// ListPage returns one bounded, ascending-address page. Unlike
-// Purchase/RedemptionRequest's ListPage, Address IS the collection's
-// unique key already, so the cursor is simply the previous
-// page's last address — no separate KeysetCursor/tiebreak is needed (see
-// mongodb.investorRepo.ListPage's identical reasoning).
+// ListPage returns one page sorted by address ascending. Address is the unique
+// key, so the cursor is the previous page's last address and needs no KeysetCursor,
+// as in mongodb.investorRepo.ListPage.
 func (r *InvestorRepository) ListPage(ctx context.Context, cursor string, limit int) ([]*models.Investor, string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

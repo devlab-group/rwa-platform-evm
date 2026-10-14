@@ -11,24 +11,32 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// deadLetterRepo persists indexer_dead_letters (see
-// repository.DeadLetterRepository's doc comment on Record's
-// upsert-with-increment semantics).
+// deadLetterRepo persists indexer_dead_letters. See repository.DeadLetterRepository
+// for Record's upsert and increment behavior. Record is one atomic upsert.
 type deadLetterRepo struct{ coll *mongo.Collection }
 
 func (r *deadLetterRepo) Record(ctx context.Context, e *models.DeadLetterEntry) error {
-	existing, err := findOne[models.DeadLetterEntry](ctx, r.coll, bson.M{"_id": e.ID})
-	if err != nil && err != repository.ErrNotFound {
-		return err
-	}
-	cp := *e
-	if existing != nil {
-		cp.FirstFailedAt = existing.FirstFailedAt
-		cp.RetryCount = existing.RetryCount + 1
-		cp.Resolved = false
-	}
-	_, err = r.coll.ReplaceOne(ctx, bson.M{"_id": e.ID}, cp, options.Replace().SetUpsert(true))
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": e.ID}, deadLetterRecordUpdate(e), options.UpdateOne().SetUpsert(true))
 	return err
+}
+
+// deadLetterRecordUpdate builds Record's update as an aggregation pipeline, so one
+// upsert can branch on whether the entry exists. A new entry is stored as given. A
+// repeat keeps firstFailedAt, bumps retryCount, un-resolves the entry and takes the
+// latest failure fields. $literal keeps values that start with "$" from being read
+// as field paths.
+func deadLetterRecordUpdate(e *models.DeadLetterEntry) mongo.Pipeline {
+	lit := func(v any) bson.M { return bson.M{"$literal": v} }
+	return mongo.Pipeline{{{Key: "$set", Value: bson.M{
+		"chainId": lit(e.ChainID), "blockNumber": lit(e.BlockNumber), "blockHash": lit(e.BlockHash),
+		"txHash": lit(e.TxHash), "logIndex": lit(e.LogIndex), "eventSignature": lit(e.EventSignature),
+		"errorCategory": lit(e.ErrorCategory), "errorMessage": lit(e.ErrorMessage),
+		"lastFailedAt": lit(e.LastFailedAt), "sourceData": lit(e.SourceData),
+		"firstFailedAt": bson.M{"$ifNull": bson.A{"$firstFailedAt", lit(e.FirstFailedAt)}},
+		"resolved": bson.M{"$cond": bson.A{
+			bson.M{"$eq": bson.A{bson.M{"$type": "$retryCount"}, "missing"}}, lit(e.Resolved), false}},
+		"retryCount": bson.M{"$ifNull": bson.A{bson.M{"$add": bson.A{"$retryCount", 1}}, lit(e.RetryCount)}},
+	}}}}
 }
 
 func (r *deadLetterRepo) Get(ctx context.Context, id string) (*models.DeadLetterEntry, error) {

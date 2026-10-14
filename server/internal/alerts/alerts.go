@@ -1,8 +1,7 @@
-// Package alerts implements the operational alert evaluators: pure
-// functions over already-loaded domain state, deliberately with no I/O of
-// their own, so they're testable against fake/in-memory data without a
-// live chain or Mongo (cmd/platform wires a periodic ticker that loads
-// state, calls these, and reports whatever they return — see main.go).
+// Package alerts implements the operational alert evaluators. They are pure
+// functions over domain state that the caller has already loaded, so they need
+// no chain or database. cmd/platform runs them on a ticker and reports what
+// they return.
 package alerts
 
 import (
@@ -12,21 +11,20 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// Alert is one SLA/health-check finding an evaluator produced.
+// Alert is one finding from an evaluator
 type Alert struct {
-	Kind         string // "pending_redemption_sla" | "funded_claim_failure"
+	Kind         string // "pending_redemption_sla" or "funded_claim_failure"
 	RedemptionID string
 	Message      string
 	Since        time.Time // when the condition being alerted on started
 	Age          time.Duration
 }
 
-// EvaluatePendingRedemptionSLA returns one Alert per redemption request
-// that has been sitting in Pending (requested on-chain, not yet funded)
-// longer than threshold. A Pending redemption is not a payment guarantee,
-// which is exactly why an operator needs to know when one has sat Pending
-// long enough that the beneficiary is likely wondering where their funds
-// are.
+// EvaluatePendingRedemptionSLA returns one Alert per redemption request that
+// has been Pending (requested on-chain, not yet funded) for at least threshold,
+// measured from its on-chain creation time. A Pending redemption is not a
+// payment guarantee, so an operator needs to know when one has waited that
+// long.
 func EvaluatePendingRedemptionSLA(requests []*models.RedemptionRequest, threshold time.Duration, now time.Time) []Alert {
 	var out []Alert
 	for _, r := range requests {
@@ -46,27 +44,23 @@ func EvaluatePendingRedemptionSLA(requests []*models.RedemptionRequest, threshol
 	return out
 }
 
-// EvaluateFundedClaimFailure returns one Alert per redemption request that
-// has been Funded (the treasurer paid in) longer than threshold without
-// transitioning to Completed — i.e. nobody has successfully submitted the
-// permissionless claimRedemption call, which usually means either the claim
-// flow is broken somewhere, or funds are sitting unclaimed because the
-// beneficiary was never notified.
+// EvaluateFundedClaimFailure returns one Alert per redemption request that has
+// been Funded for at least threshold without reaching Completed. That means
+// nobody has submitted the permissionless claimRedemption call, which points to
+// a broken claim flow or a beneficiary who was never notified.
 //
-// UpdatedAt is used as an approximation of "became Funded at": there is no
-// dedicated FundedAt timestamp field (only FundedAtBlock, a block number,
-// not wall-clock time — see models.RedemptionRequest's doc comment), but
-// redemption.Reconcile only writes UpdatedAt when this record's derived
-// state actually changes in response to a new chain event, so for a
-// redemption that reached Funded and has sat there untouched since,
-// UpdatedAt closely tracks the real Funded transition time.
+// The age is measured from FundedAt, the time the server indexed the
+// RedemptionFunded event. Requests with no FundedAt are skipped.
 func EvaluateFundedClaimFailure(requests []*models.RedemptionRequest, threshold time.Duration, now time.Time) []Alert {
 	var out []Alert
 	for _, r := range requests {
 		if r.Status != models.RedemptionFunded {
 			continue
 		}
-		fundedAt := r.UpdatedAt.UTC()
+		if r.FundedAt.IsZero() {
+			continue
+		}
+		fundedAt := r.FundedAt.UTC()
 		age := now.Sub(fundedAt)
 		if age < threshold {
 			continue

@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// A --password-file readable by the file's group or by anyone else on the
-// machine leaks the keystore password just as badly as putting it on the
-// command line would, so checkPasswordFilePermissions must reject it.
+// A --password-file readable by its group or by anyone else on the machine leaks the
+// keystore password as badly as putting it on the command line, so
+// checkPasswordFilePermissions must reject it
 func TestCheckPasswordFilePermissions_RejectsGroupReadable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pw")
 	if err := os.WriteFile(path, []byte("secret\n"), 0o640); err != nil {

@@ -64,7 +64,7 @@ contract FixedPriceStrategyTest is TestBase {
         FixedPriceStrategy s = new FixedPriceStrategy(18, price, price, pricer, admin, 0);
         uint256 purchase = s.quotePurchase(tokenAmount);
         uint256 redemption = s.quoteRedemption(tokenAmount);
-        // Ceil >= exact division >= Floor, and they differ by at most 1.
+        // Ceil >= exact division >= Floor, and they differ by at most 1
         assertGe(purchase, redemption);
         assertLe(purchase - redemption, 1);
     }

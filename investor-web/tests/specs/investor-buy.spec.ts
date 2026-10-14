@@ -5,7 +5,7 @@ import { getMockSentTransactions, MOCK_WALLET_ADDRESS } from "../fixtures/mock-w
 import { vaultAbi } from "../../src/lib/abis";
 import { InvestorPage } from "../pages/InvestorPage";
 
-test.describe("Investor — wallet, balance, and buy", () => {
+test.describe("Investor - wallet, balance, and buy", () => {
   mockOnly();
 
   test("connects a wallet and verifies ownership", async ({ page }) => {
@@ -46,8 +46,8 @@ test.describe("Investor — wallet, balance, and buy", () => {
     await investor.submitBuy();
     await expect(page.getByText(/Buy submitted:/)).toBeVisible();
 
-    // The purchase is encoded in the browser (lib/abis.ts) and addressed to
-    // this project's Vault — nothing here comes from the server.
+    // The purchase is encoded in the browser (lib/abis.ts) and sent to this
+    // project's Vault, with no calldata from the server
     const sent = await getMockSentTransactions(page);
     const buy = sent.at(-1);
     expect(buy?.to?.toLowerCase()).toBe(ADDRESSES.vault.toLowerCase());
@@ -56,8 +56,8 @@ test.describe("Investor — wallet, balance, and buy", () => {
       data: buy!.data as `0x${string}`,
     });
     expect(decoded.functionName).toBe("buy");
-    // The form takes whole units, so the 1e18 typed above is 1e18 tokens at 18
-    // decimals — the quoted minimal-unit amount is what gets encoded.
+    // The form takes whole units, so 1e18 tokens at 18 decimals is 1e36 minimal
+    // units, and that is the amount encoded
     expect(decoded.args?.[0]).toBe(10n ** 36n);
     expect((decoded.args?.[2] as string).toLowerCase()).toBe(MOCK_WALLET_ADDRESS);
   });
@@ -85,7 +85,7 @@ test.describe("Investor — wallet, balance, and buy", () => {
     expect(decoded.functionName).toBe("approve");
     expect((decoded.args[0] as string).toLowerCase()).toBe(ADDRESSES.vault.toLowerCase());
 
-    // Buy only unlocks once the on-chain allowance is confirmed sufficient.
+    // Buy unlocks only once the on-chain allowance is sufficient
     const buyButton = investor.buySection.getByRole("button", { name: "2. Buy" });
     await expect(buyButton).toBeEnabled();
   });

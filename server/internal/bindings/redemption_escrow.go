@@ -116,11 +116,9 @@ type RedemptionRequestedEvent struct {
 
 // UnpackRedemptionRequested decodes a RedemptionRequested log.
 func (r RedemptionEscrow) UnpackRedemptionRequested(data []byte, topics []common.Hash) (RedemptionRequestedEvent, error) {
-	// Explicit abi tags are required for RWAAmount: go-ethereum's untagged
-	// struct-field matching maps the ABI name "rwaAmount" to the Go field
-	// name ToCamelCase("rwaAmount") == "RwaAmount" (only the leading
-	// character is upcased), which never matches the "RWA" all-caps
-	// acronym spelling this codebase otherwise uses everywhere else.
+	// RWAAmount needs an explicit abi tag: without one, go-ethereum matches the
+	// ABI name "rwaAmount" to a field named ToCamelCase("rwaAmount"), which is
+	// "RwaAmount" (only the first letter is upcased), not "RWAAmount"
 	var partial struct {
 		RWAAmount   *big.Int `abi:"rwaAmount"`
 		QuoteAmount *big.Int `abi:"quoteAmount"`
@@ -168,8 +166,7 @@ type RedemptionCompletedEvent struct {
 
 // UnpackRedemptionCompleted decodes a RedemptionCompleted log.
 func (r RedemptionEscrow) UnpackRedemptionCompleted(data []byte, topics []common.Hash) (RedemptionCompletedEvent, error) {
-	// See UnpackRedemptionRequested above for why RWAAmount needs an
-	// explicit abi tag.
+	// RWAAmount needs an explicit abi tag, as in UnpackRedemptionRequested
 	var partial struct {
 		RWAAmount   *big.Int `abi:"rwaAmount"`
 		QuoteAmount *big.Int `abi:"quoteAmount"`

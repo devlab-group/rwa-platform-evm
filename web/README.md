@@ -1,190 +1,70 @@
-# web — RWA platform admin console
+# web: RWA platform admin console
 
-A Vite + React 18 + TypeScript SPA serving the issuer's **admin console** (`/admin/*`),
-talking to the Go server's REST API over `/api/v1/**`. The production build
-(`web/dist/`) is embedded directly into the Go server binary and served by it — this
-app never runs against its own backend in production; `vite dev`/`vite preview` are
-development-only.
+A Vite, React 18 and TypeScript single-page app for the issuer's admin console (`/admin/*`). It calls the Go server's REST API under `/api/v1/**`. In production the build (`web/dist/`) is embedded in the Go server binary and served by it. `vite dev` and `vite preview` are for development only.
 
-**This app is admin-only.** The investor-facing UI lives in the top-level
-[`investor-web/`](../investor-web) subrepo: a standalone, self-contained example
-interface that an issuer forks and rebrands for their own investors. Nothing
-investor-facing belongs here — no `/investor` route, no buy/request/claim/cancel
-senders, no wallet-session (`X-Wallet-Session`) client. Adding one back would put the
-investor surface behind the admin login gate and re-bloat this bundle.
+This app serves administrators. Fork the standalone [`investor-web/`](../investor-web) example for investors. Investor routes, buy and redemption senders, and the `X-Wallet-Session` client live there.
 
-See also: `api/openapi.yaml` (the frozen API contract), and `web/CSP-AUDIT.md`.
+See also `api/openapi.yaml` (the HTTP contract) and [`CSP-AUDIT.md`](CSP-AUDIT.md).
 
 ## Stack
 
-- **Vite** (build/dev server) + **React 18** + **TypeScript** (strict).
-- **react-router-dom** v6 for client-side routing.
-- **viem** for wallet interaction (`custom(window.ethereum)` transport only — this app
-  never makes a direct JSON-RPC `http()` call itself; every on-chain read/write goes
-  through whatever wallet extension the admin has installed).
-- **SCSS** for styling, hand-written (no component library) — see `src/styles/`.
-- **Vitest** + Testing Library for unit/component tests; **Playwright** + axe-core for
-  end-to-end and accessibility tests.
-- No state-management library — each screen owns its own fetch/mutation state via a
-  small shared `useAsync` hook (`src/hooks/useAsync.ts`).
+- Vite, React 18 and TypeScript in strict mode.
+- `react-router-dom` v6 for routing.
+- `viem` for wallet access, always through `custom(provider)` over the injected `window.ethereum`. The app never creates an `http()` transport, so every on-chain read and write goes through the admin's wallet extension.
+- Hand-written SCSS in `src/styles/`, with no component library.
+- Vitest and Testing Library for unit and component tests. Playwright and axe-core for end-to-end and accessibility tests.
+- No state-management library. Each screen owns its fetch state through `useAsync` (`src/hooks/useAsync.ts`) or `usePaginatedList`.
 
-## Generated API client
+## API client
 
-`api/openapi.yaml` is the frozen contract (owned by the platform lead — never hand-edit
-it from `web/`). The client is generated from it in two layers:
+`api/openapi.yaml` is the API contract and is not edited from `web/`.
 
-1. **`npm run gen:api`** runs `openapi-typescript ../api/openapi.yaml -o
-   src/lib/api-types.ts`. That file is fully generated — **never hand-edit it**;
-   regenerate it after any change to `api/openapi.yaml`, and re-run `npm run
-   typecheck` afterward since a contract change can break call sites.
-2. **`src/lib/client.ts`** is a small, hand-written `fetch` wrapper typed against
-   `api-types.ts`. It exports one `api.<operationId>()` function per endpoint (e.g.
-   `api.getProject()`, `api.listRedemptions({...})`), handles the `Idempotency-Key`
-   header on mutating calls, attaches the admin JWT as `Authorization: Bearer`
-   (`src/lib/authSession.ts` — see "No secrets in the browser" below), and throws a
-   typed `ApiError` on any non-2xx response. Every non-204 success response is parsed as
-   JSON unconditionally — there's deliberately no silent "return undefined for an
-   unexpected content-type" fallback (an earlier version of this code had exactly that
-   as a defensive branch, and it silently turned a broken response into a fake success
-   that crashed downstream components; removed once the end-to-end tests caught
-   it in a real browser).
+1. `npm run gen:api` generates `src/lib/api-types.ts` from it with `openapi-typescript`. Do not edit that file. Regenerate it after any contract change, then run `npm run typecheck`, because call sites can break.
+2. `src/lib/client.ts` is a hand-written `fetch` wrapper typed against `api-types.ts`. It exports one `api.<operationId>()` function per endpoint, sends the `Idempotency-Key` header on the calls that take one, attaches the admin JWT as `Authorization: Bearer`, and throws `ApiError` on any non-2xx response. It parses every non-204 JSON response and lets a parse failure throw, so an HTML fallback page from a misconfigured proxy fails loudly. `downloadPackage` is the one call that returns a `Blob`.
 
-Screens never call `fetch` directly — always go through `api.*` in `client.ts`.
+Screens call the server only through `api.*`.
 
-## Route structure
+## Routes
 
-One route tree (`/admin/*`, `src/routes/admin/`) under a shared shell
-(`src/components/AppLayout.tsx`, nav + skip link + nested `<Suspense>` for the routed
-page — see "Route code-splitting" below). `/` and any unmatched path redirect to
-`/admin/setup`.
+All routes live under `/admin/*` in `src/routes/admin/`, inside the shared shell `src/components/AppLayout.tsx` (nav, skip link and one `Suspense` boundary). `/` and unmatched paths redirect to `/admin/setup`. Without a live session the shell renders the sign-in screen in place of the page.
 
-`Setup.tsx` (asset-profile editor + validation preview, chain/role config, prices,
-timeout, deployment), `Assets.tsx` (metadata records, IPFS package download,
-auditor-signature upload → mint), `Compliance.tsx` (wallet allowlist status, manual
-allow/block, ownership-challenge generator, webhook history, audit log),
-`InventorySales.tsx` (vault inventory, quote preview, purchase history, treasury
-withdrawal — on-chain only; off-chain distribution was removed), `Redemptions.tsx`
-(list + detail, fund/reject), `Transactions.tsx` (indexer-observed tx list),
-`Security.tsx` (pause, roles, prices, admin transfer, bytecode verification).
+| Route | Screen |
+| --- | --- |
+| `setup` | Asset Profile editor and validation, project summary, deployment |
+| `assets` | Asset records, signer policy download, `.rwa` package download, signed-result upload and mint |
+| `compliance` | Wallet statuses, manual allow and block, ownership challenge, webhook history, audit log |
+| `inventory-sales` | Vault inventory, purchase quote preview, treasury withdrawal, purchase history |
+| `redemptions` | Redemption list and detail, fund and reject |
+| `transactions` | Transactions the server tracks, with explorer links |
+| `security` | Pause, prices, role holders and role changes, admin transfer, ERC-7943 freeze and forced transfer, bytecode verification status |
 
-## Transaction-safety model
+Purchases are on-chain only, through `Vault.buy`.
 
-Enforced end to end:
+## Transaction safety
 
-- **No private role keys ever reach the browser.** Admin actions either call the one
-  explicitly-allowed server hot-key endpoint (`setComplianceStatus` — gated behind a
-  confirm step, see below) or are broadcast from the connected wallet, where the key
-  never leaves the extension.
-- **The server never builds calldata.** Every on-chain write — `RWAFactory.deploy`,
-  `SupplyController.mint`, role grants/revokes, pause/unpause, price setters, admin
-  transfer, `Vault.withdrawProceeds`, `RedemptionEscrow.fundRedemption`/
-  `rejectRedemption`, plus the standard ERC-20 `approve` that precedes funding — is
-  encoded in the browser from a pinned ABI fragment (`src/lib/abis.ts`) and sent via
-  `src/lib/wallet.ts`. A compromised server cannot redirect a call, because it never
-  supplies one.
-- **Privileged calls are authorized on-chain, not by the UI.** The Security screen
-  offers actions any connected wallet can attempt; the contract's `onlyRole` check is
-  the real gate. `src/lib/roles.ts` + `src/components/RoleGate.tsx` only hide/disable
-  what the connected wallet can't do, to avoid submitting a guaranteed revert.
-- **Every wallet-submitted action renders a review step first**, showing chain ID,
-  addresses, amounts (+ units), price side, and quote token before the user can
-  approve, plus the standing disclaimer that a pending/funded redemption is never a
-  guarantee of payment (asserted directly in `tests/specs/status-states.spec.ts`).
-- **Hot-key admin actions get a confirm step.** `Compliance.tsx`'s
-  `setComplianceStatus` calls a server hot key directly with no wallet signature
-  afterward to catch a mistake, so it's gated behind `src/components/ConfirmStep.tsx`
-  — a reusable review → confirm gate (the same shape `Setup.tsx`'s deploy flow
-  already used).
+- No role private key reaches the browser. The admin signs in with a wallet signature and every on-chain action is signed by the connected wallet. The one server hot-key action is `setComplianceStatus`.
+- The browser encodes wallet transactions from the pinned ABI fragments in `src/lib/abis.ts` and sends them through `src/lib/wallet.ts`: `RWAFactory.deploy`, `SupplyController.mint`, role grants and revokes, pause and unpause, price setters, admin transfer, ERC-7943 freeze and forced transfer, `Vault.withdrawProceeds`, `RedemptionEscrow.fundRedemption` and `rejectRedemption`, and ERC-20 `approve` before funding. The server encodes its own compliance-status transactions. Wallet calldata is built locally, but its inputs include server-supplied configuration and indexed state; verify the review panel and wallet prompt.
+- The contracts authorize privileged calls with `onlyRole`, not the UI. `src/lib/roles.ts` and `src/components/RoleGate.tsx` only decide what to show. When the connected wallet lacks the role, `RoleGate` offers a Safe{Wallet} Transaction Builder batch (`src/lib/safeBatch.ts`) for a Safe that holds it. The selection does not check the Safe's bytecode.
+- Setup's deployment and the Security screen's forced transfer show a review panel before the wallet is asked to sign. `src/components/ConfirmStep.tsx` gates the server hot-key action in Compliance. Other wallet actions are submitted from their form, and the wallet shows the transaction for approval.
+- Redemption views state that a pending or funded redemption is not a guarantee of payment (`tests/specs/status-states.spec.ts`).
 
-## Redemption/transaction status derivation and distinct states
+## Status display
 
-`src/lib/status.ts` is the single source of truth for turning raw chain-derived
-`Redemption`/`Transaction` records into display state:
+`src/lib/status.ts` turns server records into display states.
 
-- `redemptionDisplayStatus()` maps the on-chain `status` enum
-  (`None`/`Pending`/`Funded`/`Completed`/`Rejected`/`Cancelled`) plus the server's
-  derived `claimable` boolean into six **visually distinct** UI states — `Pending`,
-  `Funded`, `Claimable`, `Completed`, `Rejected`, `Cancelled` — each with its own
-  badge tone in `src/components/StatusBadge.tsx` and a `data-status` attribute for
-  reliable test hooks. `Funded` only promotes to `Claimable` once the server's
-  `claimable` flag is true (status `Funded` **and** `confirmations >=
-  Project.finalityConfirmations`); a `confirmations`-based fallback
-  (`FALLBACK_FINALITY_CONFIRMATIONS = 12`) covers the unlikely case both fields are
-  absent from an older server response.
-- `TRANSACTION_STATUS_LABEL` gives every indexer transaction state
-  (`pending`/`mined`/`confirmed`/`replaced`/`reverted`/`reorged`) its own label and
-  badge tone — `reverted` reads "Reverted — failed on-chain" and `reorged` reads
-  "Reorged — resubmission required" so the two failure modes are never confused with
-  each other or treated as a single generic "failed" bucket.
-- `needsAttention(status)` flags `reverted`/`reorged` specifically; the Transactions
-  screen renders a page-level `role="alert"` banner ("N transactions reverted or were
-  reorged…") when any are present, so a reader doesn't have to spot one red badge in
-  a long table.
-- All of the above is asserted in `tests/specs/status-states.spec.ts` (all six
-  redemption states + all six transaction states, asserted via `data-status`).
+- `redemptionDisplayStatus()` maps the on-chain status (`None`, `Pending`, `Funded`, `Completed`, `Rejected`, `Cancelled`) and the server's `claimable` flag to the display states `Pending`, `Funded`, `Claimable`, `Completed`, `Rejected` and `Cancelled`. `StatusBadge` gives each its own tone and a `data-status` attribute. A `Funded` redemption shows as `Claimable` when `claimable` is true, meaning status `Funded` and `confirmations >= Project.finalityConfirmations`. When a response has no `claimable` flag, the function compares `confirmations` with `finalityConfirmations`, or with `FALLBACK_FINALITY_CONFIRMATIONS` (12).
+- `TRANSACTION_STATUS_LABEL` labels every transaction status in the API: `pending`, `mined`, `confirmed`, `replaced`, `reverted`, `reorged`, `failed`, `broadcast_unknown`, `nonce_consumed_externally` and `needs_intervention`. A status outside that list renders as "Unknown".
+- `needsAttention()` is true for `reverted`, `reorged`, `failed`, `broadcast_unknown`, `nonce_consumed_externally`, `needs_intervention` and any unrecognized status. When any listed transaction needs attention, the Transactions screen shows a page-level `role="alert"` banner.
 
-## Playwright: two modes
+`tests/specs/status-states.spec.ts` asserts these states through `data-status`.
 
-`web/tests/` (config: `playwright.config.ts`) runs the same spec files in two modes,
-selected purely by whether `BASE_URL` is set:
+## Authentication
 
-- **Mock (default, `npm run test:e2e`)**: builds the app, serves it via `vite preview`
-  on `:4173`, and intercepts the entire `/api/v1/**` surface with an in-memory,
-  stateful mock (`tests/fixtures/mock-api.ts` — `installMockApi()` returns the
-  mutable store so a spec can seed/mutate state directly, e.g. push a
-  `Funded`+`claimable` redemption between two page loads to simulate an admin funding
-  it). A fake EIP-1193 `window.ethereum` (`tests/fixtures/mock-wallet.ts`) stands in
-  for a real wallet extension. No backend, Anvil, Mongo, or IPFS needed — this is
-  what CI runs, and it's fully deterministic. The `api` fixture in
-  `tests/fixtures/fixtures.ts` is marked `{ auto: true }` so every spec gets the mock
-  installed even if it only destructures `{ page }`.
-- **Live (`BASE_URL=http://host:port npx playwright test`)**: points straight at a
-  running server + embedded SPA instead of the local preview server; no mocking is
-  installed. Specs whose assertions depend on the mock's seeded state call
-  `mockOnly()` at the top of their `describe` block and are skipped in this mode —
-  they can't meaningfully validate against arbitrary real server state.
-  **`tests/specs/live-smoke.spec.ts`** (every admin route renders its `<h1>`, root
-  redirects correctly) makes no seeded-state assumptions and is the
-  one file that actually exercises the real full-stack server end to end; run
-  alongside it are `tests/specs/accessibility.spec.ts` and `tests/specs/csp.spec.ts`,
-  which check static markup rather than seeded data so they also run unconditionally
-  in both modes.
+Sign-in is a wallet signature. The connected wallet calls `POST /auth/challenge`, signs the message with `personal_sign`, and sends the signature to `POST /auth/session`. The server accepts only the configured project admin and returns a JWT. The browser keeps it in IndexedDB (`src/lib/authSession.ts`, `src/lib/idb.ts`) and sends it as `Authorization: Bearer`. A 401 response, expiry or Log out clears it. `CSP-AUDIT.md` covers the storage tradeoff.
 
-Page objects live in `tests/pages/` (one per screen); `tests/fixtures/helpers.ts`'s
-`sectionByHeading()` scopes locators to a `<section class="card"><h2>` block, needed
-because several screens repeat the same label/button text in different sections.
+## Content Security Policy
 
-`npm run typecheck:e2e` typechecks `tests/` against `tsconfig.playwright.json`
-separately from the app's own `npm run typecheck` (keeps the Playwright/Node-only
-types out of the app's `tsconfig.app.json`).
-
-## Accessibility
-
-`tests/specs/accessibility.spec.ts` runs an axe-core scan
-(`@axe-core/playwright`, WCAG 2.0/2.1 A+AA tags) against all seven admin routes and fails
-the build on any `serious`/`critical` violation; as of the last full pass there are
-zero violations of *any* severity. It also asserts a skip link ("Skip to main
-content", first in tab order) moves focus into `<main id="main-content">`, and that
-client-side route navigation (which React Router doesn't manage focus for by
-default — it's a DOM swap, not a real page load) moves focus to the new page's
-`<main>` so a screen-reader user gets a signal the route changed
-(`AppLayout.tsx`'s `useEffect` on `location.pathname`, skipped on the very first
-render so a fresh page load still starts at the top of the document). Other
-accessibility fixes made along the way: replaced a misused ARIA `tablist`/`tab` pattern in the nav
-with plain links (React Router's `NavLink` already sets `aria-current="page"`
-correctly, and these are separate pages, not in-page tab panels); every form
-control has an associated `<label>` (verified: every `id` used by an input/select/
-textarea has a matching `htmlFor` — checked programmatically, not just by eye);
-`role="status"` on every one-line success confirmation ("Approval submitted: …",
-etc.) so it's announced without the user having to find it; the border color token
-was raised from a 1.36:1 to a ~3.3–3.5:1 contrast ratio against its surface in both
-light and dark themes (WCAG 1.4.11 non-text contrast — it's used for input/card/
-table borders, which count as UI components).
-
-## Content-Security-Policy
-
-Full writeup, the exact policy string, and the no-secret-in-browser audit are in
-**`web/CSP-AUDIT.md`** — read that for the complete rationale. Summary:
+`vite.config.ts` injects this policy as a `<meta http-equiv="Content-Security-Policy">` tag into the built `index.html`. The `injectCsp` plugin runs only for `vite build`, because the dev server's HMR client needs an inline script and a WebSocket.
 
 ```
 default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self';
@@ -192,96 +72,54 @@ font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self';
 form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests
 ```
 
-No `'unsafe-inline'` or `'unsafe-eval'` anywhere — reachable because there's no
-`dangerouslySetInnerHTML`/`eval` anywhere in `src/`, and every inline `style={{...}}`
-React prop was replaced with a plain CSS utility class (`u-mt-4`, `field--narrow`,
-etc. in `src/styles/_base.scss`) so `style-src` never needs an inline allowance.
+The policy has no `'unsafe-inline'` or `'unsafe-eval'`. `src/` has no `dangerouslySetInnerHTML`, `eval` or `new Function`, and no inline `style` props, so `src/styles/_base.scss` provides utility classes instead.
 
-**`connect-src 'self'` is correct as-is for the wallet provider.**
-`window.ethereum.request(...)` (`src/lib/wallet.ts`) is the browser extension's own
-out-of-page communication channel — it is not `fetch`/`XHR`/`WebSocket`, so it is
-never subject to the page's CSP at all, regardless of what `connect-src` allows.
-viem is only ever constructed with `custom(provider)` transport here, never
-`http()`, so there is no direct JSON-RPC fetch call from this app to allow either.
-`connect-src 'self'` only needs to (and does) cover this app's own `/api/v1/**`
-calls.
+`connect-src 'self'` covers the app's own `/api/v1/**` calls. Wallet requests use the extension's own channel, not `fetch`, XHR or WebSocket, so `connect-src` does not govern them.
 
-It's injected into `dist/index.html` as a `<meta http-equiv="Content-Security-Policy">`
-tag by a small Vite plugin in `vite.config.ts` (`injectCsp`, `apply: "build"` only —
-`npm run dev`'s HMR client needs an inline bootstrap script and a WebSocket that a
-strict CSP would break, so the plugin deliberately never runs for `vite dev`).
-`tests/specs/csp.spec.ts` regression-guards that the tag stays present with no
-`unsafe-inline`/`unsafe-eval`. One thing a `<meta>` tag cannot do: browsers ignore
-`frame-ancestors` unless it comes from a real HTTP response header — the directive
-is included in the meta tag as documented intent, but the Go server also needs to
-send the same policy (or at least `frame-ancestors 'none'`) as a header on the SPA
-route (`server/internal/webui/webui.go`) for that specific protection to actually
-apply; CSP-AUDIT.md has the exact string handed off for that.
+Browsers ignore `frame-ancestors` in a `<meta>` tag. The Go server sends the same policy, plus other security headers, as response headers on every SPA response (`server/internal/webui/webui.go`, `server/internal/auth/limits.go`). `tests/specs/csp.spec.ts` checks the meta tag. See `CSP-AUDIT.md`.
 
-## No secrets in the browser
+## Code splitting
 
-No chain private key is ever handled by this app — everything state-changing is
-either wallet-signed (the key never leaves the extension) or a call to the server's
-one compliance hot-key endpoint. There is no API key: admin auth is
-connect wallet → `POST /auth/challenge` → `personal_sign` → `POST /auth/session` → a
-short-lived JWT held in IndexedDB (`src/lib/authSession.ts`, `src/lib/idb.ts`) and
-attached as `Authorization: Bearer`. CSP-AUDIT.md documents why browser-held JWT
-storage is an accepted tradeoff for this specific self-hosted, single-admin trust
-model rather than a gap.
+`src/App.tsx` loads each screen with `React.lazy`. The shell connects the wallet, so `viem` is in the main chunk. Each screen's own code loads when its route is first visited.
 
-## Route code-splitting
+## Tests
 
-Every top-level screen is loaded via `React.lazy()` in `src/App.tsx` (each named
-export re-wrapped as a default for `lazy()`'s sake — route files keep their normal
-named-export convention), with a single `<Suspense>` boundary around the shared
-`<Outlet/>` in `AppLayout.tsx`.
+`npm test` runs the Vitest suite. Playwright specs in `tests/` run in two modes, chosen by whether `BASE_URL` is set (`playwright.config.ts`).
 
-Note that the shared shell itself connects the wallet (`WalletConnectButton` →
-`src/context/WalletContext.tsx` → `src/lib/wallet.ts`), so `viem` lands in the main
-chunk and dominates it: `npm run build` (see the NODE_ENV note below for why "real"
-numbers matter here) gives a main chunk of **~460KB** (144KB gzip) with every route
-chunk far smaller (e.g. `Setup` 19.8KB, `Security` 13.5KB, `Transactions` 3.3KB).
-Splitting still keeps each screen's own code off the critical path; moving `viem` off
-it too would mean lazy-loading the wallet context, which the login gate needs
-immediately.
+- Mock mode (default, `npm run test:e2e`) builds the app, serves it with `vite preview` on port 4173, and intercepts `/api/v1/**` and `/auth/*` with a stateful in-memory mock (`tests/fixtures/mock-api.ts`). `installMockApi()` returns the mutable store, so a spec can change server state directly. `tests/fixtures/mock-wallet.ts` injects a fake EIP-1193 `window.ethereum`. `tests/fixtures/fixtures.ts` runs this setup for every test (`{ auto: true }`) and seeds an admin session, except in specs that set `skipAuthBootstrap`. No backend, Anvil, Mongo or IPFS is needed.
+- Live mode (`BASE_URL=http://host:port npx playwright test`) targets a running server that embeds the SPA. It installs no mocks. Set `E2E_ADMIN_PRIVATE_KEY` to the private key of the server's `admin_address` (anvil account 0 locally) and the fixture signs in for real through `POST /auth/challenge` and `POST /auth/session` before each test, then seeds the resulting session. Without the key, specs that need an admin session are skipped with a message; public checks still run. The key is read from the environment only and is never logged. Specs that need seeded state call `mockOnly()` and are skipped.
+
+Page objects are in `tests/pages/`. `sectionByHeading()` in `tests/fixtures/helpers.ts` scopes locators to a `section.card` by its `<h2>`.
+
+`npm run typecheck:e2e` checks `tests/` against `tsconfig.playwright.json`, separate from the app's `npm run typecheck`.
+
+## Accessibility
+
+`tests/specs/accessibility.spec.ts` runs an axe-core scan (`@axe-core/playwright`, tags `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`) on all seven admin routes and fails on any `serious` or `critical` violation. It also checks that the skip link is first in tab order and moves focus to `<main id="main-content">`, and that a client-side route change moves focus to `<main>`. React Router does not move focus on its own. `AppLayout.tsx` does it, except on the first render, so a fresh page load starts at the top.
+
+The border color token has at least 3.27:1 contrast against its surface in the light theme and 3.52:1 in the dark theme, above the 3:1 that WCAG 2.2 success criterion 1.4.11 requires for the boundaries of UI components.
 
 ## Scripts
 
-| Script                  | What it does                                                        |
-| ----------------------- | ------------------------------------------------------------------- |
-| `npm run dev`           | Vite dev server with HMR, no CSP meta tag.                          |
-| `npm run build`         | `tsc -b` then `NODE_ENV=production vite build` → `dist/`.           |
-| `npm run typecheck`     | `tsc -b --noEmit` over the app (`src/`).                            |
-| `npm run typecheck:e2e` | `tsc --noEmit` over `tests/` against `tsconfig.playwright.json`.    |
-| `npm test`              | `vitest run` — unit/component tests, `src/**/*.test.{ts,tsx}` only. |
-| `npm run test:e2e`      | Builds, then runs the full Playwright suite in mock mode.           |
-| `npm run lint`          | ESLint over the whole project (`src/` and `tests/`).                |
-| `npm run format`        | Prettier over `src/**/*.{ts,tsx,scss}`.                             |
-| `npm run gen:api`       | Regenerates `src/lib/api-types.ts` from `../api/openapi.yaml`.      |
-| `npm run preview`       | Serves the built `dist/` (what Playwright's mock mode drives).      |
+| Script | What it does |
+| --- | --- |
+| `npm run dev` | Vite dev server with HMR and no CSP tag |
+| `npm run build` | `tsc -b`, then `NODE_ENV=production vite build` into `dist/` |
+| `npm run typecheck` | `tsc -b --noEmit` over `src/` |
+| `npm run typecheck:e2e` | `tsc --noEmit` over `tests/` with `tsconfig.playwright.json` |
+| `npm test` | `vitest run` over `src/**/*.{test,spec}.{ts,tsx}` |
+| `npm run test:e2e` | Builds, then runs the Playwright suite in mock mode |
+| `npm run lint` | ESLint over `src/` and `tests/` |
+| `npm run format` | Prettier over `src/**/*.{ts,tsx,scss}` |
+| `npm run gen:api` | Regenerates `src/lib/api-types.ts` from `../api/openapi.yaml` |
+| `npm run preview` | Serves the built `dist/` |
 
-From the repo root, `make web-test` runs typecheck + test + build.
+From the repository root, `make web-test` runs typecheck, tests and the build.
 
-## The `NODE_ENV=production` build note
+## Production build and `NODE_ENV`
 
-`npm run build` explicitly runs `NODE_ENV=production vite build` rather than bare
-`vite build`. This isn't decorative: an ambient shell environment with
-`NODE_ENV=development` already set (which happened in the sandbox this app was
-built in — inherited from `~/.profile`, entirely outside this project) gets picked
-up by React/Vite and silently produces a **development-mode** bundle even under the
-`build` command — unminified dev warnings, no dead-code elimination of
-`process.env.NODE_ENV !== 'production'` branches, and (concretely, the way this was
-caught) React Strict Mode double-invoking `useEffect` in a way a true production
-build never does. Hardcoding `NODE_ENV=production` in the script makes the build
-correct regardless of what the invoking shell has set, rather than relying on every
-environment (a developer's laptop, a CI runner, whatever runs `make web-test`) to
-happen to have it unset.
+`npm run build` sets `NODE_ENV=production` explicitly. With `NODE_ENV=development` in the shell, `vite build` otherwise produces a development-mode bundle, with unminified development checks and React's development behavior. Setting it in the script makes the output independent of the shell environment.
 
 ## Deployment
 
-`web/dist/` is not deployed on its own — the Go server embeds it at build time and
-serves it directly (see `server/internal/webui/`), so `npm run build` needs to run
-before/as part of the server's own build step. There is no separate web server or
-CDN in this architecture; the SPA and the API it calls are same-origin by
-construction, which is also what makes the CSP above viable without any cross-origin
-allowances.
+`web/dist/` is not deployed on its own. The Go server embeds it at build time and serves it (`server/internal/webui/`), so run `npm run build` before building the server. The SPA and the API are same-origin, which is what lets the CSP limit every source to `'self'`.

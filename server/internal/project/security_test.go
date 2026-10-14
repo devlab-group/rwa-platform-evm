@@ -201,7 +201,7 @@ func TestReconcileSecurityRoleDeltas(t *testing.T) {
 
 // TestReconcileSecurityAdminMultiContract: DEFAULT_ADMIN_ROLE is held on every
 // contract, so revoking it on ONE contract must NOT drop the admin from the
-// union — the per-contract fold is what makes this correct.
+// union, which the per-contract fold makes possible
 func TestReconcileSecurityAdminMultiContract(t *testing.T) {
 	repos := setup(t)
 	// A second admin granted on the vault only.
@@ -220,7 +220,7 @@ func TestReconcileSecurityAdminMultiContract(t *testing.T) {
 	}
 }
 
-// TestReconcileSecurityGrantThenRevokeSameContract: order matters — a grant
+// TestReconcileSecurityGrantThenRevokeSameContract: order matters, so a grant
 // followed by a revoke of the same account leaves it absent.
 func TestReconcileSecurityGrantThenRevokeSameContract(t *testing.T) {
 	repos := setup(t)
@@ -234,7 +234,7 @@ func TestReconcileSecurityGrantThenRevokeSameContract(t *testing.T) {
 }
 
 // TestReconcileSecurityReorgRemovesEvent: a reorged-out (Removed) event is
-// ignored, and full replay re-derives from the baseline — no stuck live state.
+// ignored, and a full replay re-derives from the baseline, leaving no stale state
 func TestReconcileSecurityReorgRemovesEvent(t *testing.T) {
 	repos := setup(t)
 	addEvent(t, repos, tokenAddr, "Paused", 10, 0, map[string]any{"account": adminA})
@@ -328,9 +328,9 @@ func TestReconcileSecuritySkipsNonActive(t *testing.T) {
 }
 
 // TestReconcileSecurityStrategySwap: Vault.setStrategy repoints the Vault at
-// a different pricing contract. The projection must follow it — the live
-// address, and the prices from the NEW contract, not the last ones the old
-// one emitted before it stopped being used.
+// a different pricing contract. The projection must follow it: the live
+// address, and the prices from the new contract, not the last ones the old one
+// emitted.
 func TestReconcileSecurityStrategySwap(t *testing.T) {
 	repos := setup(t)
 	newStrategy := addr("0x0000000000000000000000000000000000000b11")
@@ -353,8 +353,8 @@ func TestReconcileSecurityStrategySwap(t *testing.T) {
 
 // TestReconcileSecurityStrategySwapDropsUnverifiedBaseline: the deploy-config
 // role baseline was verified against the DEPLOYED strategy only. A swapped-in
-// contract inherits none of it — its authority is exactly what its own role
-// events say — so the configured pricer must not be reported as holding
+// contract inherits none of it and its authority is exactly what its own role
+// events show, so the configured pricer must not be reported as holding
 // PRICER_ROLE on a contract nobody checked.
 func TestReconcileSecurityStrategySwapDropsUnverifiedBaseline(t *testing.T) {
 	repos := setup(t)

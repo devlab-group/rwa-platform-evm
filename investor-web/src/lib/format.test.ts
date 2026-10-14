@@ -20,7 +20,7 @@ describe("formatTokenAmount", () => {
   });
 
   it("returns an em dash for empty input", () => {
-    expect(formatTokenAmount("")).toBe("—");
+    expect(formatTokenAmount("")).toBe("-");
   });
 });
 
@@ -30,8 +30,7 @@ describe("toMinimalUnits", () => {
   });
 
   it("scales a whole-unit integer to 6-decimal minimal units", () => {
-    // The req_changes Web 1 worked example: user enters 1 for a 6-decimal
-    // token -> 1000000 is sent to the server.
+    // A user entering 1 for a 6-decimal token produces 1000000
     expect(toMinimalUnits("1", 6)).toBe("1000000");
   });
 
@@ -106,6 +105,6 @@ describe("shortenAddress", () => {
   });
 
   it("returns an em dash for a missing address", () => {
-    expect(shortenAddress(undefined)).toBe("—");
+    expect(shortenAddress(undefined)).toBe("-");
   });
 });

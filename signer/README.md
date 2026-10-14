@@ -20,10 +20,11 @@ deployment fields are `chainId`, `controller`, `vault`, `auditor`, `projectId` a
 
 1. Read the compressed package with `rwapkg.ReadPackageFile`. Check its size with `Stat`, then
    enforce the bound with a limited reader. Extract the ZIP in memory without writing entries
-   to disk. Reject traversal (`../`, absolute paths and backslashes), symlinks indicated by
-   either decoded file mode or raw Unix attributes, duplicate names, unsupported compression
-   methods and excessive entry counts. Only Store and Deflate are accepted. Decompression limits
-   count bytes actually read across the archive, regardless of sizes claimed in ZIP headers.
+   to disk. Reject traversal (any name that `path.Clean` would change, such as `../`, `./` or
+   a trailing slash, plus absolute paths and backslashes), symlinks indicated by either decoded
+   file mode or raw Unix attributes, duplicate names, unsupported compression methods and
+   excessive entry counts. Only Store and Deflate are accepted. Decompression limits count
+   bytes actually read across the archive, regardless of sizes claimed in ZIP headers.
 2. Parse the manifest with `rwapkg.ParseManifest`, checking the
    `shared/schemas/rwa-manifest.schema.json` envelope. Each mandatory document must appear once,
    file paths must be unique, and other payloads must live under `proofs/`. Verify every listed
@@ -60,8 +61,9 @@ deployment fields are `chainId`, `controller`, `vault`, `auditor`, `projectId` a
    match the manifest. `internal/canonical` rejects duplicate keys and invalid UTF-8, enforces
    configurable structural limits, sorts keys by UTF-16 code units, formats numbers using
    ECMAScript `Number::toString`, and escapes strings minimally. `internal/cid` derives CIDv1
-   with codec `raw` (0x55) and multihash sha2-256 from the same bytes. Its vectors were generated
-   with `ipfs add --cid-version=1 --raw-leaves --hash=sha2-256 --only-hash`.
+   with codec `raw` (0x55) and multihash sha2-256 from the same bytes. Signing does not call it;
+   the vector tests do. Its vectors were generated with
+   `ipfs add --cid-version=1 --raw-leaves --hash=sha2-256 --only-hash`.
 6. Parse and cross-check typed data (`cmd/signer/typeddata.go`; format:
    `shared/schemas/typed-data.schema.json`). Digests and `primaryType` must match the package.
    Compare amounts as `big.Int`, so leading-zero decimal representations are equivalent. For
@@ -74,12 +76,14 @@ deployment fields are `chainId`, `controller`, `vault`, `auditor`, `projectId` a
    project IDs, unit, decimals, chain, controller, auditor, Vault, digests, raw and normalized
    amounts, nonce, deadline and policy window, EIP-712 digest, and policy path. Mint review also
    shows `recordId` and `recordKey`; burn review shows `operationId`. Safe mode adds its auditor
-   type, threshold, owners and message hash. Resolve each `displayFields` JSON pointer against
+   type, threshold, owners and message hash. Resolve each `displayFields` JSON pointer (RFC 6901) against
    the metadata's `asset`, using "(not present)" when it cannot resolve. Rendering happens after
    digest computation; the `displayFields` definitions themselves are validated and included in
    the profile digest. List each proof with a matching attached file or
    `NO ATTACHED FILE MATCHES THIS HASH`. Sanitize screen titles, labels and values with
-   `textsafe.SanitizeForTerminal` to neutralize control, ANSI and bidi characters.
+   `textsafe.SanitizeForTerminal` to neutralize control, ANSI and bidi characters. Parsing
+   already rejects non-printable text in `assetType`, `tokenUnit`, `recordIdLabel`,
+   display-field labels, `issuance.unit` and proof types.
 9. Read confirmation from stdin with `ui.Confirm`. Only `y` or `yes`, ignoring case and surrounding
    whitespace, proceeds. Blank or other responses decline; EOF with no response declines too.
    `--yes` skips confirmation only with `--unsafe-test-mode`. Both flags are for tests and CI;
@@ -107,7 +111,7 @@ signer/
 │   └── review.go           JSON-pointer resolution and review-screen field building
 └── internal/
     ├── canonical/          RFC 8785 JCS: parser and canonical serializer
-    ├── cid/                CIDv1 (raw, sha2-256) from canonical bytes
+    ├── cid/                CIDv1 (raw, sha2-256) from canonical bytes (vector tests only)
     ├── jsonschema/         operator assetSchema dialect validator (docs/spec/profile-schema-dialect.md)
     ├── profile/            Asset Profile envelope validation and assetSchema compilation
     ├── metadata/           metadata envelope validation
@@ -116,13 +120,12 @@ signer/
     ├── attestation/        EIP-712 domain, type hashes, digest, Safe message hash, Sign, Recover
     ├── keystore/           keystore load and create, unlock hardening (see "Keys and secrets")
     ├── hardware/           Signer interface, DeviceKind/Open factory, non-production StubAdapter
-    ├── output/             signed-result.json and Safe signature shares, with schema checks
+    ├── output/             signed-result.json and Safe signature shares, with format checks
     ├── textsafe/           neutralizes untrusted text for the review terminal; printable-text check for validators
     └── ui/                 review-screen rendering, mint/burn banner, fail-closed confirm prompt
 ```
 
-The directory `internal/package` declares Go package `rwapkg` because `package` is a reserved
-word. Importers use `rwapkg`.
+Import `internal/package` as `rwapkg`; `package` is a reserved Go word.
 
 ## EIP-712 construction and vector reproduction
 
@@ -142,9 +145,10 @@ EIP-712 hashes and the record key use keccak256.
 
 The shared vectors pin the following results:
 
-- `TestVectors` in `internal/attestation/vectors_test.go` reproduces all five frozen type hashes
-  from `shared/vectors/typehashes.json`, then the domain separator, struct hash, digest and exact
-  deterministic signature from `shared/vectors/mint-eip712.json` using its `signerPrivateKey`.
+- `TestVectors` in `internal/attestation/vectors_test.go` reproduces the frozen domain and
+  attestation type hashes from `shared/vectors/typehashes.json`, then the domain separator,
+  struct hash, digest and exact deterministic signature from `shared/vectors/mint-eip712.json`
+  using its `signerPrivateKey`.
 - `TestVectors_SafeAuditor` reproduces the Safe hashes, owner signatures and concatenated result
   from `shared/vectors/safe-auditor.json` (see below).
 - `internal/canonical/jcscid_vector_test.go` reproduces canonical bytes, SHA-256 and CIDv1 from
@@ -180,10 +184,9 @@ unless `--password-file` supplies it. Creation and import enforce `keystore.Vali
 at least 12 bytes, at least six distinct Unicode characters, and no known weak value from the
 blocklist. This strength check does not apply when unlocking an existing keystore.
 
-`createKeystoreFileExclusive` opens the destination with `os.O_CREATE|os.O_EXCL`, refusing any
-existing entry, including a dangling symlink. It confirms a regular file, sets mode `0600`,
-syncs it and closes it. There is no export subcommand; the absence of that command does not make
-the encrypted key non-exportable.
+`createKeystoreFileExclusive` opens a new destination with `os.O_CREATE|os.O_EXCL`, refusing
+existing entries, including dangling symlinks. It checks for a regular file, sets `0600`,
+syncs and closes it. There is no export subcommand; encrypted key files can still be copied.
 
 The default password prompt uses `golang.org/x/term.ReadPassword` on a terminal. With piped
 stdin it reads lines through one shared `bufio.Reader`, preserving input for subsequent prompts.
@@ -204,9 +207,9 @@ and signatures with their address, signed hash or failure reason:
 - Verify the full chain before unlocking with `VerifyAuditLogAnchored` and before each append
   with `AppendAuditEvent`/`AppendAuditEventTo`. A broken chain blocks signing.
 - Append JSON lines to `<keystore>.auditlog.jsonl` under an exclusive file lock covering
-  read, verify and append. The lock uses neither flock nor cgo. It is removed when older than two
-  minutes, so the age limit must accommodate normal signing runs. Main-log and anchor appends
-  call `fsync` before returning.
+  read, verify and append. The lock uses neither flock nor cgo and is held only for that append.
+  A lock file older than two minutes is treated as abandoned and removed. Main-log and anchor
+  appends call `fsync` before returning.
 - Record each new entry's sequence and hash in `<keystore>.auditlog.anchor.jsonl`, or at
   `--audit-anchor <path>`. An intact anchor detects deletion of recent main-log entries. A missing
   or empty anchor supplies no watermark. The default shares the keystore's storage; protection

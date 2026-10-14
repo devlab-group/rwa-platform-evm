@@ -5,11 +5,10 @@ import type { components } from "./api-types";
 
 type Project = components["schemas"]["Project"];
 
-// Post-deploy screens already fetch the project; when the server supplies
-// Project.quoteDecimals they must scale quote amounts from it instead of an
-// on-chain round trip, falling back to the ERC-20 read only when it's absent
-// (older server builds). readErc20Decimals is the on-chain path, so a strict
-// "not called" assertion proves the server value was preferred.
+// When the project response has Project.quoteDecimals, quote amounts are scaled
+// from it without an on-chain read; the ERC-20 read is only the fallback for an
+// absent value. readErc20Decimals is the on-chain path, so asserting it was not
+// called proves the project value was used.
 vi.mock("./wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./wallet")>();
   return { ...actual, readErc20Decimals: vi.fn().mockResolvedValue(18) };

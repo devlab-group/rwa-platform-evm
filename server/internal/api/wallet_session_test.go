@@ -15,9 +15,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// TestGetMyWalletStatusRequiresSession pins the auth boundary:
-// /api/v1/me/wallet-status is gated by auth.RequireWalletSession, not the
-// admin JWT — no header at all must 401.
+// TestGetMyWalletStatusRequiresSession checks that /api/v1/me/wallet-status is
+// gated by auth.RequireWalletSession, not the admin JWT: no header returns 401
 func TestGetMyWalletStatusRequiresSession(t *testing.T) {
 	env := setupTestApp(t)
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/me/wallet-status", nil, nil)
@@ -26,9 +25,8 @@ func TestGetMyWalletStatusRequiresSession(t *testing.T) {
 	}
 }
 
-// TestGetMyWalletStatusRejectsInvalidSessionToken pins that a garbage/
-// unknown X-Wallet-Session value is rejected the same as a missing one,
-// not treated as some other principal.
+// TestGetMyWalletStatusRejectsInvalidSessionToken checks that an unknown
+// X-Wallet-Session value is rejected like a missing one
 func TestGetMyWalletStatusRejectsInvalidSessionToken(t *testing.T) {
 	env := setupTestApp(t)
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/me/wallet-status", nil, map[string]string{"X-Wallet-Session": "not-a-real-token"})
@@ -37,10 +35,9 @@ func TestGetMyWalletStatusRejectsInvalidSessionToken(t *testing.T) {
 	}
 }
 
-// TestGetMyWalletStatusReturnsOwnStatus is the core case: a
-// valid session returns the WalletStatus for exactly the address bound to
-// that session (seeded here as Allowed), and never requires — or accepts
-// — an admin credential.
+// TestGetMyWalletStatusReturnsOwnStatus is the core case: a valid session
+// returns the WalletStatus for the address bound to it (seeded as Allowed) and
+// neither requires nor accepts an admin credential
 func TestGetMyWalletStatusReturnsOwnStatus(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -71,10 +68,9 @@ func TestGetMyWalletStatusReturnsOwnStatus(t *testing.T) {
 	}
 }
 
-// TestGetMyWalletStatusUnknownForAddressWithNoRecord covers the (in
-// practice unreachable via the real verifyChallenge->session flow, since
-// VerifyOwnership always upserts an Investor row first) defensive fallback
-// for a session whose address has no Investor record at all.
+// TestGetMyWalletStatusUnknownForAddressWithNoRecord covers the fallback for a
+// session whose address has no Investor record. The real flow does not reach it,
+// because VerifyOwnership upserts the Investor first.
 func TestGetMyWalletStatusUnknownForAddressWithNoRecord(t *testing.T) {
 	env := setupTestApp(t)
 	address := addr("0xFEED")
@@ -96,12 +92,10 @@ func TestGetMyWalletStatusUnknownForAddressWithNoRecord(t *testing.T) {
 	}
 }
 
-// TestIsAddressAllowedIsPublicAndDisclosesOnlyAllowed covers the other
-// half: no credential of any kind — no bearer token, no X-Wallet-Session —
-// and the response body
-// contains ONLY the "allowed" field — never status/validUntil/ownership,
-// which would let an anonymous caller enumerate a third party's compliance
-// state.
+// TestIsAddressAllowedIsPublicAndDisclosesOnlyAllowed checks that the endpoint
+// needs no credential and returns only the "allowed" field, never
+// status, validUntil or ownership, which would let an anonymous caller enumerate
+// a third party's compliance state
 func TestIsAddressAllowedIsPublicAndDisclosesOnlyAllowed(t *testing.T) {
 	env := setupTestApp(t)
 	account := common.HexToAddress("0x0000000000000000000000000000000000B0B0")
@@ -135,8 +129,8 @@ func TestIsAddressAllowedIsPublicAndDisclosesOnlyAllowed(t *testing.T) {
 	}
 }
 
-// TestIsAddressAllowedReflectsFalse exercises the other outcome so the
-// handler isn't just always returning true.
+// TestIsAddressAllowedReflectsFalse covers the false outcome, so the handler is
+// not always returning true
 func TestIsAddressAllowedReflectsFalse(t *testing.T) {
 	env := setupTestApp(t)
 	account := common.HexToAddress("0x0000000000000000000000000000000000BAD1")
@@ -173,10 +167,10 @@ func TestIsAddressAllowedRejectsBadAddress(t *testing.T) {
 	}
 }
 
-// TestGetMyWalletStatusReportsOwnFrozenAmount: a frozen holder needs to be
-// able to tell an enforcement hold apart from a broken app, so their own
-// frozen amount travels on the subject-scoped status. Another holder's does
-// not: the aggregate map stays admin-only.
+// TestGetMyWalletStatusReportsOwnFrozenAmount checks that a frozen holder can see
+// their own frozen amount on the session-scoped status, so they can tell an
+// enforcement hold from an app fault. Another holder's amount is not shown, and
+// the map of all frozen wallets stays admin-only.
 func TestGetMyWalletStatusReportsOwnFrozenAmount(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -197,8 +191,8 @@ func TestGetMyWalletStatusReportsOwnFrozenAmount(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.Security = &models.SecurityState{FrozenBalances: map[string]string{
-		// Lowercased on purpose: the projection checksums its keys, and the
-		// lookup must not depend on the casing either side happens to use.
+		// Lowercased on purpose: the projection stores checksummed keys, and the lookup
+		// must not depend on the casing
 		strings.ToLower(mine): "1500000000000000000",
 		someoneElse:           "42",
 	}}
@@ -226,7 +220,7 @@ func TestGetMyWalletStatusReportsOwnFrozenAmount(t *testing.T) {
 	}
 }
 
-// An unfrozen wallet omits the field rather than reporting "0".
+// An unfrozen wallet omits the field instead of reporting "0"
 func TestGetMyWalletStatusOmitsFrozenWhenNoneHeld(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()

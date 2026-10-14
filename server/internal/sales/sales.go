@@ -1,11 +1,8 @@
-// Package sales provides read models for the Vault contract: inventory and
-// the indexed purchase history. Per-amount purchase quotes are read straight
-// from Vault.previewBuy by the client. It submits no
-// transactions and builds none: an investor's Vault.buy and the issuer's
-// treasury withdrawal are both assembled and signed by the wallet/multisig
-// itself, never by a server hot key. The off-chain payment-distribution
-// feature (Vault.distribute, the distributor hot key) has been removed
-// from the platform — only on-chain purchases remain.
+// Package sales provides read models for the Vault contract: inventory and the
+// indexed purchase history. Clients read per-amount purchase quotes from
+// Vault.previewBuy themselves. The package neither builds nor submits
+// transactions: the investor's Vault.buy and the treasurer's withdrawal are
+// assembled and signed in the wallet or multisig.
 package sales
 
 import (
@@ -39,11 +36,8 @@ type PurchaseView struct {
 	Confirmations uint64 `json:"confirmations"`
 }
 
-// Service reads Vault/strategy state. It submits no transactions itself:
-// every Vault write (investor buy, and — now that off-chain distribution is
-// removed and treasury withdrawal is submitted directly by the treasurer's
-// wallet in the web — treasury withdrawal too) is a wallet/multisig
-// transaction, never a server hot-key action.
+// Service reads Vault and strategy state and maintains the purchases read
+// model. It submits no transactions.
 type Service struct {
 	client         blockchain.Client
 	vault          bindings.Vault
@@ -55,8 +49,8 @@ type Service struct {
 }
 
 // New constructs a sales Service. purchases may be nil if the caller never
-// calls ListPurchases/Reconcile. The strategy is deliberately NOT a
-// parameter — see strategyAddress.
+// calls ListPurchases or Reconcile. The strategy address is not a parameter;
+// see strategyAddress.
 func New(client blockchain.Client, vaultAddr, quoteTokenAddr common.Address, purchases repository.PurchaseRepository) *Service {
 	return &Service{
 		client: client,
@@ -66,14 +60,11 @@ func New(client blockchain.Client, vaultAddr, quoteTokenAddr common.Address, pur
 	}
 }
 
-// strategyAddress reads the Vault's CURRENT pricing strategy rather than
-// trusting the one recorded at deployment. Vault.setStrategy is
-// admin-callable (unlike RedemptionEscrow's immutable strategy), so the
-// deployed address is a snapshot, not an invariant: an admin who swaps the
-// strategy would otherwise leave this public, unauthenticated price feed
-// quoting a contract that the investor's own client-side Vault.previewBuy
-// no longer routes through — the server advertising one price while the
-// buy executes at another.
+// strategyAddress reads the Vault's current pricing strategy instead of using
+// the address recorded at deployment. Vault.setStrategy is callable by the
+// admin (RedemptionEscrow's strategy is immutable), so the deployed address can
+// go stale. Reading it live keeps the public inventory prices in line with what
+// Vault.buy and Vault.previewBuy use.
 func (s *Service) strategyAddress(ctx context.Context) (common.Address, error) {
 	data, err := s.vault.PackStrategy()
 	if err != nil {
@@ -86,8 +77,8 @@ func (s *Service) strategyAddress(ctx context.Context) (common.Address, error) {
 	return s.vault.UnpackStrategy(out)
 }
 
-// GetInventory reads Vault inventory, the Vault's quote-token balance, and
-// the strategy's current purchase/redemption prices.
+// GetInventory reads the Vault's inventory and quote-token balance and the
+// current strategy's purchase and redemption prices
 func (s *Service) GetInventory(ctx context.Context) (Inventory, error) {
 	invData, err := s.vault.PackInventory()
 	if err != nil {
@@ -157,11 +148,10 @@ func (s *Service) readStrategyPrice(ctx context.Context, strategyAddr common.Add
 	return s.strategy.UnpackQuote(method, out)
 }
 
-// ListPurchases returns one bounded, newest-block-first page of indexed
-// Vault.buy fills using repository-level keyset pagination (see
-// repository.PurchaseRepository.ListPage's doc comment), with
-// confirmations derived from currentBlock (typically the indexer's
-// last-scanned block). cursor is "" for the first page.
+// ListPurchases returns one page of indexed Vault.buy fills, newest block
+// first, using keyset pagination (see repository.PurchaseRepository.ListPage).
+// Confirmations are derived from currentBlock, typically the indexer's last
+// scanned block. cursor is "" for the first page.
 func (s *Service) ListPurchases(ctx context.Context, currentBlock uint64, cursor string, limit int) ([]PurchaseView, string, error) {
 	items, next, err := s.purchases.ListPage(ctx, cursor, limit)
 	if err != nil {

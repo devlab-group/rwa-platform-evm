@@ -16,8 +16,7 @@ import (
 )
 
 // personalSign produces an EIP-191 personal_sign signature over msg with key,
-// hex-encoded with a 0x prefix — the exact shape a wallet submits to
-// POST /auth/session.
+// hex-encoded with a 0x prefix, the shape a wallet submits to POST /auth/session
 func personalSign(t *testing.T, msg string, key *ecdsa.PrivateKey) string {
 	t.Helper()
 	sig, err := crypto.Sign(accounts.TextHash([]byte(msg)), key)
@@ -28,8 +27,8 @@ func personalSign(t *testing.T, msg string, key *ecdsa.PrivateKey) string {
 	return "0x" + hex.EncodeToString(sig)
 }
 
-// requestChallenge runs POST /auth/challenge for address and returns the
-// message the wallet must sign.
+// requestChallenge runs POST /auth/challenge for address and returns the message
+// the wallet must sign
 func requestChallenge(t *testing.T, env *testEnv, address string) string {
 	t.Helper()
 	w := doJSON(t, env.router, http.MethodPost, "/auth/challenge", map[string]string{"address": address}, nil)
@@ -49,9 +48,9 @@ func requestChallenge(t *testing.T, env *testEnv, address string) string {
 	return resp.Message
 }
 
-// TestAdminAuthChallengeSessionFlow is the wallet-signature -> JWT login
-// regression: the admin requests a challenge, personal_signs it, exchanges the
-// signature for a JWT, and that JWT authorizes an admin-only route.
+// TestAdminAuthChallengeSessionFlow covers the wallet-signature to JWT login:
+// the admin requests a challenge, signs it, exchanges the signature for a JWT, and
+// that JWT authorizes an admin-only route
 func TestAdminAuthChallengeSessionFlow(t *testing.T) {
 	env := setupTestApp(t)
 
@@ -71,14 +70,14 @@ func TestAdminAuthChallengeSessionFlow(t *testing.T) {
 		t.Fatalf("bad session response: %+v", resp)
 	}
 
-	// The JWT authorizes an admin-only route.
+	// The JWT authorizes an admin-only route
 	got := doJSON(t, env.router, http.MethodGet, "/api/v1/compliance/wallets", nil,
 		map[string]string{"Authorization": "Bearer " + resp.Token})
 	if got.Code == http.StatusForbidden || got.Code == http.StatusUnauthorized {
 		t.Fatalf("JWT admin route status = %d, want authorized", got.Code)
 	}
 
-	// Replaying the same (now-used) challenge signature must fail: single-use.
+	// Replaying the used challenge signature fails, because challenges are single-use
 	replay := doJSON(t, env.router, http.MethodPost, "/auth/session",
 		map[string]string{"address": env.adminAddr.Hex(), "signature": sig}, nil)
 	if replay.Code != http.StatusUnauthorized {
@@ -86,9 +85,8 @@ func TestAdminAuthChallengeSessionFlow(t *testing.T) {
 	}
 }
 
-// TestAdminAuthRejectsNonAdminSigner is the authorization gate: a wallet that
-// controls a DIFFERENT address than the configured admin gets a valid-signature
-// challenge but is refused a JWT.
+// TestAdminAuthRejectsNonAdminSigner checks that a wallet controlling an address
+// other than the configured admin gets a challenge but no JWT
 func TestAdminAuthRejectsNonAdminSigner(t *testing.T) {
 	env := setupTestApp(t)
 	otherKey, _ := crypto.GenerateKey()
@@ -104,15 +102,15 @@ func TestAdminAuthRejectsNonAdminSigner(t *testing.T) {
 	}
 }
 
-// TestAdminAuthRejectsWrongSignature is the ownership gate: a signature that
-// does not recover to the challenge's address is refused (and, per Verify's
-// ordering, does not consume the pending challenge).
+// TestAdminAuthRejectsWrongSignature checks that a signature that does not
+// recover to the challenge's address is refused and does not consume the pending
+// challenge
 func TestAdminAuthRejectsWrongSignature(t *testing.T) {
 	env := setupTestApp(t)
 	wrongKey, _ := crypto.GenerateKey()
 
 	msg := requestChallenge(t, env, env.adminAddr.Hex())
-	// Sign the admin's challenge with the WRONG key.
+	// Sign the admin's challenge with the wrong key
 	sig := personalSign(t, msg, wrongKey)
 
 	w := doJSON(t, env.router, http.MethodPost, "/auth/session",
@@ -121,8 +119,8 @@ func TestAdminAuthRejectsWrongSignature(t *testing.T) {
 		t.Fatalf("wrong-signature status = %d, want 401", w.Code)
 	}
 
-	// The mismatched attempt must NOT have burned the challenge — the real
-	// admin can still complete login with it.
+	// The mismatched attempt did not consume the challenge, so the real admin can
+	// still complete login with it
 	good := personalSign(t, msg, env.adminKey)
 	ok := doJSON(t, env.router, http.MethodPost, "/auth/session",
 		map[string]string{"address": env.adminAddr.Hex(), "signature": good}, nil)
@@ -131,9 +129,9 @@ func TestAdminAuthRejectsWrongSignature(t *testing.T) {
 	}
 }
 
-// TestAuditAttributesJWTAuthenticatedActionCorrectly covers the JWT path: a
-// privileged action authenticated via the admin JWT must be attributed to the
-// admin wallet address in the audit log, never "anonymous".
+// TestAuditAttributesJWTAuthenticatedActionCorrectly checks that a privileged
+// action authenticated with the admin JWT is attributed to the admin address in
+// the audit log, not to "anonymous"
 func TestAuditAttributesJWTAuthenticatedActionCorrectly(t *testing.T) {
 	env := setupTestApp(t)
 

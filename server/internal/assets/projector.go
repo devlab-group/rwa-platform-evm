@@ -13,23 +13,16 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// ReconcileMinted scans indexed SupplyController Minted events for
-// (chainID, controllerAddr) and flips any matching Pending/Signed
-// AssetRecord to Minted. Anyone may submit the valid signature to
-// SupplyController.mint, and tokens are minted only to the Vault. Matching is
-// by RecordKey since Minted carries recordKey, not recordId, and
-// record.RecordKey was computed and stored at CreateRecord time. Safe to call
-// repeatedly: already-Minted records backed by a surviving event are left
-// alone.
+// ReconcileMinted projects the indexed SupplyController Minted events for
+// (chainID, controllerAddr) onto asset records. A record that is neither Minted
+// nor Rejected and has a matching event becomes Minted and takes the event's
+// transaction hash. Events are matched by RecordKey because Minted carries
+// recordKey, not recordId, and CreateRecord stores RecordKey.
 //
-// The projection is reversible: a record promoted to Minted by a prior call
-// is DEMOTED back to Signed if its backing Minted event is no longer
-// present — e.g. an indexer reorg rollback (internal/indexer) discarded it
-// because it was orphaned. chainEvents only ever holds events the indexer
-// currently considers canonical, so "no surviving event for this
-// RecordKey" is exactly the condition that must be reflected here; this
-// reconciler must not be append-only or a rolled-back mint would leave a
-// record permanently (and incorrectly) stuck at Minted.
+// The projection is reversible. The indexer deletes events it rolls back in a
+// reorg, so chainEvents holds only events it currently considers canonical. A
+// Minted record with no matching event goes back to Signed and its MintTxHash is
+// cleared. Rejected records are never changed. Repeated calls are safe.
 func (s *RecordService) ReconcileMinted(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, controllerAddr string, records repository.AssetRecordRepository) error {
 	events, err := chainEvents.ListByName(ctx, chainID, controllerAddr, "Minted")
 	if err != nil {
@@ -52,12 +45,8 @@ func (s *RecordService) ReconcileMinted(ctx context.Context, chainEvents reposit
 		event, backed := byRecordKey[rec.RecordKey]
 		switch {
 		case rec.Status == models.RecordStatusMinted && !backed:
-			// The Minted event that produced this record's mint was
-			// orphaned (rolled back). Demote to Signed — the state
-			// immediately before minting — so the still-valid signed
-			// package can mint again once a genuine Minted event exists.
-			// Never touch Rejected: it's a terminal, non-chain-derived
-			// status this reconciler never set in the first place.
+			// the Minted event was rolled back; Signed is the state before minting,
+			// so the signed package can mint again
 			rec.Status = models.RecordStatusSigned
 			rec.MintTxHash = ""
 			rec.UpdatedAt = now
@@ -76,28 +65,17 @@ func (s *RecordService) ReconcileMinted(ctx context.Context, chainEvents reposit
 	return nil
 }
 
-// ReconcileAuditor projects indexed SupplyController AuditorChanged events
-// for (chainID, controllerAddr) onto RecordService's live auditor address.
-// A rotation performed on-chain via SupplyController.setAuditor — outside
-// this server, e.g. by the admin/
-// multisig — otherwise never reaches a running process: BuildPackage and
-// RelaySignedResult would keep attesting/verifying against whatever
-// auditor was known at construction (or activation) time, producing
-// packages/verifications the contract's mint() now rejects (WrongAuditor).
-// Safe to call repeatedly: it only ever applies the most recent event
-// (by (blockNumber,logIndex), the order ListByName returns) and setting
-// the same address again is a no-op.
+// ReconcileAuditor sets the live auditor address from the most recent indexed
+// SupplyController AuditorChanged event for (chainID, controllerAddr). The
+// contract admin can call SupplyController.setAuditor outside this server, and
+// without this the process would keep building packages for the old auditor,
+// which mint rejects with WrongAuditor. Events that ListByName returns in
+// (blockNumber, logIndex) order are applied in that order, events marked Removed
+// are skipped, and repeated calls are safe.
 //
-// If NO surviving AuditorChanged event exists — the rotation that set the
-// currently-live auditor was itself rolled back by a reorg
-// (indexer.Indexer.rollback deletes the underlying chain_events row
-// entirely, it does not merely flag it Removed) — this restores
-// baselineAuditor (the deployment-time value RecordService was
-// constructed with) rather than leaving the live auditor stuck at an
-// address with no on-chain record justifying it anymore. Previously this
-// returned nil without restoring anything, so the service kept
-// creating/verifying packages against the orphaned auditor until restart
-// or another rotation.
+// When no AuditorChanged event remains, because the indexer deleted the
+// rotation's event in a reorg rollback, it restores the baseline auditor given to
+// NewRecordService.
 func (s *RecordService) ReconcileAuditor(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, controllerAddr string) error {
 	events, err := chainEvents.ListByName(ctx, chainID, controllerAddr, "AuditorChanged")
 	if err != nil {
@@ -122,12 +100,10 @@ func (s *RecordService) ReconcileAuditor(ctx context.Context, chainEvents reposi
 	return nil
 }
 
-// ReconcileAuditorLive reads SupplyController.auditor() directly from the
-// chain and applies it. Unlike ReconcileAuditor this doesn't
-// depend on the indexer having caught up, so it's the right check to run
-// once, synchronously, right after activation/boot — ReconcileAuditor's
-// ticker then keeps it current for any rotation afterward without a fresh
-// RPC round-trip on every tick.
+// ReconcileAuditorLive reads SupplyController.auditor() from the chain and sets
+// it as the live auditor. It does not depend on the indexer having caught up, so
+// the platform calls it once at startup, and ReconcileAuditor follows later
+// rotations from indexed events.
 func (s *RecordService) ReconcileAuditorLive(ctx context.Context, client blockchain.Client) error {
 	data, err := s.controller.ABI.Pack("auditor")
 	if err != nil {

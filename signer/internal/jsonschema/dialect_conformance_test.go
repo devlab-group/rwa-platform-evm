@@ -14,7 +14,7 @@ import (
 )
 
 // conformanceCase mirrors one entry of shared/vectors/schema-dialect-conformance.json's
-// top-level "cases" array: does the schema COMPILE.
+// top-level "cases" array: whether the schema compiles
 type conformanceCase struct {
 	Name   string          `json:"name"`
 	Expect string          `json:"expect"` // "accept" | "reject"
@@ -22,8 +22,8 @@ type conformanceCase struct {
 	Schema json.RawMessage `json:"schema"`
 }
 
-// instanceCase mirrors one entry of "instanceCases": the schema compiles,
-// and both validators must agree on whether it VALIDATES instance.
+// instanceCase mirrors one entry of "instanceCases": the schema compiles, and both
+// validators must agree on whether instance validates against it
 type instanceCase struct {
 	Name        string          `json:"name"`
 	Schema      json.RawMessage `json:"schema"`
@@ -32,8 +32,8 @@ type instanceCase struct {
 	Note        string          `json:"note"`
 }
 
-// limitCase mirrors one entry of "limitCases": a structural limit dimension
-// (kind) and the exact boundary value both binaries must enforce.
+// limitCase mirrors one entry of "limitCases": a structural limit dimension (kind) and
+// the boundary value both binaries must enforce
 type limitCase struct {
 	Name  string `json:"name"`
 	Kind  string `json:"kind"` // "string" | "string-2byte" | "string-3byte" | "string-4byte" | "array" | "object" | "object-key" | "object-key-4byte" | "depth" | "bytes"
@@ -41,8 +41,8 @@ type limitCase struct {
 	Note  string `json:"note"`
 }
 
-// sharedLimits mirrors shared/schemas/structural-limits.json /
-// schema-dialect-conformance.json's "limits" object.
+// sharedLimits mirrors the "limits" object of schema-dialect-conformance.json, a copy of
+// shared/schemas/structural-limits.json
 type sharedLimits struct {
 	MaxUncompressedBytes int `json:"maxUncompressedBytes"`
 	MaxDepth             int `json:"maxDepth"`
@@ -59,10 +59,9 @@ type conformanceFile struct {
 	Limits        sharedLimits      `json:"limits"`
 }
 
-// loadConformanceFile reads and parses shared/vectors/schema-dialect-conformance.json,
-// failing the test immediately if it can't be found -- this differential
-// corpus is a shared contract (docs/spec/profile-schema-dialect.md), not
-// something the signer generates.
+// loadConformanceFile reads and parses shared/vectors/schema-dialect-conformance.json
+// and fails the test if it is missing. The file is a shared contract
+// (docs/spec/profile-schema-dialect.md), not something the signer generates.
 func loadConformanceFile(t *testing.T) conformanceFile {
 	t.Helper()
 	path, err := filepath.Abs(filepath.Join("..", "..", "..", "shared", "vectors", "schema-dialect-conformance.json"))
@@ -83,15 +82,13 @@ func loadConformanceFile(t *testing.T) conformanceFile {
 	return file
 }
 
-// TestDialectConformance reproduces shared/vectors/schema-dialect-conformance.json's
-// "cases" array exactly: for every case, Compile must accept or reject the
-// schema per the vector's "expect", per docs/spec/profile-schema-dialect.md.
-// This is the differential gate: the signer and server compilers
-// must agree on every case. Name and package are
-// load-bearing -- the root `make dialect-check` target runs
-// `go test ./internal/jsonschema/... -run Dialect -count=1` (a substring
-// match on "Dialect", so every Test*Dialect* function in this package is
-// part of the gate), and the server mirrors the same convention.
+// TestDialectConformance reproduces the "cases" array of
+// shared/vectors/schema-dialect-conformance.json: Compile must accept or reject each
+// schema as the case's "expect" says. The signer and server compilers must agree on
+// every case. The test name matters: `make dialect-check` runs
+// `go test ./internal/jsonschema/... ./internal/profile/... -run Dialect -count=1`,
+// which matches every test whose name contains "Dialect", and the server follows the
+// same convention.
 func TestDialectConformance(t *testing.T) {
 	file := loadConformanceFile(t)
 	if len(file.Cases) == 0 {
@@ -118,11 +115,9 @@ func TestDialectConformance(t *testing.T) {
 	}
 }
 
-// TestDialectInstanceValidation reproduces "instanceCases": compile-only
-// parity is not sufficient -- an assetSchema's whole purpose is validating
-// the asset instance a signature attests to, so the two validators must
-// also agree on every accept/reject verdict for actual data, not just
-// whether the schema itself compiles.
+// TestDialectInstanceValidation reproduces "instanceCases". Compile-only parity is not
+// enough: an assetSchema exists to validate the asset a signature attests to, so the
+// two validators must also agree on every accept or reject verdict for actual data.
 func TestDialectInstanceValidation(t *testing.T) {
 	file := loadConformanceFile(t)
 	if len(file.InstanceCases) == 0 {
@@ -153,13 +148,10 @@ func TestDialectInstanceValidation(t *testing.T) {
 	}
 }
 
-// TestDialectStructuralLimitsMatchSharedConstants asserts
-// canonical.DefaultLimits() equals shared/vectors/schema-dialect-conformance.json's
-// "limits" object (itself a copy of shared/schemas/structural-limits.json)
-// field for field. docs/spec/profile-schema-dialect.md is explicit that
-// each binary hardcodes these and asserts equality in a test -- divergent
-// limits are how a hand-built package can stay under one side's limits while
-// exceeding the other's, which is exactly what this guards against.
+// TestDialectStructuralLimitsMatchSharedConstants asserts that canonical.DefaultLimits()
+// equals the "limits" object of shared/vectors/schema-dialect-conformance.json (a copy
+// of shared/schemas/structural-limits.json) field for field. Divergent limits would let
+// a hand-built package stay under one side's limits while exceeding the other's.
 func TestDialectStructuralLimitsMatchSharedConstants(t *testing.T) {
 	file := loadConformanceFile(t)
 	want := file.Limits
@@ -182,14 +174,10 @@ func TestDialectStructuralLimitsMatchSharedConstants(t *testing.T) {
 	}
 }
 
-// TestDialectStructuralLimits reproduces "limitCases": for each structural
-// dimension, an input built to exactly the limit must be accepted
-// and one built to limit+1 must be rejected. Each dimension is tested in
-// isolation (a Limits value with only that one field set) so the boundary
-// of one dimension is never accidentally tripped by another while
-// constructing the fixture -- e.g. the "bytes" case needs a ~1 MiB payload
-// that would trip MaxStringLen/MaxArrayLen/MaxObjectKeys if those were also
-// active, even though this vector is about MaxBytes specifically.
+// TestDialectStructuralLimits checks acceptance at each limit and rejection at
+// limit+1 from limitCases. Each test enables only the limit under examination;
+// for example, a roughly 1 MiB byte-limit input must not fail a string, array
+// or property-count limit first.
 func TestDialectStructuralLimits(t *testing.T) {
 	file := loadConformanceFile(t)
 	if len(file.LimitCases) == 0 {
@@ -247,19 +235,17 @@ func assertParseAcceptReject(t *testing.T, lim canonical.Limits, atLimit, overLi
 	}
 }
 
-// jsonString returns a JSON string literal of exactly n ASCII characters
-// (so byte length and rune count coincide).
+// jsonString returns a JSON string literal of exactly n ASCII characters, so byte
+// length and rune count coincide
 func jsonString(n int) []byte {
 	return append(append([]byte{'"'}, bytes.Repeat([]byte{'a'}, n)...), '"')
 }
 
-// utf8BytesOfLength returns a string whose UTF-8 encoding is exactly
-// totalBytes long, built from as many whole copies of r as fit and padded
-// with single-byte ASCII 'x' filler to hit the exact byte count -- so its
-// rune count (totalBytes/width(r), roughly) is far smaller than totalBytes
-// whenever r is multi-byte. Used by the string-2byte/-3byte/-4byte and
-// object-key-*byte limitCase kinds to prove the length bound is enforced in
-// UTF-8 BYTES, not runes.
+// utf8BytesOfLength returns a string whose UTF-8 encoding is exactly totalBytes long,
+// built from as many whole copies of r as fit and padded with ASCII 'x' to reach the
+// exact count. For a multi-byte r the rune count is far below totalBytes. The
+// string-2byte, string-3byte, string-4byte and object-key-*byte limitCase kinds use it
+// to show that the length bound counts UTF-8 bytes, not runes.
 func utf8BytesOfLength(r rune, totalBytes int) string {
 	width := utf8.RuneLen(r)
 	var b strings.Builder
@@ -272,21 +258,20 @@ func utf8BytesOfLength(r rune, totalBytes int) string {
 	return b.String()
 }
 
-// jsonStringUTF8Bytes returns a JSON string literal whose UTF-8-encoded
-// content (excluding the surrounding quote bytes) is exactly totalBytes
-// long, built from the (possibly multi-byte) rune r.
+// jsonStringUTF8Bytes returns a JSON string literal whose UTF-8 content, excluding the
+// quote bytes, is exactly totalBytes long and built from rune r
 func jsonStringUTF8Bytes(r rune, totalBytes int) []byte {
 	return append(append([]byte{'"'}, []byte(utf8BytesOfLength(r, totalBytes))...), '"')
 }
 
-// jsonObjectWithKeyBytes returns a single-property JSON object whose key's
-// UTF-8-encoded length is exactly totalBytes, built from rune r.
+// jsonObjectWithKeyBytes returns a single-property JSON object whose key is exactly
+// totalBytes of UTF-8, built from rune r
 func jsonObjectWithKeyBytes(r rune, totalBytes int) []byte {
 	key, _ := json.Marshal(utf8BytesOfLength(r, totalBytes))
 	return []byte(`{` + string(key) + `:0}`)
 }
 
-// jsonIntArray returns a JSON array literal with exactly n integer elements.
+// jsonIntArray returns a JSON array literal with exactly n integer elements
 func jsonIntArray(n int) []byte {
 	elems := make([]string, n)
 	for i := range elems {
@@ -295,8 +280,7 @@ func jsonIntArray(n int) []byte {
 	return []byte("[" + strings.Join(elems, ",") + "]")
 }
 
-// jsonObjectOfSize returns a JSON object literal with exactly n distinct
-// string-keyed properties.
+// jsonObjectOfSize returns a JSON object literal with exactly n distinct properties
 func jsonObjectOfSize(n int) []byte {
 	pairs := make([]string, n)
 	for i := range pairs {
@@ -305,18 +289,16 @@ func jsonObjectOfSize(n int) []byte {
 	return []byte("{" + strings.Join(pairs, ",") + "}")
 }
 
-// jsonNestedArray returns a JSON value whose innermost element is parsed
-// at nesting depth exactly n (i.e. n containers deep, root array = depth
-// 0). canonical's parser increments depth once per container level below
-// the root, so n levels of nesting below the outermost array requires
-// n+1 bracket pairs total (see canonical.ParseWithLimits/parseArray).
+// jsonNestedArray returns a JSON value whose innermost array sits at nesting depth
+// exactly n, with the root array at depth 0. The canonical parser increments depth once
+// per container level below the root, so n levels below the outermost array take n+1
+// bracket pairs (see canonical.ParseWithLimits).
 func jsonNestedArray(n int) []byte {
 	return []byte(strings.Repeat("[", n+1) + strings.Repeat("]", n+1))
 }
 
-// jsonBytesOfLength returns a syntactically valid JSON document (a single
-// string literal, "..." including its two quote bytes) whose total byte
-// length is exactly n. Only meaningful for n >= 2.
+// jsonBytesOfLength returns a valid JSON document, a single string literal including
+// its two quote bytes, whose total length is exactly n bytes. It needs n >= 2.
 func jsonBytesOfLength(n int) []byte {
 	return jsonString(n - 2)
 }

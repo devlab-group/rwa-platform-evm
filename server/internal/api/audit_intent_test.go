@@ -12,8 +12,8 @@ import (
 )
 
 // failingAuditRepo is an AuditLogRepository that fails Append for a chosen
-// phase, letting a test drive a Mongo fault BEFORE the intent is durable
-// (failIntent) or AFTER the effect while writing the result (failResult).
+// phase: failIntent fails before the intent is durable, failResult fails while
+// writing the result after the effect
 type failingAuditRepo struct {
 	failIntent bool
 	failResult bool
@@ -41,10 +41,9 @@ func (r *failingAuditRepo) List(ctx context.Context, category string, limit int)
 	return nil, nil
 }
 
-// TestSetComplianceStatusFailsClosedWhenAuditIntentUndurable is the "DB failure
-// BEFORE broadcast" test: if the audit intent cannot be persisted, the
-// compliance transaction must NOT be broadcast and the request fails closed
-// with 500.
+// TestSetComplianceStatusFailsClosedWhenAuditIntentUndurable covers a database
+// failure before broadcast: if the audit intent cannot be persisted, the
+// compliance transaction is not broadcast and the request returns 500
 func TestSetComplianceStatusFailsClosedWhenAuditIntentUndurable(t *testing.T) {
 	env := setupTestApp(t)
 	repo := &failingAuditRepo{failIntent: true}
@@ -66,10 +65,9 @@ func TestSetComplianceStatusFailsClosedWhenAuditIntentUndurable(t *testing.T) {
 	}
 }
 
-// TestSetComplianceStatusSucceedsWhenAuditResultFails is the "DB failure AFTER
-// broadcast" test: once the intent is durable and the tx is broadcast, a
-// failure to write the linked RESULT is only logged — the request still
-// succeeds (the intent already captured the actor/action).
+// TestSetComplianceStatusSucceedsWhenAuditResultFails covers a database failure
+// after broadcast: once the intent is durable and the transaction is broadcast, a
+// failure to write the linked result is only logged and the request succeeds
 func TestSetComplianceStatusSucceedsWhenAuditResultFails(t *testing.T) {
 	env := setupTestApp(t)
 	repo := &failingAuditRepo{failResult: true}
@@ -91,10 +89,9 @@ func TestSetComplianceStatusSucceedsWhenAuditResultFails(t *testing.T) {
 	}
 }
 
-// TestReissueRecordFailsClosedWhenAuditIntentUndurable is the "assets endpoint,
-// DB failure before effect" test: if the audit intent cannot be persisted, the
-// privileged nonce-rolling reissue must NOT mutate the record and the request
-// fails closed with 500.
+// TestReissueRecordFailsClosedWhenAuditIntentUndurable covers a database failure
+// before the effect: if the audit intent cannot be persisted, the reissue does not
+// change the record and the request returns 500
 func TestReissueRecordFailsClosedWhenAuditIntentUndurable(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.Audit = auditlog.New(&failingAuditRepo{failIntent: true})

@@ -5,7 +5,7 @@ import type { Handle } from "onfido-sdk-ui";
 interface Props {
   /** SDK token from POST /api/v1/compliance/kyc/start. */
   token: string;
-  /** The `ref` from the same response — Onfido Studio's workflow run id. */
+  /** The `ref` from the same response, used as the Onfido Studio workflow run id. */
   workflowRunId: string;
   /** The applicant finished the workflow; the outcome now arrives by webhook. */
   onSubmitted: () => void;
@@ -13,17 +13,17 @@ interface Props {
 }
 
 /**
- * Onfido's official web SDK in Studio workflow mode, mounted into a container
- * this component owns.
+ * Onfido's web SDK in Studio workflow mode, mounted into a container this
+ * component owns.
  *
  * As with Sumsub, no outcome is decided here: Onfido reports the result to the
- * server's webhook and the server flips the wallet to Allowed on-chain.
+ * server's webhook and the server sets the wallet to Allowed on-chain.
  * `onSubmitted` only moves this browser to a "waiting for approval" state.
  *
- * `onfido-sdk-ui` is a thin loader — `init()` returns a handle immediately and
- * pulls the real SDK from Onfido's CDN in the background, so the returned
- * handle's `tearDown()` is safe to call even if the applicant closes the page
- * before the download lands.
+ * `onfido-sdk-ui` is a thin loader: `init()` returns a handle immediately and
+ * imports the real SDK from Onfido's host in the background. The handle's
+ * `tearDown()` is safe to call before that import finishes; it is queued until
+ * the SDK loads.
  */
 export function OnfidoVerification({
   token,
@@ -33,9 +33,8 @@ export function OnfidoVerification({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Held in refs so a parent re-render that changes a callback's identity
-  // doesn't re-run the effect and restart the applicant's workflow. Only the
-  // token/workflowRunId — which genuinely identify a different verification —
-  // may do that.
+  // doesn't re-run the effect and restart the applicant's workflow. Only a new
+  // token or workflowRunId, which identifies a different verification, may
   const onSubmittedRef = useRef(onSubmitted);
   onSubmittedRef.current = onSubmitted;
   const onErrorRef = useRef(onError);

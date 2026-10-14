@@ -12,12 +12,11 @@ import (
 	"github.com/rwa-platform/server/internal/redemption"
 )
 
-// toRedemptionResponse computes the three enrichments the view mapper cannot
-// derive from the record — claimable and confirmations against the indexer's
-// block height and the configured finality depth, and a live
-// ComplianceRegistry.isAllowed(beneficiary) read. A failed chain read leaves
-// beneficiaryAllowed false rather than failing the whole response, since it is
-// an enrichment, not the request's primary data.
+// toRedemptionResponse computes the values the view mapper cannot derive from
+// the record: claimable and confirmations, from the indexer's block height and
+// the configured finality depth, and beneficiaryAllowed, from a live
+// ComplianceRegistry.isAllowed read. A failed chain read leaves
+// beneficiaryAllowed false instead of failing the response.
 func (app *App) toRedemptionResponse(ctx context.Context, r *models.RedemptionRequest) dto.RedemptionResponse {
 	currentBlock := app.lastIndexedBlock()
 	allowed := false
@@ -35,14 +34,10 @@ func (app *App) toRedemptionResponse(ctx context.Context, r *models.RedemptionRe
 
 // listRedemptions implements GET /api/v1/redemptions (operationId
 // listRedemptions).
-// PUBLIC (redemption requests are on-chain-public data, so issuers can build
-// their own investor UIs), keyset-paginated, with optional `status` and
-// `address` filters — the latter narrowing to one beneficiary's requests
-// (case-insensitive).
-//
-// Uses repository-level keyset pagination
-// (RedemptionRequestRepository.ListPage) — see api.listPurchases' doc comment
-// for the same reasoning (bounded query, X-Total-Count omitted).
+// Public, because redemption requests are public on-chain data. The page is
+// keyset-paginated by RedemptionRequestRepository.ListPage, with X-Total-Count
+// omitted, and takes optional `status` and `address` filters. The address
+// filter selects one beneficiary's requests, case-insensitively.
 func (app *App) listRedemptions(c *gin.Context) {
 	if app.Redemptions == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "redemptions is not configured on this server")
@@ -66,8 +61,8 @@ func (app *App) listRedemptions(c *gin.Context) {
 
 // getRedemption implements GET /api/v1/redemptions/{id} (operationId
 // getRedemption).
-// PUBLIC: RedemptionEscrow.getRedemption(id) is itself an unauthenticated
-// on-chain view call and ids are sequential, not a capability token.
+// Public: RedemptionEscrow.getRedemption(id) is an unauthenticated on-chain
+// view, and ids are sequential, so an id grants no access.
 func (app *App) getRedemption(c *gin.Context) {
 	if app.Redemptions == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "redemptions is not configured on this server")

@@ -1,39 +1,29 @@
-// Package keys implements the server's hot-key abstraction: a KeyProvider
-// interface (local-keystore|vault|kms-mock) plus rotation.
-// Every hot-key role (compliance/pricer/relayer/deployer)
-// resolves to a Provider — Address()+SignTx(), matching
-// internal/blockchain.Signer structurally — through exactly one of three
-// backends selected by KEY_PROVIDER_MODE:
+// Package keys implements the server's hot-key providers. A Provider reports
+// an address and signs transactions, matching internal/blockchain.Signer
+// structurally. Load resolves a role to one of four backends selected by
+// keys.provider_mode:
 //
-//   - "raw": a plaintext hex private key from an env
-//     var (COMPLIANCE_KEY, ...). Kept as the default so existing
-//     deployments/tests/docs are not broken by this package's addition;
-//     explicitly the least secure option — Load logs a loud warning
-//     whenever this mode is active (default or explicit), the same way
-//     kms-mock does, since an unset KEY_PROVIDER_MODE silently resolves
-//     here otherwise.
+//   - "raw": a plaintext hex private key from configuration. This is the
+//     default when the mode is unset, and the least secure option, so Load logs
+//     a warning whenever it is active. Production config validation rejects it
+//     when a compliance key is set.
 //   - "local-keystore": a password-encrypted go-ethereum keystore JSON file
-//     per role (same format signer/internal/keystore already uses), key
-//     material decrypted into memory once at Load and held there — better
-//     than plaintext-in-env, but still a hot key on this host.
-//   - "vault": HashiCorp Vault's Transit secrets engine signs remotely over
-//     HTTP; this server never sees the private key at all. Rotation is
-//     Vault-native (`vault write -f transit/keys/<name>/rotate`) — signing
-//     always asks for Transit's latest key version, so a rotation on the
-//     Vault side takes effect on this server's very next signature with no
-//     server-side action needed.
-//   - "kms-mock": an explicit, clearly-non-production stand-in for a real
-//     KMS (AWS KMS, GCP Cloud KMS, ...) — deterministic per-role keys
-//     derived from a seed, so the Provider abstraction and its call sites
-//     can be exercised in CI/local dev without a real KMS account. NEVER
-//     use in production; Load logs a loud warning when this mode is active.
+//     per role. The key is decrypted into memory at Load and on Reload, so it
+//     is still a hot key on this host.
+//   - "vault": a HashiCorp Vault Transit-compatible backend signs over HTTP, so
+//     this server never holds the private key. Signing always asks for the
+//     latest key version, but the address is cached at Load and Reload, so
+//     after a rotation on the Vault side signing fails until the process
+//     restarts. See vaultProvider.
+//   - "kms-mock": a non-production stand-in for a real KMS, with deterministic
+//     per-role keys derived from a seed. It lets CI and local development
+//     exercise the Provider abstraction without a KMS account. Load logs a
+//     warning when it is active, and config validation rejects it in
+//     production.
 //
-// "Rotation" beyond Vault's native support: Provider.Reload re-reads
-// key material from its source (a changed keystore file + password on
-// disk for local-keystore) without a process restart. main.go does not
-// currently call Reload on a timer/signal — see Provider's doc comment —
-// but every backend implements it so that wiring is a small addition, not
-// a redesign, when an operator asks for it.
+// Provider.Reload re-reads key material from its source, but no server code
+// calls it, so a changed keystore file or Vault key takes effect after a
+// restart.
 package keys
 
 import (
@@ -47,7 +37,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// Mode selects which backend Load uses.
+// Mode selects which backend Load uses
 type Mode string
 
 const (
@@ -58,39 +48,32 @@ const (
 	defaultModeIfEmpty      = ModeRaw
 )
 
-// Provider is a hot key that can report the address it signs for, sign a
-// transaction, and reload its key material from its source (rotation
-// support). It is structurally identical to internal/blockchain.Signer
-// plus Reload/Close, so any Provider is usable anywhere a blockchain.Signer
-// is expected without this package importing internal/blockchain.
+// Provider is a hot key that reports its address, signs transactions, and
+// reloads its key material from its source. It extends
+// internal/blockchain.Signer with Reload and Close, so a Provider can be used
+// as a Signer without this package importing internal/blockchain.
 type Provider interface {
 	Address(ctx context.Context) (common.Address, error)
 	SignTx(ctx context.Context, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)
-	// Reload re-reads/re-fetches key material from this Provider's source.
-	// Safe to call at any time, including concurrently with SignTx (callers
-	// needing atomicity around a specific tx should not call Reload
-	// mid-flight, but Reload itself does not corrupt an in-progress sign).
+	// Reload re-reads or re-fetches key material from the Provider's source.
+	// It is safe to call concurrently with SignTx
 	Reload(ctx context.Context) error
-	// Close zeroes any private key material this Provider holds in memory
-	// (the raw/local-keystore/kms-mock backends decrypt/derive a real
-	// *ecdsa.PrivateKey and keep it for the process lifetime; vault never
-	// holds one at all, so its Close is a no-op — see each backend's Zero
-	// helper). Call once, at process shutdown; a Provider is unusable for
-	// SignTx after Close returns. Mirrors signer/internal/keystore.Zero's
-	// pattern for the same reason: best-effort, not a hard security
-	// guarantee (the Go runtime may have copied the bytes elsewhere via GC
-	// or stack growth before Close runs), but it removes the primary
-	// in-memory copy as soon as it's no longer needed.
+	// Close zeroes the private key material the Provider holds in memory. The
+	// raw, local-keystore and kms-mock backends keep an *ecdsa.PrivateKey for
+	// the process lifetime; vault holds none, so its Close does nothing.
+	// Call it once at shutdown: the key-holding backends cannot sign afterwards.
+	// Zeroing is best effort, because the Go runtime may already have copied
+	// the bytes elsewhere through garbage collection or stack growth.
 	Close() error
 }
 
-// zeroECDSAKey overwrites priv's private scalar with zero bytes, shared by
-// every backend that holds a real key (raw, local-keystore, kms-mock).
+// zeroECDSAKey overwrites priv's private scalar with zeros for every backend
+// that holds a key (raw, local-keystore, kms-mock).
 //
-// SetInt64(0) alone is not enough: it only reslices big.Int's backing nat to
-// length 0, leaving the secret words intact in the heap where a core dump or
-// swap read still recovers them. Overwrite the words through the mutable
-// Bits() slice first, then normalize the value to zero.
+// SetInt64(0) alone is not enough: it only truncates the big.Int's backing
+// slice and leaves the secret words in the heap, where a core dump or swap
+// read can recover them. Overwrite the words through the mutable Bits() slice
+// first, then normalize the value to zero.
 func zeroECDSAKey(priv *ecdsa.PrivateKey) {
 	if priv == nil || priv.D == nil {
 		return
@@ -102,50 +85,45 @@ func zeroECDSAKey(priv *ecdsa.PrivateKey) {
 	priv.D.SetInt64(0)
 }
 
-// zeroBytes overwrites b in place, for the backends that retain raw key
-// material alongside the parsed *ecdsa.PrivateKey.
+// zeroBytes overwrites b in place, for backends that keep raw key bytes
+// alongside the parsed *ecdsa.PrivateKey
 func zeroBytes(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
 }
 
-// Config bundles every backend's configuration. Only the fields the
-// selected Mode actually needs are read; the rest may be zero-valued.
+// Config bundles every backend's settings. Only the fields for the selected
+// Mode are read.
 type Config struct {
 	Mode Mode
 
-	// "raw" mode: a hex private key (with or without 0x prefix).
+	// RawHexKey is the "raw" mode hex private key, with or without a 0x prefix
+
 	RawHexKey string
 
-	// "local-keystore" mode: KeystoreDir/<role>.json decrypted with the
-	// contents of PasswordFile (first line, trailing newline trimmed).
+	// "local-keystore" mode decrypts KeystoreDir/<role>.json with the contents of
+	// PasswordFile, trailing CR and LF characters removed
 	KeystoreDir  string
 	PasswordFile string
 
-	// "vault" mode: HashiCorp Vault Transit secrets engine. Key name per
-	// role is KeyNamePrefix+role (e.g. prefix "rwa-" + role "compliance" =
-	// "rwa-compliance"). Token is a Vault token with sign/read capability
-	// on transit/keys/<name> and transit/sign/<name> — read further
-	// restricted in a real deployment via a Vault policy scoped to exactly
-	// those paths (see docs/operator/operator-guide.md).
+	// "vault" mode uses a Transit-compatible backend. The key name for a role
+	// is VaultKeyPrefix+role, such as "rwa-compliance". VaultToken needs read
+	// access to transit/keys/<name> and update access to transit/sign/<name>;
+	// scope its policy to those paths.
 	VaultAddr      string
 	VaultToken     string
 	VaultKeyPrefix string
 
-	// "kms-mock" mode: deterministic per-role keys derived from SeedHex (a
-	// hex string of any length, hashed together with the role name); empty
-	// SeedHex means "generate a random ephemeral key and log its address,
-	// once, at Load" — fine for a one-off local smoke test, useless across
-	// restarts since the address changes every time.
+	// KMSMockSeedHex seeds "kms-mock" per-role keys: the key is the keccak256
+	// of the seed and the role name. An empty seed generates a random key per
+	// process and logs its address, which changes on every restart
 	KMSMockSeedHex string
 }
 
-// Load resolves role (e.g. "compliance", "pricer",
-// "relayer", "deployer") to a Provider per cfg.Mode. An empty Mode defaults
-// to "raw". Returns (nil, nil) — not an error — when "raw" mode has no key
-// configured for this role (RawHexKey == ""): an absent hot key means "this
-// role's actions are unavailable," not a startup failure.
+// Load resolves role to a Provider for cfg.Mode, which defaults to "raw".
+// It returns (nil, nil) when "raw" mode has no key (RawHexKey is empty), so an
+// absent key leaves the role's actions unavailable instead of failing startup.
 func Load(role string, cfg Config) (Provider, error) {
 	mode := cfg.Mode
 	if mode == "" {
@@ -156,13 +134,9 @@ func Load(role string, cfg Config) (Provider, error) {
 		if cfg.RawHexKey == "" {
 			return nil, nil
 		}
-		// Loud on purpose (mirrors kms-mock's warning below): ModeRaw is
-		// also what an UNSET KEY_PROVIDER_MODE silently resolves to
-		// (defaultModeIfEmpty), so without this, forgetting to configure
-		// KEY_PROVIDER_MODE in production silently picks the least-secure
-		// backend — a plaintext hex key held in memory for the process
-		// lifetime — with no signal that anything unusual happened.
-		log.Printf("keys: WARNING — role %q is using raw env-hex key provider. NOT for production; use local-keystore, vault, or kms-mock (set KEY_PROVIDER_MODE).", role)
+		// Raw is also what an unset KEY_PROVIDER_MODE resolves to, so the
+		// warning is the only signal that the least secure backend is in use
+		log.Printf("keys: WARNING - role %q is using raw env-hex key provider. NOT for production; use local-keystore or vault (set KEY_PROVIDER_MODE).", role)
 		return newRawKeyProvider(cfg.RawHexKey)
 	case ModeLocalKeystore:
 		return newLocalKeystoreProvider(role, cfg.KeystoreDir, cfg.PasswordFile)

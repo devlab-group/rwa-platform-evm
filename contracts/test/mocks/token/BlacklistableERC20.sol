@@ -4,11 +4,9 @@ pragma solidity ^0.8.24;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /// @title BlacklistableERC20
-/// @notice Quote token simulating a USDC-style blacklist: transfers to or from a blacklisted
-///         address revert. Used to prove that a quote-token-side failure during
-///         RedemptionEscrow.claimRedemption leaves the request's on-chain status and escrowed
-///         funds untouched (the whole call reverts atomically) and that a later retry, once
-///         the blacklist lifts, succeeds — i.e. the failure is recoverable, not a stuck state.
+/// @notice Quote-token mock refusing transfers to or from blacklisted addresses.
+///         Claim tests verify atomic rollback of status and escrowed funds, then
+///         successful retry after the blacklist is lifted.
 contract BlacklistableERC20 is ERC20 {
     mapping(address account => bool blocked) public blacklisted;
 

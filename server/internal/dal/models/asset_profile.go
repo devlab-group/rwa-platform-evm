@@ -3,7 +3,7 @@ package models
 import "time"
 
 // AssetProfile is the operator-defined, immutable-per-deployment profile
-// (collection: asset_profiles).
+// (collection: asset_profiles)
 type AssetProfile struct {
 	ProjectID     string    `json:"projectId" bson:"_id"`
 	ProfileRaw    []byte    `json:"-" bson:"profileRaw"`

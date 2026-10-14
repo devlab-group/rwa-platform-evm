@@ -10,62 +10,56 @@ import {RedemptionEscrowDeployer} from "../src/factory/RedemptionEscrowDeployer.
 import {IRWAFactory} from "../src/interfaces/IRWAFactory.sol";
 import {MockERC20} from "../test/mocks/token/MockERC20.sol";
 
-/// @notice Deploys one full project via RWAFactory against whatever chain `--rpc-url` points
-///         at (anvil for local/E2E use, a real testnet for staging) and logs every address so
-///         the server can wire its bindings against them.
+/// @notice Deploys one full project through RWAFactory on whatever chain `--rpc-url` points at
+///         (anvil for local and E2E use, a testnet for staging) and logs every address.
 ///
 /// Usage:
 ///   forge script script/Deploy.s.sol --broadcast --rpc-url http://localhost:8545 -vv
 ///
-/// All parameters are overridable via env; every role defaults to the single `DEPLOYER_PK`
-/// account except `QUOTE_TOKEN`, which is deployed as a fresh MockERC20("USD Coin","USDC",6)
-/// if not supplied. `DEPLOYER_PK` itself only defaults to anvil's well-known account 0 when
-/// `block.chainid == 31337` (anvil's default); on any other chain it MUST be set explicitly or
-/// the run reverts — see `RefusingAnvilKeyFallbackOnNonAnvilChain`. `ADMIN_TRANSFER_DELAY`
-/// similarly defaults to 0 only on anvil and to `PRODUCTION_MIN_ADMIN_TRANSFER_DELAY` (24h)
-/// elsewhere; a resulting 0 outside anvil reverts unless `ALLOW_ZERO_ADMIN_TRANSFER_DELAY=true`
-/// is also set — see `RefusingZeroAdminTransferDelayOnNonAnvilChain`. A value above
-/// `type(uint48).max` reverts rather than silently wrapping — see
+/// Every parameter can be overridden by env. Every role defaults to the `DEPLOYER_PK` account.
+/// `QUOTE_TOKEN` defaults to a freshly deployed MockERC20("USD Coin", "USDC", 6).
+/// `DEPLOYER_PK` falls back to anvil's well-known account 0 only when `block.chainid == 31337`;
+/// on any other chain it must be set or the run reverts with
+/// `RefusingAnvilKeyFallbackOnNonAnvilChain`. `ADMIN_TRANSFER_DELAY` defaults to 0 on anvil and
+/// to `PRODUCTION_MIN_ADMIN_TRANSFER_DELAY` (one day) elsewhere. A zero delay off anvil reverts
+/// with `RefusingZeroAdminTransferDelayOnNonAnvilChain` unless
+/// `ALLOW_ZERO_ADMIN_TRANSFER_DELAY=true`, and a value above `type(uint48).max` reverts with
 /// `AdminTransferDelayExceedsUint48`.
-/// @dev Holds the shared deploy logic with no `run()` of its own, so `Deploy` and `E2EFlow`
-///      can each declare their own `run()` entrypoint without a Solidity override collision
-///      (forge script always looks for `run()` by default).
+/// @dev Holds the shared deploy logic and has no `run()`, so `Deploy`, `DeployFactory` and
+///      `E2EFlow` can each declare their own `run()` entrypoint (forge script looks for `run()`
+///      by default) without an override collision.
 abstract contract DeployBase is Script {
-    // Anvil's default account 0 — also the frozen shared/vectors/mint-eip712.json signer.
+    // Anvil's default account 0, also the signer of shared/vectors/mint-eip712.json
     uint256 internal constant ANVIL_ACCT0_PK = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
     uint256 internal constant ANVIL_CHAIN_ID = 31337;
 
-    // The default-admin transfer delay should be at least 24h in production so a compromised
-    // admin key can't rotate itself away faster than an operator can react. This is the default
-    // applied on any non-Anvil chain when ADMIN_TRANSFER_DELAY isn't set explicitly.
+    // Default admin-transfer delay on any non-anvil chain when ADMIN_TRANSFER_DELAY is unset;
+    // it gives operators time to react to an admin transfer started by a compromised key
     uint48 internal constant PRODUCTION_MIN_ADMIN_TRANSFER_DELAY = 1 days;
 
-    /// @dev Refuses to silently fall back to the well-known, publicly-documented anvil dev key
-    ///      on any chain other than anvil's own default chain id. That key is printed in every
-    ///      anvil startup banner and in this file's own source — using it as a deployer key
-    ///      against a real chain would hand admin/auditor/etc control on the whole project to
-    ///      anyone who has ever read this repo (or any anvil README).
+    /// @dev Refuses to fall back to the public anvil dev key on any chain other than anvil's
+    ///      default chain id. The key is printed in anvil's startup banner and appears in this
+    ///      file, so deploying with it on a real chain would hand the admin, auditor and other
+    ///      roles to anyone who has read this repo or an anvil README.
     error RefusingAnvilKeyFallbackOnNonAnvilChain(uint256 chainId);
 
-    /// @dev `adminTransferDelay` must not silently default to 0 in production: that would
-    ///      discard the delayed two-step admin-transfer protection even though production needs
-    ///      >=24h. Same shape of guard as `RefusingAnvilKeyFallbackOnNonAnvilChain` — an
-    ///      explicit env var is required to accept a zero delay outside anvil, so it can only
-    ///      happen via a deliberate, auditable operator choice, never a silent default.
+    /// @dev A zero `adminTransferDelay` removes the delay on the two-step admin transfer, which a
+    ///      production deployment should keep. Like the anvil-key guard, accepting it off anvil
+    ///      takes an explicit env var, so it is a deliberate operator choice and never a
+    ///      default.
     error RefusingZeroAdminTransferDelayOnNonAnvilChain(uint256 chainId);
 
-    /// @dev `ADMIN_TRANSFER_DELAY` is read as a `uint256` env value but the constructor
-    ///      parameter (and `IRWAFactory.ProjectConfig.adminTransferDelay`) is `uint48`. An
-    ///      oversized value would silently wrap on a naked `uint48(delay)` cast — e.g.
-    ///      `type(uint48).max + 1` wraps to 0, discarding the zero-delay guard above. Revert on
-    ///      overflow instead of truncating.
+    /// @dev `ADMIN_TRANSFER_DELAY` is read as a `uint256`, but the constructor parameter and
+    ///      `IRWAFactory.ProjectConfig.adminTransferDelay` are `uint48`. A bare `uint48(delay)`
+    ///      cast would wrap an oversized value (`type(uint48).max + 1` becomes 0) and bypass
+    ///      the zero-delay guard, so the script reverts instead of truncating.
     error AdminTransferDelayExceedsUint48(uint256 delay);
 
     function _deployerPrivateKey() internal view returns (uint256) {
         if (block.chainid == ANVIL_CHAIN_ID) {
             return vm.envOr("DEPLOYER_PK", ANVIL_ACCT0_PK);
         }
-        // Not anvil's default chain id: DEPLOYER_PK must be set explicitly, or fail loudly.
+        // Not anvil's default chain id: DEPLOYER_PK must be set explicitly, or fail loudly
         try vm.envUint("DEPLOYER_PK") returns (uint256 pk) {
             return pk;
         } catch {
@@ -77,8 +71,8 @@ abstract contract DeployBase is Script {
         uint256 deployerPk = _deployerPrivateKey();
         address deployer = vm.addr(deployerPk);
 
-        // Field-by-field (not one big struct literal from ~19 locals) to stay clear of solc's
-        // stack-too-deep limit without needing --via-ir.
+        // Built field by field instead of from one struct literal over many locals, to stay
+        // under solc's stack-too-deep limit without --via-ir
         IRWAFactory.ProjectConfig memory config = _readConfig(deployer);
         quoteToken = config.quoteToken;
 
@@ -89,8 +83,8 @@ abstract contract DeployBase is Script {
             config.quoteToken = quoteToken;
         }
 
-        // RWAFactory takes its four stateless deploy-helper addresses in its constructor (see
-        // src/factory/*Deployer.sol NatSpec for why); they must be deployed first.
+        // RWAFactory's constructor takes the four stateless deployer helpers, so they must be
+        // deployed first (ComplianceTokenDeployer explains why they exist)
         factory = new RWAFactory(
             address(new ComplianceTokenDeployer()),
             address(new MarketDeployer()),
@@ -124,16 +118,15 @@ abstract contract DeployBase is Script {
         config.adminTransferDelay = _adminTransferDelay();
     }
 
-    /// @dev Defaults to 0 on anvil (dev/test) and to `PRODUCTION_MIN_ADMIN_TRANSFER_DELAY` on
-    ///      every other chain. `ADMIN_TRANSFER_DELAY` overrides either default explicitly. A
-    ///      resulting delay of exactly 0 outside anvil is refused unless
-    ///      `ALLOW_ZERO_ADMIN_TRANSFER_DELAY=true` is also set — see
+    /// @dev Defaults to 0 on anvil and to `PRODUCTION_MIN_ADMIN_TRANSFER_DELAY` on every other
+    ///      chain; `ADMIN_TRANSFER_DELAY` overrides either. A resulting delay of 0 off anvil is
+    ///      refused unless `ALLOW_ZERO_ADMIN_TRANSFER_DELAY=true` is also set, see
     ///      `RefusingZeroAdminTransferDelayOnNonAnvilChain`.
     function _adminTransferDelay() private view returns (uint48) {
         uint256 delay = vm.envOr(
             "ADMIN_TRANSFER_DELAY", uint256(block.chainid == ANVIL_CHAIN_ID ? 0 : PRODUCTION_MIN_ADMIN_TRANSFER_DELAY)
         );
-        // Reject before the narrowing cast below rather than let it wrap.
+        // Reject before the narrowing cast below rather than let it wrap
         if (delay > type(uint48).max) revert AdminTransferDelayExceedsUint48(delay);
         if (block.chainid != ANVIL_CHAIN_ID && delay == 0 && !vm.envOr("ALLOW_ZERO_ADMIN_TRANSFER_DELAY", false)) {
             revert RefusingZeroAdminTransferDelayOnNonAnvilChain(block.chainid);

@@ -15,8 +15,7 @@ import (
 
 const testHexKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" // anvil acct0
 
-// captureLog redirects the standard logger for the duration of fn and
-// returns everything it wrote.
+// captureLog redirects the standard logger during fn and returns what it wrote
 func captureLog(fn func()) string {
 	var buf bytes.Buffer
 	orig := log.Writer()
@@ -26,10 +25,9 @@ func captureLog(fn func()) string {
 	return buf.String()
 }
 
-// TestLoadRawModeLogsWarning is the K1 regression test: raw mode is the
-// silent default (defaultModeIfEmpty), so it must warn just as loudly as
-// kms-mock does, or an operator who forgot to set KEY_PROVIDER_MODE would
-// get no signal they're running the least-secure backend.
+// TestLoadRawModeLogsWarning checks that raw mode, the default when
+// KEY_PROVIDER_MODE is unset, logs a warning, so an operator who forgot to set
+// it learns they are on the least secure backend
 func TestLoadRawModeLogsWarning(t *testing.T) {
 	out := captureLog(func() {
 		if _, err := Load("compliance", Config{RawHexKey: testHexKey}); err != nil {
@@ -129,9 +127,8 @@ func TestRawKeyProviderReload(t *testing.T) {
 	}
 }
 
-// TestRawKeyProviderCloseZeroesKey is the K2 regression test: Close must
-// overwrite the private scalar so it's not sitting in memory indefinitely
-// after the process is done signing with it.
+// TestRawKeyProviderCloseZeroesKey checks that Close overwrites the private
+// scalar instead of leaving it in memory
 func TestRawKeyProviderCloseZeroesKey(t *testing.T) {
 	p, err := newRawKeyProvider(testHexKey)
 	if err != nil {
@@ -146,17 +143,15 @@ func TestRawKeyProviderCloseZeroesKey(t *testing.T) {
 	if p.key.D.Sign() != 0 {
 		t.Error("Close did not zero the private scalar")
 	}
-	// Sign() == 0 alone would pass even if the words were merely resliced
-	// away, so check the backing words directly — that memory is what a core
-	// dump or swap read would recover.
+	// Sign() == 0 alone would pass if the words were only resliced away, so
+	// check the backing words, which a core dump or swap read would recover
 	for _, w := range p.key.D.Bits() {
 		if w != 0 {
 			t.Error("Close resliced the scalar but left its backing words intact")
 			break
 		}
 	}
-	// Reload's key source must be scrubbed too; a retained copy of the raw
-	// scalar is just as recoverable as the parsed one.
+	// The raw bytes Reload parses from must be scrubbed too
 	for _, b := range p.raw {
 		if b != 0 {
 			t.Error("Close did not zero the retained raw key bytes")

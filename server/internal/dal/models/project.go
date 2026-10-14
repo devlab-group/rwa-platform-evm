@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// Addresses is the deployed project contract set.
+// Addresses is the deployed project contract set
 type Addresses struct {
 	Token            string `json:"token" bson:"token"`
 	Compliance       string `json:"compliance" bson:"compliance"`
@@ -13,7 +13,7 @@ type Addresses struct {
 	QuoteToken       string `json:"quoteToken" bson:"quoteToken"`
 }
 
-// ProjectStatus tracks deployment lifecycle.
+// ProjectStatus tracks deployment lifecycle
 type ProjectStatus string
 
 const (
@@ -24,13 +24,9 @@ const (
 	ProjectStatusFailed     ProjectStatus = "Failed"
 )
 
-// Project is the single-tenant deployment record (collection: projects).
-// Its Mongo document uses a fixed technical _id (see
-// internal/dal/mongodb's projectDocID), NOT ProjectID: the "one
-// project per deployment" invariant used to be enforced only in
-// application code (Service.Deploy's pre-broadcast Get), and Upsert wrote
-// to _id==ProjectID, so two concurrent deploys using two different
-// ProjectIDs could each land as a SEPARATE document.
+// Project is the single-tenant deployment record (collection: projects). Its
+// MongoDB document has a fixed _id (projectDocID in internal/dal/mongodb) and not
+// ProjectID, so the database guarantees one project per deployment.
 type Project struct {
 	ProjectID         string    `json:"projectId" bson:"projectId"`
 	Version           string    `json:"version" bson:"version"`
@@ -41,12 +37,10 @@ type Project struct {
 	Auditor           string    `json:"auditor" bson:"auditor"`
 	Treasury          string    `json:"treasury" bson:"treasury"`
 	RedemptionManager string    `json:"redemptionManager" bson:"redemptionManager"`
-	// Admin/ComplianceOperator/Pricer/Treasurer are the configured
-	// role-holder candidates from DeployRequest, kept so post-deploy role
-	// verification has addresses to check
-	// hasRole against — OZ AccessControl (no Enumerable extension in
-	// these contracts) offers no way to enumerate holders without already
-	// knowing a candidate.
+	// Admin, ComplianceOperator, Pricer and Treasurer are the role-holder candidates
+	// from the adopted deploy transaction. They let post-deploy verification check
+	// hasRole, because OpenZeppelin AccessControl without the Enumerable extension
+	// cannot list holders unless a candidate is already known.
 	Admin                        string `json:"admin,omitempty" bson:"admin,omitempty"`
 	ComplianceOperator           string `json:"complianceOperator,omitempty" bson:"complianceOperator,omitempty"`
 	Pricer                       string `json:"pricer,omitempty" bson:"pricer,omitempty"`
@@ -57,59 +51,43 @@ type Project struct {
 	RedemptionPricePerWholeToken string `json:"redemptionPricePerWholeToken" bson:"redemptionPricePerWholeToken"`
 	RedemptionTimeout            int64  `json:"redemptionTimeout" bson:"redemptionTimeout"`
 	TokenDecimals                uint8  `json:"tokenDecimals" bson:"tokenDecimals"`
-	// QuoteDecimals is the ERC-20 decimals() of the quote/collateral token
-	// (Addresses.QuoteToken), read on-chain ONCE during post-deploy
-	// verification and persisted here so the API/UI can scale
-	// quote-denominated amounts without a per-request chain read. omitempty:
-	// the quote token is an arbitrary external ERC-20 whose decimals() may be
-	// unreadable at setup (RPC failure, or a token that doesn't implement it),
-	// in which case this stays unset rather than failing the deployment.
+	// QuoteDecimals is the decimals() of the quote token (Addresses.QuoteToken). It is
+	// read once during post-deploy verification and stored, so the API and UI can scale
+	// quote amounts without a chain read per request. It is omitted when decimals()
+	// cannot be read, because the quote token is an arbitrary ERC-20, and the
+	// deployment does not fail for that.
 	QuoteDecimals         uint8  `json:"quoteDecimals,omitempty" bson:"quoteDecimals,omitempty"`
 	FinalityConfirmations uint64 `json:"finalityConfirmations" bson:"finalityConfirmations"`
 	BytecodeVerified      bool   `json:"bytecodeVerified" bson:"bytecodeVerified"`
-	// Roles maps a role name (DEFAULT_ADMIN_ROLE, PAUSER_ROLE, ...) to its
-	// current holder addresses. Populated by post-deploy verification;
-	// empty until that runs.
+	// Roles maps a role name, such as DEFAULT_ADMIN_ROLE, to its holder addresses. It
+	// is filled by post-deploy verification and is empty until then.
 	Roles     map[string][]string `json:"roles,omitempty" bson:"roles,omitempty"`
 	Status    ProjectStatus       `json:"status" bson:"status"`
 	CreatedAt time.Time           `json:"createdAt" bson:"createdAt"`
 	UpdatedAt time.Time           `json:"updatedAt" bson:"updatedAt"`
 
-	// DeployTxHash is the hash of the observed on-chain RWAFactory.deploy
-	// transaction this project record was adopted from. Deployment is now
-	// broadcast from the admin's wallet, not the server: the deployment
-	// projector (project.ReconcileDeployment) matches the ProjectDeployed event
-	// to the stored Asset Profile and records the emitting transaction here, so
-	// a re-run can tell "already adopted this exact deploy" from "a new
-	// (possibly reorged-in) one" and demote the project if that transaction's
-	// event no longer survives.
+	// DeployTxHash is the hash of the RWAFactory.deploy transaction this record was
+	// adopted from. The admin's wallet broadcasts the deployment, and
+	// project.Service.ReconcileDeployment matches the ProjectDeployed event to the
+	// stored Asset Profile and records the transaction here. A later run can then tell
+	// an already adopted deployment from a new one, and demote the project if the
+	// event no longer survives a reorg.
 	DeployTxHash string `json:"deployTxHash,omitempty" bson:"deployTxHash,omitempty"`
 
-	// VerificationNote records why VerifyDeployment marked this project Failed
-	// (any mismatch means the deployment is Failed, never Active-with-metadata).
-	// Empty when verification succeeded.
+	// VerificationNote records why verification marked the project Failed, or why it
+	// was demoted after a reorg. It is empty when verification succeeded.
 	VerificationNote string `json:"verificationNote,omitempty" bson:"verificationNote,omitempty"`
 
-	// Security is the LIVE governance-authority projection maintained by
-	// project.ReconcileSecurity from indexed chain events.
-	// It is kept SEPARATE from the deploy-config fields above (Auditor,
-	// Treasury, RedemptionManager, Admin, ComplianceOperator, Pricer,
-	// Treasurer, PurchasePricePerWholeToken, RedemptionPricePerWholeToken,
-	// Roles) precisely so those remain the immutable deploy-time snapshot the
-	// projector re-folds every governance event on top of — writing live
-	// values back over them would make the fold's own baseline drift. nil
-	// until the first projection runs (or when governance indexing is not
-	// wired), in which case the API falls back to the deploy-config snapshot.
+	// Security is the live governance projection kept by project.ReconcileSecurity from
+	// indexed chain events. The deploy-time fields above (Auditor, Treasury,
+	// RedemptionManager, Admin, ComplianceOperator, Pricer, Treasurer, the prices and
+	// Roles) are a baseline that the projector replays every event on top of, so they
+	// are not overwritten with live values. Security is nil until the first projection
+	// runs or when governance indexing is not wired, and the API then uses the
+	// deploy-time values.
 	Security *SecurityState `json:"security,omitempty" bson:"security,omitempty"`
 }
 
-// SecurityState is the live, event-sourced view of a deployed project's
-// governance authority — the current paused flag, auditor, treasury, prices,
-// and role holders as projected from indexed Pausable / AccessControl /
-// Vault / SupplyController / Strategy events by project.ReconcileSecurity.
-// AsOfBlock/AsOfTime record how current this projection is (the indexer
-// checkpoint it was last folded up to), which the API turns into the
-// securityStale signal.
 // ForcedTransferState is the bounded summary of one ERC-7943 forced transfer,
 // carrying enough identity to find the event itself in canonical chain
 // history. Amount is a base-10 string in token minimal units.
@@ -122,6 +100,12 @@ type ForcedTransferState struct {
 	LogIndex    uint   `json:"logIndex" bson:"logIndex"`
 }
 
+// SecurityState is the live view of a deployed project's governance authority:
+// the paused flag, auditor, treasury, prices and role holders, projected from
+// indexed Pausable, AccessControl, Vault, SupplyController and Strategy events by
+// project.ReconcileSecurity. AsOfBlock and AsOfTime record the indexer checkpoint
+// the projection was last built up to, which the API turns into the securityStale
+// signal.
 type SecurityState struct {
 	Paused             bool   `json:"paused" bson:"paused"`
 	Auditor            string `json:"auditor" bson:"auditor"`
@@ -130,40 +114,31 @@ type SecurityState struct {
 	Admin              string `json:"admin,omitempty" bson:"admin,omitempty"`
 	ComplianceOperator string `json:"complianceOperator,omitempty" bson:"complianceOperator,omitempty"`
 	Pricer             string `json:"pricer,omitempty" bson:"pricer,omitempty"`
-	// PendingAdmin is the incoming DEFAULT_ADMIN of an in-progress two-step
-	// admin transfer (AccessControlDefaultAdminRules): the newAdmin of the
-	// latest DefaultAdminTransferScheduled that has neither been canceled nor
-	// yet accepted on every governance contract. Empty when no transfer is
-	// pending. See project.ReconcileSecurity for the accept-clears-via-role-move
-	// projection.
+	// PendingAdmin is the incoming DEFAULT_ADMIN of a two-step admin transfer
+	// (AccessControlDefaultAdminRules) that has been scheduled and neither canceled nor
+	// accepted on every governance contract. It is empty when no transfer is pending.
+	// See project.ReconcileSecurity for how acceptance is detected.
 	PendingAdmin string `json:"pendingAdmin,omitempty" bson:"pendingAdmin,omitempty"`
 	Treasurer    string `json:"treasurer,omitempty" bson:"treasurer,omitempty"`
-	// Strategy is the pricing strategy the Vault CURRENTLY points at, folded
-	// from Vault.StrategyChanged. Vault.setStrategy is admin-callable, so
-	// Addresses.Strategy — written once at deploy verification and never
-	// rewritten — is only the baseline. This is what the price projection
-	// below reads from, and what the indexer's watched-address set is
-	// rebuilt from after a swap; empty until the fold has a value.
+	// Strategy is the pricing strategy the Vault currently uses, folded from
+	// Vault.StrategyChanged. Vault.setStrategy is callable by the admin, so
+	// Addresses.Strategy is only the deploy-time value. The price projection reads
+	// this address, and the indexer's watched addresses are rebuilt from it after a
+	// change. It is empty until the fold has a value.
 	Strategy string `json:"strategy,omitempty" bson:"strategy,omitempty"`
-	// PurchasePricePerWholeToken/RedemptionPricePerWholeToken are the live
-	// strategy prices. NOTE: the /project API response does not currently
-	// expose price fields at all (see dto.ProjectResponse) — flagged as a
-	// genuinely-missing exposed field rather than silently added to the
-	// frozen openapi contract; they are projected here so the DB record is
-	// the source of truth regardless.
+	// PurchasePricePerWholeToken and RedemptionPricePerWholeToken are the live
+	// strategy prices
 	PurchasePricePerWholeToken   string              `json:"purchasePricePerWholeToken,omitempty" bson:"purchasePricePerWholeToken,omitempty"`
 	RedemptionPricePerWholeToken string              `json:"redemptionPricePerWholeToken,omitempty" bson:"redemptionPricePerWholeToken,omitempty"`
 	Roles                        map[string][]string `json:"roles,omitempty" bson:"roles,omitempty"`
-	// FrozenBalances is the ERC-7943 enforcement state: checksummed holder
-	// address -> frozen amount in token minimal units, as a base-10 string so
-	// a uint256 survives JSON without precision loss. BOUNDED by design: only
-	// currently-frozen holders appear, and a Frozen(account, 0) drops the
-	// entry rather than recording a zero. nil when nothing is frozen.
+	// FrozenBalances maps each currently frozen holder (checksummed address) to the
+	// frozen amount in token minimal units, as a base-10 string so a uint256 keeps its
+	// precision. A Frozen event with amount 0 removes the holder. It is nil when
+	// nothing is frozen.
 	FrozenBalances map[string]string `json:"frozenBalances,omitempty" bson:"frozenBalances,omitempty"`
-	// LastForcedTransfer summarizes the most recent canonical ForcedTransfer,
-	// as an audit hint only. The full history stays in chain_events and the
-	// transaction index; this document never accumulates one entry per
-	// seizure.
+	// LastForcedTransfer summarizes the latest canonical ForcedTransfer, as a hint for
+	// auditors. The full history stays in chain_events and the transaction index, so
+	// this document does not grow with each seizure.
 	LastForcedTransfer *ForcedTransferState `json:"lastForcedTransfer,omitempty" bson:"lastForcedTransfer,omitempty"`
 	AsOfBlock          uint64               `json:"asOfBlock" bson:"asOfBlock"`
 	AsOfTime           time.Time            `json:"asOfTime" bson:"asOfTime"`

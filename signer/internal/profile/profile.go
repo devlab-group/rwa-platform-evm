@@ -1,7 +1,6 @@
-// Package profile validates an Asset Profile document against the fixed
-// platform envelope (shared/schemas/asset-profile.schema.json) and compiles
-// its operator-defined assetSchema for later use validating individual asset
-// records.
+// Package profile validates an Asset Profile document against the platform envelope
+// (shared/schemas/asset-profile.schema.json) and compiles its operator-defined
+// assetSchema for validating asset records
 package profile
 
 import (
@@ -15,9 +14,9 @@ import (
 	"github.com/rwa-platform/signer/internal/textsafe"
 )
 
-// DisplayField is one entry of the offline review screen field list.
-// displayFields controls that screen only; it never affects hashing or
-// validation.
+// DisplayField is one entry of the review screen's field list. The definitions are part
+// of the profile document and so covered by profileDigest, but resolving them only
+// affects what the screen shows, never validation
 type DisplayField struct {
 	Label   string
 	Pointer string
@@ -34,17 +33,17 @@ type Profile struct {
 	DisplayFields  []DisplayField
 	AssetSchema    *jsonschema.Schema
 
-	// Canonical bytes and digest of the whole profile document, as stored
-	// on-chain and referenced by MintAttestation.profileDigest.
+	// Canonical bytes and SHA-256 digest of the whole profile document; the digest is
+	// MintAttestation.profileDigest
 	CanonicalBytes []byte
 	Digest         [32]byte
 }
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// Validate parses and validates raw Asset Profile JSON against the fixed
-// platform envelope (shared/schemas/asset-profile.schema.json), then
-// compiles assetSchema via the restricted jsonschema subset engine.
+// Validate parses and validates raw Asset Profile JSON against the platform envelope
+// (shared/schemas/asset-profile.schema.json) and the structural limits in
+// canonical.DefaultLimits, then compiles assetSchema with the jsonschema package
 func Validate(raw []byte) (*Profile, error) {
 	v, err := canonical.ParseWithLimits(raw, canonical.DefaultLimits())
 	if err != nil {
@@ -172,8 +171,8 @@ func Validate(raw []byte) (*Profile, error) {
 	return p, nil
 }
 
-// ValidateAsset validates the operator-defined "asset" object of a metadata
-// record against this profile's assetSchema.
+// ValidateAsset validates the operator-defined "asset" object of a metadata record
+// against this profile's assetSchema
 func (p *Profile) ValidateAsset(assetJSON canonical.Value) error {
 	if p.AssetSchema == nil {
 		return fmt.Errorf("profile: assetSchema is not compiled")
@@ -181,13 +180,10 @@ func (p *Profile) ValidateAsset(assetJSON canonical.Value) error {
 	return p.AssetSchema.Validate(assetJSON)
 }
 
-// requireBoundedString reads a string field and enforces both a rune-length
-// bound and a printable charset. The charset check matters most for tokenUnit:
-// it is rendered on the review screen on the same line as the normalized
-// amount, and unlike chainId or vault it is not pinned by the --policy trust
-// root, so nothing else constrains what a package can put there. A control
-// character in it has no legitimate meaning, so reject the document outright
-// rather than rely on the review screen escaping it.
+// requireBoundedString enforces rune-length bounds and printable characters.
+// Reject controls before review, especially in tokenUnit, which appears beside
+// the normalized amount and is not pinned by policy. Rendering still escapes
+// free-form values.
 func requireBoundedString(obj *canonical.Object, key string, min, max int) (string, error) {
 	v, _ := obj.Get(key)
 	s, ok := v.(string)

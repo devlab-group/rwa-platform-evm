@@ -5,8 +5,8 @@ export type WalletStatus = "disconnected" | "connecting" | "connected";
 
 /**
  * App-wide connected-wallet state (see WalletContext.tsx for the provider).
- * Kept in its own module so WalletContext.tsx exports only the component,
- * which keeps react-refresh happy.
+ * Kept in its own module so WalletContext.tsx exports only a component, as the
+ * react-refresh lint rule requires.
  */
 export interface WalletContextValue {
   address: Address | null;
@@ -17,7 +17,7 @@ export interface WalletContextValue {
   error: string | null;
   /** Prompts the wallet for account access (eth_requestAccounts). */
   connect: () => Promise<void>;
-  /** Client-side disconnect: injected wallets have no programmatic revoke, so this just forgets the account locally. */
+  /** Client-side disconnect: forgets the account locally and does not revoke the wallet's permission for this site. */
   disconnect: () => void;
   /** personal_sign the given message with the connected account. Throws if no wallet is connected. */
   signMessage: (message: string) => Promise<Hex>;

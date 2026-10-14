@@ -1,10 +1,9 @@
 # Slither static analysis (contracts/)
 
-This report records a local `slither-analyzer` 0.11.3 run, last updated 2026-08-27, with 16
-findings. The recorded triage classified none as exploitable. It predates the ERC-7943 paths
-`setFrozenTokens`, `forcedTransfer`, `returnEscrowedRWA` and `setRedemptionEscrow`; those paths
-have not been covered by a subsequent run recorded here. Rerun Slither and update this report
-before release.
+This report records 16 findings from a local `slither-analyzer` 0.11.3 run, last updated
+2026-08-27. That triage classified none as exploitable. It predates `setFrozenTokens`,
+`forcedTransfer`, `returnEscrowedRWA` and `setRedemptionEscrow`; no later run covering these
+ERC-7943 paths is recorded here. Rerun Slither and update the report before release.
 
 ## How Slither runs
 
@@ -23,8 +22,8 @@ treated as trusted for this triage; the exclusion does not assess its security. 
 `contracts/src/**`: contracts, pricing strategy, four stateless deploy helpers, interfaces and
 test token. Deployment-script guards are reviewed separately below.
 
-The workflow also runs Mythril symbolic execution weekly and on demand, with findings failing
-that job.
+The workflow also runs Mythril symbolic execution weekly and on demand. That job fails when
+`myth analyze` exits nonzero for any contract.
 
 ## Accepted findings
 
@@ -66,10 +65,12 @@ contracts use `^0.8.24`. `foundry.toml` pins the compiler to solc 0.8.24 for the
 
 ### `cyclomatic-complexity`: `RWAFactory._validateConfig`
 
-The function has twelve sequential, unnested `if (...) revert InvalidConfig(...)` checks.
-`RWAFactoryTest` covers them with `test_deploy_zero*Reverts`, `test_deploy_decimalsTooHighReverts`
-and `test_deploy_redemptionTimeoutTooShort/LongReverts`. Keeping the checks together makes the
-configuration boundary visible in one place.
+`RWAFactory._validateConfig` uses sequential, unnested `if (...) revert InvalidConfig(...)`
+checks. `RWAFactoryTest` covers zero `admin`, `auditor`, `quoteToken`, `complianceOperator`,
+`pricer`, `treasurer`, `redemptionManager` and `treasury`; decimals above 36; zero purchase
+and redemption prices; and both redemption-timeout bounds. See `test_deploy_zero*Reverts`,
+`test_deploy_decimalsTooHighReverts`, `test_deploy_redemptionTimeoutTooShortReverts` and
+`...TooLongReverts`. Keeping the validations together makes the configuration boundary clear.
 
 ### `naming-convention`: `MINT_ATTESTATION_TYPEHASH()` / `BURN_ATTESTATION_TYPEHASH()`
 
@@ -80,7 +81,7 @@ These `ISupplyController` functions expose `public constant` EIP-712 type hashes
 
 The recorded run's eight missing-zero-address findings were fixed. Direct deployment needs these
 guards even when factory deployment already supplies created or validated addresses. The guarded
-arguments now include:
+arguments include:
 
 - `RWAToken`: constructor `compliance_`, `setSupplyController` and `setRedemptionEscrow` raise
   `ZeroAddress` (`test_constructor_zeroComplianceReverts`,
@@ -91,9 +92,10 @@ arguments now include:
   (`test_constructor_zeroTokenReverts`, `test_constructor_zeroVaultReverts`);
   the auditor uses `ZeroAddressAuditor`.
 
-`Vault` already declares `ZeroAddress` in `IVault`. ComplianceRegistry constructor addresses
-receive roles: OpenZeppelin rejects a zero admin, and the factory validates the compliance
-operator. They were not flagged in the recorded run.
+`Vault` declares `ZeroAddress` in `IVault` and checks its token, quote token, strategy and
+treasury. ComplianceRegistry constructor addresses receive roles: OpenZeppelin's
+`AccessControlDefaultAdminRules` rejects a zero admin (`AccessControlInvalidDefaultAdmin`), and
+the factory validates the compliance operator. They were not flagged in the recorded run.
 
 ## Deployment scripts
 

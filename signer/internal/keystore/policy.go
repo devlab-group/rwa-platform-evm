@@ -5,21 +5,15 @@ import (
 	"strings"
 )
 
-// MinPasswordLength is the minimum length this signer accepts for a
-// keystore password it creates (CreateNative) or that ValidatePassword is
-// otherwise asked to check. NIST SP 800-63B recommends weighting length
-// over forced composition rules, so this is a length floor plus a small
-// weak-password blocklist rather than an upper/lower/digit/symbol
-// requirement.
+// MinPasswordLength is the minimum length, in bytes, of a password for a keystore this
+// signer creates. NIST SP 800-63B recommends weighting length over composition rules,
+// so the policy is a length floor, a distinct-character floor and a small blocklist
+// instead of upper-case, digit or symbol requirements.
 const MinPasswordLength = 12
 
-// commonWeakPasswords is a short blocklist of passwords that are trivially
-// guessable regardless of length. It is deliberately small: this is an
-// offline, air-gapped tool with no network access to a live
-// breached-password corpus, so exhaustive list-checking is out of scope —
-// but rejecting the most obvious placeholders (including this repo's own
-// go-ethereum test passphrase, which must never be reused for a real key)
-// meaningfully raises the floor.
+// commonWeakPasswords is a short blocklist of trivially guessable passwords. It is small
+// because the signer is offline and has no breached-password corpus to check against,
+// but it still rejects the most obvious placeholders.
 var commonWeakPasswords = map[string]bool{
 	"password":                     true,
 	"passw0rd1234":                 true,
@@ -30,16 +24,13 @@ var commonWeakPasswords = map[string]bool{
 	"letmein123456":                true,
 }
 
-// ValidatePassword returns a descriptive error if password does not meet
-// this signer's minimum keystore-password policy. It is enforced only when
-// this signer itself creates a keystore (CreateNative, and therefore
-// "signer keystore create"/"import") — it cannot and does not
-// retroactively apply to an existing external keystore that Load is asked
-// to unlock, since the signer has no way to change a password it did not
-// choose. It never logs or wraps password into the returned error.
+// ValidatePassword requires MinPasswordLength bytes, six distinct characters
+// and no case-insensitive blocklist match. CreateNative enforces it for keystore
+// create/import; Load does not reject an existing keystore's password. Errors
+// never include the password.
 func ValidatePassword(password string) error {
 	if len(password) < MinPasswordLength {
-		return fmt.Errorf("keystore: password must be at least %d characters (got %d)", MinPasswordLength, len(password))
+		return fmt.Errorf("keystore: password must be at least %d bytes (got %d)", MinPasswordLength, len(password))
 	}
 	if commonWeakPasswords[strings.ToLower(password)] {
 		return fmt.Errorf("keystore: password is a known weak/placeholder value; choose a different one")
@@ -50,9 +41,9 @@ func ValidatePassword(password string) error {
 	return nil
 }
 
-// lowEntropy rejects passwords built from a very small character alphabet
-// repeated to reach the length floor (e.g. "aaaaaaaaaaaa" or
-// "ababababbaba"), which the length check alone would not catch.
+// lowEntropy rejects passwords built from a very small alphabet repeated to reach the
+// length floor, such as "aaaaaaaaaaaa" or "ababababbaba", which the length check alone
+// would not catch
 func lowEntropy(password string) bool {
 	seen := make(map[rune]bool)
 	for _, r := range password {

@@ -14,9 +14,8 @@ type keyAndAddr struct {
 	addr common.Address
 }
 
-// newTestKeystoreFile creates a real V3 keystore file on disk (via
-// go-ethereum's own KeyStore.ImportECDSA, the same code path a real
-// operator would use) and returns its path and the imported key/address.
+// newTestKeystoreFile creates a V3 keystore file on disk with go-ethereum's
+// KeyStore.ImportECDSA and returns its path and the imported key and address
 func newTestKeystoreFile(t *testing.T, passphrase string) (path string, want *keyAndAddr) {
 	t.Helper()
 	key, err := crypto.GenerateKey()
@@ -24,10 +23,8 @@ func newTestKeystoreFile(t *testing.T, passphrase string) (path string, want *ke
 		t.Fatalf("GenerateKey: %v", err)
 	}
 	dir := t.TempDir()
-	// MinScryptN/P (not LightScryptN/P): the signer now enforces a KDF
-	// strength floor on every V3 load (kdf.go), so a keystore encrypted
-	// with go-ethereum's "light" parameters would be rejected before Load
-	// even tries the password.
+	// Load enforces a KDF floor on V3 files (kdf.go), so go-ethereum's light parameters
+	// would be rejected before the password is tried
 	ks := gokeystore.NewKeyStore(dir, MinScryptN, MinScryptP)
 	account, err := ks.ImportECDSA(key, passphrase)
 	if err != nil {
@@ -90,11 +87,10 @@ func TestZeroBytes_NilAndEmptySafe(t *testing.T) {
 	ZeroBytes([]byte{}) // must not panic
 }
 
-// TestZero_OverwritesBackingWords pins the reason Zero does more than
-// SetInt64(0): the scalar's backing words must actually be overwritten.
-// SetInt64(0) alone only reslices them away, leaving the whole key readable in
-// the heap -- and a core dump or a swapped page taken after signing would
-// still yield it.
+// TestZero_OverwritesBackingWords pins why Zero does more than SetInt64(0): the
+// scalar's backing words must be overwritten. SetInt64(0) alone only reslices them
+// away, leaving the key readable in the heap, where a core dump or swapped page taken
+// after signing would still yield it.
 func TestZero_OverwritesBackingWords(t *testing.T) {
 	key, err := crypto.GenerateKey()
 	if err != nil {
@@ -128,8 +124,8 @@ func TestZero_OverwritesBackingWords(t *testing.T) {
 	}
 }
 
-// TestZero_NoScalarIsSafe covers a key struct whose D was never set, which
-// Zero must skip rather than dereference.
+// TestZero_NoScalarIsSafe covers a key struct whose D was never set, which Zero must
+// skip instead of dereferencing
 func TestZero_NoScalarIsSafe(t *testing.T) {
 	Zero(&ecdsa.PrivateKey{})
 }

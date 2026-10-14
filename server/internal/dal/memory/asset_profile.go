@@ -30,9 +30,8 @@ func (r *AssetProfileRepository) Get(ctx context.Context, projectID string) (*mo
 	return &cp, nil
 }
 
-// GetCurrent returns the most-recent (by CreatedAt) stored profile, or
-// repository.ErrNotFound when none exists — the single-tenant "the profile"
-// accessor backing GET /api/v1/profile.
+// GetCurrent returns the profile with the latest CreatedAt, or
+// repository.ErrNotFound when none exists. It backs GET /api/v1/profile.
 func (r *AssetProfileRepository) GetCurrent(ctx context.Context) (*models.AssetProfile, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -57,8 +56,8 @@ func (r *AssetProfileRepository) Upsert(ctx context.Context, p *models.AssetProf
 	return nil
 }
 
-// Create is create-once/CAS: it refuses to overwrite an existing profile
-// for the same projectId (see the interface doc comment).
+// Create refuses to overwrite an existing profile for the same projectId, see the
+// interface doc comment
 func (r *AssetProfileRepository) Create(ctx context.Context, p *models.AssetProfile) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

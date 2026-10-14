@@ -3,8 +3,8 @@
 This dialect applies to an asset profile's operator-supplied `assetSchema`. Platform envelope
 schemas in `shared/schemas/` use Draft 2020-12; see `asset-profile.md`.
 
-The server and offline signer must agree on every asset schema. Both reject unsupported keywords
-so one validator cannot silently ignore a rule the other enforces.
+The server and offline signer must agree on asset-schema validation. Both reject
+unsupported keywords to avoid silently enforcing different rules.
 
 ## Dialect id
 
@@ -57,8 +57,8 @@ instance data only when referenced.
 Any key outside the allowlists is rejected. Common examples are:
 
 - Composition and conditionals: `oneOf`, `anyOf`, `allOf`, `not`, `if`, `then`, `else`.
-- Dynamic: `$dynamicRef`, `$dynamicAnchor`, `$anchor`, `unevaluatedProperties`,
-  `unevaluatedItems`.
+- Anchors and dynamic references: `$anchor`, `$dynamicRef`, `$dynamicAnchor`.
+- Unevaluated: `unevaluatedProperties`, `unevaluatedItems`.
 - Unsupported validation: `multipleOf`, `minProperties`, `maxProperties`, `patternProperties`,
   `propertyNames`, `dependentRequired`, `dependentSchemas`, `contains`, `minContains`,
   `maxContains`, `format`, `prefixItems`, `additionalItems`, `contentEncoding`,

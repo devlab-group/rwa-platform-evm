@@ -15,31 +15,25 @@ import (
 
 // getMyWalletStatus implements GET /api/v1/me/wallet-status (operationId
 // getMyWalletStatus).
-// Returns the WalletStatus for ONLY the address bound to the presented
-// X-Wallet-Session.
+// Returns the WalletStatus for the address bound to the presented
+// X-Wallet-Session, and only that address.
 //
-// auth.RequireWalletSession (wired ahead of this handler in api.go) has already
-// validated the session and rejected with 401 before this handler ever runs, so
-// there is no request parameter through which a caller could ask for a
-// different address's status. This replaces the investor page's former
-// dependency on the operator-only global wallet list.
+// auth.RequireWalletSession runs ahead of this handler and answers 401 for an
+// invalid session, so no request parameter can select a different address.
 func (app *App) getMyWalletStatus(c *gin.Context) {
 	address, ok := auth.WalletSessionAddress(c)
 	if !ok {
-		// Unreachable given the route's middleware chain in api.go — fail
-		// closed rather than silently proceeding if it somehow is.
+		// Unreachable behind RequireWalletSession; fail closed if it happens
 		fail(c, http.StatusUnauthorized, CodeUnauthorized, "no wallet session")
 		return
 	}
 	inv, err := app.Repos.Investors.Get(c.Request.Context(), address)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			// compliance.ChallengeService.VerifyOwnership (the only path
-			// that mints a session) always upserts an Investor record
-			// before returning, so this is not expected in practice — but
-			// respond with the honest "nothing on file yet" status rather
-			// than an internal error if it's ever reached (e.g. the record
-			// was independently removed after the session was issued).
+			// ChallengeService.VerifyOwnership, the only path that issues a
+			// session, upserts the Investor record first, so this happens only
+			// if the record was removed after issuance. Report Unknown rather
+			// than an internal error.
 			unknown := dto.WalletStatus{Address: address, Status: string(models.ComplianceUnknown), OwnershipVerified: true}
 			c.JSON(http.StatusOK, unknown.WithFrozenTokens(app.currentProject(c)))
 			return
@@ -50,10 +44,9 @@ func (app *App) getMyWalletStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.ToWalletStatus(inv).WithFrozenTokens(app.currentProject(c)))
 }
 
-// currentProject loads the project record for the per-wallet frozen lookup,
-// returning nil when there is none (or it cannot be read): a missing project
-// must degrade to "no frozen amount reported", never to an error on a status
-// call that is otherwise answerable.
+// currentProject loads the project record for the frozen-amount lookup. It
+// returns nil when the record is missing or unreadable, so the status response
+// omits the frozen amount instead of failing.
 func (app *App) currentProject(c *gin.Context) *models.Project {
 	p, err := app.Repos.Projects.Get(c.Request.Context())
 	if err != nil {
@@ -64,15 +57,12 @@ func (app *App) currentProject(c *gin.Context) *models.Project {
 
 // isAddressAllowed implements GET /api/v1/compliance/allowed/{address}
 // (operationId isAddressAllowed).
-// PUBLIC anonymous transfer-preflight lookup that discloses only {allowed}.
+// Public transfer preflight that discloses only {allowed}.
 //
-// The live ComplianceRegistry.isAllowed(address) read is via
-// app.Redemptions.IsBeneficiaryAllowed — internal/redemption's existing
-// on-chain reader (already used identically for
-// Schemas.Redemption.beneficiaryAllowed in redemptions.go), not a
-// stored/possibly-stale Investor snapshot. internal/compliance has no
-// equivalent live single-address reader; reusing this one avoids adding a
-// second on-chain isAllowed call path for the exact same contract read.
+// It reads ComplianceRegistry.isAllowed(address) live through
+// Redemptions.IsBeneficiaryAllowed, the same reader that fills
+// RedemptionResponse.beneficiaryAllowed, rather than the stored Investor
+// record.
 func (app *App) isAddressAllowed(c *gin.Context) {
 	addressParam := c.Param("address")
 	if !common.IsHexAddress(addressParam) {
@@ -80,9 +70,7 @@ func (app *App) isAddressAllowed(c *gin.Context) {
 		return
 	}
 	if app.Redemptions == nil {
-		// This route is unauthenticated/public, so a 501 "not configured"
-		// is the honest response here — there is no credential a caller
-		// could present to get a different answer.
+		// The route is public, so no credential could change this answer
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "compliance eligibility lookup is not configured on this server")
 		return
 	}

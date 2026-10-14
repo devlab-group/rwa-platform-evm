@@ -20,10 +20,9 @@ func NewNonceLeaseRepository() *NonceLeaseRepository {
 	return &NonceLeaseRepository{m: map[string]*models.NonceLease{}}
 }
 
-// Acquire grants the lease IFF free or expired, regardless of who
-// previously held it (see the interface doc comment). Deliberately never
-// deletes an expired entry — see models.NonceLease's doc comment on why a
-// reset Token would break the fencing guarantee.
+// Acquire grants the lease if it is free or expired, whoever held it (see the
+// interface doc comment). It never deletes an expired entry, because a reset Token
+// would break the fencing guarantee (see models.NonceLease).
 func (r *NonceLeaseRepository) Acquire(ctx context.Context, key, holderID string, ttl time.Duration) (uint64, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -52,16 +51,11 @@ func (r *NonceLeaseRepository) Renew(ctx context.Context, key, holderID string, 
 	return true, nil
 }
 
-// Release marks the record immediately expired (free for the next
-// Acquire) rather than deleting it — deleting would let the NEXT Acquire's
-// existing.Token+1 computation start back over from 0/1, resetting the
-// fencing token exactly like an unwanted TTL-based auto-delete would (see
-// models.NonceLease's doc comment): a network-delayed, stale write from
-// THIS SAME holder's earlier (now-released) session could then collide
-// with a later session that reused the same reset token — the classic
-// fencing-token ABA problem. Keeping the record (with its token
-// preserved) means every future Acquire for key still computes a value
-// strictly greater than anything ever issued for it.
+// Release marks the record expired and does not delete it. A deleted entry would
+// restart the next Acquire's token at 1, and a delayed write from an earlier
+// session of the same holder could then collide with a later session that reused
+// the token. Keeping the record means every later Acquire for the key returns a
+// token greater than any issued before.
 func (r *NonceLeaseRepository) Release(ctx context.Context, key, holderID string, token uint64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

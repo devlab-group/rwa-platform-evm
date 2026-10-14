@@ -143,7 +143,8 @@ func runSign(args []string) error {
 	if f.policyPath == "" {
 		return fmt.Errorf("--policy is required: the signer refuses to sign without an independently-provisioned deployment trust root; see internal/policy and docs/auditor/auditor-guide.md")
 	}
-	// Skipping review requires an explicit test-mode flag; policy checks still apply
+	// --yes skips only the confirmation prompt and needs the explicit test-mode flag;
+	// policy checks still apply
 	if f.yes && !f.unsafeTestMode {
 		return fmt.Errorf("--yes requires --unsafe-test-mode: noninteractive signing bypasses the human confirmation step and is restricted to scripted test/CI use")
 	}
@@ -294,7 +295,7 @@ func runSign(args []string) error {
 	now := time.Now().UTC()
 	validUntil := time.Unix(int64(td.Message.ValidUntil), 0).UTC()
 	if !validUntil.After(now) {
-		return fmt.Errorf("typed-data validUntil %s is not after the current time %s -- refusing to sign a zero, already-expired, or non-future validUntil", validUntil.Format(time.RFC3339), now.Format(time.RFC3339))
+		return fmt.Errorf("typed-data validUntil %s is not after the current time %s; refusing to sign a zero, already-expired or non-future validUntil", validUntil.Format(time.RFC3339), now.Format(time.RFC3339))
 	}
 	maxValidUntil := now.Add(pol.MaxAttestationLifetime)
 	if fromCreated := createdAt.Add(pol.MaxAttestationLifetime); fromCreated.Before(maxValidUntil) {
@@ -371,7 +372,7 @@ func runSign(args []string) error {
 
 	// Establish the mint or burn action before showing individual fields
 	ui.RenderActionBanner(os.Stdout, td.PrimaryType)
-	ui.Render(os.Stdout, fmt.Sprintf("Review %s — %s", td.PrimaryType, pkgPath), critical, displayFields)
+	ui.Render(os.Stdout, fmt.Sprintf("Review %s - %s", td.PrimaryType, pkgPath), critical, displayFields)
 
 	if !f.yes {
 		confirmed, err := ui.Confirm(os.Stdout, os.Stdin, "Sign this attestation")
@@ -625,14 +626,15 @@ func signDigest(digest common.Hash, f signFlags) ([]byte, common.Address, error)
 	return sig, addr, nil
 }
 
-// checkPasswordFilePermissions requires owner-only access to the plaintext password
+// checkPasswordFilePermissions requires owner-only access to a plaintext password or
+// private key file
 func checkPasswordFilePermissions(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return fmt.Errorf("stat --password-file %s: %w", path, err)
 	}
 	if info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("--password-file %s is group- or world-readable (mode %s); refusing to read it -- run: chmod 600 %s", path, info.Mode().Perm(), path)
+		return fmt.Errorf("--password-file %s is group- or world-readable (mode %s); refusing to read it; run: chmod 600 %s", path, info.Mode().Perm(), path)
 	}
 	return nil
 }

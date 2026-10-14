@@ -5,7 +5,7 @@ import { describeWalletError, waitForTxReceipt } from "./wallet";
 
 const HASH = "0xaa" as const;
 
-/** A provider that answers just enough for viem to fetch one receipt. */
+// A provider that answers just enough for viem to fetch one receipt
 function installReceiptProvider(status: "0x1" | "0x0") {
   const request = vi.fn(async ({ method }: { method: string }) => {
     switch (method) {

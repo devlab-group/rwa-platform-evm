@@ -10,40 +10,32 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// Signer abstracts "produce a signed transaction for address X" so
-// TxManager never needs raw private key material for backends that refuse
-// to expose it by design (a KMS or Vault Transit key signs remotely; the
-// key bytes never leave the service). internal/keys provides the
-// local-keystore/vault/kms-mock implementations; this package only depends
-// on the interface, not on internal/keys, to keep the dependency direction
-// one-way.
+// Signer produces signed transactions for one address, so TxManager does not
+// need raw private key material from backends that never expose it (a KMS or
+// Vault Transit key signs remotely). internal/keys provides the
+// local-keystore, vault and kms-mock implementations; this package depends only
+// on the interface, not on internal/keys.
 //
-// SubmitRequest.PrivateKey remains supported directly (StaticKeySigner is
-// what it's adapted through internally) for simple local/dev/test use where
-// a raw key is genuinely appropriate.
+// SubmitRequest.PrivateKey is also supported for local, dev and test use, and
+// is adapted through StaticKeySigner.
 type Signer interface {
-	// Address returns the account this Signer signs for. May do I/O (e.g. a
-	// KMS DescribeKey call) so it takes a context.
+	// Address returns the account this Signer signs for. It may do I/O (for
+	// example a KMS DescribeKey call), hence the context.
 	Address(ctx context.Context) (common.Address, error)
-	// SignTx returns tx signed for chainID. Implementations MUST NOT mutate
-	// tx's signature in place in a way that's visible to the caller's copy;
-	// return the signed transaction as go-ethereum's types.SignTx does.
+	// SignTx returns tx signed for chainID. Like go-ethereum's types.SignTx, it
+	// returns a new signed transaction and must not alter the caller's tx.
 	SignTx(ctx context.Context, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)
 }
 
-// StaticKeySigner adapts a plain in-memory *ecdsa.PrivateKey to Signer. This
-// is what SubmitRequest.PrivateKey is internally converted through, and is
-// also the right choice for tests and any deployment that intentionally
-// wants the simplest (least secure) key handling.
+// StaticKeySigner adapts an in-memory *ecdsa.PrivateKey to Signer. It suits
+// tests and any setup that accepts a raw key in process memory.
 type StaticKeySigner struct {
 	key  *ecdsa.PrivateKey
 	addr common.Address
 }
 
-// NewStaticKeySigner wraps key as a Signer. Returns a nil Signer for a nil
-// key, mirroring the pre-Signer convention (a nil *ecdsa.PrivateKey meant
-// "this role's hot key isn't configured") so every existing call site that
-// may legitimately pass nil (an optional hot key) keeps working unchanged.
+// NewStaticKeySigner wraps key as a Signer. It returns a nil Signer for a nil
+// key, so a caller with an optional, unconfigured hot key can pass it through
 func NewStaticKeySigner(key *ecdsa.PrivateKey) Signer {
 	if key == nil {
 		return nil

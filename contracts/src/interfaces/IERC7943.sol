@@ -7,10 +7,9 @@ import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 /// @notice The final ERC-7943 (uRWA) fungible interface: directional eligibility queries, an
 ///         absolute per-holder frozen amount, and a privileged forced transfer for legal
 ///         seizure. `type(IERC7943).interfaceId` is `0x3edbb4c4`.
-/// @dev Only the final names are declared. The draft-era spellings (`isUserAllowed`,
-///      `isTransferAllowed`, `getFrozen`, `setFrozen`, `forceTransfer`) are deliberately absent:
-///      no consumer asks for them, and carrying both would double the privileged ABI for one set
-///      of semantics.
+/// @dev Only the final ERC-7943 names are declared. The earlier draft names (`isUserAllowed`,
+///      `isTransferAllowed`, `getFrozen`, `setFrozen`, `forceTransfer`) are absent, so the
+///      privileged ABI has one spelling per function.
 interface IERC7943 is IERC165 {
     /// @notice The holder's absolute frozen amount is now `amount`. Emitted on every successful
     ///         `setFrozenTokens`, and before the `Transfer` of a `forcedTransfer` that eats into
@@ -18,25 +17,25 @@ interface IERC7943 is IERC165 {
     event Frozen(address indexed account, uint256 amount);
 
     /// @notice `amount` was moved out of `from` by the enforcement authority rather than by
-    ///         `from` itself.
+    ///         `from` itself
     event ForcedTransfer(address indexed from, address indexed to, uint256 amount);
 
-    /// @notice `account` may not send.
+    /// @notice `account` may not send
     error ERC7943CannotSend(address account);
 
-    /// @notice `account` may not receive.
+    /// @notice `account` may not receive
     error ERC7943CannotReceive(address account);
 
-    /// @notice The permissioned rules refuse this transfer.
+    /// @notice The permissioned rules refuse this transfer
     error ERC7943CannotTransfer(address from, address to, uint256 amount);
 
-    /// @notice `account` tried to move `amount` while only `unfrozen` of its balance is free.
+    /// @notice `account` tried to move `amount` while only `unfrozen` of its balance is free
     error ERC7943InsufficientUnfrozenBalance(address account, uint256 amount, uint256 unfrozen);
 
-    /// @notice Whether `account` is currently eligible to send.
+    /// @notice Whether `account` is currently eligible to send
     function canSend(address account) external view returns (bool allowed);
 
-    /// @notice Whether `account` is currently eligible to receive.
+    /// @notice Whether `account` is currently eligible to receive
     function canReceive(address account) external view returns (bool allowed);
 
     /// @notice Whether the permissioned rules would let `from` send `amount` to `to` right now.
@@ -49,10 +48,10 @@ interface IERC7943 is IERC165 {
     ///         balance, so consumers must compute the unfrozen part without underflowing.
     function getFrozenTokens(address account) external view returns (uint256 amount);
 
-    /// @notice Overwrite `account`'s frozen amount (absolute, not a delta). Emits `Frozen`.
+    /// @notice Overwrite `account`'s frozen amount (absolute, not a delta). Emits `Frozen`
     function setFrozenTokens(address account, uint256 amount) external returns (bool result);
 
-    /// @notice Move `amount` from `from` to `to` on the enforcement authority's signature,
+    /// @notice Move `amount` from `from` to `to` on the enforcement authority's call,
     ///         bypassing the sender's own eligibility. Emits `ForcedTransfer`.
     function forcedTransfer(address from, address to, uint256 amount) external returns (bool result);
 }

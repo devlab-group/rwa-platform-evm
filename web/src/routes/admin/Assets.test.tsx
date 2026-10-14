@@ -6,10 +6,11 @@ import { api, ApiError } from "../../lib/client";
 import { sendMint, waitForTxReceipt } from "../../lib/wallet";
 import { installFakeWallet, renderWithWallet } from "../../test/walletHarness";
 
-// The mint is now broadcast from the admin's wallet (SupplyController.mint),
-// not relayed by the server. The signed-result.json supplies only the auditor
-// signature (bound into the on-chain MintAttestation) + auditor address (cross-
-// checked); every other attestation field comes from the record and project.
+// The admin's wallet broadcasts the mint (SupplyController.mint); the server
+// does not relay it. signed-result.json supplies only the auditor signature,
+// which the MintAttestation carries, and the auditor address, which the page
+// checks against the project. Every other attestation field comes from the
+// record and the project.
 vi.mock("../../lib/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/client")>();
   return {
@@ -198,7 +199,7 @@ describe("Assets signer policy (offline signing trust root)", () => {
   it("buildSignerPolicy emits exactly the six keys, chainId as a decimal string, projectId as the UUID", () => {
     const policy = buildSignerPolicy(PROJECT, POLICY_UUID);
     expect(policy).not.toBeNull();
-    // Exactly the six keys the signer's DisallowUnknownFields loader accepts.
+    // The six required policy keys, and nothing else
     expect(Object.keys(policy!).sort()).toEqual([
       "auditor",
       "chainId",
@@ -207,10 +208,10 @@ describe("Assets signer policy (offline signing trust root)", () => {
       "projectId",
       "vault",
     ]);
-    // chainId is a decimal STRING, not the API's number.
+    // chainId is a decimal string, not the API's number
     expect(policy!.chainId).toBe("31337");
     expect(typeof policy!.chainId).toBe("string");
-    // projectId is the UUID string, NOT the bytes32 profileDigest/hash.
+    // projectId is the UUID string, not the bytes32 profile digest
     expect(policy!.projectId).toBe(POLICY_UUID);
     expect(policy!.projectId).not.toBe(PROJECT.profileDigest);
     // Every other value maps straight off the project.
@@ -223,7 +224,7 @@ describe("Assets signer policy (offline signing trust root)", () => {
   it("returns null when the project isn't deployed or the UUID is missing", () => {
     expect(buildSignerPolicy(undefined, POLICY_UUID)).toBeNull();
     expect(buildSignerPolicy(PROJECT, undefined)).toBeNull();
-    // Deployed addresses absent (pre-deploy) → no partial file.
+    // Without the deployed addresses (before deployment) there is no policy
     expect(
       buildSignerPolicy({ ...PROJECT, addresses: {} }, POLICY_UUID),
     ).toBeNull();
@@ -278,7 +279,7 @@ describe("Assets signer policy (offline signing trust root)", () => {
     renderWithWallet(<Assets />);
 
     await screen.findByText(
-      /Deploy the project and create the asset profile first/i,
+      /Create the Asset Profile and deploy the project first/i,
     );
     expect(
       screen.queryByRole("button", { name: "Download policy.json" }),

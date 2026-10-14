@@ -1,6 +1,6 @@
-// Test-only helper (never in the app bundle), so react-refresh's
-// "only export components" constraint — which exists purely for dev HMR —
-// doesn't apply here; it intentionally exports render/install helpers too.
+// Test-only helper, not part of the app bundle, so the react-refresh
+// "only export components" rule (which exists for dev HMR) does not apply; it
+// exports render and install helpers on purpose.
 /* eslint-disable react-refresh/only-export-components */
 import { render, type RenderResult } from "@testing-library/react";
 import { useEffect, type ReactElement } from "react";

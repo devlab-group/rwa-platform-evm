@@ -629,7 +629,9 @@ describe("Security ERC-7943 enforcement controls", () => {
 
     // Nothing is signed until the operator reads the warning and confirms.
     expect(
-      await screen.findByText(/even while trading is paused/i),
+      await screen.findByText(
+        /works while paused and when the holder is blocked or expired/i,
+      ),
     ).toBeInTheDocument();
     expect(sendForcedTransfer).not.toHaveBeenCalled();
 
@@ -678,7 +680,7 @@ describe("Security ERC-7943 enforcement controls", () => {
 
     for (const section of [freeze, forced]) {
       expect(
-        within(section).getByText(/visible in the mempool/i),
+        within(section).getByText(/see this transaction in the mempool/i),
       ).toBeInTheDocument();
       expect(
         within(section).getByText(/pause the project/i),

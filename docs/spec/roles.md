@@ -12,14 +12,15 @@ Each governance contract maintains its own roles through `AccessControlEnumerabl
 | `TREASURER_ROLE` | `keccak256("TREASURER_ROLE")` | Vault, RedemptionEscrow | `Vault.withdrawProceeds`, `RedemptionEscrow.fundRedemption` |
 | `REDEMPTION_MANAGER_ROLE` | `keccak256("REDEMPTION_MANAGER_ROLE")` | RedemptionEscrow | `rejectRedemption` |
 
-At deployment, `config.admin` receives each contract's `DEFAULT_ADMIN_ROLE` and the token's
-`PAUSER_ROLE`. Other roles go to their configured holders. Later admin transfers can leave the
-contracts with different admins.
+At deployment, `config.admin` holds `DEFAULT_ADMIN_ROLE` on each governance contract and
+`PAUSER_ROLE` on the token. Other roles go to their configured holders. Per-contract admin
+transfers can later leave different admins.
 
 - Transfer admin authority per contract with `beginDefaultAdminTransfer`, then
   `acceptDefaultAdminTransfer` after `adminTransferDelay`; `grantRole` cannot transfer it.
   Contracts accept a zero delay. `Deploy.s.sol` defaults to 0 on Anvil and one day elsewhere,
-  refusing 0 off Anvil unless `ALLOW_ZERO_ADMIN_TRANSFER_DELAY=true`. Setup defaults to two days.
+  refusing 0 off Anvil unless `ALLOW_ZERO_ADMIN_TRANSFER_DELAY=true`. The admin console's Setup
+  form defaults to two days.
   The delay governs admin transfer, not other actions by the current admin.
 - Freezing and forced transfers require `DEFAULT_ADMIN_ROLE`. Pausers have no seizure power;
   compliance may use a server hot key, while legal enforcement belongs to the issuer's admin,

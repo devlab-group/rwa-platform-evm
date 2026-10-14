@@ -22,10 +22,9 @@ func (r *walletChallengeRepo) Get(ctx context.Context, id string) (*models.Walle
 }
 
 func (r *walletChallengeRepo) MarkUsed(ctx context.Context, id string) error {
-	// The filter's "used": bson.M{"$ne": true} makes this a genuine
-	// compare-and-swap: it only matches (and so only applies the $set) a
-	// document that is not already used, so a concurrent second MarkUsed
-	// for the same id cannot also succeed — see the interface doc comment.
+	// the filter matches only a challenge that is not yet used, so the update is a
+	// compare-and-set and a concurrent second MarkUsed for the id cannot also
+	// succeed
 	res, err := r.coll.UpdateOne(ctx, bson.M{"_id": id, "used": bson.M{"$ne": true}}, bson.M{"$set": bson.M{"used": true}})
 	if err != nil {
 		return err
@@ -33,21 +32,17 @@ func (r *walletChallengeRepo) MarkUsed(ctx context.Context, id string) error {
 	if res.MatchedCount == 1 {
 		return nil
 	}
-	// MatchedCount 0 means either "no such challenge" or "already used";
-	// telling those apart needs one more read (this only happens on the
-	// error path, never on the common success path above).
+	// MatchedCount 0 means no such challenge or already used. One more read tells
+	// them apart, and only on this error path.
 	if _, err := r.Get(ctx, id); err != nil {
 		return err // repository.ErrNotFound
 	}
 	return repository.ErrAlreadyExists
 }
 
-// CountActive backs ChallengeService.Create's per-address active-challenge
-// cap. Uses CountDocuments (not an approximate
-// estimate) since this gates a security-relevant decision, not a UI
-// display figure; the address+used+expiresAt compound index declared in
-// EnsureIndexes (internal/dal/mongodb/mongodb.go) backs this exact
-// query shape.
+// CountActive backs the per-address cap in ChallengeService.Create. It uses
+// CountDocuments and not an estimate because it gates a security decision. The
+// address, used and expiresAt index from EnsureIndexes serves this query.
 func (r *walletChallengeRepo) CountActive(ctx context.Context, address string, now time.Time) (int, error) {
 	n, err := r.coll.CountDocuments(ctx, bson.M{"address": address, "used": false, "expiresAt": bson.M{"$gt": now}})
 	return int(n), err

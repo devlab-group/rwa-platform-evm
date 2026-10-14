@@ -1,7 +1,6 @@
-// Every wallet read/transaction has to be bound to the project's configured
-// chain. A wrong initial network — or a network switch after connect but
-// before submission — should block every wallet action rather than silently
-// signing against whatever chain the wallet happens to be on.
+// Every wallet read and transaction is bound to the project's chain. A wrong
+// initial network, or a switch after connect and before submission, blocks every
+// wallet action instead of signing on whatever chain the wallet is on.
 import { expect, mockOnly, test } from "../fixtures/fixtures";
 import { CHAIN_ID } from "../fixtures/mock-api";
 import { installMockWallet, mockWalletSwitchChain } from "../fixtures/mock-wallet";
@@ -10,12 +9,12 @@ import { InvestorPage } from "../pages/InvestorPage";
 const WRONG_CHAIN_ID = 1;
 const RECIPIENT = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-test.describe("Investor — wallet chain binding", () => {
+test.describe("Investor - wallet chain binding", () => {
   mockOnly();
 
   test("a wrong initial network blocks reads and every wallet action", async ({ page }) => {
-    // Re-install the mock wallet reporting the wrong chain, overriding the
-    // fixture's default (correct-chain) install added just before this.
+    // Install the mock wallet again reporting the wrong chain; this init
+    // script runs after the fixture's default one and overrides it
     await installMockWallet(page, { chainId: WRONG_CHAIN_ID });
 
     const investor = new InvestorPage(page);
@@ -32,15 +31,15 @@ test.describe("Investor — wallet chain binding", () => {
     // Balance read is blocked.
     await expect(investor.balanceSection.getByRole("button", { name: "Read balance" })).toBeDisabled();
 
-    // The buy quote is itself an on-chain read from the Vault, so it is
-    // blocked too — there is no quote to approve against on the wrong chain.
+    // The buy quote is an on-chain read from the Vault, so it is blocked too and
+    // there is no quote to approve against on the wrong chain
     await investor.fillBuyAmount("1000000000000000000");
     await expect(investor.buyPreviewButton).toBeDisabled();
     await expect(
       investor.buySection.getByRole("button", { name: "1. Approve quote token spend" }),
     ).toHaveCount(0);
 
-    // Transfer is blocked even for an otherwise-allowed recipient.
+    // Transfer is blocked too
     await investor.fillTransferRecipient(RECIPIENT);
     await expect(investor.transferButton).toBeDisabled();
   });
@@ -65,7 +64,7 @@ test.describe("Investor — wallet chain binding", () => {
     await expect(approveButton).toBeDisabled();
     await expect(investor.walletSection).toContainText(String(WRONG_CHAIN_ID));
 
-    // The offered switch prompt reconnects to the project's chain.
+    // The switch button moves the wallet back to the project's chain
     await investor.switchChain();
     await expect(investor.chainMismatchBanner).toHaveCount(0);
     await expect(approveButton).toBeEnabled();

@@ -3,7 +3,7 @@ package models
 import "time"
 
 // ComplianceOperation is a submitted status-change transaction
-// (collection: compliance_operations).
+// (collection: compliance_operations)
 type ComplianceOperation struct {
 	ID         string           `json:"id" bson:"_id"`
 	Address    string           `json:"address" bson:"address"`

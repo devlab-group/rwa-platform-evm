@@ -16,23 +16,21 @@ const ADMIN_LINKS = [
   { to: "/admin/security", label: "Security" },
 ];
 
-/** Shared shell: brand, wallet controls, section nav, and the routed page. */
+/** Shared shell: brand, wallet controls, section nav and the routed page */
 export function AppLayout() {
   const location = useLocation();
   const isAdmin = location.pathname.startsWith("/admin");
   const session = useAuthSession();
-  // Every screen here is an admin screen and needs a live session; the check
-  // stays path-scoped so a stray non-/admin URL still renders the shell.
+  // Every screen needs a live admin session; the check is scoped to /admin
+  // paths so any other URL still renders the shell
   const requiresLogin = isAdmin && !session;
   const mainRef = useRef<HTMLElement>(null);
   const isFirstRender = useRef(true);
 
-  // React Router doesn't manage focus on navigation (it's a client-side DOM
-  // swap, not a real page load) — without this, a screen reader user who
-  // clicks a nav link gets no indication anything happened. Skip it on the
-  // very first render so a fresh page load still starts at the top of the
-  // document (skip link first in tab order), and only shift focus on actual
-  // route changes thereafter.
+  // A client-side route change is a DOM swap, not a page load, and React Router
+  // does not move focus, so a screen reader user would get no signal. Move
+  // focus to <main> on route changes, but not on the first render, so a fresh
+  // load still starts at the top of the document with the skip link first.
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false;
@@ -50,10 +48,8 @@ export function AppLayout() {
       <nav className="app-nav" aria-label="Primary">
         <div className="app-nav__brand">RWA Platform</div>
 
-        {/* Global wallet affordance — present on every screen. On admin it's
-            also the prerequisite for signing in (challenge/sign happens on the
-            Login screen once a wallet is connected). The network switcher sits
-            beside it and appears once a wallet is connected. */}
+        {/* Wallet controls on every screen. The network switcher appears
+            beside them once a wallet is connected. */}
         <WalletConnectButton />
         <NetworkSwitcher />
 

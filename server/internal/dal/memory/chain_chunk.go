@@ -9,12 +9,11 @@ import (
 
 // --- indexer atomic chunk commit ---
 
-// ChainChunkRepository commits a scanned chunk atomically over the in-memory
-// event/block-hash/checkpoint repos. Its own mutex — held across the version
-// check and every write — is the atomicity guarantee (the mongodb impl uses a
-// real Mongo transaction instead). In atomic mode the indexer only ever
-// mutates the checkpoint through here, so no other writer races the version
-// check under this lock.
+// ChainChunkRepository commits a scanned chunk over the in-memory event, block-hash
+// and checkpoint repositories. Its mutex, held across the version check and every
+// write, makes the commit atomic, where the MongoDB implementation uses a
+// transaction. In atomic mode the indexer changes the checkpoint only through
+// this repository, so nothing else races the version check under the lock.
 type ChainChunkRepository struct {
 	mu          sync.Mutex
 	events      *ChainEventRepository
@@ -66,9 +65,8 @@ func (r *ChainChunkRepository) CommitChunk(ctx context.Context, c repository.Chu
 	return true, nil
 }
 
-// RewindChunk applies a reorg rollback / trusted reset under the same lock and
-// the same version fence CommitChunk uses — see
-// repository.ChainChunkRepository.RewindChunk.
+// RewindChunk applies a reorg rollback or trusted reset under the same lock and
+// version check as CommitChunk. See repository.ChainChunkRepository.RewindChunk.
 func (r *ChainChunkRepository) RewindChunk(ctx context.Context, rw repository.ChunkRewind) (bool, error) {
 	if rw.Checkpoint == nil {
 		return false, repository.ErrNotFound

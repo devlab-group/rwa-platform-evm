@@ -1,8 +1,8 @@
 // Package eip712 computes the RWA-Supply-Attestation EIP-712 domain
-// separator, struct hashes, and digests, and recovers the signer of a
-// digest. Type strings and field order are FROZEN by shared/eip712/types.md
-// and MUST match byte-for-byte across Solidity, the Go signer, and this
-// package. See shared/vectors/typehashes.json and mint-eip712.json.
+// separator, struct hashes and digests, and recovers the signer of a digest.
+// Type strings and field order are defined in shared/eip712/types.md and must
+// match byte for byte across Solidity, the Go signer and this package; the
+// golden values are in shared/vectors/typehashes.json and mint-eip712.json.
 package eip712
 
 import (
@@ -51,16 +51,16 @@ const (
 	burnTypeString   = "BurnAttestation(address auditor,bytes32 profileDigest,bytes32 operationId,bytes32 metadataDigest,uint256 amount,uint256 nonce,uint64 validUntil,address vault)"
 )
 
-// DomainTypehash, MintTypehash, and BurnTypehash are exported so callers
-// (and tests) can compare directly against shared/vectors/typehashes.json.
+// DomainTypehash, MintTypehash and BurnTypehash are exported so callers and
+// tests can compare them against shared/vectors/typehashes.json.
 var (
 	DomainTypehash = crypto.Keccak256Hash([]byte(domainTypeString))
 	MintTypehash   = crypto.Keccak256Hash([]byte(mintTypeString))
 	BurnTypehash   = crypto.Keccak256Hash([]byte(burnTypeString))
 )
 
-// word32 left-pads b to a 32-byte big-endian word, as abi.encode does for
-// every static type used here (address, bytesN, uintN).
+// word32 left-pads b to a 32-byte word, as abi.encode does for the static
+// types used here (address, uintN)
 func word32(b []byte) [32]byte {
 	var w [32]byte
 	copy(w[32-len(b):], b)
@@ -77,8 +77,8 @@ func uintWord(n *big.Int) [32]byte {
 }
 func uint64Word(n uint64) [32]byte { return word32(new(big.Int).SetUint64(n).Bytes()) }
 
-// DomainSeparator computes keccak256(abi.encode(domainTypehash, keccak256(name),
-// keccak256(version), chainId, verifyingContract)).
+// DomainSeparator returns keccak256(abi.encode(domainTypehash, keccak256(name),
+// keccak256(version), chainId, verifyingContract))
 func DomainSeparator(d Domain) [32]byte {
 	nameHash := crypto.Keccak256Hash([]byte(d.Name))
 	versionHash := crypto.Keccak256Hash([]byte(d.Version))
@@ -95,7 +95,7 @@ func DomainSeparator(d Domain) [32]byte {
 	return crypto.Keccak256Hash(buf)
 }
 
-// HashMintAttestation computes hashStruct(MintAttestation).
+// HashMintAttestation returns hashStruct(MintAttestation)
 func HashMintAttestation(m MintAttestation) [32]byte {
 	buf := make([]byte, 0, 32*9)
 	buf = append(buf, MintTypehash.Bytes()...)
@@ -118,7 +118,7 @@ func HashMintAttestation(m MintAttestation) [32]byte {
 	return crypto.Keccak256Hash(buf)
 }
 
-// HashBurnAttestation computes hashStruct(BurnAttestation).
+// HashBurnAttestation returns hashStruct(BurnAttestation)
 func HashBurnAttestation(b BurnAttestation) [32]byte {
 	buf := make([]byte, 0, 32*9)
 	buf = append(buf, BurnTypehash.Bytes()...)
@@ -141,7 +141,7 @@ func HashBurnAttestation(b BurnAttestation) [32]byte {
 	return crypto.Keccak256Hash(buf)
 }
 
-// Digest computes keccak256(0x1901 || domainSeparator || hashStruct).
+// Digest returns keccak256(0x1901 || domainSeparator || hashStruct)
 func Digest(domainSeparator, hashStruct [32]byte) [32]byte {
 	buf := make([]byte, 0, 2+32+32)
 	buf = append(buf, 0x19, 0x01)
@@ -150,21 +150,19 @@ func Digest(domainSeparator, hashStruct [32]byte) [32]byte {
 	return crypto.Keccak256Hash(buf)
 }
 
-// MintDigest is a convenience wrapper computing the full digest for a mint
-// attestation under the given domain.
+// MintDigest returns the EIP-712 digest of m under domain d.
 func MintDigest(d Domain, m MintAttestation) [32]byte {
 	return Digest(DomainSeparator(d), HashMintAttestation(m))
 }
 
-// BurnDigest is a convenience wrapper computing the full digest for a burn
-// attestation under the given domain.
+// BurnDigest returns the EIP-712 digest of b under domain d.
 func BurnDigest(d Domain, b BurnAttestation) [32]byte {
 	return Digest(DomainSeparator(d), HashBurnAttestation(b))
 }
 
-// RecoverSigner recovers the EOA that produced signature over digest.
-// signature MUST be the standard 65-byte [R || S || V] form with V in
-// {0,1,27,28}; it is normalized to {0,1} for go-ethereum's recovery API.
+// RecoverSigner returns the address that produced signature over digest.
+// signature must be 65 bytes in [R || S || V] form with V in {0,1,27,28}; V is
+// normalized to {0,1} for go-ethereum's recovery API.
 func RecoverSigner(digest [32]byte, signature []byte) (common.Address, error) {
 	if len(signature) != 65 {
 		return common.Address{}, errors.New("eip712: signature must be 65 bytes")

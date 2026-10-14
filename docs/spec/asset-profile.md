@@ -1,10 +1,10 @@
 # Asset profile and metadata limits
 
-An asset profile defines a project's asset class; metadata describes one issuance record.
-Their envelopes are `shared/schemas/asset-profile.schema.json` and
-`shared/schemas/metadata.schema.json`, using JSON Schema Draft 2020-12 with `format: uuid` and
-`format: date-time`. The signer and server MUST enforce the same limits and derivations.
-TypeScript implementations MUST reproduce the shared vectors.
+An asset profile defines the project's asset class; metadata describes an issuance record.
+Their envelopes, `shared/schemas/asset-profile.schema.json` and
+`shared/schemas/metadata.schema.json`, use Draft 2020-12 with UUID and date-time formats.
+The signer and server MUST enforce matching limits and derivations. Other implementations,
+including TypeScript clients, MUST reproduce the shared vectors.
 
 ## Documents
 

@@ -33,10 +33,10 @@ const TRANSACTION_TONE: Record<TransactionChainStatus, string> = {
   needs_intervention: "badge--danger",
 };
 
-/** Tone for an unrecognized/forward-compat status: visible, not silently neutral. */
+// Tone for an unrecognized status: a warning, not a neutral badge
 const TRANSACTION_UNKNOWN_TONE = "badge--warning";
 
-/** Redemption status badge. Derives Pending/Funded/Claimable/Completed/Rejected/Cancelled. */
+/** Redemption status badge showing Pending, Funded, Claimable, Completed, Rejected or Cancelled */
 export function RedemptionStatusBadge({
   status,
   claimable,
@@ -61,11 +61,9 @@ export function RedemptionStatusBadge({
 }
 
 /**
- * Shown alongside the status badge when a Pending redemption's beneficiary
- * has lost compliance eligibility, so funding would revert.
- * Renders nothing once the request is Funded/Completed/etc. (compliance no
- * longer blocks it) or if `beneficiaryAllowed` isn't present on the
- * response (defensive — degrades to no indicator rather than a guess).
+ * Shown beside the status badge when a Pending redemption's beneficiary is not
+ * Allowed, so funding would revert. It renders nothing for other statuses or
+ * when the response has no `beneficiaryAllowed`.
  */
 export function RedemptionComplianceBadge({
   status,
@@ -87,11 +85,9 @@ export function RedemptionComplianceBadge({
 }
 
 /**
- * Transaction confirmation/lifecycle-state badge covering every
- * `domain.TxStatus` the server can emit. Accepts a plain `string` (not just
- * the generated union) so a forward-compat status a newer server sends renders
- * a clear "Unknown" badge with a visible tone and an `attention` marker,
- * rather than an empty label or an undefined CSS class.
+ * Badge for a transaction lifecycle status, covering every status in the
+ * OpenAPI enum. It accepts a plain `string`, so a status outside the generated
+ * union renders an "Unknown" badge with a warning tone and the attention marker.
  */
 export function TransactionStatusBadge({ status }: { status: string }) {
   const known = isKnownTransactionStatus(status);

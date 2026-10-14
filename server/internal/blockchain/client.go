@@ -1,8 +1,7 @@
 // Package blockchain wraps the go-ethereum JSON-RPC client and implements a
-// per-key transaction manager. Business logic depends on the Client and
-// TxManager interfaces so it is testable with the fakes in this package,
-// without a live chain — `go test ./...` must pass with no external
-// services.
+// per-key transaction manager. Callers depend on the Client and TxManager
+// interfaces, so they can be tested with the fakes in this package without a
+// live chain.
 package blockchain
 
 import (
@@ -23,12 +22,11 @@ type Client interface {
 	BlockNumber(ctx context.Context) (uint64, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
 	PendingNonceAt(ctx context.Context, account common.Address) (uint64, error)
-	// NonceAt returns the account's nonce as of the given block (nil means
-	// "latest", i.e. eth_getTransactionCount(address,"latest")) — the
-	// MINED transaction count, distinct from PendingNonceAt's mempool-
-	// inclusive view. TxManager reconciles both before allocating or
-	// recovering a nonce, reconciling local state against both the "latest"
-	// and "pending" transaction counts.
+	// NonceAt returns the account's nonce as of the given block; nil means
+	// "latest", as in eth_getTransactionCount(address, "latest"). That is the
+	// count of mined transactions, unlike PendingNonceAt, which also counts the
+	// node's pending transactions. TxManager compares both with its own records
+	// before it allocates a nonce.
 	NonceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (uint64, error)
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
 	SuggestGasPrice(ctx context.Context) (*big.Int, error)
@@ -36,16 +34,16 @@ type Client interface {
 	CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
 	SendTransaction(ctx context.Context, tx *types.Transaction) error
 	TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
-	// TransactionByHash returns the mined/pending transaction (isPending
-	// reports which) so post-deploy verification can decode the observed
-	// RWAFactory.deploy transaction's INPUT calldata — the ProjectConfig the
-	// admin's wallet signed, which the ProjectDeployed event does not carry.
-	// ethereum.NotFound when the hash is unknown.
+	// TransactionByHash returns the mined or pending transaction (isPending
+	// reports which) and ethereum.NotFound when the hash is unknown. Post-deploy
+	// verification uses it to decode the input calldata of the observed
+	// RWAFactory.deploy transaction, which holds the ProjectConfig that the
+	// ProjectDeployed event does not carry.
 	TransactionByHash(ctx context.Context, txHash common.Hash) (tx *types.Transaction, isPending bool, err error)
 	FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error)
-	// CodeAt returns the deployed bytecode at address (nil blockNumber means
-	// latest). Used for post-deploy verification: a non-empty result proves
-	// *something* was deployed there.
+	// CodeAt returns the deployed bytecode at address (a nil blockNumber means
+	// latest). Post-deploy verification uses it: a non-empty result shows that
+	// some contract exists at the address.
 	CodeAt(ctx context.Context, address common.Address, blockNumber *big.Int) ([]byte, error)
 }
 

@@ -11,18 +11,15 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// BuildStates replays RedemptionEscrow chain events in (blockNumber,
-// logIndex) order and derives the current models.RedemptionRequest for each
-// id, following the FROZEN transition table in
-// docs/spec/redemption-state-machine.md:
+// BuildStates replays RedemptionEscrow chain events in (blockNumber, logIndex)
+// order and derives the current models.RedemptionRequest for each id, following
+// the transition table in docs/spec/redemption-state-machine.md:
 //
 //	None -> Pending -> {Funded -> Completed | Rejected | Cancelled}
 //
-// This is the ONLY source of redemption status; it
-// never reads server workflow tables. Events with an unrecognized id
-// ordering (e.g. Funded before Requested, which cannot happen on a
-// correctly indexed chain but could appear from a malformed test/fixture)
-// are skipped rather than panicking.
+// Chain events are the only source of a request's status. An event without an
+// id, or one that does not fit the request's current status (for example
+// Funded before Requested), is ignored.
 func BuildStates(events []*models.ChainEvent, redemptionTimeout int64) map[string]*models.RedemptionRequest {
 	sorted := make([]*models.ChainEvent, len(events))
 	copy(sorted, events)
@@ -60,6 +57,7 @@ func BuildStates(events []*models.ChainEvent, redemptionTimeout int64) map[strin
 				r.Status = models.RedemptionFunded
 				r.FundTxHash = e.TxHash
 				r.FundedAtBlock = e.BlockNumber
+				r.FundedAt = e.IndexedAt.UTC()
 				r.UpdatedAt = now
 			}
 		case "RedemptionCompleted":
@@ -89,10 +87,9 @@ func toString(v any) string {
 	return s
 }
 
-// toInt64 accepts every numeric shape a ChainEvent.Data value can arrive in
-// (see internal/compliance/projector.go's toInt64 for why int32 is in this
-// list: MongoDB's Go driver decodes any stored small int as int32, never
-// the field's original Go width).
+// toInt64 converts the shapes an integer in ChainEvent.Data can take: the
+// indexer's original Go type, int32 or int64 after a MongoDB round trip,
+// float64 after JSON decoding, and decimal strings
 func toInt64(v any) int64 {
 	switch t := v.(type) {
 	case int64:
@@ -113,23 +110,16 @@ func toInt64(v any) int64 {
 	}
 }
 
-// Reconcile rebuilds the redemption_requests read model out of every
-// persisted RedemptionEscrow chain event for (chainID, escrowAddr).
-// Rebuilding fully from chain events (rather than incrementally patching
-// individual fields) means the read model can always be reconstructed from
-// chain events when database records diverge: it is always safe to
-// call, including after an indexer reorg rollback that deleted some events
-// out from under a previously-derived read model.
+// Reconcile rebuilds the redemption_requests read model from every persisted
+// RedemptionEscrow chain event for (chainID, escrowAddr). Rebuilding from the
+// events, not patching individual fields, lets the model recover when database
+// records diverge. It is safe to call at any time, including after an indexer
+// rollback that deleted events.
 //
-// This used to DeleteAll the whole collection before
-// re-upserting every derived state, which let a concurrent API reader
-// observe an empty read model, and left it that way if the process crashed
-// or errored between the delete and the last upsert. It now does a
-// generation-swap instead — see sales.Service.Reconcile's doc comment for
-// the full reasoning, which applies identically here: every state is
-// Upsert'd under the current generation first (never deleted), and only
-// once that is complete are ids that no longer have a derived state at all
-// (e.g. rolled back by a reorg) pruned by generation.
+// It swaps generations as sales.Service.Reconcile does: each derived state is
+// upserted under a fresh generation, and only then are records from older
+// generations, such as requests whose events a reorg removed, deleted. A
+// concurrent API reader never sees an empty or partial model.
 func (s *Service) Reconcile(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, redemptionTimeout int64) error {
 	var all []*models.ChainEvent
 	for _, name := range EventNames {

@@ -57,7 +57,7 @@ func checkV3KDFStrength(keyJSON []byte) error {
 			return fmt.Errorf("keystore: parsing scrypt kdfparams: %w", err)
 		}
 		if p.N < MinScryptN || p.R < MinScryptR || p.P < MinScryptP {
-			return fmt.Errorf("keystore: scrypt parameters (N=%d r=%d p=%d) are weaker than the minimum policy (N>=%d r>=%d p>=%d); refusing to unlock a keystore with downgraded KDF parameters -- to keep this key, decrypt it with the tool that created it and re-encrypt it with \"signer keystore import\"", p.N, p.R, p.P, MinScryptN, MinScryptR, MinScryptP)
+			return fmt.Errorf("keystore: scrypt parameters (N=%d r=%d p=%d) are weaker than the minimum policy (N>=%d r>=%d p>=%d); refusing to unlock a keystore with downgraded KDF parameters; to keep this key, decrypt it with the tool that created it and re-encrypt it with \"signer keystore import\"", p.N, p.R, p.P, MinScryptN, MinScryptR, MinScryptP)
 		}
 		// Scrypt requires a power-of-two N; report malformed values before deriving a key
 		if p.N&(p.N-1) != 0 {
@@ -76,7 +76,7 @@ func checkV3KDFStrength(keyJSON []byte) error {
 			return fmt.Errorf("keystore: parsing pbkdf2 kdfparams: %w", err)
 		}
 		if p.C < MinPBKDF2Iterations {
-			return fmt.Errorf("keystore: pbkdf2 iteration count (c=%d) is weaker than the minimum policy (c>=%d); refusing to unlock a keystore with downgraded KDF parameters -- to keep this key, decrypt it with the tool that created it and re-encrypt it with \"signer keystore import\"", p.C, MinPBKDF2Iterations)
+			return fmt.Errorf("keystore: pbkdf2 iteration count (c=%d) is weaker than the minimum policy (c>=%d); refusing to unlock a keystore with downgraded KDF parameters; to keep this key, decrypt it with the tool that created it and re-encrypt it with \"signer keystore import\"", p.C, MinPBKDF2Iterations)
 		}
 		if p.C > MaxPBKDF2Iterations {
 			return fmt.Errorf("keystore: pbkdf2 iteration count (c=%d) exceeds the maximum policy (c<=%d); refusing to spend unbounded CPU decrypting a keystore with these parameters before the password is even verified", p.C, MaxPBKDF2Iterations)

@@ -13,11 +13,9 @@ import {MockERC20} from "../../mocks/token/MockERC20.sol";
 import {ISupplyController} from "../../../src/interfaces/ISupplyController.sol";
 import {IRedemptionEscrow} from "../../../src/interfaces/IRedemptionEscrow.sol";
 
-/// @notice Fuzzed sequences of mint/buy/request/fund/claim/reject/cancel/burn against one
-///         deployed project, with ghost accounting the invariant test checks against live
-///         contract state. All calls are wrapped so an expected revert (insufficient balance,
-///         no open request of the right kind, etc.) just skips the step rather than aborting
-///         the run — the handler explores whatever state is currently reachable.
+/// @notice Fuzzes mint, buy, request, fund, claim, reject, cancel and burn on one project
+///         with ghost accounting checked against live state. Expected reverts, such as
+///         insufficient balances or unavailable requests, skip a step without ending the run.
 contract RedemptionHandler is Test {
     RWAToken public token;
     ComplianceRegistry public compliance;

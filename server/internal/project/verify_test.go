@@ -16,8 +16,8 @@ import (
 // perContractClient routes eth_call responses by (contract, calldata) so a
 // test can give the SAME role-enumeration calldata (getRoleMemberCount and
 // getRoleMember are keyed only by role, not by contract) different answers
-// per deployed contract — which the shared FakeClient, keyed solely by
-// calldata, cannot. Unstubbed calls fall through to the embedded FakeClient,
+// per deployed contract, which the shared FakeClient, keyed only by calldata,
+// cannot. Unstubbed calls fall through to the embedded FakeClient,
 // whose DefaultCallResponse newPerContractClient sets to 32 zero bytes so an
 // un-stubbed getRoleMemberCount reports zero holders (and an un-stubbed
 // hasRole reads false).
@@ -96,7 +96,7 @@ func stubExpectedRoleHolders(t *testing.T, c *perContractClient, p *models.Proje
 		stubRoleHolders(t, c, compliance, bindings.ComplianceRole, op)
 	}
 	if pr := common.HexToAddress(p.Pricer); pr != (common.Address{}) {
-		// Strategy only — RWAFactory does not grant PRICER_ROLE on the Vault.
+		// strategy only: RWAFactory does not grant PRICER_ROLE on the Vault
 		stubRoleHolders(t, c, strategy, bindings.PricerRole, pr)
 	}
 	if tr := common.HexToAddress(p.Treasurer); tr != (common.Address{}) {
@@ -145,7 +145,7 @@ func TestVerifyBytecodeAllPresent(t *testing.T) {
 func TestVerifyBytecodeFalseWhenOneAddressEmpty(t *testing.T) {
 	client := blockchain.NewFakeClient()
 	addrs := sampleAddresses()
-	// Seed all but Strategy — simulates a factory event pointing at an
+	// Seed all but Strategy, simulating a factory event that points at an
 	// address with nothing actually deployed there.
 	for _, a := range []string{addrs.Token, addrs.Compliance, addrs.SupplyController, addrs.Vault, addrs.RedemptionEscrow} {
 		client.Code[common.HexToAddress(a)] = []byte{0x60, 0x60}
@@ -182,8 +182,8 @@ func TestVerifyRolesEnumeratesExpectedHolders(t *testing.T) {
 }
 
 // TestVerifyRolesDetectsUnexpectedHolder checks that a role held by an address
-// NOT on the allowlist — an attacker granted admin, or a bootstrap holder
-// never renounced — is reported as unexpected even though every required
+// not on the allowlist (an attacker granted admin, or a bootstrap holder that
+// never renounced) is reported as unexpected even though every required
 // holder is also present. A candidate-only hasRole check would be structurally
 // blind to this.
 func TestVerifyRolesDetectsUnexpectedHolder(t *testing.T) {
@@ -240,5 +240,33 @@ func TestVerifyRolesDedupesHolderAcrossMultipleContracts(t *testing.T) {
 	// treasurer holds TREASURER on vault + escrow but must appear once.
 	if got := roles["TREASURER_ROLE"]; len(got) != 1 {
 		t.Errorf("TREASURER_ROLE holders = %v, want exactly 1 (deduped)", got)
+	}
+}
+
+// TestVerifyNoFactoryRolesNamesRetainedRole checks that the result names exactly
+// the role and contract the factory still holds
+func TestVerifyNoFactoryRolesNamesRetainedRole(t *testing.T) {
+	c := newPerContractClient()
+	factory := common.HexToAddress("0xf0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0")
+	compliance := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	addrs := models.Addresses{Compliance: compliance.Hex(), Vault: common.HexToAddress("0x3333333333333333333333333333333333333333").Hex()}
+
+	ac := bindings.NewAccessControl()
+	data, err := ac.PackHasRole(bindings.ComplianceRole, factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := ac.ABI.Methods["hasRole"].Outputs.Pack(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.byContract[compliance] = map[string][]byte{common.Bytes2Hex(data): out}
+
+	got, err := verifyNoFactoryRoles(context.Background(), c, factory, addrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "COMPLIANCE_ROLE on ComplianceRegistry" {
+		t.Fatalf("retained = %v, want [COMPLIANCE_ROLE on ComplianceRegistry]", got)
 	}
 }

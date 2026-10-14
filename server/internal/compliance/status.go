@@ -10,11 +10,9 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// StatusService submits ComplianceRegistry.setStatus transactions using the
-// server's compliance hot key. Manual compliance
-// actions performed by a multisig instead go through the same contract but
-// outside this server-signed path; this service only covers the automated/
-// hot-key operator flow.
+// StatusService submits ComplianceRegistry.setStatus transactions signed with
+// the server's compliance hot key. Actions taken by a multisig go to the same
+// contract outside this service.
 type StatusService struct {
 	txs      blockchain.TxManager
 	registry bindings.ComplianceRegistry
@@ -22,14 +20,14 @@ type StatusService struct {
 	signer   blockchain.Signer
 }
 
-// NewStatusService constructs a StatusService. signer is typically a
-// StaticKeySigner (tests, simple deployments) or an internal/keys-backed
-// Signer (local-keystore/vault/kms-mock).
+// NewStatusService constructs a StatusService. signer is a
+// blockchain.StaticKeySigner or a signer from internal/keys (local keystore,
+// Vault or the KMS mock).
 func NewStatusService(txs blockchain.TxManager, contract common.Address, signer blockchain.Signer) *StatusService {
 	return &StatusService{txs: txs, registry: bindings.NewComplianceRegistry(), contract: contract, signer: signer}
 }
 
-// SetStatus submits one setStatus(account, status, validUntil) transaction.
+// SetStatus submits one setStatus(account, status, validUntil) transaction
 func (s *StatusService) SetStatus(ctx context.Context, idempotencyKey string, account common.Address, status bindings.ComplianceStatus, validUntil uint64) (*models.Transaction, error) {
 	data, err := s.registry.PackSetStatus(account, status, validUntil)
 	if err != nil {
@@ -41,21 +39,16 @@ func (s *StatusService) SetStatus(ctx context.Context, idempotencyKey string, ac
 		Signer:         s.signer,
 		To:             s.contract,
 		Data:           data,
-		// setStatus is a plain idempotent state write — no
-		// value moves, and reapplying the same (account,status,validUntil)
-		// twice has no duplicate side effect — so it's safe to opt into
-		// same-key resubmission after TxReorged/TxNonceConsumedExternally.
-		// This is exactly the recovery path WebhookReconciler.
-		// checkSubmitted relies on: without this, its
-		// TxReorged handling would now be blocked by the signer-level
-		// NeedsIntervention-equivalent guard Submit added for every OTHER
-		// Kind that does NOT make this same safety claim.
+		// setStatus writes state and moves no value, so applying the same
+		// (account, status, validUntil) twice is harmless. That allows
+		// resubmission under the same key after TxReorged or
+		// TxNonceConsumedExternally, which WebhookReconciler relies on.
 		AllowReorgRetry: true,
 	})
 }
 
-// StatusFromString maps the API's WalletStatus/SetStatusRequest string enum
-// to the on-chain uint8 encoding.
+// StatusFromString maps the API's WalletStatus and SetStatusRequest string
+// values to the on-chain encoding
 func StatusFromString(s string) (bindings.ComplianceStatus, bool) {
 	switch s {
 	case "Unknown":

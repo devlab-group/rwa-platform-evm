@@ -18,33 +18,25 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// vaultProvider signs through HashiCorp Vault's Transit secrets engine
-// HTTP API (or any Transit-API-compatible mount — e.g. a self-hosted
-// vault-ethereum-style plugin), so this server never holds the private key
-// at all: only Vault does. Two important caveats, stated plainly rather
-// than glossed over:
+// vaultProvider signs through the HashiCorp Vault Transit HTTP API, or any
+// Transit-compatible mount, so this server never holds the private key.
 //
-//  1. Stock open-source Vault Transit's built-in key types (ecdsa-p256/
-//     p384/p521, ed25519, rsa-*) do not include secp256k1, the curve
-//     Ethereum uses. A real deployment needs Vault Enterprise managed keys,
-//     a plugin that adds secp256k1 support at a Transit-shaped API surface
-//     (VaultKeyPrefix/VaultAddr just need to point at whatever mount
-//     actually implements it), or an HSM-backed KMS behind the same wire
-//     protocol. This client speaks the wire protocol; it is the operator's
-//     responsibility to point it at a backend that actually supports
-//     secp256k1 — see docs/operator/operator-guide.md.
-//  2. Vault Transit's sign response is a bare (r,s) ECDSA signature with no
-//     recovery id — Ethereum needs v too. This provider derives v itself by
-//     recovering the address for both possible v values (0 and 1) and
-//     keeping whichever matches the key's known address (the same
-//     technique real vault-ethereum-style integrations use).
+//  1. Stock Vault Transit has no secp256k1 key type (its ECDSA types are
+//     ecdsa-p256, ecdsa-p384 and ecdsa-p521), and Ethereum needs secp256k1.
+//     VaultAddr must point at a backend that implements the Transit wire
+//     protocol for secp256k1, such as a plugin. The provider also expects the
+//     key read response to carry a base64 uncompressed public key, which a
+//     stock Transit ECDSA key does not return.
+//  2. Transit returns a bare (r,s) signature without a recovery id, and
+//     Ethereum also needs v. The provider recovers the public key for both
+//     candidate values of v and keeps the one that matches the key's public
+//     key.
 //
-// Rotation is Vault-native: signing always targets Transit's "latest"
-// key version, so `vault write -f transit/keys/<name>/rotate` on the Vault
-// side takes effect on this server's very next signature — Reload only
-// re-derives the cached address (which DOES change on rotation, since
-// Transit generates a fresh keypair per version; the on-chain role grant
-// for the old address must be reassigned to the new one out-of-band).
+// Signing requests the latest key version, but the address and public key are
+// fetched at construction and on Reload. After a Transit key rotation, which
+// creates a new keypair, signatures stop matching the cached public key and
+// SignTx fails until Reload or a restart. The on-chain role granted to the old
+// address must also move to the new one.
 type vaultProvider struct {
 	http    *http.Client
 	addr    string // Vault server base URL, e.g. https://vault.internal:8200
@@ -73,10 +65,9 @@ func newVaultProvider(role, addr, token, keyPrefix string) (*vaultProvider, erro
 	return p, nil
 }
 
-// transitKeyResponse mirrors GET /v1/transit/keys/:name's relevant fields.
-// PublicKey is expected to be a base64-encoded 65-byte uncompressed
-// secp256k1 point — see the package/type doc comment for why that's a
-// backend-specific assumption, not something stock Vault Transit ships.
+// transitKeyResponse holds the fields used from GET /v1/transit/keys/:name.
+// PublicKey must be a base64-encoded 65-byte uncompressed secp256k1 point, a
+// backend-specific format described on vaultProvider.
 type transitKeyResponse struct {
 	Data struct {
 		LatestVersion int `json:"latest_version"`
@@ -137,13 +128,11 @@ func (p *vaultProvider) Reload(ctx context.Context) error {
 	return p.fetchPublicKey(ctx)
 }
 
-// Close is a genuine no-op, not just an unimplemented stub: this Provider
-// never holds private key material at all (that is the entire point of
-// Vault Transit signing — Vault signs, this client only ever sees the
-// public key and a resulting signature). Nothing to zero.
+// Close does nothing because the provider never holds private key material,
+// only the public key and signatures
 func (p *vaultProvider) Close() error { return nil }
 
-// transitSignRequest/-Response mirror POST /v1/transit/sign/:name.
+// transitSignRequest and transitSignResponse model POST /v1/transit/sign/:name
 type transitSignRequest struct {
 	Input         string `json:"input"`
 	Prehashed     bool   `json:"prehashed"`
@@ -156,8 +145,8 @@ type transitSignResponse struct {
 	} `json:"data"`
 }
 
-// derSignature mirrors the ASN.1 SEQUENCE{r INTEGER, s INTEGER} that
-// Vault Transit (and most ECDSA implementations) emit.
+// derSignature is the ASN.1 SEQUENCE{r INTEGER, s INTEGER} that Transit returns
+// for ECDSA keys by default (marshaling_algorithm asn1)
 type derSignature struct {
 	R, S *big.Int
 }
@@ -220,23 +209,16 @@ func (p *vaultProvider) pubKeyBytesSnapshot() []byte {
 }
 
 // secp256k1HalfN is half the secp256k1 group order, used to canonicalize s
-// below (go-ethereum keeps the equivalent constant unexported in its own
-// crypto package as secp256k1halfN).
 var secp256k1HalfN = new(big.Int).Rsh(crypto.S256().Params().N, 1)
 
-// recoverableSignature builds the 65-byte (R||S||V) Ethereum signature
-// format from a bare (r,s) pair by trying both possible recovery ids and
-// keeping whichever recovers to expectedPubKey — Vault Transit's generic
-// ECDSA sign response has no recovery id, since only secp256k1/Ethereum
-// tooling needs one. It also canonicalizes s to the lower half of the
-// curve order (EIP-2 / go-ethereum's crypto.ValidateSignatureValues
-// requires this for every post-Homestead tx): if s is in the upper half,
-// (r, N-s) is an equally valid signature for the same message and key, so
-// it's substituted in — flipping the recovery id to compensate — rather
-// than rejected. Standard ECDSA/ASN.1 libraries like Go's crypto/ecdsa (and
-// real Vault Transit) do not canonicalize s themselves, so skipping this
-// would make every other Vault-signed transaction get rejected by any
-// Ethereum node/client for a "malleable" signature.
+// recoverableSignature builds the 65-byte R||S||V Ethereum signature from a bare
+// (r,s) pair. It tries both recovery ids and keeps the one that recovers to
+// expectedPubKey.
+//
+// It also lowers s to the lower half of the curve order, as EIP-2 requires for
+// transaction signatures: if s is in the upper half, (r, N-s) is an equally
+// valid signature for the same message and key. A generic ECDSA signer may
+// return a high s, and Ethereum nodes reject it.
 func recoverableSignature(digest []byte, r, s *big.Int, expectedPubKey []byte) ([]byte, error) {
 	if s.Cmp(secp256k1HalfN) > 0 {
 		s = new(big.Int).Sub(crypto.S256().Params().N, s)

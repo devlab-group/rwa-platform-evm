@@ -1,6 +1,6 @@
-// Thin, hand-written fetch wrapper typed against the generated OpenAPI schema
-// (src/lib/api-types.ts, produced by `npm run gen:api`). Do not hand-edit that
-// generated file — extend this one instead.
+// Hand-written fetch wrapper typed against the generated OpenAPI schema
+// (src/lib/api-types.ts, produced by `npm run gen:api`). Extend this file;
+// never edit the generated one.
 import type { components, operations } from "./api-types";
 import { clearSession, getSession } from "./authSession";
 
@@ -13,7 +13,7 @@ function baseUrl(): string {
 
 export type ApiErrorBody = components["schemas"]["Error"];
 
-/** Thrown for any non-2xx response. Carries the parsed error body when present. */
+/** Thrown for any non-2xx response, carrying the parsed error body when there is one */
 export class ApiError extends Error {
   readonly status: number;
   readonly body: ApiErrorBody | undefined;
@@ -63,10 +63,10 @@ type OpQueryParams<Op> = Op extends {
 type ArrayItem<T> = T extends (infer U)[] ? U : never;
 
 /**
- * A page of a cursor-paginated list endpoint. `totalCount` is omitted
- * server-side for most-recent-N stores (e.g. audit logs) — treat its absence
- * as "unknown", not zero. `nextCursor` is present iff another page exists;
- * pass it back as `cursor` to fetch it.
+ * A page of a cursor-paginated list endpoint. `totalCount` is absent when the
+ * server cannot count cheaply (for example audit logs); treat that as unknown,
+ * not zero. `nextCursor` is present when another page exists; pass it back as
+ * `cursor` to fetch it.
  */
 export interface PageResult<T> {
   items: T[];
@@ -83,7 +83,7 @@ interface RequestOptions<Op> {
   signal?: AbortSignal;
 }
 
-/** Caller-facing options for a paginated list wrapper: signal + limit/cursor, plus any endpoint-specific filter. */
+/** Options for a paginated list wrapper: signal, limit and cursor, plus any endpoint-specific filter */
 type PageOptions<Op, Extra extends object = object> = Pick<
   RequestOptions<Op>,
   "signal"
@@ -118,16 +118,14 @@ function appendQuery(
 }
 
 function authHeaders(): Record<string, string> {
-  // Admin JWT from the wallet-signature login (see lib/authSession.ts),
-  // attached as a standard bearer token.
+  // Admin JWT from the wallet-signature login (lib/authSession.ts)
   const session = getSession();
   return session ? { Authorization: `Bearer ${session.token}` } : {};
 }
 
 async function throwForErrorResponse(res: Response): Promise<never> {
-  // A rejected/expired session is never worth holding onto — drop it so the
-  // UI falls back to the login form instead of silently retrying with a dead
-  // token.
+  // A 401 means the session is rejected or expired; drop it so the UI shows
+  // the login form instead of retrying with a dead token
   if (res.status === 401) clearSession();
   let body: ApiErrorBody | undefined;
   try {
@@ -168,20 +166,17 @@ async function request<Op>(
 
   if (res.status === 204) return undefined as OpResponse<Op>;
 
-  // Every non-204 success response in api/openapi.yaml is application/json.
-  // Don't silently swallow an unexpected body (e.g. an SPA-fallback HTML page
-  // from a misconfigured proxy) as `undefined` — parsing it as JSON and
-  // letting a SyntaxError propagate to the caller as a real failure is safer
-  // than handing callers `undefined` disguised as a successful response.
+  // Every non-204 success response this wrapper serves is application/json (the
+  // binary package download has its own function). An unexpected body, such as
+  // an SPA-fallback HTML page from a misconfigured proxy, throws a SyntaxError
+  // here instead of reaching callers as a fake success.
   return (await res.json()) as OpResponse<Op>;
 }
 
 /**
- * Like `request`, but for the cursor-paginated list endpoints: reads the
- * X-Total-Count/X-Page-Size/X-Next-Cursor response headers instead of
- * discarding them, so callers can show a total/"more available"
- * indicator and fetch further pages rather than silently truncating at the
- * server's default page size.
+ * Like `request`, but for the cursor-paginated list endpoints: it also reads
+ * the X-Total-Count, X-Page-Size and X-Next-Cursor response headers so callers
+ * can show a total or a "more available" indicator and fetch further pages.
  */
 async function requestPage<Op>(
   pathTemplate: string,
@@ -216,7 +211,7 @@ async function requestPage<Op>(
   };
 }
 
-// ---- Endpoint wrappers, one per operationId in api/openapi.yaml -----------
+// Endpoint wrappers, one per operationId in api/openapi.yaml
 
 export const api = {
   getHealth: (
@@ -231,10 +226,7 @@ export const api = {
     opts: Pick<RequestOptions<operations["getProject"]>, "signal"> = {},
   ) => request<operations["getProject"]>("GET", "/api/v1/project", opts),
 
-  /**
-   * ERC-7943 enforcement state: who is frozen, and the last seizure. Admin-only,
-   * unlike getProject, because it names individual wallets.
-   */
+  /** ERC-7943 enforcement state: frozen balances and the last forced transfer. Admin-only because it names wallets. */
   getEnforcement: (
     opts: Pick<RequestOptions<operations["getEnforcement"]>, "signal"> = {},
   ) =>
@@ -245,11 +237,9 @@ export const api = {
     ),
 
   /**
-   * Public, unauthenticated bootstrap for the admin console: the chain id and
-   * RWAFactory address the admin needs to assemble ProjectConfig and broadcast
-   * RWAFactory.deploy from their own wallet. Used pre-first-deploy, where
-   * GET /project still 404s, so it (not /project) is the source of the factory
-   * address + chain.
+   * Public bootstrap values: the chain id and RWAFactory address the admin needs
+   * to broadcast RWAFactory.deploy from their own wallet. It works before the
+   * first deployment, when GET /project returns 404.
    */
   getConfig: (
     opts: Pick<RequestOptions<operations["getConfig"]>, "signal"> = {},
@@ -260,12 +250,12 @@ export const api = {
       body,
     }),
 
-  /** Admin-only — the deployment's single stored profile, or 404 if none yet (so Setup can repopulate after a reload). */
+  /** Admin-only. The deployment's stored profile, or 404 when none exists yet */
   getProfile: (
     opts: Pick<RequestOptions<operations["getProfile"]>, "signal"> = {},
   ) => request<operations["getProfile"]>("GET", "/api/v1/profile", opts),
 
-  /** Admin-only, create-once — persists the profile. Setup must call this, not just validate. */
+  /** Admin-only. Stores the profile; the profile can be created only once, and validateProfile alone persists nothing */
   createProfile: (
     body: OpBody<operations["createProfile"]>,
     idempotencyKey: string,
@@ -341,10 +331,9 @@ export const api = {
     }),
 
   /**
-   * Fetches the binary .rwa package with the operator's bearer session
-   * attached. A plain `<a href>` can't set that header, so the protected
-   * endpoint would 403; callers instead turn the Blob into an object URL and
-   * trigger the download themselves — see routes/admin/Assets.tsx.
+   * Fetches the binary .rwa package with the bearer token attached. A plain
+   * `<a href>` cannot send that header, so callers turn the Blob into an object
+   * URL and trigger the download themselves (routes/admin/Assets.tsx).
    */
   downloadPackage: async (
     recordId: string,
@@ -416,9 +405,8 @@ export const api = {
   },
 
   /**
-   * Step 1 of admin login: requests a single-use, time-limited message for
-   * the connected wallet to personal_sign. Public/unauthenticated — this is
-   * the login entry point (see components/Login.tsx).
+   * Admin login step 1: requests a single-use, time-limited message for the
+   * connected wallet to personal_sign. Public (components/Login.tsx).
    */
   createAuthChallenge: (body: OpBody<operations["createAuthChallenge"]>) =>
     request<operations["createAuthChallenge"]>("POST", "/auth/challenge", {
@@ -426,13 +414,10 @@ export const api = {
     }),
 
   /**
-   * Step 2 of admin login: submits the wallet address + its signature over
-   * the challenge message. The server recovers the signer and, if it equals
-   * the configured project admin, returns a signed JWT (token/expiresAt/role/
-   * address) to store and attach as `Authorization: Bearer <token>`. A 401
-   * means the recovered signer is not the admin. Public by design — this *is*
-   * the exchange call. Logout is client-side (drop the token); there is no
-   * DELETE endpoint.
+   * Admin login step 2: submits the wallet address and its signature over the
+   * challenge message. The server recovers the signer and, when it is the
+   * configured project admin, returns the JWT session. Public. Logout is
+   * client-side; the API has no logout endpoint.
    */
   createSession: (body: OpBody<operations["createSession"]>) =>
     request<operations["createSession"]>("POST", "/auth/session", {

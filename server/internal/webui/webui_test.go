@@ -12,21 +12,17 @@ import (
 
 func init() { gin.SetMode(gin.TestMode) }
 
-// fixtureFS is a small, self-contained SPA build used by every test below
-// except the two that specifically check the real embedded dist/ — server/
-// e2e/run_e2e.sh overwrites dist/ with a real `npm run build` output whose
-// exact file list this package's tests must not depend on (see attach's doc
-// comment in webui.go), so the routing-behavior tests exercise attach()
-// directly against this fixture instead of Attach()/FS().
+// fixtureFS is a small SPA build for the routing tests, which call attach
+// directly. Only the two tests that check the real embedded dist/ use FS and
+// Attach.
 var fixtureFS = fstest.MapFS{
 	"index.html":    {Data: []byte("<html><body>spa shell</body></html>")},
 	"robots.txt":    {Data: []byte("User-agent: *\n")},
 	"assets/app.js": {Data: []byte("console.log('app')")},
 }
 
-// newTestRouter mirrors how cmd/platform wires things: a couple of real
-// API routes registered first (so attach's NoRoute only ever sees paths
-// nothing else claimed), then attach.
+// newTestRouter registers a couple of API routes and then attach, as
+// cmd/platform does
 func newTestRouter() *gin.Engine {
 	r := gin.New()
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
@@ -113,13 +109,10 @@ func TestNonGetUnmatchedPathIs404NotSPA(t *testing.T) {
 	}
 }
 
-// requireRealIndexHTML skips a test when only the tracked dist/.gitkeep
-// placeholder is present (a bare checkout: dist/ is otherwise gitignored, its
-// real index.html + assets are copied in only at build/release time by
-// `make platform` or server/e2e/run_e2e.sh). These two tests assert
-// properties of a REAL embedded build; with no index.html embedded there is
-// nothing to assert, so they skip rather than fail — keeping their intent for
-// when a real build IS embedded.
+// requireRealIndexHTML skips a test when only the dist/.gitkeep placeholder is
+// embedded, as in a bare checkout where `make platform` or
+// server/e2e/run_e2e.sh has not copied in a build. The tests that use it assert
+// properties of a real build, so without an index.html they skip.
 func requireRealIndexHTML(t *testing.T) {
 	t.Helper()
 	f, err := FS().Open("index.html")
@@ -129,10 +122,8 @@ func requireRealIndexHTML(t *testing.T) {
 	_ = f.Close()
 }
 
-// TestRealEmbeddedFSServesIndexHTML exercises the actual FS()/Attach() path
-// (real embedded dist/, whatever is copied there by a build) — only asserting
-// the one thing guaranteed true when a real build is embedded: a GET /
-// returns 200 with an HTML document.
+// TestRealEmbeddedFSServesIndexHTML checks the real FS and Attach path against
+// whatever build is embedded: a GET / returns 200 with an HTML document
 func TestRealEmbeddedFSServesIndexHTML(t *testing.T) {
 	requireRealIndexHTML(t)
 	r := gin.New()
@@ -155,10 +146,9 @@ func TestFSRootedAtDistNotUnderDistPrefix(t *testing.T) {
 	_ = f.Close()
 }
 
-// TestSecurityHeadersOnSPAResponses covers the review item asking these to
-// be set directly by this package (not only relied on from
-// internal/auth's router-wide middleware) — on the index.html fallback,
-// on a real static asset, and on the /api/ 404 branch.
+// TestSecurityHeadersOnSPAResponses checks that this package sets the security
+// headers itself, rather than relying on internal/auth's router-wide
+// middleware, on the index.html fallback, a static asset and the /api/ 404
 func TestSecurityHeadersOnSPAResponses(t *testing.T) {
 	r := newTestRouter()
 	for _, path := range []string{"/", "/admin/setup", "/assets/app.js", "/api/v1/does-not-exist"} {

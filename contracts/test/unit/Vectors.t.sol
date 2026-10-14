@@ -9,11 +9,11 @@ import {FixedPriceStrategy} from "../../src/pricing/FixedPriceStrategy.sol";
 import {IERC7943} from "../../src/interfaces/IERC7943.sol";
 import {IRWAToken} from "../../src/interfaces/IRWAToken.sol";
 
-/// @notice Asserts the deployed contracts reproduce the FROZEN golden vectors in
-///         shared/vectors/typehashes.json, shared/vectors/mint-eip712.json, and
-///         shared/vectors/arithmetic.json byte-for-byte. Values below are transcribed
-///         verbatim from those files; do not "fix" a mismatch here without checking whether
-///         the frozen vector itself changed.
+/// @notice Asserts the deployed contracts reproduce the golden vectors in
+///         shared/vectors/typehashes.json, shared/vectors/mint-eip712.json and
+///         shared/vectors/arithmetic.json byte for byte. The values below are transcribed
+///         from those files; before changing one to fix a mismatch, check whether the vector
+///         itself changed.
 
 contract VectorsTest is Test {
     // ---- shared/vectors/typehashes.json ----
@@ -48,7 +48,7 @@ contract VectorsTest is Test {
 
     function setUp() public {
         // Deploy at nonce 0 from the vector's deployer so address(sc) == VERIFYING_CONTRACT,
-        // exactly reproducing how the golden vector was generated.
+        // exactly reproducing how the golden vector was generated
         vm.setNonce(VECTOR_DEPLOYER, 0);
         vm.prank(VECTOR_DEPLOYER);
         sc = new SupplyController(
@@ -128,7 +128,7 @@ contract VectorsTest is Test {
     }
 }
 
-/// @notice shared/vectors/arithmetic.json — purchase rounds Ceil, redemption rounds Floor.
+/// @notice shared/vectors/arithmetic.json: purchase rounds Ceil, redemption rounds Floor
 contract ArithmeticVectorsTest is Test {
     function test_wholeTokenUsdc() public {
         _assertCase(18, 2_000_000, 1_950_000, 1_000_000_000_000_000_000, 2_000_000, 1_950_000);
@@ -214,7 +214,7 @@ contract ERC7943VectorsTest is Test {
     }
 
     /// @dev The two errors the token actually raises on the ERC-20 transfer path, pinned
-    ///      beside the standard's set so an integrator's error table matches what arrives.
+    ///      beside the standard's set so an integrator's error table matches what arrives
     function test_platformErrorSelectors() public view {
         _assertSelectorAt(".platformErrors.SenderNotAllowed", IRWAToken.SenderNotAllowed.selector);
         _assertSelectorAt(".platformErrors.RecipientNotAllowed", IRWAToken.RecipientNotAllowed.selector);
@@ -241,7 +241,7 @@ contract ERC7943VectorsTest is Test {
 }
 
 /// @dev A minimal IERC7943 implementation, so the compiler proves the interface's mutating
-///      functions really are declared to return a decodable `bool`.
+///      functions really are declared to return a decodable `bool`
 contract ReturnsTrue is IERC7943 {
     function canSend(address) external pure returns (bool) {
         return true;

@@ -17,12 +17,11 @@ export interface WalletState {
 
 /**
  * Per-page binding over the app-wide WalletProvider. The connection itself
- * (address/chainId/connect/events) lives in the context so it's shared across
- * every screen; this hook only layers on the project-specific chain-mismatch
- * check using the caller's `expectedChainId` (undefined until the project has
- * loaded), and binds `switchChain` to that chain — lib/wallet.ts
- * additionally re-asserts the chain right before each read/sign/send, since
- * this state can be stale between a subscription event and a click.
+ * (address, chainId, connect, events) lives in the context; this hook adds the
+ * chain-mismatch check against the caller's `expectedChainId` (undefined until
+ * the project has loaded) and binds `switchChain` to that chain. lib/wallet.ts
+ * checks the chain again right before each read and send, because this state
+ * can be stale between a wallet event and a click.
  */
 export function useWallet(expectedChainId: number | undefined): WalletState {
   const wallet = useWalletContext();

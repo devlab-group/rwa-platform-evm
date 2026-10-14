@@ -27,18 +27,19 @@ interface IComplianceRegistry {
 
     error ArrayLengthMismatch();
     error ZeroAddressAccount();
-    /// @dev The Vault and RedemptionEscrow are pinned Allowed; they cannot be set to any
-    ///      other status, so a fat-fingered or compromised COMPLIANCE_ROLE cannot freeze core flows.
+    /// @dev The Vault and RedemptionEscrow are pinned to `Allowed` with no expiry, so a mistaken
+    ///      or compromised COMPLIANCE_ROLE cannot block core flows
     error SystemAddressCannotBeBlocked(address account);
     error SystemAddressesAlreadySet();
     error OnlyRegistryDeployer(address caller);
 
     /// @notice One-time deploy wiring: record the Vault and RedemptionEscrow as protected system
-    ///         addresses. Callable exactly once, only by the deployer recorded at construction (the
-    ///         RWAFactory). After this, setStatus/setStatuses reject any status != Allowed for them.
+    ///         addresses. Callable exactly once, only by the deployer recorded at construction
+    ///         (normally the RWAFactory). After this, setStatus and setStatuses reject any
+    ///         status other than Allowed, and any nonzero `validUntil`, for them.
     function setSystemAddresses(address vault, address redemptionEscrow) external;
 
-    /// @notice True if `account` is a pinned system address (Vault or RedemptionEscrow).
+    /// @notice True if `account` is a pinned system address (Vault or RedemptionEscrow)
     function isSystemAddress(address account) external view returns (bool);
 
     function setStatus(address account, ComplianceStatus status, uint64 validUntil) external;

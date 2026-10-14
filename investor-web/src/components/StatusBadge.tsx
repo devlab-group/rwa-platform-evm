@@ -33,10 +33,10 @@ const TRANSACTION_TONE: Record<TransactionChainStatus, string> = {
   needs_intervention: "badge--danger",
 };
 
-/** Tone for an unrecognized/forward-compat status: visible, not silently neutral. */
+/** Tone for an unrecognized status: a visible warning rather than neutral */
 const TRANSACTION_UNKNOWN_TONE = "badge--warning";
 
-/** Redemption status badge. Derives Pending/Funded/Claimable/Completed/Rejected/Cancelled. */
+/** Redemption status badge, showing the display status derived by redemptionDisplayStatus. */
 export function RedemptionStatusBadge({
   status,
   claimable,
@@ -61,11 +61,10 @@ export function RedemptionStatusBadge({
 }
 
 /**
- * Shown alongside the status badge when a Pending redemption's beneficiary
- * has lost compliance eligibility, so funding would revert.
- * Renders nothing once the request is Funded/Completed/etc. (compliance no
- * longer blocks it) or if `beneficiaryAllowed` isn't present on the
- * response (defensive — degrades to no indicator rather than a guess).
+ * Shown next to the status badge when a Pending redemption's beneficiary is not
+ * currently Allowed, so funding would revert. Renders nothing for any other
+ * status (compliance no longer blocks it) or when `beneficiaryAllowed` is
+ * absent from the response.
  */
 export function RedemptionComplianceBadge({
   status,
@@ -87,11 +86,11 @@ export function RedemptionComplianceBadge({
 }
 
 /**
- * Transaction confirmation/lifecycle-state badge covering every
- * `domain.TxStatus` the server can emit. Accepts a plain `string` (not just
- * the generated union) so a forward-compat status a newer server sends renders
- * a clear "Unknown" badge with a visible tone and an `attention` marker,
- * rather than an empty label or an undefined CSS class.
+ * Transaction lifecycle badge for every status in the OpenAPI
+ * Transaction.status enum. It takes a plain `string`, so a status outside the
+ * generated union, such as one a newer server sends, renders an "Unknown"
+ * badge with a warning tone and an attention marker instead of an empty label
+ * or an undefined CSS class.
  */
 export function TransactionStatusBadge({ status }: { status: string }) {
   const known = isKnownTransactionStatus(status);

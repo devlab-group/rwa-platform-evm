@@ -8,7 +8,7 @@ import (
 
 // StoredProfileResponse mirrors components.schemas.StoredProfile: the raw
 // stored Asset Profile document plus the server-derived identity fields, so the
-// admin UI can repopulate the editor + deploy form after a reload.
+// admin console can repopulate its editor and deploy form after a reload
 type StoredProfileResponse struct {
 	Profile       json.RawMessage `json:"profile"`
 	ProjectID     string          `json:"projectId"`
@@ -18,8 +18,8 @@ type StoredProfileResponse struct {
 	TokenUnit     string          `json:"tokenUnit"`
 }
 
-// ToStoredProfileResponse emits the profile as the raw stored JSON document
-// (ProfileRaw was already digest-verified at create time), never re-marshalled.
+// ToStoredProfileResponse emits the profile as the stored JSON document, without
+// re-marshalling it, so the bytes match the digest computed at creation
 func ToStoredProfileResponse(p *models.AssetProfile) StoredProfileResponse {
 	return StoredProfileResponse{
 		Profile: json.RawMessage(p.ProfileRaw), ProjectID: p.ProjectID, ProfileDigest: p.Digest,
@@ -27,11 +27,11 @@ func ToStoredProfileResponse(p *models.AssetProfile) StoredProfileResponse {
 	}
 }
 
-// AssetRecordResponse mirrors components.schemas.AssetRecord. recordKey/nonce/
-// validUntil are exposed so the admin's web wallet can rebuild the
-// MintAttestation (recordKey as 0x-hex, nonce as a decimal string, validUntil
-// as unix seconds) for the auditor to sign and the wallet to submit — the mint
-// is no longer relayed by the server.
+// AssetRecordResponse mirrors components.schemas.AssetRecord. recordKey, nonce
+// and validUntil let the admin's web wallet rebuild the MintAttestation
+// (recordKey as 0x-hex, nonce as a decimal string, validUntil as Unix seconds)
+// for the auditor to sign and the wallet to submit; the server does not relay
+// the mint
 type AssetRecordResponse struct {
 	RecordID       string `json:"recordId"`
 	Status         string `json:"status"`
@@ -44,7 +44,7 @@ type AssetRecordResponse struct {
 	CreatedAt      string `json:"createdAt"`
 }
 
-// ToAssetRecordResponse maps one stored asset record onto its API view.
+// ToAssetRecordResponse maps one stored asset record onto its API view
 func ToAssetRecordResponse(r *models.AssetRecord) AssetRecordResponse {
 	return AssetRecordResponse{
 		RecordID: r.RecordID, Status: string(r.Status), MetadataDigest: r.MetadataDigest,

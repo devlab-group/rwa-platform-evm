@@ -28,19 +28,16 @@ paused. These checks cannot detect a false asset record.
 
 ## 2. Machine and binary hygiene
 
-- Sign on a machine that never connects to a network. The signer makes no network requests
-  during signing, but the machine's air gap is what enforces isolation.
-- Check the binary's checksum before each use, especially after an update. Agree with the
-  operator how the binary is built and how you receive its checksum through a trusted channel.
-  The repository has no release workflow for building, checksumming or signing binaries;
-  `make signer` builds locally into `signer/bin/signer`.
-- Use a dedicated transfer medium, such as a USB drive, for incoming `.rwa` packages and outgoing
-  results. Check it before use. A `.rwa` package is a ZIP; the parser rejects traversal, symlinks,
-  duplicate names and archives that exceed its size or decompression limits. These checks do
-  not replace careful handling of incoming files.
-- Keep the keystore and password on the offline side, stored separately. For example, keep the
-  keystore on disk and the password in a password manager or safe. Neither belongs on the drive
-  used to transfer packages.
+- Sign on a machine that never connects to a network. Signing makes no network requests;
+  the machine's air gap enforces isolation.
+- Check the binary's checksum before each use, especially after updates. Agree with the
+  operator on the build process and a trusted channel for checksums. The repository has no
+  binary release, checksum or signing workflow; `make signer` builds `signer/bin/signer` locally.
+- Check and use a dedicated medium, such as a USB drive, to transfer `.rwa` packages and
+  results. ZIP parsing rejects traversal, symlinks, duplicate names and excessive size or
+  decompression, but incoming files still need careful handling.
+- Store the keystore and password separately on the offline side, for example on disk and
+  in a password manager or safe. Keep both off the package-transfer drive.
 
 ## 3. Running the signer
 
@@ -105,24 +102,21 @@ partial file may remain; treat it as unusable.
 The signer checks package consistency and deployment binding. Before confirming, review the
 underlying evidence:
 
-- Compare each displayed asset value with your own audit report, custodian statement or other
-  source for this `recordId`. Inspect `metadata.json`'s `asset` object for fields the screen
-  doesn't show.
-- Read every proof line. An attached document is identified by its matching hash; a missing one
-  is marked `NO ATTACHED FILE MATCHES THIS HASH`. Hash-only proofs are allowed, but you must
-  obtain and verify the document through another channel before relying on it.
-- Convert `amount` from the token's smallest unit using its decimals, then check that the
-  backing supports that quantity. For an 18-decimal token, the integer uses the same scale as
-  wei. Checking the digits alone is insufficient.
-- Review `validUntil` even though the signer enforces the policy's window. If it is unexpectedly
-  close to the maximum, ask the operator why the package uses that deadline.
-- For a burn, confirm that the backing is being removed legitimately and that the tokens should
-  not instead pass through `RedemptionEscrow`. Verify with the operator that the Vault balance
-  is unsold inventory, rather than tokens someone expects back.
-- Ask why you are being asked to sign the same record again. A used record key cannot mint
-  twice, but an unused, expired authorization can need a replacement. Repeat the review and
-  record the reason; do not sign again merely "just in case". For a Safe, each owner signs their
-  own share for the reviewed digest.
+- Compare displayed asset values with your audit report, custodian statement or other
+  evidence for this `recordId`. Inspect `metadata.json`'s `asset` for fields the screen omits.
+- Review every proof. Attached documents are matched by hash; missing ones show
+  `NO ATTACHED FILE MATCHES THIS HASH`. For a hash-only proof, obtain and verify the document
+  through another channel before relying on it.
+- Convert `amount` from minimal units using the token's decimals and check that the backing
+  supports the quantity. An 18-decimal token uses the same scale as wei; the digits alone
+  do not establish the amount.
+- Review `validUntil` despite the enforced policy window. Ask the operator about deadlines
+  unexpectedly close to its maximum.
+- For burns, confirm legitimate removal of backing and that the tokens belong in unsold
+  Vault inventory, rather than in `RedemptionEscrow` or owed back to a holder.
+- Review and record the reason for signing the same record again. A used record key cannot
+  mint twice, but an unused expired authorization may need replacing. Do not sign "just in
+  case". Each Safe owner reviews the digest and signs their own share.
 
 ## 5. Key management
 
@@ -162,8 +156,8 @@ Keep the audit files with your signing records:
   unlocks are also recorded when the failure bookkeeping succeeds; errors there produce a
   warning. Signature entries contain the EIP-712 digest, or the Safe message hash for an owner
   share, never a password or private key. The signer verifies the existing chain before unlock.
-- `<keystore>.auditlog.anchor.jsonl` records the newest entry's sequence number and hash. It can
-  detect deletion of recent main-log entries when the anchor survives. The default anchor shares
+- `<keystore>.auditlog.anchor.jsonl` records the sequence number and hash of each new entry. It
+  can detect deletion of recent main-log entries when the anchor survives. The default anchor shares
   the keystore's storage, so an attacker able to rewrite both files can rewrite the history.
   Use `--audit-anchor <path>` for media protected independently from the main log. Separate
   storage helps only if the attacker cannot also modify it.

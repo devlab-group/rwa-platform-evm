@@ -1,18 +1,10 @@
-// Package textsafe neutralizes untrusted text before it is printed to the
-// auditor's terminal, and answers whether a string is safe to accept at all.
+// Package textsafe validates printable text and escapes untrusted values for
+// the auditor's terminal. Review fields from a .rwa package can contain cursor
+// controls that overwrite an amount, Vault or digest on screen while leaving
+// the signed 32-byte digest unchanged.
 //
-// The offline review screen is the auditor's only control: they read it, then
-// sign an opaque 32-byte digest. Most of what it renders comes from the .rwa
-// package, which is untrusted -- a display value, a token unit, a proof type.
-// A terminal treats some of those bytes as commands rather than text: a
-// carriage return rewinds to the start of the line, ESC [ 2 A moves the cursor
-// up two lines, and either one lets a crafted field overwrite the amount, the
-// vault, or the digest the auditor is checking. So the auditor would read one
-// attestation and sign another.
-//
-// Nothing here strips characters silently: an offending byte becomes a visible
-// \xNN escape. A value that tried to move the cursor should look wrong on
-// screen, not merely be defused.
+// Control characters become visible escapes rather than disappearing, exposing
+// attempted terminal manipulation in the review.
 package textsafe
 
 import (
@@ -22,20 +14,11 @@ import (
 	"unicode/utf8"
 )
 
-// SanitizeForTerminal returns s with every rune a terminal would act on
-// rather than draw replaced by a visible escape (\xNN, or \uNNNN above
-// U+00FF). Printable text, including non-ASCII, is returned unchanged.
-//
-// Escaping the ESC byte itself is what disarms an ANSI sequence: with the
-// introducer rendered as the four characters \x1b, the rest of a CSI (or OSC,
-// or any other) sequence is ordinary printable text that the terminal draws
-// instead of interpreting, and the auditor sees exactly the bytes that were
-// in the package.
-//
-// The result is always a single line: newlines are escaped like any other
-// control character, so a value can never add or displace a row of the review
-// screen. Callers pass field values and labels through here, never the format
-// string's own layout.
+// SanitizeForTerminal preserves printable text, including non-ASCII, and
+// escapes other runes as \xNN through U+00FF or \u with at least four hex digits.
+// Escaping ESC as the literal \x1b neutralizes ANSI CSI, OSC and other sequences.
+// Newlines are escaped too, keeping each value on one line. Callers sanitize
+// labels and values, leaving the review format's own layout intact.
 func SanitizeForTerminal(s string) string {
 	if IsPrintable(s) {
 		return s
@@ -45,8 +28,8 @@ func SanitizeForTerminal(s string) string {
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
 		if r == utf8.RuneError && size == 1 {
-			// Not valid UTF-8; escape the raw byte rather than emit a
-			// replacement char that hides what was actually there.
+			// Not valid UTF-8; escape the raw byte rather than emit a replacement
+			// character that hides what was there
 			fmt.Fprintf(&b, `\x%02x`, s[i])
 			i++
 			continue
@@ -63,11 +46,11 @@ func SanitizeForTerminal(s string) string {
 	return b.String()
 }
 
-// IsPrintable reports whether every rune of s is valid UTF-8 and printable,
-// i.e. whether SanitizeForTerminal would return s unchanged. Validators use it
-// to reject a control character at parse time, before it ever reaches a
-// terminal; sanitizing at render time stays in place regardless, since free-form
-// values such as an asset's displayFields cannot be constrained this way.
+// IsPrintable reports whether every rune of s is valid UTF-8 and printable, that is,
+// whether SanitizeForTerminal would return s unchanged. Validators use it to reject a
+// control character at parse time, before it reaches a terminal. Render-time
+// sanitizing still applies, because free-form values such as the asset fields shown
+// through displayFields cannot be constrained this way.
 func IsPrintable(s string) bool {
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
@@ -82,12 +65,12 @@ func IsPrintable(s string) bool {
 	return true
 }
 
-// printableRune reports whether r draws as a glyph. The explicit C0/DEL/C1
-// range check is redundant with unicode.IsPrint but states the terminal-control
-// bytes this exists for. unicode.IsPrint additionally excludes tabs (which
-// distort a column layout), the line/paragraph separators U+2028 and U+2029,
-// and the Cf formatting characters -- among them the bidi overrides that can
-// reverse how a value reads on screen without changing a byte of it.
+// printableRune reports whether r draws as a glyph. The explicit C0, DEL and C1 range
+// check overlaps unicode.IsPrint but names the terminal-control bytes this package
+// exists for. unicode.IsPrint also excludes tabs (which distort the column layout),
+// the line and paragraph separators U+2028 and U+2029, non-ASCII spaces, and the Cf
+// formatting characters, including the bidi overrides that can reverse how a value
+// reads on screen without changing a byte of it.
 func printableRune(r rune) bool {
 	if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
 		return false

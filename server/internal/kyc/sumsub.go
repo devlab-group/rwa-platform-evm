@@ -254,7 +254,7 @@ func sumsubOccurredAt(wh sumsubWebhook) (int64, error) {
 		}
 	}
 	if wh.CreatedAt != "" {
-		// Sumsub renders createdAt like "2020-02-21 13:23:19+0000".
+		// Sumsub renders createdAt like "2020-02-21 13:23:19+0000"
 		if t, err := time.Parse("2006-01-02 15:04:05-0700", wh.CreatedAt); err == nil {
 			return t.Unix(), nil
 		}

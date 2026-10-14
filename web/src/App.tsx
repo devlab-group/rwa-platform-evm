@@ -2,11 +2,10 @@ import { lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppLayout } from "./components/AppLayout";
 
-// Code-split per route: React.lazy + a dynamic import() per screen, so the
-// initial bundle only ships app shell + whichever screen is first requested
-// (each named export is re-wrapped as a default for lazy()'s sake — the
-// route files keep their normal named-export convention). Suspense boundary
-// lives once in AppLayout, around the shared <Outlet/>.
+// Each screen loads through React.lazy and a dynamic import(), so the initial
+// bundle holds the shell and the first requested screen. lazy() needs a default
+// export, so each named export is re-wrapped. AppLayout holds the one Suspense
+// boundary, around the shared <Outlet/>.
 const Setup = lazy(() =>
   import("./routes/admin/Setup").then((m) => ({ default: m.Setup })),
 );

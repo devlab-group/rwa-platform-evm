@@ -10,9 +10,9 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// erc7943Vector mirrors shared/vectors/erc7943-abi.json, the frozen ERC-7943
-// ABI surface that the Solidity interface and the web ABI fragments are also
-// asserted against.
+// erc7943Vector mirrors shared/vectors/erc7943-abi.json, the ERC-7943 ABI
+// surface that the Solidity interface and the web ABI fragments are also
+// checked against
 type erc7943Vector struct {
 	InterfaceID string `json:"interfaceId"`
 	Functions   map[string]struct {

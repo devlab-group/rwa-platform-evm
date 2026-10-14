@@ -5,14 +5,10 @@ import (
 	"testing"
 )
 
-// TestDialectRejectsUnusedDefsMember guards a subtle server/signer parity
-// case: `{"$defs":{"unused":{"multipleOf":2}}}` must be rejected. A validator
-// that only dialect-checks $defs entries reachable through a $ref would let a
-// disallowed keyword slip through in an unreferenced entry. The dialect treats
-// $defs as a container whose members are all schema objects, each of which
-// must itself satisfy the dialect regardless of whether anything $refs it, so
-// guardAssetSchema's $defs branch (schema_guard.go) walks every entry
-// unconditionally with its own fresh refChain. This test pins that.
+// TestDialectRejectsUnusedDefsMember checks that `{"$defs":{"unused":{"multipleOf":2}}}`
+// is rejected. Every $defs member must satisfy the dialect even when no $ref
+// reaches it, so guardAssetSchema walks all of them. A validator that checked
+// only referenced entries would let a disallowed keyword through.
 func TestDialectRejectsUnusedDefsMember(t *testing.T) {
 	err := guardAssetSchema([]byte(`{"$defs":{"unused":{"multipleOf":2}}}`))
 	if err == nil {
@@ -23,16 +19,11 @@ func TestDialectRejectsUnusedDefsMember(t *testing.T) {
 	}
 }
 
-// TestEmptyTypeArrayRejected guards another parity case: `{"type":[]}` is
-// rejected by the server's full Draft 2020-12 compiler, but a hand-written
-// validator can mistakenly treat an empty type array as "any type" and
-// silently accept an arbitrary instance. guardAssetSchema itself does
-// not reject an empty type array (validateTypeValue's []any branch has no
-// error path for zero elements — an empty array is vacuously "every element
-// is a recognized type name"), so parity here depends entirely on
-// compileAssetSchema's underlying jsonschema.Compiler rejecting it. Assert
-// that explicitly so a library upgrade or refactor that silently starts
-// accepting `type: []` is caught here instead of only in production.
+// TestEmptyTypeArrayRejected checks that `{"type":[]}` is rejected. A validator
+// can treat an empty type array as "any type" and accept every instance.
+// guardAssetSchema accepts an empty array, because validateTypeValue has no error
+// path for zero elements, so the rejection comes from the jsonschema compiler in
+// compileAssetSchema. The test fails if a library upgrade starts accepting it.
 func TestEmptyTypeArrayRejected(t *testing.T) {
 	raw := []byte(`{"type":[]}`)
 	if err := guardAssetSchema(raw); err != nil {

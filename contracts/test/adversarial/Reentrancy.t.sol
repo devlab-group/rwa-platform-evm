@@ -12,8 +12,8 @@ import {Vault} from "../../src/Vault.sol";
 import {RedemptionEscrow} from "../../src/RedemptionEscrow.sol";
 import {IComplianceRegistry} from "../../src/interfaces/IComplianceRegistry.sol";
 
-/// @notice Proves Vault.buy and RedemptionEscrow.fundRedemption are safe against a malicious
-///         quote token that tries to reenter mid-`transferFrom`, via `nonReentrant`.
+/// @notice Checks that Vault.buy and RedemptionEscrow.fundRedemption, both `nonReentrant`,
+///         revert when a malicious quote token reenters mid-`transferFrom`
 contract ReentrancyTest is TestBase {
     ReentrantERC20 internal evilQuote;
     address internal evilVault;
@@ -40,7 +40,7 @@ contract ReentrancyTest is TestBase {
         vm.prank(complianceOperator);
         ComplianceRegistry(evilCompliance).setStatus(investor, IComplianceRegistry.ComplianceStatus.Allowed, 0);
 
-        // Mint inventory into the evil vault.
+        // Mint inventory into the evil vault
         ISupplyController.MintAttestation memory a = ISupplyController.MintAttestation({
             auditor: auditor,
             profileDigest: PROFILE_DIGEST,
@@ -81,7 +81,7 @@ contract ReentrancyTest is TestBase {
         evilQuote.arm(evilVault, reentrantCall);
 
         vm.prank(investor);
-        vm.expectRevert(); // ReentrancyGuardReentrantCall via nonReentrant
+        vm.expectRevert(); // the mock reverts when its reentrant call fails
         Vault(evilVault).buy(1 ether, type(uint256).max, investor, uint64(block.timestamp + 1 hours));
     }
 
@@ -95,7 +95,7 @@ contract ReentrancyTest is TestBase {
     }
 
     function test_fundRedemption_reentrancyReverts() public {
-        // Give investor some RWA to redeem, then request a redemption.
+        // Give investor some RWA to redeem, then request a redemption
         vm.prank(evilVault);
         IERC20(evilToken).transfer(investor, 10 ether);
 

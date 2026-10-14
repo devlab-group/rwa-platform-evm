@@ -5,22 +5,20 @@ import (
 	"time"
 )
 
-// EventDerivedTxIDPrefix marks a Transaction record synthesized by the
-// stack-transactions projector (txindex.ReconcileStackTransactions) from
-// indexed chain events, rather than one the transaction manager itself signed
-// and broadcast. Such a record's ID is EventDerivedTxIDPrefix + txHash. It
-// carries no signed payload/nonce (those fields stay zero) and MUST be ignored
-// by TxManager.RefreshStatuses, which only manages transactions it submitted.
+// EventDerivedTxIDPrefix marks a Transaction record that the stack-transactions
+// projector (txindex.ReconcileStackTransactions) built from indexed chain events,
+// as opposed to one the transaction manager signed and broadcast. Its ID is
+// EventDerivedTxIDPrefix + txHash. It has no signed payload or nonce, and
+// TxManager.RefreshStatuses ignores it because that only manages transactions it
+// submitted.
 const EventDerivedTxIDPrefix = "evt:"
 
-// IsEventDerived reports whether t was synthesized from chain events by the
-// stack-transactions projector (see EventDerivedTxIDPrefix), as opposed to a
-// transaction-manager-submitted record.
+// IsEventDerived reports whether t has the EventDerivedTxIDPrefix
 func IsEventDerived(t *Transaction) bool {
 	return strings.HasPrefix(t.ID, EventDerivedTxIDPrefix)
 }
 
-// TxStatus is the transaction-manager lifecycle state.
+// TxStatus is the transaction manager's lifecycle state
 type TxStatus string
 
 const (
@@ -29,75 +27,51 @@ const (
 	TxConfirmed TxStatus = "confirmed"
 	TxReplaced  TxStatus = "replaced"
 	TxReverted  TxStatus = "reverted"
-	// TxReorged means a transaction that previously had a receipt (Mined,
-	// Confirmed, or Reverted — including one that had already crossed the
-	// configured confirmations threshold) no longer does, or its receipt's
-	// block is no longer the canonical block at that height — even a
-	// confirmed transaction is re-checked for reorgs. Like TxFailed,
-	// a TxReorged record's Idempotency-Key is retryable — see TxFailed's
-	// doc comment — because the chain no longer contains this attempt under
-	// any nonce/hash TxManager can still track; a fresh Submit under the
-	// same key re-queries the nonce and resubmits.
+	// TxReorged means a transaction that had a receipt (Mined, Confirmed or Reverted,
+	// including one past the confirmations threshold) no longer has one, or its
+	// receipt's block is no longer canonical at that height. The Idempotency-Key of a
+	// TxReorged record can be reused by a new Submit only if AllowReorgRetry was set,
+	// because the transaction may return to the mempool. A new Submit then re-queries
+	// the nonce and signs again.
 	TxReorged TxStatus = "reorged"
-	// TxFailed means signing succeeded but SendTransaction itself returned
-	// a DEFINITE (non-ambiguous) error — nothing reached the mempool under
-	// this record's nonce. Unlike every other status except
-	// TxReorged, a TxFailed record's Idempotency-Key is retryable:
-	// TxManager.Submit treats it the same as "no prior record" instead of
-	// replaying it as an already-submitted result.
+	// TxFailed means signing succeeded and SendTransaction returned a definite error,
+	// so nothing reached the mempool under the record's nonce. The Idempotency-Key is
+	// retryable: TxManager.Submit treats a TxFailed record like no earlier record.
 	TxFailed TxStatus = "failed"
-	// TxBroadcastUnknown means the record was durably persisted — including
-	// the exact signed RLP bytes in SignedRawTx — but whether it actually
-	// reached/was accepted by the node is UNKNOWN: either SendTransaction
-	// itself returned a transport-level error (timeout, connection reset,
-	// context deadline) that could just as easily mean "the node accepted
-	// it and the ack was lost" as "it never arrived", or the
-	// process crashed between persisting a replacement's intent and
-	// actually broadcasting it. Unlike TxFailed/TxReorged, a
-	// TxBroadcastUnknown record's Idempotency-Key is NOT retryable via a
-	// fresh Submit — allocating a new nonce or re-signing while the
-	// outcome is unknown risks a duplicate on-chain operation. It can only
-	// be resolved by RefreshStatuses: query the chain by the known hash,
-	// and if no receipt exists yet, rebroadcast the EXACT SAME persisted
-	// bytes (never a different nonce/signature) until a receipt appears or
-	// an operator intervenes.
+	// TxBroadcastUnknown stores SignedRawTx but does not establish whether the node
+	// accepted it. A transport error may lose the acknowledgement, or a crash may
+	// interrupt broadcasting after persistence.
+	//
+	// Submit cannot retry the Idempotency-Key with a new nonce or signature because
+	// that could duplicate the operation. RefreshStatuses resolves the known hash
+	// and rebroadcasts the stored bytes while unresolved, until a receipt appears
+	// or operator intervention is required.
 	TxBroadcastUnknown TxStatus = "broadcast_unknown"
-	// TxNonceConsumedExternally means the account's on-chain (latest/mined)
-	// nonce has advanced past this transaction's Nonce without a receipt
-	// ever being observed for THIS transaction's hash — an externally
-	// consumed nonce we detect and reconcile. Some other
-	// transaction — not this one, e.g. one submitted directly against the
-	// signer outside TxManager, or replaced by a mechanism TxManager lost
-	// track of — was mined at this nonce, so this record can never confirm.
-	// Like TxFailed/TxReorged, its Idempotency-Key is retryable: the
-	// business operation this record represents never actually executed
-	// under it.
+	// TxNonceConsumedExternally means the account's on-chain nonce moved past this
+	// transaction's Nonce without a receipt for this transaction's hash. Another
+	// transaction was mined at that nonce, for example one sent directly with the
+	// signer's key outside TxManager or a replacement TxManager lost track of, so this
+	// record cannot confirm. The Idempotency-Key is retryable only if AllowReorgRetry
+	// was set, because the other transaction may have performed the same business
+	// action.
 	TxNonceConsumedExternally TxStatus = "nonce_consumed_externally"
-	// TxNeedsIntervention means a stuck transaction exhausted its
-	// configured replacement-attempt limit: it must be flagged for operator
-	// intervention so later nonce-dependent transactions aren't incorrectly
-	// reported as finalized behind it. It is
-	// terminal from TxManager's own automated-replacement perspective —
-	// Replace refuses to act on it further — but NOT retryable via a fresh
-	// Submit under the same Idempotency-Key, because whether the
-	// underlying nonce is still live/replaceable or was already consumed
-	// is unknown without operator investigation. While any transaction for
-	// a signer is TxNeedsIntervention, Submit refuses new submissions for
-	// that same signer (see TxManager's doc comment): a chain enforces
-	// strict nonce ordering, so anything submitted behind a stuck nonce
-	// would get stuck too.
+	// TxNeedsIntervention means a stuck transaction used up its replacement attempts.
+	// It is flagged for an operator so that later transactions are not reported
+	// finalized behind it. TxManager.Replace acts only on Pending records, so it does
+	// nothing further for this one. A new Submit under the same Idempotency-Key is not
+	// allowed, because whether the nonce is still replaceable or was consumed is
+	// unknown. While a signer has a TxNeedsIntervention transaction, Submit refuses new
+	// submissions for that signer, since a transaction behind a stuck nonce would also
+	// stick.
 	TxNeedsIntervention TxStatus = "needs_intervention"
 )
 
-// AllTxStatuses is the single source-of-truth list of every TxStatus the
-// transaction manager can persist and the API can therefore emit. The
-// OpenAPI Transaction.status enum, the generated TS type, and the
-// UI status maps must cover exactly this set — the Go transactions handler
-// returns the raw status string, so any status missing from the enum/UI
-// renders as an undefined/unknown badge). A contract test
-// (TestAllTxStatusesMatchesConstants) asserts this slice stays in lockstep
-// with the const block above, and TestAllTxStatusesMatchesOpenAPIEnum asserts
-// it matches api/openapi.yaml's enum exactly.
+// AllTxStatuses lists every TxStatus the transaction manager can store and the API
+// can return. The Transaction.status enum in api/openapi.yaml, the generated
+// TypeScript type and the UI status maps must cover exactly this set, because the
+// transactions handler returns the raw status string and a missing status would
+// render as unknown. Tests in internal/api check the list against the constants
+// above and against the OpenAPI enum.
 var AllTxStatuses = []TxStatus{
 	TxPending,
 	TxMined,
@@ -111,7 +85,8 @@ var AllTxStatuses = []TxStatus{
 	TxNeedsIntervention,
 }
 
-// Transaction is one server-submitted chain transaction (collection: transactions).
+// Transaction is a chain transaction, either submitted by the server or derived
+// from chain events (collection: transactions)
 type Transaction struct {
 	ID             string `json:"id" bson:"_id"`
 	IdempotencyKey string `json:"idempotencyKey,omitempty" bson:"idempotencyKey,omitempty"`
@@ -123,99 +98,65 @@ type Transaction struct {
 	Value          string `json:"value" bson:"value"`
 	Nonce          uint64 `json:"nonce" bson:"nonce"`
 	TxHash         string `json:"txHash" bson:"txHash"`
-	// SignedRawTx is the exact signed RLP transaction bytes ("0x"-prefixed
-	// hex), persisted BEFORE broadcast so it can always be replayed. It is
-	// what RefreshStatuses
-	// rebroadcasts, byte-for-byte, to resolve a TxBroadcastUnknown record —
-	// never a re-signed/re-nonced transaction. Internal only: never
-	// serialized in an API response (see the dedicated
-	// dto.TransactionResponse view type).
+	// SignedRawTx is the signed RLP transaction, 0x-prefixed hex, stored before
+	// broadcast. RefreshStatuses rebroadcasts these bytes unchanged to resolve a
+	// TxBroadcastUnknown record and never re-signs or changes the nonce. It is not
+	// included in API responses (see dto.TransactionResponse).
 	SignedRawTx string   `json:"-" bson:"signedRawTx,omitempty"`
 	Status      TxStatus `json:"status" bson:"status"`
 	BlockNumber uint64   `json:"blockNumber,omitempty" bson:"blockNumber,omitempty"`
-	// BlockHash is the receipt's block hash at the time it was last
-	// observed (the receipt's block HASH), used to detect
-	// a reorg by comparing against the CURRENT canonical header at
-	// BlockNumber on a later RefreshStatuses tick.
+	// BlockHash is the hash of the receipt's block when it was last observed.
+	// RefreshStatuses compares it with the canonical header at BlockNumber to detect a
+	// reorg.
 	BlockHash  string `json:"-" bson:"blockHash,omitempty"`
 	ReplacedBy string `json:"replacedBy,omitempty" bson:"replacedBy,omitempty"`
-	// Replaces is the reverse link set on a replacement record, back to the
-	// original transaction it replaces, so an incomplete replacement can be
-	// reconciled. Together with ReplacedBy on the original, this
-	// lets RefreshStatuses self-heal a crash that persisted this record but
-	// never got to mark the original Replaced/ReplacedBy.
+	// Replaces links a replacement record back to the transaction it replaces. With
+	// ReplacedBy on the original, it lets RefreshStatuses repair a crash that stored
+	// this record before marking the original Replaced.
 	Replaces string `json:"-" bson:"replaces,omitempty"`
-	// ReplacementCount is how many times this transaction's nonce has been
-	// replaced so far, walking back through the Replaces chain (0 for an
-	// original Submit-created record, N+1 for a record replacing one whose
-	// own ReplacementCount was N). TxManager.Replace compares it against
-	// the configured replacement-attempt cap to decide
-	// whether to attempt another bumped-fee resubmission or mark the
-	// transaction TxNeedsIntervention instead.
+	// ReplacementCount is how many times the nonce has been replaced along the
+	// Replaces chain: 0 for a record created by Submit, and the replaced record's count
+	// plus one for a replacement. TxManager.Replace compares it with the configured cap
+	// to decide between another fee bump and TxNeedsIntervention.
 	ReplacementCount int `json:"replacementCount,omitempty" bson:"replacementCount,omitempty"`
-	// FencingToken is the distributed nonce lease's fencing token in effect
-	// when this record was persisted, in "mongo-lease" TxCoordinationMode
-	// (multi-replica hot-key coordination). Zero in
-	// "in-process" mode (the default) — see NonceLeaseRepository and
-	// TxManager's doc comment. Recorded for observability/audit only; the
-	// actual reject-a-superseded-writer enforcement happens live, via a
-	// NonceLeaseRepository.Renew call gating the persist step itself (a
-	// live repository check is race-free in a way comparing a locally
-	// cached number never fully is), not by re-deriving trust from this
-	// stored field later.
+	// FencingToken is the nonce lease's fencing token when the record was stored, in
+	// "mongo-lease" TxCoordinationMode. It is zero in the default "in-process" mode.
+	// It is kept for audit only. A superseded writer is rejected by a
+	// NonceLeaseRepository.Renew call before the record is stored, not by checking this
+	// field later.
 	FencingToken uint64 `json:"-" bson:"fencingToken,omitempty"`
-	// AllowReorgRetry, set from SubmitRequest.AllowReorgRetry at Submit
-	// time, marks this record's IdempotencyKey as safe to resubmit (same
-	// key, fresh nonce) after TxReorged/TxNonceConsumedExternally. A reorged
-	// transaction can still return to the mempool, and an externally consumed
-	// nonce can represent an unknown replacement that performed the same
-	// business action; the generic manager does not enforce that every Kind
-	// is on-chain idempotent, so this stays opt-in. Only a caller that
-	// KNOWS its own on-chain action is safely repeatable (e.g.
-	// compliance.StatusService's setStatus — see its call site) should set
-	// this; every other Kind defaults to false, so Submit refuses the
-	// same-key retry and RefreshStatuses' signer-level guard blocks
-	// further submissions for that signer until an operator identifies
-	// the canonical transaction at (chainId, sender, nonce) and resolves
-	// it — see TxNeedsIntervention's doc comment, which this now also
-	// governs the entry into.
+	// AllowReorgRetry is copied from SubmitRequest.AllowReorgRetry at Submit. It marks
+	// the IdempotencyKey as reusable, with a new nonce, after TxReorged or
+	// TxNonceConsumedExternally. The manager does not require every Kind to be
+	// idempotent on-chain, so the caller must set it only for an action that is safe to
+	// repeat, as compliance.StatusService does for setStatus. Without it, Submit
+	// refuses the retry and RefreshStatuses blocks new submissions for that signer
+	// until an operator identifies the canonical transaction at (chainId, sender,
+	// nonce) and resolves the record, as for TxNeedsIntervention.
 	AllowReorgRetry bool `json:"-" bson:"allowReorgRetry,omitempty"`
-	// Version supports optimistic conditional writes: a caller acquires the
-	// lock/lease before loading the record, then updates conditionally on
-	// (id, expectedStatus, version, fencingToken), so a stale token is
-	// rejected at the repository write itself rather than only in a prior
-	// Renew call. TransactionRepository.UpdateConditional increments this on
-	// every successful write and rejects a write whose caller-supplied
-	// expectedVersion no longer matches the stored value — a second,
-	// storage-level backstop independent of (and in addition to)
-	// NonceLeaseRepository.Renew's application-level check, for the state
-	// transitions that could otherwise race ahead of it (Replace's
-	// original-Replaced / failure-revert writes — see TxManager.Replace).
+	// Version supports optimistic concurrency. TransactionRepository.UpdateConditional
+	// increments it on each successful write and rejects a write whose expected version
+	// no longer matches. This backs up NonceLeaseRepository.Renew at the storage layer
+	// for state changes that could otherwise race it, such as the writes in
+	// TxManager.Replace that mark the original Replaced or revert after a failure.
 	Version int `json:"-" bson:"version,omitempty"`
-	// Attempts is an append-only forensic record of every distinct signed
-	// payload/nonce/hash this logical operation has gone through BEFORE
-	// its current one (see TxAttempt's doc comment). The
-	// top-level TxHash/SignedRawTx/Nonce/Status fields above still reflect
-	// the CURRENT/latest attempt (existing callers keep working
-	// unchanged); this slice additionally retains every prior one instead
-	// of losing it when Submit resubmits a TxFailed record under the same
-	// IdempotencyKey/ID.
+	// Attempts lists the earlier signed attempts of this operation, so a nonce, hash
+	// or signed payload is not lost when Submit retries a failed record under the same
+	// IdempotencyKey. TxHash, SignedRawTx, Nonce and Status above describe the latest
+	// attempt.
 	Attempts    []TxAttempt `json:"-" bson:"attempts,omitempty"`
 	SubmittedAt time.Time   `json:"submittedAt" bson:"submittedAt"`
 	UpdatedAt   time.Time   `json:"updatedAt" bson:"updatedAt"`
 }
 
-// TxAttempt is one immutable, forensic snapshot of a single sign+broadcast
-// attempt that a Transaction record's top-level fields are about to
-// stop reflecting. One logical operation is modeled as an immutable record
-// with append-only signed attempts: an earlier hash, signed payload,
-// receipt, or replacement outcome is never overwritten. See
-// Transaction.Attempts.
+// TxAttempt is a snapshot of one earlier sign-and-broadcast attempt of a
+// Transaction, kept in Transaction.Attempts so the earlier hash, signed payload and
+// outcome are not overwritten
 type TxAttempt struct {
 	Nonce  uint64 `json:"nonce" bson:"nonce"`
 	TxHash string `json:"txHash" bson:"txHash"`
-	// SignedRawTx mirrors Transaction.SignedRawTx's doc comment: internal
-	// only, never serialized in an API response.
+	// SignedRawTx is as in Transaction.SignedRawTx and is not included in API
+	// responses
 	SignedRawTx string    `json:"-" bson:"signedRawTx,omitempty"`
 	Status      TxStatus  `json:"status" bson:"status"`
 	RecordedAt  time.Time `json:"recordedAt" bson:"recordedAt"`

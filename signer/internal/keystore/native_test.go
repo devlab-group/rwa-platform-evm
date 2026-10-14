@@ -64,11 +64,10 @@ func TestLoadNative_WrongPasswordFails(t *testing.T) {
 	}
 }
 
-// TestLoadNative_RejectsDowngradedKDFParams checks that a native-format
-// keystore file whose kdfparams have been edited down
-// below the policy floor -- e.g. by an attacker who does not have the
-// password but can modify the file to make brute-forcing cheaper -- must
-// be refused before any decryption is attempted.
+// TestLoadNative_RejectsDowngradedKDFParams checks that a native keystore whose
+// kdfparams were edited below the policy floor is refused before any decryption. An
+// attacker without the password but able to modify the file could do this to make
+// brute forcing cheaper.
 func TestLoadNative_RejectsDowngradedKDFParams(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	data, err := CreateNative(priv, testNativePassword)
@@ -107,8 +106,8 @@ func TestIsNativeFormat(t *testing.T) {
 
 // --- maximum KDF parameters and exact-length validation ---
 
-// tamperedNativeFile round-trips a fresh native keystore through JSON,
-// letting the test mutate specific fields before Load sees the result.
+// tamperedNativeFile round-trips a fresh native keystore through JSON so the test can
+// mutate specific fields before Load sees the result
 func tamperedNativeFile(t *testing.T, mutate func(*nativeKeyFile)) string {
 	t.Helper()
 	priv, err := crypto.GenerateKey()
@@ -229,7 +228,7 @@ func TestLoadNative_RejectsMalformedHexWithoutPanicking(t *testing.T) {
 	}
 }
 
-// hexOfLen returns the hex encoding of n arbitrary bytes.
+// hexOfLen returns the hex encoding of n arbitrary bytes
 func hexOfLen(t *testing.T, n int) string {
 	t.Helper()
 	b := make([]byte, n)

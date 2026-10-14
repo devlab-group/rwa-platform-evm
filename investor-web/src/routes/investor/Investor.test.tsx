@@ -16,9 +16,9 @@ import {
   waitForTxReceipt,
 } from "../../lib/wallet";
 
-// The investor forms take human whole-unit amounts and must convert them to the
-// token's minimal units before anything reaches a contract.
-// A 6-decimal token is used throughout so "1" must become "1000000".
+// The investor forms take whole-unit amounts and must convert them to the
+// token's minimal units before anything reaches a contract. A 6-decimal token
+// is used throughout, so "1" must become "1000000".
 vi.mock("../../lib/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/client")>();
   return {
@@ -27,20 +27,17 @@ vi.mock("../../lib/client", async (importOriginal) => {
       ...actual.api,
       getProject: vi.fn(),
       getMyWalletStatus: vi.fn(),
-      // The connected-wallet redemptions/history lists + claim/cancel flow.
+      // The connected wallet's redemption and transaction lists
       listRedemptions: vi.fn(),
       listTransactions: vi.fn(),
     },
   };
 });
 
-// resolveQuoteDecimals reads the quote token on-chain; stub the wallet read so
-// the (display-only) quote-decimals lookup doesn't need an injected provider.
-// The two price previews are on-chain views as well and are stubbed with the
-// raw bigint the contracts would return. The buy/claim/cancel senders are
-// spied so the flows can be asserted without a chain; the approve trio lets a
-// test reach the Buy button, which stays disabled until a confirmed approval
-// leaves a sufficient allowance.
+// Stub quote decimals and preview views so display and pricing need no wallet.
+// Buy, claim and cancel spies verify submissions without a chain. Approval,
+// receipt and allowance stubs let the Buy button enable only after a mined
+// approval leaves sufficient allowance.
 vi.mock("../../lib/wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/wallet")>();
   return {
@@ -312,10 +309,10 @@ describe("Investor redemptions list (connected wallet)", () => {
   });
 });
 
-// Buy and redemption-request are encoded in the browser and broadcast from the
-// connected wallet: the target is the project's own Vault/escrow, and the
-// on-chain arguments must carry the amounts, the slippage bound, the connected
-// recipient and a future deadline the page derived itself.
+// Buy and redemption request are encoded in the browser and sent from the
+// connected wallet. The target is the project's own Vault or escrow, and the
+// arguments carry the amounts, the slippage bound, the connected recipient and
+// a future deadline that the page derives itself.
 describe("Investor buy and redemption request (client-encoded)", () => {
   let wallet: ReturnType<typeof installFakeWallet>;
 
@@ -425,10 +422,11 @@ describe("Investor buy and redemption request (client-encoded)", () => {
   });
 
   it("keeps the redemption request disabled when the approval left too small an allowance", async () => {
-    // The approve tx returns a hash and lands, but the on-chain allowance
-    // covers less than the requested amount (a re-quote for more, a wallet
-    // that edited the amount down). A submitted hash alone must not enable
-    // the request — requestRedemption would revert on safeTransferFrom.
+    // The approve tx returns a hash and is mined, but the on-chain allowance
+    // covers less than the requested amount (e.g. a re-quote for more, or a
+    // wallet that edited the amount down). A submitted hash alone must not
+    // enable the request, because requestRedemption would revert on
+    // safeTransferFrom.
     vi.mocked(readErc20Allowance).mockResolvedValue(2499999n);
 
     renderWithWallet(<Investor />, { connected: true });
@@ -477,8 +475,8 @@ describe("Investor frozen balance", () => {
     clearWalletSession(CONNECTED);
   });
 
-  // A frozen holder sees their whole balance in the wallet, so without this the
-  // failed transfer that follows looks like a broken app.
+  // A holder with frozen tokens sees the full balance in their wallet, so
+  // without this the failed transfer that follows looks like a broken app
   it("shows how much of the balance is actually spendable", async () => {
     vi.mocked(api.getMyWalletStatus).mockResolvedValue({
       address: CONNECTED,

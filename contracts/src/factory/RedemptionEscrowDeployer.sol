@@ -5,11 +5,10 @@ import {IRWAFactory} from "../interfaces/IRWAFactory.sol";
 import {RedemptionEscrow} from "../RedemptionEscrow.sol";
 
 /// @title RedemptionEscrowDeployer
-/// @notice Stateless deploy logic for RedemptionEscrow. See ComplianceTokenDeployer for why
-///         RWAFactory's `new` calls are split across helper contracts like this one.
-/// @dev Called via `delegatecall` from RWAFactory for consistency with the other deploy
-///      helpers, though RedemptionEscrow's constructor doesn't read `msg.sender` for anything
-///      privileged. Holds no state of its own.
+/// @notice Stateless deploy logic for RedemptionEscrow. ComplianceTokenDeployer explains why
+///         RWAFactory's `new` calls are split across helper contracts.
+/// @dev Called through `delegatecall` from RWAFactory like the other helpers. The constructor
+///      does not read `msg.sender` for anything privileged. Holds no state.
 contract RedemptionEscrowDeployer {
     function deploy(IRWAFactory.ProjectConfig calldata config, address token, address vault, address strategy)
         external

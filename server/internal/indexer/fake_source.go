@@ -10,58 +10,53 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// FakeSource is an in-memory ChainSource for tests. It models a simple
-// linear chain of headers plus a flat log list, and lets tests simulate a
-// reorg by replacing a range of headers (giving them different hashes via
-// distinct Extra bytes) and swapping which logs are "canonical" at those
-// heights.
+// FakeSource is an in-memory ChainSource for tests. It models a linear chain of
+// headers and a flat log list. A test simulates a reorg by replacing headers
+// (SetHeader with a different seed gives a different hash) and changing which logs
+// exist at those heights.
 type FakeSource struct {
 	mu      sync.Mutex
 	headers map[uint64]*types.Header
 	logs    []types.Log
 	head    uint64
 
-	// FilterLogsErrors, if non-empty, is popped (FIFO) — one entry per
-	// FilterLogs call — and returned instead of a normal result when
-	// non-nil, letting tests simulate a sequence of RPC failures
-	// (oversized-response, timeout, ...) without real network I/O. A
-	// popped nil entry means "succeed this call", so a fault can be
-	// scripted at a specific position in a sequence of otherwise-successful
-	// calls.
+	// FilterLogsErrors, if non-empty, is consumed first in, first out, one entry per
+	// FilterLogs call, and a non-nil entry is returned instead of a normal result.
+	// This simulates a sequence of RPC failures (oversized response, timeout) without
+	// network I/O. A nil entry makes that call succeed, so a fault can be placed at a
+	// given position in a sequence of otherwise successful calls.
 	FilterLogsErrors []error
-	// MaxLogRangeBlocks, if >0, makes FilterLogs itself return an
-	// "oversized" error for any query spanning more than this many blocks —
-	// a standing RPC-provider-limit simulation, independent of
-	// FilterLogsErrors' one-shot queue.
+	// MaxLogRangeBlocks, if greater than 0, makes FilterLogs return an oversized-range
+	// error for any query spanning more blocks than this, simulating a provider's
+	// range limit. It is independent of the one-shot FilterLogsErrors queue.
 	MaxLogRangeBlocks uint64
-	// FilterLogsCalls counts every FilterLogs invocation, so a test can
-	// assert how many chunk requests a scan actually issued.
+	// FilterLogsCalls counts FilterLogs invocations, so a test can assert how many
+	// chunk requests a scan issued
 	FilterLogsCalls int
-	// FilterLogsHook, if set, is invoked ONCE (then cleared), immediately
-	// after a successful FilterLogs call computes its response but before
-	// returning it — letting a test mutate chain state (typically
-	// SetHeader, simulating a reorg) at that exact point without any real
-	// concurrency — reproducing the case where the node reorganizes before
-	// HeaderByNumber(N).
+	// FilterLogsHook, if set, runs once and is then cleared. It runs after a
+	// FilterLogs call has computed its response and before it returns, so a test can
+	// change chain state at that point (typically SetHeader, simulating a reorg)
+	// without real concurrency. This reproduces a node reorganizing between
+	// FilterLogs and HeaderByNumber.
 	FilterLogsHook func()
 }
 
-// ErrRangeTooLarge is a canned error matching isRangeTooLargeError's
-// classifier, for tests exercising the shrink-on-oversized-response path.
+// ErrRangeTooLarge is a canned error that isRangeTooLargeError matches, for tests
+// of the shrink-on-oversized-response path
 var ErrRangeTooLarge = errors.New("query returned more than 10000 results")
 
-// ErrTransient is a canned error that does NOT match isRangeTooLargeError,
-// for tests exercising the bounded-backoff retry path.
+// ErrTransient is a canned error that isRangeTooLargeError and isTimeoutError do
+// not match, for tests of the backoff retry path
 var ErrTransient = errors.New("simulated transient RPC failure")
 
-// NewFakeSource returns an empty FakeSource; use SetHeader/AddLog/SetHead
-// to build up chain state.
+// NewFakeSource returns an empty FakeSource. Build chain state with SetHeader,
+// AddLog and SetHead.
 func NewFakeSource() *FakeSource {
 	return &FakeSource{headers: map[uint64]*types.Header{}}
 }
 
-// SetHeader sets (or replaces, simulating a reorg) the header at number,
-// using seed to vary the header's hash deterministically.
+// SetHeader sets the header at number, replacing any existing one to simulate a
+// reorg. seed varies the header's hash deterministically.
 func (f *FakeSource) SetHeader(number uint64, seed byte) *types.Header {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -84,11 +79,10 @@ func (f *FakeSource) AddLog(l types.Log) {
 	f.logs = append(f.logs, l)
 }
 
-// Logs returns a copy of every log currently tracked (i.e. after every
-// AddLog/RemoveLogsAtOrAfter call so far), regardless of FilterLogs'
-// from/to/address filtering — used by server/internal/shadow to compute an
-// independent expected-event count for its final reconciliation step
-// without duplicating this type's internal bookkeeping.
+// Logs returns a copy of every log tracked so far (after all AddLog and
+// RemoveLogsAtOrAfter calls), regardless of any FilterLogs filtering.
+// internal/shadow uses it to compute an expected event count independently of
+// the indexer.
 func (f *FakeSource) Logs() []types.Log {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -168,16 +162,13 @@ func (f *FakeSource) FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]
 				continue
 			}
 		}
-		// Stamp BlockHash from whichever header is CURRENTLY registered at
-		// this log's block number, exactly as a real node's eth_getLogs
-		// response reflects its own canonical view at query time — tests
-		// need not keep AddLog's BlockHash manually in sync with
-		// SetHeader, and a SetHeader call (simulating a reorg) BETWEEN two
-		// FilterLogs calls naturally produces a log stamped with the OLD
-		// hash on the first call and the NEW hash on a second — the exact
-		// race the validation logic needs to be testable
-		// against (see TestIndexerRejectsForkThatChangesBetweenFilterLogsAndHeaderByNumber
-		// in indexer_test.go).
+		// stamp BlockHash from the header currently registered at the log's block number,
+		// as a real node's eth_getLogs response reflects its canonical view at query
+		// time. Tests need not keep AddLog's BlockHash in sync with SetHeader, and a
+		// SetHeader between two FilterLogs calls yields a log with the old hash on the
+		// first call and the new hash on the second. That is the race the validation
+		// logic must handle (see
+		// TestIndexerRejectsForkThatChangesBetweenFilterLogsAndHeaderByNumber)
 		stamped := l
 		if h, ok := f.headers[l.BlockNumber]; ok {
 			stamped.BlockHash = h.Hash()
@@ -188,11 +179,9 @@ func (f *FakeSource) FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]
 	f.FilterLogsHook = nil // one-shot
 	f.mu.Unlock()
 	if hook != nil {
-		// Invoked AFTER computing this response but BEFORE returning it —
-		// i.e. exactly "the node reorganizes between FilterLogs and
-		// HeaderByNumber". Called
-		// outside the lock so the hook can itself call SetHeader/AddLog
-		// without deadlocking.
+		// run the hook after computing the response and before returning it, which is the
+		// node reorganizing between FilterLogs and HeaderByNumber. It runs outside the
+		// lock so it can call SetHeader and AddLog without deadlocking
 		hook()
 	}
 	return out, nil

@@ -9,11 +9,10 @@ export class AdminRedemptionsPage {
   }
 
   /**
-   * Connects the admin wallet via the global header button. Fund/reject are
-   * gated on the connected wallet holding TREASURER_ROLE / REDEMPTION_MANAGER_ROLE
-   * (the mock grants the connected admin both), so a spec exercising those must
-   * connect first — the bootstrapped JWT session alone leaves the wallet
-   * disconnected (WalletProvider only connects on an explicit action).
+   * Connects the admin wallet with the header button. Fund and reject need the
+   * connected wallet to hold TREASURER_ROLE and REDEMPTION_MANAGER_ROLE (the
+   * mock grants the admin both). The seeded session does not connect a wallet,
+   * so specs that fund or reject connect first.
    */
   async connectWallet(): Promise<void> {
     await this.page.getByRole("button", { name: "Connect wallet" }).click();
@@ -41,17 +40,17 @@ export class AdminRedemptionsPage {
   }
 
   /**
-   * Funds the redemption from the connected wallet (approve the escrow for the
-   * quote amount if needed, then fundRedemption). Assert the outgoing txs via
-   * the mock wallet's getMockSentTransactions, or the success message on
-   * detailSection.
+   * Funds the redemption from the connected wallet: approves the escrow for the
+   * quote amount when the allowance is short, then calls fundRedemption. Assert
+   * the sent transactions with getMockSentTransactions, or the success message
+   * on detailSection.
    */
   async fundRedemption(id: string): Promise<void> {
     this.currentDetailId = id;
     await this.detailSection.getByRole("button", { name: "Fund redemption" }).click();
   }
 
-  /** Rejects the redemption from the connected wallet (rejectRedemption with the encoded reason code). */
+  /** Rejects the redemption from the connected wallet with the encoded reason code */
   async rejectRedemption(id: string, reasonCode: string): Promise<void> {
     this.currentDetailId = id;
     await this.detailSection.locator("#reasonCode").fill(reasonCode);

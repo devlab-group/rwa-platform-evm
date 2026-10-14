@@ -44,6 +44,19 @@ func TestBuildStatesRequestOnly(t *testing.T) {
 	}
 }
 
+func TestBuildStatesSetsFundedAtFromIndexedAt(t *testing.T) {
+	indexed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	funded := ev("RedemptionFunded", "1", 12, 0, map[string]any{"funder": "0xBBB"})
+	funded.IndexedAt = indexed
+	states := BuildStates([]*models.ChainEvent{
+		ev("RedemptionRequested", "1", 10, 0, map[string]any{"createdAt": uint64(1000)}),
+		funded,
+	}, 1209600)
+	if got := states["1"].FundedAt; !got.Equal(indexed) {
+		t.Errorf("FundedAt = %v, want %v", got, indexed)
+	}
+}
+
 func TestBuildStatesFullLifecycleToCompleted(t *testing.T) {
 	events := []*models.ChainEvent{
 		ev("RedemptionRequested", "1", 10, 0, map[string]any{"beneficiary": "0xAAA", "rwaAmount": "1000", "quoteAmount": "950", "createdAt": uint64(1000)}),
@@ -87,10 +100,8 @@ func TestBuildStatesCancelledPath(t *testing.T) {
 }
 
 func TestBuildStatesIgnoresOutOfOrderTransitions(t *testing.T) {
-	// A Funded event for an id that was never Requested (or is already
-	// terminal) must not fabricate/overwrite state — this can only arise
-	// from a bug or malformed fixture, and the projector must be robust to
-	// it rather than panicking or corrupting the read model.
+	// a Funded event for an id that was never Requested (or is already
+	// terminal) must not create or overwrite state
 	events := []*models.ChainEvent{
 		ev("RedemptionFunded", "4", 5, 0, map[string]any{"funder": "0xBBB", "quoteAmount": "1"}),
 	}
@@ -101,8 +112,8 @@ func TestBuildStatesIgnoresOutOfOrderTransitions(t *testing.T) {
 }
 
 func TestBuildStatesAppliesEventsInBlockOrderRegardlessOfInputOrder(t *testing.T) {
-	// Feed events out of chronological order; BuildStates must sort by
-	// (blockNumber, logIndex) before replaying, not trust input order.
+	// feed events out of order: BuildStates sorts by (blockNumber, logIndex)
+	// before replaying
 	events := []*models.ChainEvent{
 		ev("RedemptionCompleted", "5", 30, 0, map[string]any{"beneficiary": "0xAAA", "rwaAmount": "1000", "quoteAmount": "950"}),
 		ev("RedemptionRequested", "5", 10, 0, map[string]any{"beneficiary": "0xAAA", "rwaAmount": "1000", "quoteAmount": "950", "createdAt": uint64(1000)}),
@@ -115,10 +126,9 @@ func TestBuildStatesAppliesEventsInBlockOrderRegardlessOfInputOrder(t *testing.T
 }
 
 func TestBuildStatesRejectedCannotBeReFunded(t *testing.T) {
-	// Once Rejected (terminal), a stray/duplicate Funded event for the same
-	// id must not resurrect it into Funded — matches the frozen transition
-	// table (Pending -> {Funded | Rejected | Cancelled}, no edges out of
-	// Rejected).
+	// once Rejected (terminal), a duplicate Funded event for the same id must
+	// not move it back to Funded: the transition table has no edge out of
+	// Rejected
 	events := []*models.ChainEvent{
 		ev("RedemptionRequested", "6", 10, 0, map[string]any{"beneficiary": "0xAAA", "rwaAmount": "1000", "quoteAmount": "950", "createdAt": uint64(1000)}),
 		ev("RedemptionRejected", "6", 11, 0, map[string]any{"reasonCode": "0xdead", "caller": "0xCCC"}),
@@ -131,11 +141,10 @@ func TestBuildStatesRejectedCannotBeReFunded(t *testing.T) {
 }
 
 // delayedRedemptionRequestRepo wraps a repository.RedemptionRequestRepository
-// and inserts a small sleep around every write Reconcile's generation-swap
-// performs — same rationale as sales.delayedPurchaseRepo:
-// widens the window during which a concurrent reader's List() call can
-// interleave with an in-flight rebuild, so the regression test below has a
-// real chance of catching a reintroduced DeleteAll-then-reinsert bug.
+// and sleeps briefly around every write that Reconcile's generation swap
+// performs, for the reason given on sales.delayedPurchaseRepo: it widens the
+// window in which a concurrent List() can interleave with a rebuild, so the
+// test below can catch a delete-then-reinsert rebuild.
 type delayedRedemptionRequestRepo struct {
 	repository.RedemptionRequestRepository
 }
@@ -150,11 +159,9 @@ func (d delayedRedemptionRequestRepo) DeleteStaleGeneration(ctx context.Context,
 	return d.RedemptionRequestRepository.DeleteStaleGeneration(ctx, gen)
 }
 
-// TestReconcileNeverExposesEmptyOrPartialRedemptionsToConcurrentReaders
-// mirrors sales' regression test — see that test's doc
-// comment for the full scenario. Here the worst case is a reorg that
-// replaces every seeded redemption request id with entirely different
-// ones.
+// TestReconcileNeverExposesEmptyOrPartialRedemptionsToConcurrentReaders mirrors
+// the sales test of the same purpose. The worst case here is a reorg that
+// replaces every seeded redemption request id with a different one.
 func TestReconcileNeverExposesEmptyOrPartialRedemptionsToConcurrentReaders(t *testing.T) {
 	escrowAddr := common.HexToAddress("0x0000000000000000000000000000000000000B")
 	events := memory.NewChainEventRepository()
@@ -181,8 +188,7 @@ func TestReconcileNeverExposesEmptyOrPartialRedemptionsToConcurrentReaders(t *te
 		t.Fatalf("seed: got %d redemption requests, err=%v", len(seeded), err)
 	}
 
-	// Reorg: every seeded id is gone, replaced by three entirely
-	// different ones.
+	// reorg: every seeded id is gone, replaced by three different ones
 	if _, err := events.DeleteFromBlock(ctx, 31337, escrowAddr.Hex(), 0); err != nil {
 		t.Fatal(err)
 	}

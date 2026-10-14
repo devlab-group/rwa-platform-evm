@@ -2,7 +2,7 @@ package metadata
 
 import "testing"
 
-// goldBarMetadata is a representative gold-bar metadata envelope.
+// goldBarMetadata is a representative gold-bar metadata envelope
 const goldBarMetadata = `{
   "platformVersion": "1.0",
   "projectId": "4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61",
@@ -84,16 +84,16 @@ func TestValidate_AdditionalTopLevelPropertyRejected(t *testing.T) {
 	}
 }
 
-// amountMetadata builds a valid metadata envelope with issuance.amount set
-// to amt, for the amount-boundary tests below.
+// amountMetadata builds a valid metadata envelope with issuance.amount set to amt, for
+// the amount-boundary tests below
 func amountMetadata(amt string) string {
 	return `{"platformVersion":"1.0","projectId":"4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61","recordId":"X-1","asset":{},"issuance":{"amount":"` + amt + `","unit":"g"},"createdAt":"2026-07-17T12:00:00Z"}`
 }
 
-// maxUint256Str is 2^256-1, the maximum value that fits a Solidity uint256.
+// maxUint256Str is 2^256-1, the maximum value of a Solidity uint256
 const maxUint256Str = "115792089237316195423570985008687907853269984665640564039457584007913129639935"
 
-// overUint256Str is 2^256, one past the maximum uint256 value.
+// overUint256Str is 2^256, one past the maximum uint256 value
 const overUint256Str = "115792089237316195423570985008687907853269984665640564039457584007913129639936"
 
 // TestValidate_RejectsZeroAmount guards the zero case: amountPattern
@@ -109,10 +109,9 @@ func TestValidate_RejectsZeroAmount(t *testing.T) {
 }
 
 // TestValidate_AcceptsLeadingZeroAmount pins parity with the server: neither
-// amountPattern nor record.go's semantic check rejects a leading-zero
-// numeral (server: decimalAmountPattern matches "007", then
-// big.Int.SetString("007",10) parses to a positive 7), so the signer must
-// accept it too rather than diverging by being stricter.
+// amountPattern nor record.go's semantic check rejects a leading-zero numeral (the
+// server's decimalAmountPattern matches "007" and big.Int.SetString("007", 10) parses
+// it as 7), so the signer must accept it too instead of being stricter
 func TestValidate_AcceptsLeadingZeroAmount(t *testing.T) {
 	m, err := Validate([]byte(amountMetadata("007")))
 	if err != nil {
@@ -123,35 +122,33 @@ func TestValidate_AcceptsLeadingZeroAmount(t *testing.T) {
 	}
 }
 
-// TestValidate_AcceptsMaxUint256Amount pins the upper boundary: an
-// issuance.amount of exactly 2^256-1 (the maximum value SupplyController's
-// uint256 mint amount can hold) must be accepted.
+// TestValidate_AcceptsMaxUint256Amount pins the upper boundary: an issuance.amount of
+// exactly 2^256-1, the largest uint256 mint amount, must be accepted
 func TestValidate_AcceptsMaxUint256Amount(t *testing.T) {
 	if _, err := Validate([]byte(amountMetadata(maxUint256Str))); err != nil {
 		t.Fatalf("expected issuance.amount at exactly 2^256-1 to be accepted: %v", err)
 	}
 }
 
-// TestValidate_RejectsAmountAboveUint256Max pins the overflow boundary:
-// a syntactically ^[0-9]+$-matching numeral one past 2^256-1 must be
-// rejected, matching server/internal/assets/record.go's identical bound.
+// TestValidate_RejectsAmountAboveUint256Max pins the overflow boundary: a numeral
+// matching ^[0-9]+$ but one past 2^256-1 must be rejected, as in
+// server/internal/assets/record.go
 func TestValidate_RejectsAmountAboveUint256Max(t *testing.T) {
 	if _, err := Validate([]byte(amountMetadata(overUint256Str))); err == nil {
 		t.Fatal("expected error for an issuance.amount exceeding 2^256-1")
 	}
 }
 
-// jsonUnicodeEscape builds a JSON \u-escape for a code point, e.g. "001b" for
-// ESC, so no raw control character has to appear in this file's source.
+// jsonUnicodeEscape builds a JSON \u escape for a code point, such as "001b" for ESC,
+// so no raw control character appears in this file's source
 func jsonUnicodeEscape(code string) string {
 	return "\\" + "u" + code
 }
 
-// TestValidate_RejectsControlCharInIssuanceUnit and its proofs[].type
-// counterpart cover the two metadata strings the offline review screen prints
-// verbatim. A control character in either is never legitimate, and is exactly
-// how a package would try to move the terminal cursor over the amount or
-// digest line the auditor is checking.
+// TestValidate_RejectsControlCharInIssuanceUnit and its proofs[].type counterpart cover
+// the two metadata strings the review screen prints. A control character in either has
+// no legitimate use and is how a package would try to move the terminal cursor over the
+// amount or digest line the auditor is checking.
 func TestValidate_RejectsControlCharInIssuanceUnit(t *testing.T) {
 	for _, unit := range []string{
 		`g\r  amount : 1`,

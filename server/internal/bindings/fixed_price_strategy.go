@@ -43,8 +43,9 @@ func (f FixedPriceStrategy) PackPreviewRedeem(tokenAmount *big.Int) ([]byte, err
 	return f.ABI.Pack("previewRedeem", tokenAmount)
 }
 
-// UnpackQuote decodes a single uint256 quoteAmount return value, shared by
-// previewBuy/previewRedeem/quotePurchase/quoteRedemption.
+// UnpackQuote decodes the single uint256 return value of the named method:
+// previewBuy, previewRedeem, quotePurchase, quoteRedemption or one of the
+// price getters
 func (f FixedPriceStrategy) UnpackQuote(method string, data []byte) (*big.Int, error) {
 	out, err := f.ABI.Unpack(method, data)
 	if err != nil {
@@ -73,9 +74,9 @@ func (f FixedPriceStrategy) PackRedemptionPricePerWholeToken() ([]byte, error) {
 	return f.ABI.Pack("redemptionPricePerWholeToken")
 }
 
-// PriceUpdatedEvent mirrors the PurchasePriceUpdated / RedemptionPriceUpdated
-// events: previousPrice/newPrice are non-indexed (in log.Data), caller is
-// indexed (in log.Topics).
+// PriceUpdatedEvent mirrors the PurchasePriceUpdated and RedemptionPriceUpdated
+// events: previousPrice and newPrice are in log.Data, and the indexed caller is
+// in log.Topics
 type PriceUpdatedEvent struct {
 	PreviousPrice *big.Int
 	NewPrice      *big.Int
@@ -83,7 +84,7 @@ type PriceUpdatedEvent struct {
 }
 
 // UnpackPriceUpdated decodes a PurchasePriceUpdated or RedemptionPriceUpdated
-// log (name selects which; they share the same field layout).
+// log; name selects the event, and both have the same fields.
 func (f FixedPriceStrategy) UnpackPriceUpdated(name string, data []byte, topics []common.Hash) (PriceUpdatedEvent, error) {
 	var partial struct {
 		PreviousPrice *big.Int

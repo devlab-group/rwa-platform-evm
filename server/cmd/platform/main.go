@@ -254,7 +254,7 @@ func addressesFromProject(p *models.Project) (models.Addresses, string) {
 // are fatal in production; development logs a fallback to memory repositories.
 func connectRepositories(ctx context.Context, cfg config.Config) (*repository.Repositories, *mongodriver.Client) {
 	if cfg.PersistenceMode == "memory" {
-		log.Printf("platform: PERSISTENCE_MODE=memory — using in-memory repositories (not durable; refused in production)")
+		log.Printf("platform: PERSISTENCE_MODE=memory - using in-memory repositories (not durable; refused in production)")
 		return memory.New(), nil
 	}
 
@@ -766,7 +766,7 @@ func runIndexDependentTicker(ctx context.Context, repos *repository.Repositories
 		case err != nil:
 			log.Printf("platform: %s: check indexer safety: %v", name, err)
 		case unsafe:
-			log.Printf("platform: %s: skipped — indexer reconciliation required", name)
+			log.Printf("platform: %s: skipped - indexer reconciliation required", name)
 		default:
 			runAsReconcilerLeader(ctx, repos, cfg, name, func() {
 				if err := fn(); err != nil {

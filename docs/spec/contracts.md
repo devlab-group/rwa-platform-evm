@@ -3,10 +3,10 @@
 This file and `contracts/src/interfaces/*.sol` define contract behavior. Interface changes are
 frozen-contract changes and require a written, reviewed decision.
 
-The contracts use Solidity `^0.8.24` and OpenZeppelin Contracts 5.x, without upgrades.
+Non-upgradeable Solidity `^0.8.24` contracts use OpenZeppelin Contracts 5.x.
 ComplianceRegistry, RWAToken, SupplyController, Vault, FixedPriceStrategy and RedemptionEscrow
-each use `AccessControlEnumerable` and `AccessControlDefaultAdminRules`. Role holders are
-enumerable; admin transfer takes two steps and an on-chain delay. See `roles.md`.
+each inherit `AccessControlEnumerable` and `AccessControlDefaultAdminRules`, providing
+enumerable role holders and two-step admin transfer with an on-chain delay. See `roles.md`.
 
 ## Project pause
 
@@ -19,8 +19,9 @@ enumerable; admin transfer takes two steps and an on-chain delay. See `roles.md`
 | Keep working | `RedemptionEscrow.cancelRedemption` (through `RWAToken.returnEscrowedRWA`), `RWAToken.setFrozenTokens`, `forcedTransfer`, `SupplyController.setAuditor`, `FixedPriceStrategy` price setters, `ComplianceRegistry.setStatus`/`setStatuses`, role grants and revocations, admin transfers |
 
 The two token transfer paths available during pause are `returnEscrowedRWA` and `forcedTransfer`,
-described below. Ordinary token compliance and frozen-balance checks precede its pause check,
-so an ineligible transfer can return a more specific error first.
+described below. In an ordinary transfer the compliance and frozen-balance checks run before the
+pause check, so an ineligible transfer can revert with its specific error instead of
+`EnforcedPause`.
 
 ## RWAToken
 

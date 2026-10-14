@@ -1,9 +1,8 @@
 /**
- * Shown under a paginated list: makes it visible when the list is truncated
- * at the server's page size rather than hiding older records silently, and
- * offers an explicit "Load more" action instead of unbounded auto-pagination.
- * `totalCount` is omitted by the server for most-recent-N stores; render a
- * plain "more available" notice in that case rather than a fabricated total.
+ * Shown under a paginated list: says when the list stops at the server's page
+ * size, and offers an explicit "Load more" button instead of loading every page
+ * automatically. When the server omits `totalCount`, it shows only the loaded
+ * count and a "more available" notice, not an invented total.
  */
 export function PaginationFooter({
   loadedCount,

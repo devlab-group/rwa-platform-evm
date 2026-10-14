@@ -21,14 +21,12 @@ type Field struct {
 	Warn  bool
 }
 
-// Render prints a labeled review screen to w: first the security-critical
-// typed-data fields, then the profile's displayFields, then any warnings.
+// Render prints a labeled review screen to w: the security-critical fields, then the
+// profile's displayFields. A field with Warn set gets a leading "!".
 //
-// Every label, value and title printed here is passed through
-// textsafe.SanitizeForTerminal first. Most of them originate in the untrusted
-// .rwa package, and a value that could emit a carriage return or a cursor-up
-// escape would be able to rewrite the amount or digest line the auditor is
-// checking -- see the package comment on textsafe.
+// Every title, label and value passes through textsafe.SanitizeForTerminal. Most come
+// from the untrusted .rwa package, and a value that could emit a carriage return or a
+// cursor-up escape could rewrite the amount or digest line the auditor is checking.
 func Render(w io.Writer, title string, critical, display []Field) {
 	fmt.Fprintln(w, "==============================================================")
 	fmt.Fprintln(w, textsafe.SanitizeForTerminal(title))
@@ -45,10 +43,9 @@ func Render(w io.Writer, title string, critical, display []Field) {
 }
 
 func renderFields(w io.Writer, fields []Field) {
-	// Sanitize labels before measuring them, so column alignment is computed
-	// from what actually gets printed. Measured in runes because fmt's %-*s
-	// pads by rune count too — measuring bytes would over-pad any label with
-	// a non-ASCII character and skew the ':' column.
+	// Measure the sanitized labels, in runes: fmt's %-*s pads by rune count, so
+	// measuring bytes would over-pad a label with a non-ASCII character and skew the
+	// ':' column
 	labels := make([]string, len(fields))
 	width := 0
 	for i, f := range fields {
@@ -66,25 +63,21 @@ func renderFields(w io.Writer, fields []Field) {
 	}
 }
 
-// RenderActionBanner prints a large, unmistakable banner identifying
-// primaryType before the review screen, so a mint attestation can't be
-// mistaken for a burn attestation. The mint and
-// burn banners are built to be confusable neither at a glance nor by
-// substring: different border glyphs, different wording with no shared
-// word beyond "TOKEN", and an explicit statement of the on-chain effect
-// (supply increases vs. decreases), not just the type name -- an auditor
-// skimming past "MintAttestation" vs. "BurnAttestation" in small print is
-// exactly the failure mode this exists to prevent.
+// RenderActionBanner prints a banner naming primaryType before the review screen, so a
+// mint cannot be mistaken for a burn. The two banners use different border glyphs and
+// different leading words, and state the on-chain effect (supply increases or
+// decreases) instead of relying on "MintAttestation" versus "BurnAttestation" in small
+// print.
 func RenderActionBanner(w io.Writer, primaryType string) {
 	switch primaryType {
 	case "MintAttestation":
 		printBanner(w, '+', []string{
-			"MINT — THIS WILL INCREASE TOKEN SUPPLY",
+			"MINT - THIS WILL INCREASE TOKEN SUPPLY",
 			"Tokens will be created into the Vault.",
 		})
 	case "BurnAttestation":
 		printBanner(w, '#', []string{
-			"BURN — THIS WILL DECREASE TOKEN SUPPLY",
+			"BURN - THIS WILL DECREASE TOKEN SUPPLY",
 			"Tokens will be destroyed from the Vault.",
 		})
 	default:
@@ -93,8 +86,8 @@ func RenderActionBanner(w io.Writer, primaryType string) {
 }
 
 func printBanner(w io.Writer, border rune, lines []string) {
-	// The unrecognized-type banner embeds the package's own primaryType
-	// string, so banner lines get the same treatment as field values.
+	// The unrecognized-type banner embeds the package's own primaryType string, so
+	// banner lines get the same treatment as field values
 	lines = append([]string(nil), lines...)
 	width := 0
 	for i, l := range lines {
@@ -113,9 +106,9 @@ func printBanner(w io.Writer, border rune, lines []string) {
 	fmt.Fprintln(w)
 }
 
-// Confirm prints prompt and reads a line from r, returning true only if the
-// auditor explicitly typed "y" or "yes" (case-insensitive). Anything else,
-// including a blank line, is treated as "no" (fail closed).
+// Confirm prints prompt and reads a line from r. It returns true only if the auditor
+// typed "y" or "yes" (case-insensitive, surrounding whitespace ignored). Anything
+// else, including a blank line or EOF with no input, returns false.
 func Confirm(w io.Writer, r io.Reader, prompt string) (bool, error) {
 	fmt.Fprintf(w, "%s [y/N]: ", textsafe.SanitizeForTerminal(prompt))
 	line, err := bufio.NewReader(r).ReadString('\n')

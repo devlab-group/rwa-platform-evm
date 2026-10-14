@@ -42,7 +42,7 @@ contract RWATokenTest is TestBase {
     }
 
     function test_setSupplyController_onlyDeployer() public {
-        // Deploy a fresh, unwired token to exercise the one-time setter directly.
+        // Deploy a fresh, unwired token to exercise the one-time setter directly
         vm.prank(address(this));
         RWAToken fresh = new RWAToken("Fresh", "FRSH", 18, address(compliance), admin, 0);
 
@@ -100,10 +100,9 @@ contract RWATokenTest is TestBase {
     }
 
     function test_burnFromVaultSucceeds() public {
-        // controllerBurn (to == 0) never re-checks compliance — only ordinary transfers
-        // (from != 0 && to != 0) are gated — and the Vault can't be blocked
-        // anyway (see ComplianceRegistryTest for that regression coverage), so this is now a
-        // plain happy-path sanity check rather than a compliance-bypass proof.
+        // controllerBurn (to == 0) skips the compliance check, which only gates ordinary
+        // transfers (from != 0 && to != 0). The Vault cannot be blocked anyway (see
+        // ComplianceRegistryTest), so this is a happy-path check, not a compliance-bypass proof.
         _mintTo(address(vault), 5 ether);
 
         ISupplyController.BurnAttestation memory b = _burnAttestation(auditor, 5 ether, keccak256("OP-1"), 2);
@@ -144,7 +143,7 @@ contract RWATokenTest is TestBase {
     }
 
     function test_setRedemptionEscrow_onlyDeployer() public {
-        // Deploy a fresh, unwired token to exercise the one-time setter directly.
+        // Deploy a fresh, unwired token to exercise the one-time setter directly
         vm.prank(address(this));
         RWAToken fresh = new RWAToken("Fresh", "FRSH", 18, address(compliance), admin, 0);
 
@@ -171,7 +170,7 @@ contract RWATokenTest is TestBase {
 
     function test_returnEscrowedRWA_recipientMustBeAllowed() public {
         // Give the (pinned-Allowed) escrow a balance to move, simulating an outstanding
-        // redemption request, without going through the full requestRedemption flow.
+        // redemption request, without going through the full requestRedemption flow
         _mintTo(address(escrow), 5 ether);
 
         vm.prank(address(escrow));
@@ -208,7 +207,7 @@ contract RWATokenTest is TestBase {
         assertTrue(token.canReceive(investor));
         assertTrue(token.canTransfer(investor, investor2, 1 ether));
 
-        // Unknown wallet: never given a record at all.
+        // Unknown wallet: never given a record at all
         assertFalse(token.canSend(outsider));
         assertFalse(token.canReceive(outsider));
         assertFalse(token.canTransfer(outsider, investor, 1 ether));
@@ -275,15 +274,15 @@ contract RWATokenTest is TestBase {
         assertFalse(token.canTransfer(investor, investor2, 100 ether));
     }
 
-    /// @dev An amount nobody has is an ERC-20 problem, not a permissioned refusal, so the
-    ///      standard query must not answer it.
+    /// @dev An amount nobody holds is an ERC-20 problem, not a permissioned refusal, so the
+    ///      ERC-7943 query does not report it
     function test_canTransfer_overBalanceIsNotAPermissionedRefusal() public {
         _mintTo(investor, 100 ether);
         assertTrue(token.canTransfer(investor, investor2, 101 ether));
         assertTrue(token.canTransfer(investor2, investor, 1 ether), "investor2 holds nothing at all");
 
-        // A freeze is a permissioned refusal, and it stands on its own: an amount the holder
-        // could not afford anyway is still refused when every token they hold is frozen.
+        // A freeze is a permissioned refusal and stands on its own: an amount the holder
+        // could not afford is still refused when every token they hold is frozen
         _freeze(investor, 100 ether);
         assertFalse(token.canTransfer(investor, investor2, 101 ether), "fully frozen, whatever the amount");
         _freeze(investor, 0);
@@ -294,7 +293,7 @@ contract RWATokenTest is TestBase {
         token.transfer(investor2, 101 ether);
     }
 
-    /// @dev `staticcall` proves it: any storage write in these paths would revert the call.
+    /// @dev `staticcall` proves it: any storage write in these paths would revert the call
     function test_queries_areSideEffectFree() public {
         _mintTo(investor, 100 ether);
         _freeze(investor, 40 ether);
@@ -309,7 +308,7 @@ contract RWATokenTest is TestBase {
         assertEq(type(IERC7943).interfaceId, bytes4(0x3edbb4c4), "final uRWA fungible interface id");
         assertTrue(token.supportsInterface(type(IERC7943).interfaceId));
 
-        // The inherited introspection must survive the added branch.
+        // The inherited introspection must survive the added branch
         assertTrue(token.supportsInterface(type(IERC165).interfaceId));
         assertTrue(token.supportsInterface(type(IAccessControl).interfaceId));
         assertTrue(token.supportsInterface(type(IAccessControlEnumerable).interfaceId));
@@ -393,7 +392,7 @@ contract RWATokenTest is TestBase {
         _freeze(investor, 40 ether);
         assertEq(token.getFrozenTokens(investor), 40 ether);
 
-        // Absolute, not additive: 10 replaces 40 instead of totalling 50.
+        // Absolute, not additive: 10 replaces 40 instead of totalling 50
         _freeze(investor, 10 ether);
         assertEq(token.getFrozenTokens(investor), 10 ether);
 
@@ -409,7 +408,7 @@ contract RWATokenTest is TestBase {
         _freeze(investor, 150 ether);
         assertFalse(token.canTransfer(investor, investor2, 1));
 
-        // Topping the balance up past the frozen amount frees the difference, nothing more.
+        // Topping the balance up past the frozen amount frees the difference, nothing more
         _mintTo(investor, 60 ether, "REC-2", 2);
         assertEq(token.balanceOf(investor), 160 ether);
         assertTrue(token.canTransfer(investor, investor2, 10 ether));
@@ -435,7 +434,7 @@ contract RWATokenTest is TestBase {
         vm.expectRevert(abi.encodeWithSelector(RWAToken.SystemAddressCannotBeFrozen.selector, address(escrow)));
         token.setFrozenTokens(address(escrow), 1);
 
-        // Zero stays callable so a system address can always be walked back to a clean state.
+        // Zero stays callable so a system address can always be walked back to a clean state
         vm.prank(admin);
         token.setFrozenTokens(address(vault), 0);
         vm.prank(admin);
@@ -444,8 +443,8 @@ contract RWATokenTest is TestBase {
         assertEq(token.getFrozenTokens(address(escrow)), 0);
     }
 
-    /// @dev The escrow's pause bypass moves its own balance, so an unfreezable escrow is what
-    ///      keeps a redemption cancel or claim from ever being trapped by a freeze.
+    /// @dev The escrow cannot be frozen, and `returnEscrowedRWA` keeps working while the token is
+    ///      paused
     function test_returnEscrowedRWA_cannotBeFrozenAtTheSystemSender() public {
         _mintTo(address(escrow), 5 ether);
 
@@ -555,19 +554,19 @@ contract RWATokenTest is TestBase {
     function test_forcedTransfer_recipientMustStayCompliant() public {
         _mintTo(investor, 100 ether);
 
-        // Unknown wallet.
+        // Unknown wallet
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(IERC7943.ERC7943CannotReceive.selector, outsider));
         token.forcedTransfer(investor, outsider, 1 ether);
 
-        // Blocked wallet.
+        // Blocked wallet
         vm.prank(complianceOperator);
         compliance.setStatus(investor2, IComplianceRegistry.ComplianceStatus.Blocked, 0);
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(IERC7943.ERC7943CannotReceive.selector, investor2));
         token.forcedTransfer(investor, investor2, 1 ether);
 
-        // Expired record.
+        // Expired record
         vm.prank(complianceOperator);
         compliance.setStatus(investor2, IComplianceRegistry.ComplianceStatus.Allowed, uint64(block.timestamp + 1 days));
         vm.warp(block.timestamp + 2 days);
@@ -638,7 +637,7 @@ contract RWATokenTest is TestBase {
         _mintTo(investor, 100 ether);
         _freeze(investor, 40 ether);
 
-        // 70 = 60 unfrozen + 10 taken out of the frozen 40.
+        // 70 = 60 unfrozen + 10 taken out of the frozen 40
         vm.recordLogs();
         vm.prank(admin);
         token.forcedTransfer(investor, investor2, 70 ether);
@@ -683,7 +682,7 @@ contract RWATokenTest is TestBase {
         _mintTo(investor, 100 ether);
         uint256 supply = token.totalSupply();
 
-        // The only mint/burn entry point is still the SupplyController.
+        // The only mint/burn entry point is still the SupplyController
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(IRWAToken.OnlySupplyController.selector, admin));
         token.controllerMint(investor, 1 ether);
@@ -797,7 +796,7 @@ contract RWATokenTest is TestBase {
     }
 
     /// @dev A wallet holding PAUSER_ROLE and nothing else, to prove the emergency switch never
-    ///      carries enforcement powers with it.
+    ///      carries enforcement powers with it
     function _pauserOnly() internal returns (address account) {
         account = makeAddr("pauserOnly");
         bytes32 pauserRole = token.PAUSER_ROLE();

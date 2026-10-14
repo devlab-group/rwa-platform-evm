@@ -17,10 +17,9 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// fakeVaultTransit serves just enough of Vault Transit's HTTP API
-// (GET .../keys/:name, POST .../sign/:name) for vaultProvider to work
-// against, backed by a real in-memory secp256k1 key so signatures round-
-// trip through actual EC math rather than canned bytes.
+// fakeVaultTransit serves the parts of the Transit HTTP API that vaultProvider
+// uses (GET .../keys/:name, POST .../sign/:name), backed by an in-memory
+// secp256k1 key so signatures are real
 type fakeVaultTransit struct {
 	key      *ecdsa.PrivateKey
 	pubBytes []byte
@@ -64,10 +63,8 @@ func newFakeVaultTransit(t *testing.T, keyName, token string) (*httptest.Server,
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		// Vault Transit's real sign response is a bare ASN.1 DER (r,s) with
-		// no recovery id — crypto/ecdsa.SignASN1 (stdlib, Go 1.20+) produces
-		// exactly that shape, over the same secp256k1 curve go-ethereum's
-		// *ecdsa.PrivateKey already carries.
+		// A Transit sign response is an ASN.1 DER (r,s) without a recovery id,
+		// which ecdsa.SignASN1 also produces
 		der, err := ecdsa.SignASN1(rand.Reader, f.key, digest)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -151,10 +148,8 @@ func TestVaultProviderWrongTokenErrors(t *testing.T) {
 	}
 }
 
-// TestVaultProviderCloseIsNoOp is the K2 regression test's Vault half:
-// unlike the other three backends, Close has nothing to zero (Vault never
-// hands this client a private key at all), so it must simply succeed
-// without disturbing the Provider's cached public key/address.
+// TestVaultProviderCloseIsNoOp checks that Close succeeds without changing the
+// cached public key and address, because the provider holds no private key
 func TestVaultProviderCloseIsNoOp(t *testing.T) {
 	srv, f := newFakeVaultTransit(t, "rwa-compliance", "test-token")
 	defer srv.Close()

@@ -6,23 +6,18 @@ import (
 	"strings"
 )
 
-// This file enforces the frozen operator assetSchema dialect
-// "rwa-profile-assetSchema/1".
+// This file enforces the assetSchema dialect "rwa-profile-assetSchema/1" defined
+// in docs/spec/profile-schema-dialect.md.
 //
-// The server and the offline signer must agree on exactly which schema
-// keywords are meaningful. A blacklist approach — reject a few keywords,
-// silently accept the rest — invites drift: a schema using e.g.
-// multipleOf/format/patternProperties could be enforced by the server's full
-// Draft 2020-12 compiler yet silently ignored by the signer's hand-written
-// validator, letting a manually built .rwa package carry metadata the server
-// would reject but the signer happily signs. Both sides therefore use the
-// same closed allowlist: anything not explicitly supported is rejected, not
-// ignored. Differential parity against
-// shared/vectors/schema-dialect-conformance.json is a release gate — see
-// TestSchemaDialectConformanceVectors.
+// The server and the offline signer must agree on which schema keywords apply.
+// The server compiles with a full Draft 2020-12 validator while the signer uses
+// its own, so a schema with a keyword such as multipleOf could be enforced by one
+// and ignored by the other. Both therefore accept only the same allowlist of
+// keywords and reject every other one. The vectors in
+// shared/vectors/schema-dialect-conformance.json check that parity, and
+// TestDialectConformance runs them.
 
-// allowedValidationKeywords are the dialect's supported validation/applicator
-// keywords (enforced identically by the server compiler and the signer).
+// allowedValidationKeywords are the dialect's validation and applicator keywords
 var allowedValidationKeywords = map[string]bool{
 	"type": true, "properties": true, "required": true, "additionalProperties": true,
 	"items": true, "$ref": true,
@@ -32,40 +27,32 @@ var allowedValidationKeywords = map[string]bool{
 	"minItems": true, "maxItems": true, "uniqueItems": true,
 }
 
-// allowedAnnotationKeywords are permitted but not enforced for validation.
+// allowedAnnotationKeywords are accepted and have no validation effect
 var allowedAnnotationKeywords = map[string]bool{
 	"title": true, "description": true, "default": true, "examples": true,
 	"$comment": true, "$defs": true, "$id": true, "$schema": true,
 	"deprecated": true, "readOnly": true, "writeOnly": true,
 }
 
-// opaqueDataKeywords hold data, not nested schemas: their values are never
-// walked as schema objects (a `const` value of {"oneOf": 1} is data, not a
-// use of the "oneOf" keyword).
+// opaqueDataKeywords hold data, not schemas, so their values are not walked
+// (a const of {"oneOf": 1} does not use the oneOf keyword)
 var opaqueDataKeywords = map[string]bool{
 	"enum": true, "const": true, "default": true, "examples": true,
 }
 
-// allowedTypeValues are the JSON Schema primitive type names the dialect
-// recognizes for the "type" keyword (string or array-of-strings).
+// allowedTypeValues are the primitive type names the dialect accepts in "type"
 var allowedTypeValues = map[string]bool{
 	"object": true, "array": true, "string": true, "integer": true,
 	"number": true, "boolean": true, "null": true,
 }
 
-// maxRefDepth bounds $ref resolution chains so a cyclical or merely very
-// long reference graph fails deterministically instead of recursing
-// unboundedly — without this bound a self-referential schema would recurse
-// through compile until the process crashes.
+// maxRefDepth bounds the length of a $ref chain
 const maxRefDepth = 32
 
-// guardAssetSchema walks a raw operator-supplied JSON Schema document and
-// rejects anything outside the frozen rwa-profile-assetSchema/1 allowlist —
-// every schema object's keys, "type" values, and every $ref (locality,
-// sole-member rule, resolvability, cycle-freedom) — before compilation, so
-// an unsupported/malicious schema is rejected with a clear reason instead
-// of silently behaving differently across the Go validator and the offline
-// signer.
+// guardAssetSchema rejects a raw assetSchema that falls outside the
+// rwa-profile-assetSchema/1 dialect, before it is compiled. It checks the keys
+// of every schema object, the "type" values, and every $ref: it must be local,
+// the only member of its object, resolvable, and not part of a cycle.
 func guardAssetSchema(raw json.RawMessage) error {
 	var root any
 	if err := json.Unmarshal(raw, &root); err != nil {
@@ -75,15 +62,12 @@ func guardAssetSchema(raw json.RawMessage) error {
 	return g.walkSchema(root, "$", nil)
 }
 
-// schemaGuard carries the parsed document root so $ref targets can be
-// resolved by JSON pointer against it.
+// schemaGuard holds the parsed document root, against which $ref pointers resolve
 type schemaGuard struct{ root any }
 
-// walkSchema validates node as a schema object at path. refChain is the set
-// of $ref pointer strings already traversed on the current resolution path
-// (nil at the start of every independent walk — e.g. each direct $defs
-// entry gets its own fresh chain in addition to whatever chain reaches it
-// via an actual $ref).
+// walkSchema checks node as a schema object at path. refChain holds the $ref
+// pointers already followed on the current path and is nil at the start of an
+// independent walk, such as each $defs entry
 func (g *schemaGuard) walkSchema(node any, path string, refChain map[string]bool) error {
 	obj, ok := node.(map[string]any)
 	if !ok {
@@ -151,9 +135,7 @@ func (g *schemaGuard) walkSchema(node any, path string, refChain map[string]bool
 		if !ok {
 			return fmt.Errorf("assetSchema $defs at %s must be an object", path)
 		}
-		// Every $defs entry MUST itself satisfy the dialect regardless of
-		// whether anything actually $refs it — each gets its own fresh
-		// refChain since this is an independent walk, not a resolution hop.
+		// every $defs entry must satisfy the dialect even when nothing refers to it
 		for name, sub := range defs {
 			if err := g.walkSchema(sub, path+".$defs."+name, nil); err != nil {
 				return err
@@ -163,8 +145,8 @@ func (g *schemaGuard) walkSchema(node any, path string, refChain map[string]bool
 	return nil
 }
 
-// walkRef resolves ref against g.root and validates the target, rejecting a
-// direct or indirect cycle and bounding the chain length.
+// walkRef resolves ref against g.root and checks the target. It rejects a direct
+// or indirect cycle and a chain longer than maxRefDepth.
 func (g *schemaGuard) walkRef(ref, path string, refChain map[string]bool) error {
 	if refChain[ref] {
 		return fmt.Errorf("assetSchema $ref cycle detected at %s (%s)", path, ref)
@@ -184,8 +166,8 @@ func (g *schemaGuard) walkRef(ref, path string, refChain map[string]bool) error 
 	return g.walkSchema(target, path+"->"+ref, chain)
 }
 
-// resolvePointer resolves a local "#" / "#/a/b/c" JSON pointer against root,
-// per RFC 6901 (~1 -> "/", ~0 -> "~").
+// resolvePointer resolves a local "#" or "#/a/b/c" JSON pointer against root as
+// RFC 6901 describes, decoding ~1 to "/" and ~0 to "~"
 func resolvePointer(root any, ref string) (any, error) {
 	if ref == "#" {
 		return root, nil
@@ -207,8 +189,8 @@ func resolvePointer(root any, ref string) (any, error) {
 	return cur, nil
 }
 
-// validateTypeValue checks a "type" keyword's value is a recognized
-// primitive type name, or an array of them.
+// validateTypeValue checks that a "type" value is a primitive type name or an
+// array of them
 func validateTypeValue(v any, path string) error {
 	switch t := v.(type) {
 	case string:
@@ -216,11 +198,19 @@ func validateTypeValue(v any, path string) error {
 			return fmt.Errorf("assetSchema type %q at %s is not a recognized JSON Schema type", t, path)
 		}
 	case []any:
+		if len(t) == 0 {
+			return fmt.Errorf("assetSchema type array at %s must not be empty", path)
+		}
+		seen := map[string]bool{}
 		for _, item := range t {
 			s, ok := item.(string)
 			if !ok || !allowedTypeValues[s] {
 				return fmt.Errorf("assetSchema type array at %s contains an unrecognized value", path)
 			}
+			if seen[s] {
+				return fmt.Errorf("assetSchema type array at %s contains duplicate %q", path, s)
+			}
+			seen[s] = true
 		}
 	default:
 		return fmt.Errorf("assetSchema type at %s must be a string or array of strings", path)

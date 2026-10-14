@@ -5,16 +5,10 @@ import { setSession } from "../lib/authSession";
 import { shortenAddress } from "../lib/format";
 
 /**
- * Admin sign-in via wallet signature. The flow: the connected wallet address is sent to
- * `POST /auth/challenge`, the wallet personal_signs the returned message, and
- * the signature goes to `POST /auth/session`. If the server recovers the
- * project admin as the signer it returns a JWT, which is stored (IndexedDB via
- * lib/authSession.ts) and attached as a bearer token on every request.
- *
- * Rendered by AppLayout in place of the admin `<Outlet/>` whenever there is no
- * live admin session. Connecting a wallet is handled by the global header
- * Connect button; this screen only drives the challenge → sign → verify step
- * once a wallet is present.
+ * Admin wallet login: request POST /auth/challenge, personal_sign the message,
+ * then exchange the signature at POST /auth/session. A configured-admin match
+ * returns the JWT persisted by lib/authSession.ts and sent by lib/client.ts.
+ * AppLayout shows this connect/sign/verify screen while no live session exists.
  */
 export function Login() {
   const wallet = useWalletContext();
@@ -51,10 +45,9 @@ export function Login() {
     <div className="card login-card">
       <h1>Admin sign-in</h1>
       <p>
-        Admin access is authenticated by wallet signature. Connect the project
-        admin wallet, then sign a one-time challenge to start a session. Nothing
-        is sent on-chain and no gas is spent — the signature only proves you
-        control the admin address.
+        Connect the project admin wallet and sign a one-time challenge to start
+        a session. The signature proves wallet ownership; it sends no on-chain
+        transaction and costs no gas.
       </p>
 
       {wallet.address ? (
@@ -94,20 +87,17 @@ export function Login() {
   );
 }
 
-/**
- * Turns a login failure into an operator-facing message. A 401 specifically
- * means the recovered signer is not the configured project admin; a rejected
- * signature is the common non-error case (the user dismissed the wallet
- * prompt) and shouldn't read like a fault.
- */
+// Turns a login failure into an operator-facing message. The server returns the
+// same 401 for a non-admin signer and for a bad, expired or replayed challenge.
+// A dismissed wallet prompt gets a milder message than a fault.
 function loginErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 401)
-      return "This wallet is not the project admin. Switch to the admin account and try again.";
+      return "This wallet is not the project admin, or the sign-in challenge expired. Switch to the admin account and try again.";
     return err.message;
   }
-  // viem/EIP-1193 user-rejection surfaces as code 4001 (or a message
-  // mentioning rejection); treat it as a benign cancellation.
+  // EIP-1193 reports a user rejection as code 4001; some wallets only put
+  // "reject" in the message
   if (isUserRejection(err))
     return "Signature request was rejected. Sign the challenge to sign in.";
   return "Sign-in failed. Try again.";

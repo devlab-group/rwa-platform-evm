@@ -12,5 +12,7 @@ dist-ssr
 .smoke-test.mjs
 .contrast-check.mjs
 .axe-audit.mjs
+.debug-focus.mjs
+.axe-debug.spec.ts
 tests/specs/zzz-debug.spec.ts
 .env

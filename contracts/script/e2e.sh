@@ -10,7 +10,7 @@ set -euo pipefail
 
 # Default to a random high port (not the well-known 8545) so repeated runs in one session don't
 # collide with an earlier run's anvil that couldn't be torn down (e.g. `kill` unavailable in a
-# sandboxed environment) — still overridable via env. Combined with the preflight check below,
+# sandboxed environment); ANVIL_PORT still overrides it. Combined with the preflight check below,
 # this removes the port-reuse flake class entirely rather than just making it rarer.
 ANVIL_PORT="${ANVIL_PORT:-$((20000 + RANDOM % 20000))}"
 ANVIL_HOST="127.0.0.1"
@@ -27,7 +27,7 @@ is_port_free() {
 }
 
 if ! is_port_free "${ANVIL_PORT}"; then
-    echo "Port ${ANVIL_PORT} is already in use — set ANVIL_PORT to a free port and retry." >&2
+    echo "Port ${ANVIL_PORT} is already in use; set ANVIL_PORT to a free port and retry." >&2
     exit 1
 fi
 
@@ -118,8 +118,8 @@ STRATEGY="$(extract_addr strategy)"
 QUOTE_TOKEN="$(extract_addr quoteToken)"
 
 if [[ -z "${ESCROW}" || -z "${TOKEN}" || -z "${STRATEGY}" ]]; then
-    echo "Could not parse deployed addresses from step 1 log; skipping cancel-demo branch." >&2
-    exit 0
+    echo "Could not parse deployed addresses from step 1 log; cannot run the cancel-demo branch." >&2
+    exit 1
 fi
 
 echo "Requesting a second redemption for the timeout -> cancel demo ..."
@@ -130,8 +130,8 @@ fi
 
 request_id="$(grep -oE "Requested \(for cancel demo\) redemption id [0-9]+" "${REQUEST_LOG}" | grep -oE "[0-9]+$" | tail -1)"
 if [[ -z "${request_id}" ]]; then
-    echo "Could not parse cancel-demo request id; skipping cancel-demo branch." >&2
-    exit 0
+    echo "Could not parse cancel-demo request id; cannot run the cancel-demo branch." >&2
+    exit 1
 fi
 
 echo "Advancing chain time past redemptionTimeout (${REDEMPTION_TIMEOUT}s) ..."

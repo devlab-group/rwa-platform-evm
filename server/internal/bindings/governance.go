@@ -5,24 +5,16 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// governanceEventsABIJSON declares the generic OZ governance events every
-// project contract emits but that no contract-specific binding covers:
-// Pausable's Paused/Unpaused (RWAToken is ERC20Pausable), AccessControl's
-// RoleGranted/RoleRevoked (every child contract inherits
-// AccessControlEnumerable), and AccessControlDefaultAdminRules's
-// DefaultAdminTransferScheduled/DefaultAdminTransferCanceled (the two-step
-// DEFAULT_ADMIN handover every governance contract inherits). These are
-// identical across every contract, so a single binding decodes them from any
-// routed address — the indexer routes a log to this decoder whenever the
-// address-specific decoder does not recognize its topic0. account on
-// Paused/Unpaused is NON-indexed (OZ `event Paused(address account)`), so it
-// lives in log.Data; RoleGranted/RoleRevoked have all three fields indexed,
-// so they come entirely from log.Topics. DefaultAdminTransferScheduled's
-// newAdmin is indexed (topic1) and its acceptSchedule non-indexed;
-// DefaultAdminTransferCanceled carries no fields. Note there is NO dedicated
-// event for a completed accept — acceptDefaultAdminTransfer moves the role via
-// the standard RoleRevoked(old)+RoleGranted(new), which the role fold already
-// tracks.
+// governanceEventsABIJSON covers shared OpenZeppelin governance events:
+// Pausable's Paused/Unpaused, AccessControl's RoleGranted/RoleRevoked, and
+// DefaultAdminTransferScheduled/DefaultAdminTransferCanceled. Their signatures
+// are shared across contracts, so one binding decodes them at any address.
+//
+// Paused/Unpaused put account in log.Data. RoleGranted/RoleRevoked index role,
+// account and sender in log.Topics. DefaultAdminTransferScheduled indexes newAdmin
+// and puts acceptSchedule in log.Data; DefaultAdminTransferCanceled has no fields.
+// Acceptance emits RoleRevoked and RoleGranted, which the role projection handles,
+// rather than a separate completion event.
 const governanceEventsABIJSON = `[
   {"type":"event","name":"Paused","anonymous":false,"inputs":[{"name":"account","type":"address","indexed":false}]},
   {"type":"event","name":"Unpaused","anonymous":false,"inputs":[{"name":"account","type":"address","indexed":false}]},
@@ -35,8 +27,8 @@ const governanceEventsABIJSON = `[
   {"type":"event","name":"DefaultAdminTransferCanceled","anonymous":false,"inputs":[]}
 ]`
 
-// Governance decodes the generic OZ Pausable + AccessControl events shared by
-// every project contract.
+// Governance decodes the generic OpenZeppelin Pausable, AccessControl and
+// AccessControlDefaultAdminRules events that project contracts share
 type Governance struct{ ABI abi.ABI }
 
 // NewGovernance parses the shared governance-events ABI once.
@@ -84,11 +76,10 @@ func (g Governance) AdminTransferNewAdmin(topics []common.Hash) common.Address {
 	return common.Address{}
 }
 
-// roleNamesByID reverse-maps each platform role's bytes32 id to its name (the
-// same set knownRoles in internal/project enumerates), so a decoded
-// RoleGranted/RoleRevoked can be folded into the named Roles map. An id not
-// present here is a role outside the platform's model and is ignored by the
-// security projector.
+// roleNamesByID maps each platform role's bytes32 id to its name (the set
+// internal/project's knownRoles enumerates) so a decoded RoleGranted or
+// RoleRevoked can be folded into the named Roles map. The security projector
+// ignores an id that is not here
 var roleNamesByID = map[common.Hash]string{
 	common.Hash(DefaultAdminRole): "DEFAULT_ADMIN_ROLE",
 	PauserRole:                    "PAUSER_ROLE",

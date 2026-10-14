@@ -62,10 +62,9 @@ type testEnv struct {
 	vaultAddr      common.Address
 	escrowAddr     common.Address
 
-	// Admin auth (wallet-signature -> JWT). adminKey signs admin login
-	// challenges; adminAddr is the configured admin; jwtSecret signs JWTs;
-	// bearer is a ready-to-use "Authorization: Bearer <jwt>" header value for
-	// the admin, so tests exercising admin-only routes just pass {"Authorization": env.bearer}.
+	// Admin auth (wallet signature to JWT): adminKey signs login challenges,
+	// adminAddr is the configured admin, jwtSecret signs JWTs, and bearer is the admin's
+	// "Authorization: Bearer <jwt>" header value for admin-only routes
 	adminKey  *ecdsa.PrivateKey
 	adminAddr common.Address
 	jwtSecret []byte
@@ -76,7 +75,7 @@ func setupTestApp(t *testing.T) *testEnv {
 	t.Helper()
 	repos := memory.New()
 
-	// Seed project + profile.
+	// Seed project and profile
 	result, profile := assets.ValidateProfile([]byte(goldGramProfile))
 	if !result.Valid {
 		t.Fatalf("profile fixture invalid: %v", result.Errors)
@@ -115,9 +114,8 @@ func setupTestApp(t *testing.T) *testEnv {
 	records := assets.NewRecordService(repos.AssetRecords, repos.AuditPackages, repos.Attestations, nil, controllerAddr, vaultAddr, domainCfg, auditor)
 	challenges := compliance.NewChallengeService(repos.WalletChallenges, repos.Investors, time.Hour, "RWA Test Platform")
 	webhooks := compliance.NewWebhookService(repos.KYCEvents, repos.Investors, "webhook-secret")
-	// The generic ("none") KYC provider verifies the same X-Webhook-Signature
-	// HMAC shape these tests exercise; buildApp wires KYC + Webhooks together, so
-	// the test App does too.
+	// The generic ("none") KYC provider verifies the X-Webhook-Signature HMAC shape
+	// these tests use; buildApp wires KYC and Webhooks together, so the test App does too
 	kycProvider, _ := kyc.New(kyc.Config{Mode: kyc.ModeNone, GenericHMACSecret: "webhook-secret"})
 	status := compliance.NewStatusService(txs, common.HexToAddress("0x0000000000000000000000000000000000C0A1"), blockchain.NewStaticKeySigner(complianceKey))
 	salesSvc := sales.New(client, vaultAddr, common.HexToAddress("0xA001"), repos.Purchases)
@@ -155,9 +153,8 @@ func setupTestApp(t *testing.T) *testEnv {
 	}
 }
 
-// addr expands a short hex suffix into a full, valid checksummed address
-// string, avoiding hand-counted 40-hex-char literals (an easy source of
-// off-by-a-few-digits bugs that common.IsHexAddress rejects outright).
+// addr expands a short hex suffix into a full checksummed address, avoiding
+// hand-counted 40-character literals that common.IsHexAddress would reject
 func addr(shortHex string) string {
 	return common.HexToAddress(shortHex).Hex()
 }
@@ -191,33 +188,33 @@ func TestHealthAndReady(t *testing.T) {
 		t.Fatalf("healthz status = %d", w.Code)
 	}
 
-	// Default-deny — with no ReadyCheck wired (chain services
-	// unavailable), /readyz must report not_ready, never "ready" by omission.
+	// With no ReadyCheck wired (chain services unavailable), /readyz reports
+	// not_ready rather than ready
 	w = doJSON(t, env.router, http.MethodGet, "/readyz", nil, nil)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("readyz status with no ReadyCheck = %d, want 503 (default-deny)", w.Code)
 	}
 
-	// With a passing ReadyCheck it reports ready.
+	// A passing ReadyCheck reports ready
 	env.app.ReadyCheck = func() error { return nil }
 	w = doJSON(t, env.router, http.MethodGet, "/readyz", nil, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("readyz status with passing ReadyCheck = %d, want 200", w.Code)
 	}
 
-	// A failing ReadyCheck reports not_ready.
+	// A failing ReadyCheck reports not_ready
 	env.app.ReadyCheck = func() error { return errTestNotReady }
 	w = doJSON(t, env.router, http.MethodGet, "/readyz", nil, nil)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("readyz status with failing ReadyCheck = %d, want 503", w.Code)
 	}
-	// /readyz is unauthenticated, so it must never reflect the raw internal
-	// error — those wrap RPC/Mongo dial failures with host:port detail.
+	// /readyz is unauthenticated, so it must not reflect the raw internal error,
+	// which wraps RPC and Mongo dial failures with host:port detail
 	if strings.Contains(w.Body.String(), errTestNotReady.Error()) {
 		t.Fatalf("readyz body leaked the internal error text: %s", w.Body.String())
 	}
 
-	// Each classified failure maps to a fixed, non-revealing label.
+	// Each classified failure maps to a fixed label that reveals no backend detail
 	for _, tc := range []struct {
 		err  error
 		want string
@@ -244,6 +241,7 @@ var errTestNotReady = errors.New("test: not ready")
 func TestValidateProfileEndpoint(t *testing.T) {
 	env := setupTestApp(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/validate", bytes.NewReader([]byte(goldGramProfile)))
+	req.Header.Set("Authorization", env.bearer)
 	w := httptest.NewRecorder()
 	env.router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -258,9 +256,9 @@ func TestValidateProfileEndpoint(t *testing.T) {
 	}
 }
 
-// goldGramProfileOtherProject is goldGramProfile with a distinct projectId
-// that setupTestApp never seeds, so tests below can tell "already stored by
-// the fixture" apart from "just persisted by this request".
+// goldGramProfileOtherProject is goldGramProfile with a projectId that
+// setupTestApp never seeds, to tell a fixture-stored profile from one this request
+// persisted
 const goldGramProfileOtherProject = `{
   "profileVersion": "1.0",
   "projectId": "11111111-2222-3333-4444-555555555555",
@@ -280,13 +278,12 @@ const goldGramProfileOtherProject = `{
   }
 }`
 
-// TestValidateProfileIsPure checks that POST
-// /api/v1/profile/validate — reachable with no credential at all (a missing
-// admin JWT reads as RoleReadOnly, not rejected) — must never write to the
-// AssetProfiles repository, even for a valid, well-formed profile.
+// TestValidateProfileIsPure checks that POST /api/v1/profile/validate, which is
+// admin-only, never writes to the AssetProfiles repository, even for a valid profile
 func TestValidateProfileIsPure(t *testing.T) {
 	env := setupTestApp(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/validate", bytes.NewReader([]byte(goldGramProfileOtherProject)))
+	req.Header.Set("Authorization", env.bearer)
 	w := httptest.NewRecorder()
 	env.router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -305,8 +302,19 @@ func TestValidateProfileIsPure(t *testing.T) {
 	}
 }
 
-// TestCreateProfileRequiresAdmin covers the persistence path: it is
-// admin-only, unlike the old implicit validate-then-upsert.
+// TestValidateProfileRequiresAdmin checks that the validate route rejects a
+// request without an admin JWT
+func TestValidateProfileRequiresAdmin(t *testing.T) {
+	env := setupTestApp(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/validate", bytes.NewReader([]byte(goldGramProfile)))
+	w := httptest.NewRecorder()
+	env.router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestCreateProfileRequiresAdmin covers the persistence path, which is admin-only
 func TestCreateProfileRequiresAdmin(t *testing.T) {
 	env := setupTestApp(t)
 
@@ -333,8 +341,8 @@ func TestCreateProfileRequiresAdmin(t *testing.T) {
 	}
 }
 
-// TestCreateProfileIsCreateOnce is the create-once/CAS case: a second create
-// for the same projectId must be rejected (409), never silently overwritten.
+// TestCreateProfileIsCreateOnce checks that a second create for the same
+// projectId is rejected with 409 and never overwrites
 func TestCreateProfileIsCreateOnce(t *testing.T) {
 	env := setupTestApp(t)
 
@@ -347,10 +355,8 @@ func TestCreateProfileIsCreateOnce(t *testing.T) {
 		t.Fatalf("first create status = %d, body=%s", w.Code, w.Body.String())
 	}
 
-	// A DIFFERENT Idempotency-Key for the second call: the point of this
-	// test is that the handler actually re-executes and hits the real
-	// create-once conflict, not that an idempotency cache replays the
-	// first call's 201.
+	// The second call uses a different Idempotency-Key so the handler runs again and
+	// hits the create-once conflict instead of replaying the first call's 201
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/profile", bytes.NewReader([]byte(goldGramProfileOtherProject)))
 	req.Header.Set("Authorization", env.bearer)
 	req.Header.Set("Idempotency-Key", "create-once-2")
@@ -361,9 +367,8 @@ func TestCreateProfileIsCreateOnce(t *testing.T) {
 	}
 }
 
-// TestCreateProfileGateRejectsMismatchedProjectId: when the server has a
-// configured project_id, a profile whose projectId differs is rejected (400) —
-// the safety gate that fixes which deployment a profile can belong to.
+// TestCreateProfileGateRejectsMismatchedProjectId checks that with a configured
+// project_id, a profile with a different projectId is rejected with 400
 func TestCreateProfileGateRejectsMismatchedProjectId(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.ProjectID = "99999999-8888-7777-6666-555555555555" // not goldGramProfileOtherProject's id
@@ -381,8 +386,8 @@ func TestCreateProfileGateRejectsMismatchedProjectId(t *testing.T) {
 	}
 }
 
-// TestCreateProfileGateAcceptsMatchingProjectId: the same request with the
-// server configured to the profile's own projectId is accepted.
+// TestCreateProfileGateAcceptsMatchingProjectId checks that the same request is
+// accepted when the server is configured with the profile's own projectId
 func TestCreateProfileGateAcceptsMatchingProjectId(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.ProjectID = "11111111-2222-3333-4444-555555555555"
@@ -397,11 +402,9 @@ func TestCreateProfileGateAcceptsMatchingProjectId(t *testing.T) {
 	}
 }
 
-// TestRecordCreationBlockedOnProfileDigestMismatch is the cross-check
-// case: if the stored profile's digest ever diverges from the
-// project's persisted (on-chain-submitted) profileDigest, every downstream
-// record/package/signature operation must refuse rather than silently use
-// the mismatched profile.
+// TestRecordCreationBlockedOnProfileDigestMismatch checks that when the stored
+// profile's digest differs from the project's profileDigest (the digest submitted
+// on-chain), record, package and signature operations refuse to use the profile
 func TestRecordCreationBlockedOnProfileDigestMismatch(t *testing.T) {
 	env := setupTestApp(t)
 	p, err := env.app.Repos.Projects.Get(context.Background())
@@ -434,8 +437,8 @@ func TestGetProject(t *testing.T) {
 	if p.ChainID != 31337 {
 		t.Errorf("ChainID = %d", p.ChainID)
 	}
-	// The security-authority snapshot must be flagged as not-guaranteed-
-	// live, so the UI never presents it as current chain state.
+	// The authority fields are a deploy-time snapshot, so the response must flag
+	// them as possibly stale
 	if !p.SecurityStale {
 		t.Error("expected securityStale = true (authority fields are a deployment-time snapshot)")
 	}
@@ -491,11 +494,9 @@ func TestComplianceSetStatusSubmitsTx(t *testing.T) {
 	}
 }
 
-// TestIdempotencyKeyRequiredAtAPILayer is the HTTP-level check: a
-// side-effecting route wired with auth.Idempotency must reject a request with
-// no Idempotency-Key header, using the stable
-// CodeIdempotencyKeyRequired code, before the handler (and its side
-// effect) ever runs.
+// TestIdempotencyKeyRequiredAtAPILayer checks that a side-effecting route wired
+// with auth.Idempotency rejects a request without an Idempotency-Key header, using
+// CodeIdempotencyKeyRequired, before the handler runs
 func TestIdempotencyKeyRequiredAtAPILayer(t *testing.T) {
 	env := setupTestApp(t)
 
@@ -512,7 +513,7 @@ func TestIdempotencyKeyRequiredAtAPILayer(t *testing.T) {
 		t.Errorf("code = %q, want %q", resp.Code, CodeIdempotencyKeyRequired)
 	}
 	if len(env.client.SentTxs) != 0 {
-		t.Errorf("expected no transaction submitted, got %d — the handler must never run without a key", len(env.client.SentTxs))
+		t.Errorf("expected no transaction submitted, got %d - the handler must never run without a key", len(env.client.SentTxs))
 	}
 }
 
@@ -575,12 +576,9 @@ func TestAssetsCreateListPackageAndSignatureFlow(t *testing.T) {
 	}
 }
 
-// TestDownloadPackageRejectsRejectedRecord covers
-// package build: a Rejected record will never be minted, so building a
-// package for it is pointless — unlike Signed/Minted/expired-but-otherwise-
-// valid records, which downloadPackage still serves (see its handler's
-// doc comment for why those are allowed: no chain interaction, useful as
-// an audit-trail lookup).
+// TestDownloadPackageRejectsRejectedRecord checks that a Rejected record cannot
+// be packaged, while Signed, Minted and expired records are still served (see
+// downloadPackage)
 func TestDownloadPackageRejectsRejectedRecord(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -610,15 +608,13 @@ func TestDownloadPackageRejectsRejectedRecord(t *testing.T) {
 	}
 }
 
-// TestRedemptionIDParamAcceptsZero pins the nuance that a redemption id is
-// legitimately 0 (RedemptionEscrow.nextId starts at 0), so the :id path
-// parameter must accept 0 rather than rejecting it as empty/missing.
+// TestRedemptionIDParamAcceptsZero checks that the :id path parameter accepts 0,
+// the first id RedemptionEscrow assigns (nextId starts at 0)
 func TestRedemptionIDParamAcceptsZero(t *testing.T) {
 	env := setupTestApp(t)
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/redemptions/0", nil, nil)
-	// No redemption with id 0 exists in this test's fixtures, so this
-	// legitimately 404s — the point is it must NOT be rejected as a
-	// malformed id with 400.
+	// No redemption with id 0 exists in this fixture, so the expected answer is 404,
+	// not a 400 for a malformed id
 	if w.Code == http.StatusBadRequest {
 		t.Errorf("id=0: status = 400 (rejected as a malformed id), want it to reach the lookup and 404 instead")
 	}
@@ -628,8 +624,8 @@ func TestSalesInventory(t *testing.T) {
 	env := setupTestApp(t)
 
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/sales/inventory", nil, nil)
-	// No canned CallContract response configured -> internal error expected;
-	// asserting the route is wired and returns a structured error, not a 404.
+	// No canned CallContract response is configured, so an internal error is
+	// expected; the check is that the route is wired and does not return 404
 	if w.Code == http.StatusNotFound {
 		t.Fatalf("route not found: %d", w.Code)
 	}
@@ -666,11 +662,10 @@ func TestListTransactionsEmpty(t *testing.T) {
 	}
 }
 
-// TestListRecordsIsPaginated checks that this list handler never fetches an
-// entire Mongo collection and serializes it in one response — the server-side
-// limit applies even when the client omits parameters. Seeds more records than
-// the default page size and checks both the default-bounded response and an
-// explicit limit/cursor walk through every page.
+// TestListRecordsIsPaginated checks that the list is bounded server-side even
+// when the client sends no parameters. It seeds more records than the default page
+// size and checks the default response and a limit and cursor walk through every
+// page.
 func TestListRecordsIsPaginated(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -684,8 +679,7 @@ func TestListRecordsIsPaginated(t *testing.T) {
 		}
 	}
 
-	// No limit/cursor supplied: the server-side default must still bound
-	// the response, never returning the full collection.
+	// With no limit or cursor, the default limit still bounds the response
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/assets/records", nil, map[string]string{"Authorization": env.bearer})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
@@ -697,11 +691,7 @@ func TestListRecordsIsPaginated(t *testing.T) {
 	if len(page) != defaultListLimit {
 		t.Errorf("default page size = %d, want %d (server-side default must apply even with no query params)", len(page), defaultListLimit)
 	}
-	// This endpoint uses repository-level keyset pagination — X-Total-Count
-	// is deliberately omitted (a true total would need an extra unbounded
-	// count, reintroducing the exact unbounded work being removed here),
-	// matching listAuditLogs' pre-existing "omitted rather than sent wrong"
-	// convention.
+	// Keyset pagination omits X-Total-Count, since a total would need a full count
 	if w.Header().Get("X-Total-Count") != "" {
 		t.Errorf("X-Total-Count = %q, want omitted", w.Header().Get("X-Total-Count"))
 	}
@@ -710,9 +700,8 @@ func TestListRecordsIsPaginated(t *testing.T) {
 		t.Fatal("expected a non-empty X-Next-Cursor since more records remain")
 	}
 
-	// Walk every remaining page via the returned cursor, collecting every
-	// recordId seen, and confirm the full walk exactly covers every seeded
-	// record exactly once (no gaps, no duplicates from an unstable window).
+	// Walk every remaining page via the returned cursor and confirm each seeded
+	// recordId appears exactly once
 	seen := map[string]bool{}
 	for _, r := range page {
 		seen[r.RecordID] = true
@@ -742,9 +731,8 @@ func TestListRecordsIsPaginated(t *testing.T) {
 	}
 }
 
-// TestListRecordsRejectsOversizedLimit pins the conservative hard-maximum
-// requirement: a client requesting more than maxListLimit must be capped, never
-// served the raw requested amount.
+// TestListRecordsRejectsOversizedLimit checks that a limit above maxListLimit
+// is capped to it
 func TestListRecordsRejectsOversizedLimit(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -771,12 +759,10 @@ func TestListRecordsRejectsOversizedLimit(t *testing.T) {
 	}
 }
 
-// TestAuthSessionHasItsOwnRateLimitIndependentOfGlobal checks that the
-// endpoint-specific login limiter stays on independent of the optional global
-// limiter. env.app never sets RateLimitRPS (the
-// global limiter middleware is therefore NOT installed at all — see
-// NewRouter's `if app.RateLimitRPS > 0`), yet rapid POST /auth/session
-// calls must still be throttled by the endpoint-specific bucket.
+// TestAuthSessionHasItsOwnRateLimitIndependentOfGlobal checks that the login
+// limiter applies even when the global limiter is off. env.app never sets
+// RateLimitRPS, so NewRouter installs no global limiter, yet rapid POST
+// /auth/session calls must still be throttled.
 func TestAuthSessionHasItsOwnRateLimitIndependentOfGlobal(t *testing.T) {
 	env := setupTestApp(t)
 	if env.app.RateLimitRPS > 0 {

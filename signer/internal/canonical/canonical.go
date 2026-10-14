@@ -1,11 +1,10 @@
 // Package canonical implements RFC 8785 JSON Canonicalization Scheme (JCS).
 //
-// It provides a strict JSON parser (duplicate object keys are rejected,
-// input must be valid UTF-8) and a canonical serializer (object keys sorted
-// by UTF-16 code unit, ECMAScript Number::toString number formatting,
-// minimal string escaping) so that Go and any other JCS-compliant
-// implementation (the server's TypeScript canonicalizer, in particular)
-// produce byte-identical output for the same logical JSON document.
+// It provides a strict JSON parser (duplicate object keys and invalid UTF-8 are
+// rejected) and a canonical serializer (object keys sorted by UTF-16 code unit,
+// ECMAScript Number::toString number formatting, minimal string escaping), so the signer
+// and the server's canonicalizer (server/internal/auditpkg) produce byte-identical
+// output for the same JSON document.
 package canonical
 
 import (
@@ -23,28 +22,28 @@ import (
 	"unicode/utf8"
 )
 
-// Value is a parsed JSON value: nil, bool, json.Number, string, []Value, or *Object.
+// Value is a parsed JSON value: nil, bool, json.Number, string, []Value or *Object
 type Value interface{}
 
-// Object is a JSON object that preserves insertion order and rejects
-// duplicate keys during parsing.
+// Object is a JSON object that preserves insertion order and rejects duplicate keys
+// during parsing
 type Object struct {
 	keys   []string
 	values map[string]Value
 }
 
-// Keys returns the object's keys in the order they were parsed.
+// Keys returns the object's keys in the order they were parsed
 func (o *Object) Keys() []string {
 	return o.keys
 }
 
-// Get returns the value for key and whether it was present.
+// Get returns the value for key and whether it was present
 func (o *Object) Get(key string) (Value, bool) {
 	v, ok := o.values[key]
 	return v, ok
 }
 
-// Len returns the number of properties in the object.
+// Len returns the number of properties in the object
 func (o *Object) Len() int {
 	return len(o.keys)
 }
@@ -62,37 +61,31 @@ func (o *Object) set(key string, v Value) error {
 	return nil
 }
 
-// Limits bounds the shape of a document during ParseWithLimits, guarding
-// against pathological or malicious input before it is ever hashed or
-// walked by a schema validator.
+// Limits bounds the shape of a document during ParseWithLimits, guarding against
+// pathological or malicious input before it is hashed or walked by a schema validator
 type Limits struct {
 	MaxBytes int64 // total input size in bytes; 0 means unbounded
 	MaxDepth int   // maximum object/array nesting depth; 0 means unbounded
-	// MaxStringLen is the maximum length, in UTF-8 BYTES (Go len(string)),
-	// of any JSON string token -- applied IDENTICALLY to string values AND
-	// object keys. The unit is UTF-8 bytes to match the server's limits.go,
-	// which measures every string token (key or value) with len(string). The
-	// unit matters: measuring runes for values only, and skipping keys, would
-	// let a 10,000-emoji value or a 32,769-byte object key slip past here
-	// while the server rejects it. 0 means unbounded.
+	// MaxStringLen is the maximum length, in UTF-8 bytes, of any JSON string token. It
+	// applies to string values and object keys alike, matching the server's limits.go,
+	// which measures every string token with len(string). Counting runes, or skipping
+	// keys, would let a 10,000-emoji value or a 32,769-byte key pass here while the
+	// server rejects it. 0 means unbounded.
 	MaxStringLen  int
 	MaxArrayLen   int // maximum number of elements in any array; 0 means unbounded
 	MaxObjectKeys int // maximum number of properties in any object; 0 means unbounded
-	// SafeIntegers rejects an integer literal (no fraction or exponent) outside
-	// [-(2^53-1), 2^53-1], the range Go, TypeScript and JSON agree on. The server
-	// applies the same rule to every profile and metadata document.
+	// SafeIntegers rejects an integer literal (one with no fraction or exponent) outside
+	// [-(2^53-1), 2^53-1], the range a JavaScript number represents exactly. The server
+	// applies the same rule to every document it checks.
 	SafeIntegers bool
 }
 
-// DefaultLimits returns the structural limits for operator-supplied
-// profile and metadata documents. These are the exact values the server
-// enforces (server/internal/auditpkg/canonical.go: MaxDocumentBytes,
-// MaxObjectDepth, MaxStringLength, MaxArrayLength, MaxObjectKeys). They must
-// stay in lockstep: if the signer's limits are looser than the server's, a
-// hand-built package can pass here while the server rejects it, so the two
-// validators would disagree on the same document. Both sides MUST use these
-// same numbers; do not change them here without also changing the server's
-// copy and shared/vectors/schema-dialect-conformance.json's boundary cases.
+// DefaultLimits returns the structural limits for operator-supplied profile and
+// metadata documents. They equal the server's (MaxDocumentBytes, MaxObjectDepth,
+// MaxStringLength, MaxArrayLength and MaxObjectKeys in server/internal/auditpkg) and
+// shared/schemas/structural-limits.json. A looser limit here would let a hand-built
+// package pass the signer while the server rejects it, so change both sides together
+// with the boundary cases in shared/vectors/schema-dialect-conformance.json.
 func DefaultLimits() Limits {
 	return Limits{
 		MaxBytes:      1 << 20, // 1 MiB
@@ -109,16 +102,16 @@ type parser struct {
 	limit Limits
 }
 
-// Parse parses input into a Value tree with no size/depth limits beyond a
-// hard-coded safety ceiling, rejecting duplicate object keys, invalid
-// UTF-8, and trailing data. Use ParseWithLimits to enforce document limits.
+// Parse parses input into a Value tree. It rejects duplicate object keys, invalid
+// UTF-8 and trailing data, and applies only a hard nesting-depth ceiling. Use
+// ParseWithLimits to enforce document limits.
 func Parse(input []byte) (Value, error) {
 	return ParseWithLimits(input, Limits{})
 }
 
-// ParseWithLimits parses input into a Value tree, enforcing lim (zero
-// fields are treated as unbounded, except depth which always has a hard
-// safety ceiling to protect the Go call stack).
+// ParseWithLimits parses input into a Value tree, enforcing lim (a zero field is
+// unbounded, except that nesting depth always has a hard ceiling to protect the Go call
+// stack)
 func ParseWithLimits(input []byte, lim Limits) (Value, error) {
 	if lim.MaxBytes > 0 && int64(len(input)) > lim.MaxBytes {
 		return nil, fmt.Errorf("canonical: document exceeds max size of %d bytes", lim.MaxBytes)
@@ -180,8 +173,8 @@ func (p *parser) parseTokenValue(tok json.Token, depth int) (Value, error) {
 		}
 		return t, nil
 	case string:
-		// Byte length, not rune count -- must match the server's Go
-		// len(string) check byte-for-byte. See Limits.MaxStringLen.
+		// Byte length, not rune count, to match the server's len(string) check (see
+		// Limits.MaxStringLen)
 		if p.limit.MaxStringLen > 0 && len(t) > p.limit.MaxStringLen {
 			return nil, fmt.Errorf("canonical: string exceeds max length of %d bytes", p.limit.MaxStringLen)
 		}
@@ -205,9 +198,8 @@ func (p *parser) parseObject(depth int) (*Object, error) {
 		if !ok {
 			return nil, fmt.Errorf("canonical: expected object key, got %T", keyTok)
 		}
-		// Object keys are bound by the same MaxStringLen (in UTF-8 bytes) as
-		// string values, matching the server's limits.go, which enforces the
-		// bound on every string token including keys.
+		// Keys share MaxStringLen (UTF-8 bytes) with string values, as in the server's
+		// limits.go
 		if p.limit.MaxStringLen > 0 && len(key) > p.limit.MaxStringLen {
 			return nil, fmt.Errorf("canonical: object key exceeds max length of %d bytes", p.limit.MaxStringLen)
 		}
@@ -245,11 +237,11 @@ func (p *parser) parseArray(depth int) ([]Value, error) {
 	return arr, nil
 }
 
-// maxSafeInteger is 2^53-1, the largest integer every JSON implementation represents exactly
+// maxSafeInteger is 2^53-1, JavaScript's Number.MAX_SAFE_INTEGER
 var maxSafeInteger = big.NewInt(1<<53 - 1)
 
-// checkSafeInteger mirrors the server's check: literals with a fraction or exponent are not
-// integers and pass through
+// checkSafeInteger mirrors the server's check: literals with a fraction or exponent are
+// not treated as integers and pass through
 func checkSafeInteger(n json.Number) error {
 	s := string(n)
 	if strings.ContainsAny(s, ".eE") {
@@ -265,9 +257,9 @@ func checkSafeInteger(n json.Number) error {
 	return nil
 }
 
-// Canonicalize parses input as JSON and re-serializes it as RFC 8785
-// canonical bytes. It rejects duplicate object keys, invalid UTF-8, and
-// non-finite numbers.
+// Canonicalize parses input as JSON and re-serializes it as RFC 8785 canonical bytes.
+// It rejects duplicate object keys, invalid UTF-8, trailing data and numbers outside
+// the float64 range.
 func Canonicalize(input []byte) ([]byte, error) {
 	v, err := Parse(input)
 	if err != nil {
@@ -276,7 +268,7 @@ func Canonicalize(input []byte) ([]byte, error) {
 	return Marshal(v)
 }
 
-// Marshal serializes an already-parsed Value tree as RFC 8785 canonical bytes.
+// Marshal serializes an already-parsed Value tree as RFC 8785 canonical bytes
 func Marshal(v Value) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := writeValue(&buf, v); err != nil {
@@ -340,8 +332,8 @@ func writeValue(buf *bytes.Buffer, v Value) error {
 	return nil
 }
 
-// utf16Less reports whether a sorts before b when both are compared as
-// sequences of UTF-16 code units, per RFC 8785 section 3.2.3.
+// utf16Less reports whether a sorts before b when both are compared as sequences of
+// UTF-16 code units, per RFC 8785 section 3.2.3
 func utf16Less(a, b string) bool {
 	ua := utf16.Encode([]rune(a))
 	ub := utf16.Encode([]rune(b))
@@ -357,10 +349,9 @@ func utf16Less(a, b string) bool {
 	return len(ua) < len(ub)
 }
 
-// writeString writes s as a JSON string using the minimal escaping RFC 8785
-// requires: only '"', '\\', and control characters (U+0000-U+001F) are
-// escaped; everything else, including non-ASCII characters and '/', is
-// emitted as raw UTF-8.
+// writeString writes s as a JSON string with the minimal escaping RFC 8785 requires:
+// only '"', '\\' and control characters (U+0000-U+001F) are escaped, and everything
+// else, including non-ASCII characters and '/', is written as raw UTF-8
 func writeString(buf *bytes.Buffer, s string) {
 	buf.WriteByte('"')
 	for _, r := range s {
@@ -390,15 +381,14 @@ func writeString(buf *bytes.Buffer, s string) {
 	buf.WriteByte('"')
 }
 
-// formatNumber renders f using the ECMAScript Number::toString algorithm
-// (ECMA-262 7.1.12.1), which RFC 8785 mandates for JSON number
-// serialization.
+// formatNumber renders f with the ECMAScript Number::toString algorithm (ECMA-262
+// 7.1.12.1), which RFC 8785 section 3.2.2.3 requires for JSON numbers
 func formatNumber(f float64) (string, error) {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		return "", errors.New("canonical: NaN/Infinity cannot be canonicalized")
 	}
 	if f == 0 {
-		// Both +0 and -0 serialize as "0".
+		// Both +0 and -0 serialize as "0"
 		return "0", nil
 	}
 

@@ -5,16 +5,15 @@ import { api } from "../../lib/client";
 import { readPreviewBuy, sendWithdrawProceeds } from "../../lib/wallet";
 import { installFakeWallet, renderWithWallet } from "../../test/walletHarness";
 
-// The Treasury withdrawal form is gated on the connected wallet holding
-// TREASURER_ROLE (a UX gate — the on-chain onlyRole check is the real
-// authorization). The fake wallet connects as this account, and the project
-// grants it the role, so the form renders and can broadcast directly.
+// The treasury withdrawal form shows only when the connected wallet holds
+// TREASURER_ROLE; the contract's onlyRole check is the real authorization. The
+// fake wallet connects as this account and the project grants it the role, so
+// the form renders and can broadcast directly.
 const CONNECTED = "0x1111111111111111111111111111111111111111";
 
-// The admin sales forms must scale each amount by the RIGHT token's decimals:
-// a buy preview is an RWA-token amount (Project.decimals,
-// 6 here), but a treasury withdrawal pays out the QUOTE token, whose decimals
-// (18 here) differ. Using the wrong one silently mis-scales money — these
+// The sales forms must scale each amount by its own token's decimals. A buy
+// preview is an RWA-token amount (Project.decimals, 6 here), but a treasury
+// withdrawal pays out the quote token, whose decimals (18 here) differ. These
 // tests pin each field to its own decimals.
 vi.mock("../../lib/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/client")>();
@@ -29,10 +28,10 @@ vi.mock("../../lib/client", async (importOriginal) => {
   };
 });
 
-// Quote-token decimals are read on-chain (return 18 so a correct withdrawal
-// conversion is distinguishable from the RWA token's 6 decimals); the purchase
-// quote is a Vault.previewBuy read, and the withdraw broadcast + receipt wait
-// are stubbed so the tests assert the exact calls without a chain.
+// Quote-token decimals are read on-chain and return 18, so a correct withdrawal
+// conversion differs from the RWA token's 6. The purchase quote is a
+// Vault.previewBuy read, and the withdraw broadcast and receipt wait are
+// stubbed so the tests assert the exact calls without a chain.
 vi.mock("../../lib/wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/wallet")>();
   return {
@@ -81,8 +80,8 @@ describe("InventorySales amount conversion", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Preview quote" }));
 
-    // 1 whole RWA unit at 6 decimals -> 1000000n, quoted by Vault.previewBuy
-    // on the project's chain — no server round-trip.
+    // 1 whole RWA unit at 6 decimals is 1000000n, quoted by Vault.previewBuy on
+    // the project's chain with no server call
     await waitFor(() =>
       expect(readPreviewBuy).toHaveBeenCalledWith(
         31337,
@@ -102,8 +101,8 @@ describe("InventorySales amount conversion", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Withdraw" }));
 
-    // 1 whole quote-token unit at 18 decimals -> 1000000000000000000n, NOT the
-    // RWA token's 1000000n; sent to the vault from the connected wallet.
+    // 1 whole quote-token unit at 18 decimals is 1000000000000000000n, not the
+    // RWA token's 1000000n; the connected wallet sends it to the vault
     await waitFor(() =>
       expect(sendWithdrawProceeds).toHaveBeenCalledWith(
         31337,
@@ -128,7 +127,7 @@ describe("InventorySales amount conversion", () => {
     );
 
     // Once the quote decimals resolve (18), 10 > 5 disables the button and shows
-    // the inline error — the withdrawal is never broadcast.
+    // the inline error, and no withdrawal is broadcast
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Withdraw" })).toBeDisabled(),
     );

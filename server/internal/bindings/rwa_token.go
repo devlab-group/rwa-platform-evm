@@ -9,16 +9,16 @@ import (
 )
 
 // rwaTokenABIJSON declares the ERC-7943 (uRWA) enforcement events RWAToken
-// emits: Frozen whenever an admin overwrites a holder's absolute frozen
-// amount (including the reduction a forced transfer causes before it moves
-// tokens), and ForcedTransfer alongside the ordinary ERC-20 Transfer of a
-// seizure. Both carry their addresses in topics and the amount in data; the
-// signatures and topic0 hashes are pinned in shared/vectors/erc7943-abi.json,
-// which erc7943_vectors_test.go asserts this literal against.
+// emits. Frozen is emitted when an admin sets a holder's absolute frozen amount
+// and when a forced transfer reduces it before moving tokens. ForcedTransfer is
+// emitted with the ordinary ERC-20 Transfer of a seizure. Addresses are indexed
+// and the amount is in log.Data. The signatures and topic0 hashes are pinned in
+// shared/vectors/erc7943-abi.json, and erc7943_vectors_test.go checks this
+// literal against it.
 //
-// The read side of the standard (canSend/canReceive/canTransfer/
-// getFrozenTokens) is absent on purpose: the server derives frozen state by
-// replaying these events, so it never calls those getters.
+// The standard's read functions (canSend, canReceive, canTransfer,
+// getFrozenTokens) are not declared because the server derives frozen state by
+// replaying these events.
 const rwaTokenABIJSON = `[
   {"type":"event","name":"Frozen","anonymous":false,"inputs":[
     {"name":"account","type":"address","indexed":true},{"name":"amount","type":"uint256","indexed":false}]},

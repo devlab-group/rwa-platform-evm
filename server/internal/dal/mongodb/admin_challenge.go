@@ -12,17 +12,15 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// adminChallengeRepo persists admin_challenges (one active challenge per
-// address, keyed by the normalized address as _id — see
-// models.AdminChallenge and repository.AdminChallengeRepository). A TTL
-// index on expiresAt (EnsureIndexes) is background cleanup only; Get checks
-// ExpiresAt itself, same reasoning as walletSessionRepo.Get.
+// adminChallengeRepo persists admin_challenges, one active challenge per address
+// with the normalized address as _id (see models.AdminChallenge). The TTL index on
+// expiresAt is background cleanup. Get checks ExpiresAt itself, as walletSessionRepo.Get
+// does.
 type adminChallengeRepo struct{ coll *mongo.Collection }
 
 func (r *adminChallengeRepo) Upsert(ctx context.Context, c *models.AdminChallenge) error {
-	// One active challenge per address: replace any prior document for this
-	// _id (used or not) rather than insert, since the verify step has no
-	// client-echoed nonce to pick among several.
+	// replace any earlier document for this _id, used or not, because the verify step
+	// has no client-supplied nonce to choose between several
 	_, err := r.coll.ReplaceOne(ctx, bson.M{"_id": c.Address}, c, options.Replace().SetUpsert(true))
 	return err
 }
@@ -39,9 +37,9 @@ func (r *adminChallengeRepo) Get(ctx context.Context, address string) (*models.A
 }
 
 func (r *adminChallengeRepo) MarkUsed(ctx context.Context, address string) error {
-	// "used": {$ne: true} makes this a genuine compare-and-swap so two
-	// concurrent verifies of the same signature cannot both succeed — same
-	// pattern as walletChallengeRepo.MarkUsed.
+	// the filter matches only a challenge that is not yet used, so two concurrent
+	// verifies of the same signature cannot both succeed, as in
+	// walletChallengeRepo.MarkUsed
 	res, err := r.coll.UpdateOne(ctx, bson.M{"_id": address, "used": bson.M{"$ne": true}}, bson.M{"$set": bson.M{"used": true}})
 	if err != nil {
 		return err
@@ -49,9 +47,8 @@ func (r *adminChallengeRepo) MarkUsed(ctx context.Context, address string) error
 	if res.MatchedCount == 1 {
 		return nil
 	}
-	// MatchedCount 0 means either "no such challenge" or "already used" (or
-	// "expired", which Get treats as not found) — one extra read on the
-	// error path tells them apart.
+	// MatchedCount 0 means no such challenge or one already used. A read tells them
+	// apart, and Get reports an expired challenge as not found.
 	if _, err := r.Get(ctx, address); err != nil {
 		return err // repository.ErrNotFound
 	}

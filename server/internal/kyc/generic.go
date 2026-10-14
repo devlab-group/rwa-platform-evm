@@ -11,14 +11,14 @@ import (
 )
 
 // GenericWebhookSignatureHeader is the header the "none" provider reads: the
-// lowercase hex of HMAC-SHA256(rawBody, sharedSecret), optionally 0x-prefixed.
-// Matches the historical KYC webhook contract (api/openapi.yaml's kycWebhook).
+// hex HMAC-SHA256 of the raw body under the shared secret, optionally
+// 0x-prefixed (see kycWebhook in api/openapi.yaml)
 const GenericWebhookSignatureHeader = "X-Webhook-Signature"
 
-// genericProvider is the provider-agnostic default: no server-initiated flow,
-// and a webhook body that is already the platform's generic decision shape,
-// authenticated by a shared HMAC secret. It preserves the exact pre-provider
-// behavior for issuers who feed the webhook from their own integration.
+// genericProvider is the provider-agnostic default for issuers who feed the
+// webhook from their own integration. It has no server-initiated flow, and the
+// webhook body is already the platform's decision shape, authenticated by a
+// shared HMAC secret.
 type genericProvider struct {
 	secret string
 }
@@ -29,15 +29,15 @@ func newGenericProvider(secret string) *genericProvider {
 
 func (p *genericProvider) Name() string { return "generic" }
 
-// StartVerification is unsupported: the generic provider has no upstream API to
-// create a verification against — the issuer arranges verification themselves.
+// StartVerification is unsupported: the generic provider has no upstream API,
+// and the issuer arranges verification itself
 func (p *genericProvider) StartVerification(ctx context.Context, address string) (Session, error) {
 	return Session{}, ErrStartNotSupported
 }
 
-// genericPayload is the wire shape the generic webhook body carries — the same
-// fields internal/compliance.WebhookPayload marshals, decoded here without
-// importing that package so this adapter stays a leaf dependency.
+// genericPayload is the generic webhook body, with the fields of
+// compliance.WebhookPayload. It is redeclared here so this package does not
+// import internal/compliance.
 type genericPayload struct {
 	EventID    string `json:"eventId"`
 	Address    string `json:"address"`
@@ -72,10 +72,9 @@ func (p *genericProvider) VerifyWebhook(rawBody []byte, headers http.Header) (De
 }
 
 // verifyHexHMACSHA256 reports whether sigHex (hex, optionally 0x-prefixed) is a
-// valid HMAC-SHA256 of body under secret, in constant time. An empty secret
-// always fails (an empty HMAC key is publicly computable, so anyone could
-// forge a signature) — the same defense-in-depth rule internal/compliance
-// applies. Shared by every provider's webhook verification.
+// valid HMAC-SHA256 of body under secret, compared in constant time. An empty
+// secret always fails, because anyone can compute an HMAC under an empty key.
+// Providers other than sumsub use it for webhook verification.
 func verifyHexHMACSHA256(body []byte, sigHex, secret string) bool {
 	if secret == "" {
 		return false

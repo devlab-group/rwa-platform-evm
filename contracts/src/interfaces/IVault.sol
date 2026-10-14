@@ -3,9 +3,8 @@ pragma solidity ^0.8.24;
 
 /// @title IVault
 /// @notice Holds inventory, sells for one quote token, and withdraws sale proceeds.
-/// @dev Stable interface; see docs/spec/contracts.md.
-///      There is no off-chain payment distribution (`distribute`, `distributionCap`,
-///      `DISTRIBUTOR_ROLE`): `buy` is the only inbound token flow.
+/// @dev Stable interface; see docs/spec/contracts.md. `buy` is the only way RWA leaves the
+///      Vault to a buyer.
 interface IVault {
     event Purchased(
         address indexed buyer, address indexed recipient, uint256 tokenAmount, uint256 quoteAmount, address strategy

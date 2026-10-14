@@ -2,13 +2,10 @@ package models
 
 import "time"
 
-// DeadLetterEntry is a block/tx/log the indexer could not process
-// (collection: indexer_dead_letters). The indexer routes any block,
-// transaction, or log it can't process successfully into this persistent
-// failure queue instead of dropping or blocking on it. Its ID is
-// deterministic — see indexer.Indexer's dead-letter key — so a repeated
-// failure of the SAME log across polls updates one entry (RetryCount,
-// LastFailedAt) instead of growing the queue unboundedly.
+// DeadLetterEntry is a log the indexer could not process
+// (collection: indexer_dead_letters). The indexer stores such a log here and keeps
+// scanning. The ID is deterministic, so a log that fails again on a later poll
+// updates one entry (RetryCount, LastFailedAt) instead of adding a new one.
 type DeadLetterEntry struct {
 	ID          string `json:"id" bson:"_id"`
 	ChainID     int64  `json:"chainId" bson:"chainId"`
@@ -16,36 +13,30 @@ type DeadLetterEntry struct {
 	BlockHash   string `json:"blockHash,omitempty" bson:"blockHash,omitempty"`
 	TxHash      string `json:"txHash,omitempty" bson:"txHash,omitempty"`
 	LogIndex    uint   `json:"logIndex" bson:"logIndex"`
-	// EventSignature is the log's topic0, when present — the best available
-	// "what kind of event was this" without a full ABI decode (which is
-	// exactly what failed).
+	// EventSignature is the log's topic0 when it has one, the best available
+	// indication of the event type, since decoding failed
 	EventSignature string    `json:"eventSignature,omitempty" bson:"eventSignature,omitempty"`
 	ErrorCategory  string    `json:"errorCategory" bson:"errorCategory"`
 	ErrorMessage   string    `json:"errorMessage" bson:"errorMessage"`
 	RetryCount     int       `json:"retryCount" bson:"retryCount"`
 	FirstFailedAt  time.Time `json:"firstFailedAt" bson:"firstFailedAt"`
 	LastFailedAt   time.Time `json:"lastFailedAt" bson:"lastFailedAt"`
-	// SourceData is the JSON-encoded raw log (types.Log's RPC wire
-	// representation), retained so an operator's retry can re-attempt
-	// decoding without re-querying the chain — and so the exact bytes that
-	// failed are auditable. Never re-derived from live chain state: a deep
-	// enough reorg could otherwise make a retry silently decode a
-	// DIFFERENT log than the one that originally failed.
+	// SourceData is the JSON-encoded log (types.Log), kept so a retry can decode it
+	// again without querying the chain and so the failing bytes can be inspected. It
+	// is not re-read from the chain, where a reorg could replace it with a different
+	// log.
 	SourceData []byte `json:"-" bson:"sourceData"`
-	// Resolved is set once an operator's retry succeeds (or manually
-	// dismisses the entry) — kept rather than deleted, as a durable record
-	// that this canonical event was, in fact, eventually handled and how.
+	// Resolved is set when an operator retry succeeds or the entry is dismissed. The
+	// entry is kept as a record of how the event was handled.
 	Resolved bool `json:"resolved" bson:"resolved"`
 }
 
-// DLQErrorCategory values classify why a DeadLetterEntry exists.
+// DLQErrorCategory values say why a DeadLetterEntry exists
 const (
 	DLQErrorDecode = "decode"
-	// DLQErrorOrphaned marks an entry whose retained log is no longer part
-	// of the canonical chain by the time an operator retried it. Before a DLQ
-	// replay, RetryDeadLetter fetches the canonical header and requires
-	// header.Hash == retainedLog.BlockHash; an orphan is resolved as
-	// dismissed rather than ingested. Set by
-	// indexer.Indexer.RetryDeadLetter, never by normal ingestion.
+	// DLQErrorOrphaned marks an entry whose log is no longer on the canonical chain.
+	// Before a retry, Indexer.RetryDeadLetter requires the canonical header hash at the
+	// log's block to equal the log's BlockHash and otherwise dismisses the entry
+	// without ingesting it. Only RetryDeadLetter sets it.
 	DLQErrorOrphaned = "orphaned"
 )

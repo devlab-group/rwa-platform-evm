@@ -1,13 +1,8 @@
-// Package rwapkg (directory internal/package) safely opens a .rwa audit
-// package: a ZIP container holding manifest.json, profile.json,
-// metadata.json, typed-data.json, and optional proofs/.
-//
-// Extraction is entirely in-memory (nothing is ever written to disk) and
-// enforces: no path traversal, no symlinks, no duplicate entry names, only
-// Store/Deflate compression, and hard caps on file count and expanded size
-// -- the last of which is enforced against the actual bytes decompressed,
-// not the (attacker-controlled) size declared in the ZIP header, which is
-// what actually stops a zip-bomb rather than merely a lying header.
+// Package rwapkg reads .rwa ZIP archives containing manifest.json, profile.json,
+// metadata.json, typed-data.json and optional proofs/. Extraction stays in memory.
+// It rejects traversal, symlinks, duplicate names, unsupported compression and
+// entry-count or expanded-size excesses. Store and Deflate are supported;
+// size limits count bytes read, not untrusted ZIP-header declarations.
 package rwapkg
 
 import (
@@ -24,16 +19,14 @@ import (
 	"strings"
 )
 
-// MaxCompressedSize bounds the compressed (on-disk) size of a .rwa package
-// accepted by ReadPackageFile. It is checked against the file's Stat size,
-// and enforced again with a bounded reader while reading, before any bytes
-// are allocated for the whole file: os.ReadFile'ing an arbitrarily large
-// compressed file, ahead of the uncompressed-size limits Extract applies,
-// can exhaust memory on its own.
+// MaxCompressedSize bounds the on-disk size of a .rwa package accepted by
+// ReadPackageFile. ReadPackageFile checks the Stat size and also caps the read itself,
+// so an oversized file cannot exhaust memory before Extract applies its
+// uncompressed-size limits.
 const MaxCompressedSize = 64 * 1024 * 1024 // 64 MiB
 
-// ReadPackageFile reads the .rwa package at path into memory, rejecting it
-// before allocation if its compressed size exceeds maxCompressed.
+// ReadPackageFile reads the .rwa package at path into memory, rejecting it before
+// allocation if its compressed size exceeds maxCompressed
 func ReadPackageFile(path string, maxCompressed int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -49,9 +42,8 @@ func ReadPackageFile(path string, maxCompressed int64) ([]byte, error) {
 		return nil, fmt.Errorf("rwapkg: %q is %d bytes, exceeds the maximum compressed package size of %d bytes", path, info.Size(), maxCompressed)
 	}
 
-	// Bounded read, not a bare io.ReadAll(f): a file can grow between Stat
-	// and read (TOCTOU), so the cap is re-enforced against bytes actually
-	// read, same principle Extract already applies to decompressed bytes.
+	// A file can grow between Stat and read, so cap the read itself, as Extract does
+	// for decompressed bytes
 	data, err := io.ReadAll(io.LimitReader(f, maxCompressed+1))
 	if err != nil {
 		return nil, fmt.Errorf("rwapkg: reading %q: %w", path, err)
@@ -62,16 +54,15 @@ func ReadPackageFile(path string, maxCompressed int64) ([]byte, error) {
 	return data, nil
 }
 
-// Options bounds the shape of an acceptable .rwa archive.
+// Options bounds the shape of an acceptable .rwa archive
 type Options struct {
 	MaxFileCount              int   // maximum number of entries in the archive
 	MaxSingleFileUncompressed int64 // maximum decompressed size of any one entry
 	MaxTotalUncompressed      int64 // maximum sum of decompressed sizes across all entries
 }
 
-// DefaultOptions returns conservative limits suitable for audit packages,
-// which are expected to contain a handful of small JSON documents plus a
-// few proof PDFs/images.
+// DefaultOptions returns conservative limits suited to audit packages, which hold a
+// handful of small JSON documents plus a few proof PDFs or images
 func DefaultOptions() Options {
 	return Options{
 		MaxFileCount:              256,
@@ -80,21 +71,22 @@ func DefaultOptions() Options {
 	}
 }
 
-// unixSymlinkMode is S_IFLNK (0120000) as stored in the upper 16 bits of a
-// ZIP entry's external file attributes on Unix-created archives.
+// unixSymlinkMode is S_IFLNK (0120000) as stored in the upper 16 bits of a ZIP
+// entry's external file attributes on Unix-created archives
 const unixSymlinkMode = 0120000
 
-// Extract opens zipBytes and returns a map of cleaned, relative entry name
-// to its decompressed content. It rejects:
-//   - more entries than opts.MaxFileCount;
-//   - absolute paths, backslashes, empty names, or any ".." path segment
-//     (path traversal);
+// Extract opens zipBytes and returns each entry's decompressed content keyed by its
+// entry name. It rejects:
+//   - an empty archive or more entries than opts.MaxFileCount;
+//   - empty or absolute names, backslashes, and any name that path.Clean would change,
+//     which covers ".." segments (path traversal), "." segments, repeated slashes and
+//     a trailing slash;
 //   - symlink entries;
-//   - duplicate (post-cleaning) entry names;
+//   - duplicate entry names;
 //   - compression methods other than Store and Deflate;
-//   - any entry, or the archive as a whole, exceeding the configured
-//     uncompressed-size limits -- checked against bytes actually read, so a
-//     header that under-reports size cannot bypass the limit.
+//   - any entry, or the archive as a whole, that decompresses past the configured
+//     limits. The check counts the bytes actually read, so a header that under-reports
+//     the size cannot bypass it.
 func Extract(zipBytes []byte, opts Options) (map[string][]byte, error) {
 	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
 	if err != nil {
@@ -124,7 +116,7 @@ func Extract(zipBytes []byte, opts Options) (map[string][]byte, error) {
 			return nil, fmt.Errorf("rwapkg: entry %q contains path traversal", name)
 		}
 		if strings.HasSuffix(name, "/") {
-			// Directory entry: skip, nothing to extract.
+			// Unreachable while the clean-name check above rejects a trailing slash
 			continue
 		}
 
@@ -172,7 +164,7 @@ func Extract(zipBytes []byte, opts Options) (map[string][]byte, error) {
 }
 
 // ManifestFile is one entry of manifest.json's "files" array
-// (shared/schemas/rwa-manifest.schema.json).
+// (shared/schemas/rwa-manifest.schema.json)
 type ManifestFile struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
@@ -181,7 +173,7 @@ type ManifestFile struct {
 }
 
 // Manifest is the parsed manifest.json, matching
-// shared/schemas/rwa-manifest.schema.json.
+// shared/schemas/rwa-manifest.schema.json
 type Manifest struct {
 	PackageVersion string         `json:"packageVersion"`
 	PrimaryType    string         `json:"primaryType"`
@@ -195,7 +187,7 @@ var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var hexDigestPattern = regexp.MustCompile(`^0x[0-9a-f]{64}$`)
 
 // ParseManifest validates raw manifest.json bytes against
-// shared/schemas/rwa-manifest.schema.json.
+// shared/schemas/rwa-manifest.schema.json
 func ParseManifest(raw []byte) (*Manifest, error) {
 	var m Manifest
 	dec := json.NewDecoder(bytes.NewReader(raw))
@@ -219,13 +211,10 @@ func ParseManifest(raw []byte) (*Manifest, error) {
 	if !hexDigestPattern.MatchString(m.MetadataDigest) {
 		return nil, fmt.Errorf("rwapkg: manifest metadataDigest must match ^0x[0-9a-f]{64}$")
 	}
-	// Enforce the shape of the manifest.files set as a whole, not just each
-	// entry's own field validity: reject duplicate paths, require the three
-	// mandatory JSON documents to be listed, and confine every other entry
-	// to proofs/. Without this, and given a VerifyFiles (below) that only
-	// checks manifest entries exist among the extracted files but not the
-	// reverse, an attacker could smuggle extra, unaccounted-for payloads
-	// into an otherwise-valid-looking package.
+	// Constrain the file list as a whole, not only each entry: no duplicate paths, the
+	// three mandatory documents listed, and every other entry under proofs/. VerifyFiles
+	// then requires the extracted files to match this list exactly, so nothing
+	// undeclared can ride along in the package.
 	const (
 		mandatoryProfile   = "profile.json"
 		mandatoryMetadata  = "metadata.json"
@@ -267,12 +256,9 @@ func ParseManifest(raw []byte) (*Manifest, error) {
 	return &m, nil
 }
 
-// VerifyFiles checks that files (the package's extracted entries, minus
-// manifest.json) is EXACTLY the set of paths declared in the manifest --
-// every declared path present with the exact declared size and SHA-256
-// hash, and no extracted file left undeclared -- the package's real
-// contents must be exactly what the manifest describes, not merely a
-// superset of it.
+// VerifyFiles checks that files (the extracted entries minus manifest.json) match the
+// manifest exactly: every declared path is present with the declared size and SHA-256,
+// and no extracted file is undeclared
 func (m *Manifest) VerifyFiles(files map[string][]byte) error {
 	declared := make(map[string]bool, len(m.Files))
 	for _, mf := range m.Files {

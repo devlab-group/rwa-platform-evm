@@ -134,10 +134,9 @@ func TestValidateRecordRejectsFloatAmount(t *testing.T) {
 	}
 }
 
-// TestValidateRecordRejectsZeroAmount guards against persisting a record the
-// contract will always reject: SupplyController.mint reverts ZeroAmount() on a
-// zero attestation amount. "0" satisfies decimalAmountPattern (^[0-9]+$) but
-// must still be rejected by the added semantic bound check.
+// TestValidateRecordRejectsZeroAmount checks that an amount of "0" is rejected.
+// It matches decimalAmountPattern (^[0-9]+$), but SupplyController.mint reverts
+// with ZeroAmount on a zero amount.
 func TestValidateRecordRejectsZeroAmount(t *testing.T) {
 	var m map[string]any
 	if err := json.Unmarshal([]byte(goldGramRecord), &m); err != nil {
@@ -162,17 +161,15 @@ func TestValidateRecordRejectsZeroAmount(t *testing.T) {
 	}
 }
 
-// TestValidateRecordRejectsAmountAboveUint256Max pins the other half of the
-// bound: a syntactically ^[0-9]+$-matching numeral with more digits than fit
-// in a uint256 must also be rejected, not silently truncated or left to fail
-// later at ABI encoding.
+// TestValidateRecordRejectsAmountAboveUint256Max checks that a numeral matching
+// ^[0-9]+$ but too large for a uint256 is rejected
 func TestValidateRecordRejectsAmountAboveUint256Max(t *testing.T) {
 	var m map[string]any
 	if err := json.Unmarshal([]byte(goldGramRecord), &m); err != nil {
 		t.Fatal(err)
 	}
 	issuance := m["issuance"].(map[string]any)
-	// 2^256 (one past the max uint256 value).
+	// 2^256, one above the largest uint256
 	issuance["amount"] = "115792089237316195423570985008687907853269984665640564039457584007913129639936"
 	raw, _ := json.Marshal(m)
 	profile := mustProfile(t)
@@ -183,10 +180,9 @@ func TestValidateRecordRejectsAmountAboveUint256Max(t *testing.T) {
 }
 
 // TestValidateRecordRejectsUnknownIssuanceField and
-// TestValidateRecordRejectsUnknownProofsField pin the strict nested-envelope
-// decoding (unmarshalStrict, strict.go) at the metadata.go call
-// sites; dialect_differential_test.go's envelopeCases cover the equivalent
-// displayFields[] case on the Profile side.
+// TestValidateRecordRejectsUnknownProofsField check the strict decoding of nested
+// envelope objects in ValidateRecord (unmarshalStrict). The envelopeCases in
+// dialect_differential_test.go cover the displayFields[] case for profiles.
 func TestValidateRecordRejectsUnknownIssuanceField(t *testing.T) {
 	var m map[string]any
 	if err := json.Unmarshal([]byte(goldGramRecord), &m); err != nil {

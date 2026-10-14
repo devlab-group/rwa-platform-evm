@@ -27,9 +27,9 @@ export class AdminAssetsPage {
   }
 
   /**
-   * Uploads the auditor's signed-result.json (built from the given fields) and
-   * relays. The form no longer takes the signature fields individually — they
-   * are read from the uploaded file (shared/schemas/signed-result.schema.json).
+   * Uploads the auditor's signed-result.json, built from the given fields, and
+   * submits the mint. The form reads the signature fields from the file
+   * (shared/schemas/signed-result.schema.json).
    */
   async uploadSignature(fields: {
     recordId: string;

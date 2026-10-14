@@ -55,11 +55,9 @@ const factoryABIJSON = `[
     {"name":"version","type":"string","indexed":false}]}
 ]`
 
-// Factory encodes calldata / decodes events for IRWAFactory, plus the
-// concrete RWAFactory contract's public immutable getters for its 4
-// deployment-helper addresses — those aren't part of the
-// frozen IRWAFactory interface, so this is the concrete-contract ABI, same
-// as other "concrete getter" additions elsewhere in this package.
+// Factory encodes calldata for, and decodes events from, IRWAFactory. Its ABI
+// also includes the four deployer-address getters of the concrete RWAFactory
+// contract, which are not part of IRWAFactory.
 type Factory struct{ ABI abi.ABI }
 
 // NewFactory parses the RWAFactory ABI once.
@@ -101,15 +99,14 @@ func (f Factory) PackDeploy(cfg ProjectConfig) ([]byte, error) {
 	return f.ABI.Pack("deploy", cfg)
 }
 
-// UnpackDeployInput decodes the ProjectConfig from a mined RWAFactory.deploy
-// transaction's INPUT calldata. The server observes deployments broadcast from
-// the admin's wallet (it no longer submits them itself), so the intended
-// role/treasury/auditor/price configuration — none of which appears in the
-// ProjectDeployed event — is recovered here from the exact calldata the admin
-// signed, and cross-checked against on-chain state during verification. The
-// leading 4 bytes MUST be RWAFactory.deploy's selector, so calldata for any
-// other function (e.g. a deploy wrapped in an unrecognized call) is rejected
-// rather than mis-decoded.
+// UnpackDeployInput decodes the ProjectConfig from the input calldata of a
+// mined RWAFactory.deploy transaction. The admin's wallet broadcasts the
+// deployment and the server only observes it. The role holders, treasury,
+// auditor and prices do not appear in the ProjectDeployed event, so the server
+// recovers them from the calldata the admin signed and cross-checks them against
+// on-chain state during verification. The first four bytes must be
+// RWAFactory.deploy's selector, and calldata for any other function, such as a
+// deploy wrapped in another call, is rejected.
 func (f Factory) UnpackDeployInput(calldata []byte) (ProjectConfig, error) {
 	deploy := f.ABI.Methods["deploy"]
 	if len(calldata) < 4 {

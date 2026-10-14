@@ -158,7 +158,8 @@ func NewRouter(app *App) *gin.Engine {
 		// Public config supplies chain, factory and project identity for wallet-side setup
 		v1.GET("/config", app.getConfig)
 
-		v1.POST("/profile/validate", app.validateProfile)
+		// Validation compiles a caller-supplied schema, so it is admin-only like profile creation
+		v1.POST("/profile/validate", adminOnly, app.validateProfile)
 		// Profile creation is admin-only and create-once
 		v1.POST("/profile", auth.RequireRole(auth.RoleAdmin), idem, app.createProfile)
 		// Admin-only profile retrieval returns 404 until a profile is stored

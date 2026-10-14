@@ -1,9 +1,8 @@
 // Package strategy decodes FixedPriceStrategy price-update logs into the
-// JSON-friendly ChainEvent shape the project security projector folds into
-// the live purchase/redemption prices. The strategy contract is not one of
-// the four originally-indexed addresses (compliance/supply-controller/vault/
-// escrow); it becomes reachable once the indexer's watch set is derived from
-// the deployed Project record (serverwiring.IndexerAddresses).
+// JSON-friendly ChainEvent shape that the project security projector folds into
+// the live purchase and redemption prices. The indexer watches the strategy
+// address because its watch set comes from the deployed Project record
+// (serverwiring.IndexerAddresses).
 package strategy
 
 import (
@@ -16,10 +15,9 @@ import (
 // understands.
 var EventNames = []string{"PurchasePriceUpdated", "RedemptionPriceUpdated"}
 
-// DecodeLog is an indexer.EventDecoder for FixedPriceStrategy logs: it
-// recognizes the two price-update events and returns their previous/new
-// prices as decimal strings (matching the string encoding the rest of the
-// pipeline uses for uint256s) plus the indexed caller.
+// DecodeLog is an indexer.EventDecoder for FixedPriceStrategy logs. It decodes
+// the two price-update events into the previous and new price, as decimal
+// strings like every uint256 in the pipeline, plus the indexed caller.
 func DecodeLog(log types.Log) (string, map[string]any, error) {
 	s := bindings.NewFixedPriceStrategy()
 	if len(log.Topics) == 0 {

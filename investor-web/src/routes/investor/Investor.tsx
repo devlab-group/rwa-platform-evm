@@ -63,8 +63,8 @@ type Transaction = components["schemas"]["Transaction"];
 type Challenge = components["schemas"]["Challenge"];
 
 /**
- * A price preview read from the chain — Vault.previewBuy or
- * RedemptionEscrow.previewRedeem — with the amount it was quoted for. Both
+ * A price preview read from the chain (Vault.previewBuy or
+ * RedemptionEscrow.previewRedeem) with the amount it was quoted for. Both
  * figures are minimal units: `tokenAmount` in RWA decimals, `quoteAmount` in
  * quote-token decimals. The slippage bound is derived from `quoteAmount`.
  */
@@ -82,18 +82,11 @@ interface SubmittedTx {
 }
 
 /**
- * Investor: wallet connect + ownership challenge, KYC status, balance &
- * compliance, purchase, redemption (request/cancel/funded/claim), transfer,
- * and transaction history.
- *
- * Buy/request/claim/cancel are encoded here in the browser from the pinned
- * Vault/RedemptionEscrow ABI fragments (lib/abis.ts) and broadcast from the
- * connected wallet (lib/wallet.ts), exactly like the ERC-20 approve/transfer
- * steps, and the buy/redeem quotes come from the same contracts' preview views.
- * The server supplies indexed lists and compliance state only — it never hands
- * the browser calldata or a price, so the target of every transaction is the
- * project address this page already knows and there is nothing to check a
- * server-picked target or quote against.
+ * Investor wallet ownership, verification, balances, purchase, redemption,
+ * transfer and transaction history. lib/wallet.ts encodes calls from pinned
+ * ABIs and broadcasts through the connected wallet; quotes come from Vault
+ * and escrow preview views. The server supplies configuration, indexed lists
+ * and compliance state, rather than wallet calldata or quotes.
  */
 export function Investor() {
   const project = useAsync<Project>((signal) => api.getProject({ signal }), []);
@@ -108,9 +101,8 @@ export function Investor() {
       ? project.data.finalityConfirmations
       : undefined;
 
-  // The investor's own KYC status comes from a subject-scoped session minted
-  // at challenge-verify (X-Wallet-Session), never from the operator-only global
-  // wallet list.
+  // The investor's own KYC status comes from the X-Wallet-Session minted at
+  // challenge-verify, not from the admin-only wallet list
   const ownWalletStatus = useOwnWalletStatus(wallet.address);
   const submitted = useSubmittedTransactions();
 
@@ -119,22 +111,21 @@ export function Investor() {
       <header className="app-main__header">
         <h1>Investor</h1>
         <p>
-          Connect a wallet to view balance, compliance status, and submit
+          Connect a wallet to view its balance and compliance status, and submit
           transactions.
         </p>
         {/*
-          Stated up front rather than discovered at a failed transfer: this is a
-          permissioned token, and the issuer holds powers a plain ERC-20 holder
-          would not expect. An example SPA cannot write anyone's terms, so this
-          says plainly what the contract can do and points at the issuer for the
-          conditions.
+          Disclosed up front because the issuer holds powers a plain ERC-20
+          holder would not expect. This example app cannot state anyone's terms,
+          so it describes what the contract allows and points to the issuer for
+          the conditions.
         */}
         <p className="field__hint">
-          This is a permissioned token. The issuer can pause all transfers,
-          freeze part or all of a holder&apos;s balance, and move tokens out of
-          a wallet without the holder&apos;s signature, to meet its compliance
-          and legal obligations. Every such action is recorded on-chain. Ask the
-          issuer for the terms that govern when they are used.
+          This is a permissioned token. The issuer can pause ordinary transfers,
+          freeze part or all of a holder&apos;s balance, and move tokens without
+          the holder&apos;s signature for compliance or legal obligations. Each
+          action is recorded on-chain. Ask the issuer when these powers may be
+          used.
         </p>
       </header>
 
@@ -198,12 +189,11 @@ export function Investor() {
 }
 
 /**
- * The connected wallet's own compliance status, read via the subject-scoped
- * session minted at challenge-verify (X-Wallet-Session) — never the
- * operator-only global wallet list. `data` is `null` (a successful
- * "no status" result, not an error) whenever there is no
- * unexpired session for `address` yet, i.e. the investor hasn't completed
- * (or has outlived) an ownership challenge.
+ * The connected wallet's own compliance status, read through the
+ * X-Wallet-Session minted at challenge-verify, not the admin-only wallet list.
+ * `data` is `null` (a result, not an error) when `address` has no unexpired
+ * session, i.e. the investor hasn't completed an ownership challenge or the
+ * session has expired.
  */
 function useOwnWalletStatus(address: string | null) {
   return useAsync<WalletStatus | null>(
@@ -215,9 +205,8 @@ function useOwnWalletStatus(address: string | null) {
         return await api.getMyWalletStatus(session.token, { signal });
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
-          // Expired/invalid on the server even though our local copy looked
-          // live — drop it so the UI prompts a fresh challenge instead of
-          // retrying the same dead token forever.
+          // The server rejected a token that looked live locally; drop it so
+          // the UI prompts a new challenge instead of retrying a dead token
           clearWalletSession(address);
           return null;
         }
@@ -229,11 +218,9 @@ function useOwnWalletStatus(address: string | null) {
 }
 
 /**
- * Locally-tracked record of every transaction this browser session has
- * submitted from the connected wallet. The server's transaction index is
- * operator-only and doesn't contain investor wallet-submitted transactions
- * anyway — this is deliberately not a replacement for that index, just an
- * honest "what you just sent" list.
+ * In-memory list of the transactions this page has submitted from the
+ * connected wallet. It complements the server's transaction index, which
+ * lags the chain and never records approvals or plain transfers.
  */
 function useSubmittedTransactions() {
   const [entries, setEntries] = useState<SubmittedTx[]>([]);
@@ -299,8 +286,8 @@ function WalletSection({
         signature,
       });
       setVerified(result);
-      // Store the subject-scoped session and have the KYC section re-read its
-      // own status through it — never an operator key.
+      // Store the session and have the KYC section re-read its own status
+      // through it
       if (result.sessionToken && result.sessionExpiresAt) {
         setWalletSession(wallet.address, {
           token: result.sessionToken,
@@ -339,7 +326,7 @@ function WalletSection({
           </div>
           <div className="tx-preview__row">
             <dt>Project chain ID</dt>
-            <dd>{expectedChainId ?? "—"}</dd>
+            <dd>{expectedChainId ?? "-"}</dd>
           </div>
         </dl>
       )}
@@ -476,9 +463,8 @@ function KycSection({
         </dl>
       ) : (
         <p className="field__hint">
-          Generate and sign an ownership challenge below (Wallet section) to
-          view your compliance status — it&apos;s read through your own verified
-          session, not a shared list.
+          Sign an ownership challenge in the Wallet section to view your
+          compliance status through a session scoped to your address.
         </p>
       )}
     </section>
@@ -516,8 +502,8 @@ function BalanceSection({
   const token = project?.addresses?.token;
   const chainId = project?.chainId;
   const unit = project?.tokenUnit ?? "RWA";
-  // Frozen may legitimately exceed the balance (it can withhold tokens not yet
-  // received), so the spendable figure is clamped rather than subtracted.
+  // The frozen amount can exceed the balance (RWAToken stores it as an
+  // absolute amount), so the spendable figure is clamped at zero
   const frozen = safeBigInt(frozenTokens);
   const held = balance ? safeBigInt(balance.raw) : 0n;
   const spendable = held > frozen ? held - frozen : 0n;
@@ -528,8 +514,7 @@ function BalanceSection({
     setError(null);
     try {
       const tokenAddress = token as `0x${string}`;
-      // Project.decimals is now authoritative; only fall back to an on-chain
-      // read if an older server build omits it.
+      // Use Project.decimals; read it on-chain only if the response omits it
       const decimals =
         project?.decimals ?? (await readErc20Decimals(chainId, tokenAddress));
       const raw = await readErc20Balance(
@@ -577,9 +562,9 @@ function BalanceSection({
                   {unit} of that is available to send or redeem. The issuer has
                   frozen the other{" "}
                   {formatWithDecimals(frozenTokens ?? "0", balance.decimals)}{" "}
-                  {unit}. Frozen tokens stay in your wallet, but a transfer or
-                  redemption that reaches into them is rejected on-chain.
-                  Contact the issuer if you were not expecting this.
+                  {unit}. Frozen tokens stay in your wallet. Transfers and
+                  redemptions cannot spend them. Contact the issuer about an
+                  unexpected hold.
                 </p>
               )}
             </>
@@ -611,9 +596,9 @@ function BuySection({
   const [tokenAmount, setTokenAmount] = useState("");
   const [slippageBps, setSlippageBps] = useState(50);
   const [quote, setQuote] = useState<Quote | null>(null);
-  // Decimals captured at preview time so the preview renders the (already
-  // minimal-unit) quote back as whole units: RWA decimals for the token
-  // amount, quote-token decimals for the quote/payment amounts.
+  // Decimals captured at preview time so the preview shows the minimal-unit
+  // amounts as whole units: RWA decimals for the token amount, quote-token
+  // decimals for the quote amounts
   const [decimals, setDecimals] = useState<number | null>(null);
   const [quoteDecimals, setQuoteDecimals] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -625,7 +610,7 @@ function BuySection({
   const maxQuoteAmount = quote?.quoteAmount
     ? applySlippageCeil(quote.quoteAmount, slippageBps)
     : null;
-  // The Vault pulls quoteToken (not the RWA token itself) on buy.
+  // On buy the Vault pulls the quote token, not the RWA token
   const quoteToken = project?.addresses?.quoteToken;
   const vault = project?.addresses?.vault;
   const addressesReady = Boolean(chainId && quoteToken && vault);
@@ -639,22 +624,20 @@ function BuySection({
     setBuyTx(null);
     try {
       if (!vault || !chainId) throw new Error("Project addresses not loaded.");
-      // Human whole units -> the RWA token's minimal units before the amount
-      // reaches the vault. toMinimalUnits throws a friendly AmountFormatError
-      // on bad/over-precise input.
+      // Whole units to RWA minimal units. toMinimalUnits throws an
+      // AmountFormatError on invalid or over-precise input
       const rwaDecimals = await resolveRwaDecimals(project, chainId);
       const minimalTokenAmount = toMinimalUnits(tokenAmount, rwaDecimals);
-      // The price comes from the Vault itself, through the connected wallet —
-      // the same contract the buy is sent to, on the same chain.
+      // The price comes from the Vault, read through the connected wallet: the
+      // contract the buy is sent to, on the same chain
       const quoteAmount = await readPreviewBuy(
         chainId,
         vault as `0x${string}`,
         BigInt(minimalTokenAmount),
       );
       setDecimals(rwaDecimals);
-      // Quote-token decimals are display-only and best-effort — a failed read
-      // must not block the (already-correct) quote; fall back to the grouped
-      // raw integer.
+      // Quote-token decimals are display-only: if the read fails the quote
+      // still stands and the preview shows the digit-grouped raw integer
       try {
         setQuoteDecimals(await resolveQuoteDecimals(project, chainId));
       } catch {
@@ -685,8 +668,8 @@ function BuySection({
       );
       setApproveTx(tx);
       onSubmitted(tx, "approve (quote token)");
-      // Confirm the approval landed, then read the real on-chain allowance —
-      // Buy stays disabled until it's actually sufficient.
+      // Wait for the approval to be mined, then read the on-chain allowance;
+      // Buy stays disabled until it is sufficient
       await waitForTxReceipt(tx as `0x${string}`);
       const current = await readErc20Allowance(
         chainId,
@@ -714,8 +697,8 @@ function BuySection({
     setTxState("awaiting-signature");
     setError(null);
     try {
-      // Encoded here and sent to this project's Vault — the buyer receives the
-      // tokens themselves, bounded by the slippage ceiling they approved.
+      // Encoded here and sent to this project's Vault. The buyer is the
+      // recipient, and the quote is capped by the slippage ceiling
       const tx = await sendBuy(
         chainId,
         walletAddress as `0x${string}`,
@@ -759,8 +742,8 @@ function BuySection({
           aria-describedby="buy-slippage-hint"
         />
         <span className="field__hint" id="buy-slippage-hint">
-          Capped at {MAX_SLIPPAGE_BPS / 100}% — the approved spend amount never
-          exceeds this.
+          Capped at {MAX_SLIPPAGE_BPS / 100}%, so the approved spend is never
+          more than that far above the quote.
         </span>
       </div>
       <button
@@ -878,9 +861,8 @@ function RedemptionSection({
   const [rwaAmount, setRwaAmount] = useState("");
   const [slippageBps, setSlippageBps] = useState(50);
   const [quote, setQuote] = useState<Quote | null>(null);
-  // The entered RWA amount converted to minimal units at preview time — reused
-  // by approve and request so all three see the same value the quote was built
-  // from.
+  // The entered RWA amount in minimal units, fixed at preview time so the
+  // quote, approval and request all use the same value
   const [minimalRwaAmount, setMinimalRwaAmount] = useState<string | null>(null);
   const [decimals, setDecimals] = useState<number | null>(null);
   const [quoteDecimals, setQuoteDecimals] = useState<number | null>(null);
@@ -894,10 +876,9 @@ function RedemptionSection({
   // Request, claim and cancel are all RedemptionEscrow calls.
   const escrow = project?.addresses?.redemptionEscrow;
 
-  // The connected wallet's own redemption requests, server-fetched and
-  // paginated (the public listRedemptions filtered by beneficiary). Only
-  // queried when a wallet is connected — disconnected shows a connect hint and
-  // never hits the API.
+  // The connected wallet's redemption requests: the public listRedemptions
+  // endpoint filtered by beneficiary. It is queried only while a wallet is
+  // connected
   const myRedemptions = usePaginatedList<Redemption>(
     (cursor, signal) =>
       walletAddress
@@ -906,10 +887,10 @@ function RedemptionSection({
     [walletAddress],
   );
 
-  // Display decimals for the list rows: RWA from the project (authoritative);
-  // the quote token has no HTTP-contract field, so it's read on-chain
-  // best-effort and falls back to the grouped raw integer rather than
-  // mis-scaling.
+  // Display decimals for the list rows: RWA decimals from the project, and
+  // quote-token decimals from Project.quoteDecimals or an on-chain read. If
+  // neither is available the row shows the digit-grouped raw integer instead of
+  // a mis-scaled value
   const rwaDisplayDecimals = project?.decimals;
   const listQuoteDecimalsState = useAsync<number | null>(async () => {
     if (!project || !chainId) return null;
@@ -935,17 +916,16 @@ function RedemptionSection({
   async function handlePreview() {
     setError(null);
     setRequestTx(null);
-    // A re-quote invalidates the previous approval: its allowance covers the
-    // old amount, not this one.
+    // A new quote invalidates the previous approval, whose allowance covers
+    // the old amount
     setApproveTx(null);
     setAllowance(null);
     try {
       if (!escrow || !chainId) throw new Error("Project addresses not loaded.");
-      // Human whole units -> the RWA token's minimal units before the amount
-      // reaches the escrow or the approve/request call.
+      // Whole units to RWA minimal units before the approve and request calls
       const rwaDecimals = await resolveRwaDecimals(project, chainId);
       const minimal = toMinimalUnits(rwaAmount, rwaDecimals);
-      // Priced by the escrow the request is sent to, read through the wallet.
+      // Priced by the escrow the request is sent to, read through the wallet
       const quoteAmount = await readPreviewRedeem(
         chainId,
         escrow as `0x${string}`,
@@ -989,8 +969,8 @@ function RedemptionSection({
       );
       setApproveTx(tx);
       onSubmitted(tx, "approve (RWA token)");
-      // Confirm the approval landed, then read the real on-chain allowance —
-      // Request stays disabled until it's actually sufficient.
+      // Wait for the approval to be mined, then read the on-chain allowance;
+      // Request stays disabled until it is sufficient
       await waitForTxReceipt(tx as `0x${string}`);
       const current = await readErc20Allowance(
         chainId,
@@ -1097,8 +1077,8 @@ function RedemptionSection({
           aria-describedby="redeem-slippage-hint"
         />
         <span className="field__hint" id="redeem-slippage-hint">
-          Capped at {MAX_SLIPPAGE_BPS / 100}% — the minimum payout accepted
-          never drops below this.
+          Capped at {MAX_SLIPPAGE_BPS / 100}%, so the minimum payout accepted is
+          never more than that far below the quote.
         </span>
       </div>
       <button
@@ -1222,11 +1202,11 @@ function RedemptionSection({
                   </thead>
                   <tbody>
                     {data.map((r) => {
-                      // Claim: server-derived `claimable` (Funded AND
-                      // confirmations>=finality). Cancel: a Pending request
-                      // whose timeout has elapsed (the beneficiary's escape
-                      // hatch). Neither shows for Completed/Rejected/Cancelled
-                      // or a Funded-but-not-yet-claimable request.
+                      // Claim shows when the server's `claimable` is true
+                      // (Funded and enough confirmations). Cancel shows for a
+                      // Pending request whose timeout has elapsed. Neither
+                      // shows for Completed, Rejected or Cancelled requests,
+                      // or for a Funded one that isn't claimable yet.
                       const cancellable =
                         r.status === "Pending" &&
                         !!r.timeoutAt &&
@@ -1328,11 +1308,9 @@ function TransferSection({
   const [tx, setTx] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
 
-  // Public, unauthenticated eligibility preflight — replaces the operator-only
-  // global wallet list, which an investor session can never call. Deliberately
-  // less detailed than before: AllowedResult is
-  // just a boolean, not the recipient's full status/validUntil/ownership,
-  // so an investor can't enumerate a third party's exact compliance record.
+  // Public, unauthenticated eligibility preflight. AllowedResult is only a
+  // boolean, not the recipient's status, validUntil or ownership, so a caller
+  // can't read a third party's compliance record from it
   const isWellFormedAddress = /^0x[0-9a-fA-F]{40}$/.test(recipient);
   const eligibility = useAsync<{ allowed?: boolean } | null>(
     (signal) =>
@@ -1357,8 +1335,7 @@ function TransferSection({
     setSending(true);
     setError(null);
     try {
-      // Human whole units -> the RWA token's minimal units before building the
-      // ERC-20 transfer calldata.
+      // Whole units to RWA minimal units before encoding the ERC-20 transfer
       const decimals = await resolveRwaDecimals(project, project.chainId);
       const minimal = toMinimalUnits(amount, decimals);
       const hash = await sendErc20Transfer(
@@ -1396,7 +1373,7 @@ function TransferSection({
         >
           {recipientAllowed
             ? "Recipient is eligible to receive tokens."
-            : "Recipient is not eligible to receive tokens — transfer disabled."}
+            : "Recipient is not eligible to receive tokens - transfer disabled."}
         </p>
       )}
       {recipient && !isWellFormedAddress && (
@@ -1442,16 +1419,9 @@ function TransferSection({
 }
 
 /**
- * Two complementary views of this wallet's activity:
- *
- * - "On-chain transactions": the server's now-public, address-filtered
- *   transaction index (`GET /api/v1/transactions?address=`), which carries the
- *   authoritative confirmation/reorg status the server observes. Only the
- *   connected wallet's own txs are queried.
- * - "Submitted this session": a local record of what this browser session sent
- *   from the wallet. The server index may not have indexed a just-submitted tx
- *   yet (or ever, for a pure wallet transfer), so this stays useful; it
- *   deliberately carries no confirmation status — this page can't observe it.
+ * Wallet activity has two views: the server's address-filtered transaction index
+ * with confirmation and reorg status, and this page's submissions without tracked
+ * confirmation. The index can lag and excludes approvals and plain transfers.
  */
 function HistorySection({
   entries,
@@ -1460,8 +1430,8 @@ function HistorySection({
   entries: SubmittedTx[];
   walletAddress: string | null | undefined;
 }) {
-  // Server-indexed txs involving this wallet (public, paginated). Only queried
-  // when connected — disconnected shows a connect hint and never hits the API.
+  // Server-indexed transactions involving this wallet (public, paginated),
+  // queried only while a wallet is connected
   const onchain = usePaginatedList<Transaction>(
     (cursor, signal) =>
       walletAddress
@@ -1477,8 +1447,8 @@ function HistorySection({
       <h3>On-chain transactions</h3>
       {!walletAddress ? (
         <p className="field__hint">
-          Connect a wallet to view its transactions from the server&apos;s
-          on-chain index.
+          Connect a wallet to view its transactions from the server&apos;s chain
+          index.
         </p>
       ) : (
         <AsyncSection
@@ -1504,13 +1474,13 @@ function HistorySection({
                     {data.map((tx) => (
                       <tr key={tx.txHash}>
                         <td className="mono">{tx.txHash}</td>
-                        <td>{tx.kind ?? "—"}</td>
+                        <td>{tx.kind ?? "-"}</td>
                         <td>
                           {tx.status && (
                             <TransactionStatusBadge status={tx.status} />
                           )}
                         </td>
-                        <td>{tx.blockNumber ?? "—"}</td>
+                        <td>{tx.blockNumber ?? "-"}</td>
                         <td>
                           {tx.explorerUrl && (
                             <a
@@ -1543,15 +1513,14 @@ function HistorySection({
       <h3 className="u-mt-5">Submitted this session</h3>
       {entries.length === 0 ? (
         <p className="field__hint">
-          Nothing submitted from this wallet yet this session. Connect and
-          submit a transaction above to see it listed here.
+          No transactions sent from this wallet during this session. Submit one
+          above to see it here.
         </p>
       ) : (
         <>
           <p className="field__hint">
-            Submitted directly from your wallet this session — not the
-            server&apos;s transaction index above; a just-sent transaction may
-            not be indexed yet.
+            Transactions sent from your wallet during this session. The
+            server&apos;s index above may take time to include them.
           </p>
           <div className="table-wrap">
             <table>

@@ -41,8 +41,8 @@ func mustKey(hexKey string) *ecdsa.PrivateKey {
 
 func keyAddress(k *ecdsa.PrivateKey) common.Address { return crypto.PubkeyToAddress(k.PublicKey) }
 
-// signDeployTx builds the observed deploy transaction — to the factory,
-// carrying the ProjectConfig as calldata — signed by key. Adoption recovers the
+// signDeployTx builds the observed deploy transaction, sent to the factory with
+// the ProjectConfig as calldata and signed by key. Adoption recovers the
 // sender from this signature, so the fixtures must produce genuinely signed
 // transactions rather than bare unsigned ones.
 func signDeployTx(t *testing.T, key *ecdsa.PrivateKey, factoryAddr common.Address, calldata []byte, nonce uint64) *types.Transaction {
@@ -58,7 +58,7 @@ func signDeployTx(t *testing.T, key *ecdsa.PrivateKey, factoryAddr common.Addres
 func sampleProfileDigestHex() string { return "0x" + strings.Repeat("11", 32) }
 
 // sampleConfig is the ProjectConfig the admin's wallet would have signed and
-// submitted to RWAFactory.deploy — the exact struct VerifyDeployment recovers
+// submitted to RWAFactory.deploy, the struct VerifyDeployment recovers
 // from the observed transaction's calldata as its verification allowlist.
 func sampleConfig(t *testing.T) bindings.ProjectConfig {
 	t.Helper()
@@ -92,10 +92,9 @@ func sampleProfile() *models.AssetProfile {
 	return &models.AssetProfile{ProjectID: sampleProjectUUID, Digest: sampleProfileDigestHex(), TokenDecimals: 18, TokenUnit: "gram"}
 }
 
-// verifyFixture bundles a fully-wired, PASSING VerifyDeployment scenario —
-// every check configured to succeed against the observed deploy tx + stored
-// profile — so a test can mutate exactly one thing and confirm it (and only
-// it) turns the result Failed.
+// verifyFixture bundles a VerifyDeployment scenario that passes: every check
+// succeeds against the observed deploy tx and stored profile, so a test can
+// change one thing and confirm that it alone turns the result Failed.
 type verifyFixture struct {
 	svc                                                    *Service
 	client                                                 *perContractClient
@@ -428,7 +427,7 @@ func TestVerifyDeploymentFailsOnUnsupportedVersion(t *testing.T) {
 
 // TestVerifyDeploymentFailsOnUndecodableCalldata: the ProjectDeployed event
 // binds correctly, but the deploy transaction's calldata isn't a decodable
-// RWAFactory.deploy — verification must fail rather than adopt with no
+// RWAFactory.deploy, so verification must fail rather than adopt with no
 // recoverable role/config allowlist.
 func TestVerifyDeploymentFailsOnUndecodableCalldata(t *testing.T) {
 	f := newVerifyFixture(t)
@@ -445,7 +444,7 @@ func TestVerifyDeploymentFailsOnUndecodableCalldata(t *testing.T) {
 }
 
 // TestVerifyDeploymentFailsOnCalldataProfileMismatch: the deployer submitted a
-// ProjectConfig whose decimals disagree with the stored profile — the signed
+// ProjectConfig whose decimals disagree with the stored profile, so the signed
 // calldata must be cross-checked against the profile binding.
 func TestVerifyDeploymentFailsOnCalldataProfileMismatch(t *testing.T) {
 	f := newVerifyFixture(t)
@@ -711,11 +710,11 @@ func TestReconcileDeploymentIgnoresMismatchedEvent(t *testing.T) {
 	}
 }
 
-// seedLookAlikeDeploy stages the deployment-hijack attack: a second, fully real deployment
-// carrying the SAME (public) projectId and profileDigest as the stored profile,
-// broadcast by `key` through the same permissionless factory, at a LATER block
-// than the legitimate one — with its own attacker-controlled addresses and
-// roles. Returns the look-alike's transaction hash.
+// seedLookAlikeDeploy stages a deployment-hijack attempt: a second, complete
+// deployment with the same public projectId and profileDigest as the stored
+// profile, broadcast by key through the same permissionless factory at a later
+// block than the legitimate one, with its own attacker-controlled addresses and
+// roles. It returns the look-alike's transaction hash.
 func (f *verifyFixture) seedLookAlikeDeploy(t *testing.T, chainEvents *memory.ChainEventRepository, key *ecdsa.PrivateKey, mutate func(*bindings.ProjectConfig)) common.Hash {
 	t.Helper()
 	cfg := f.cfg
@@ -768,14 +767,12 @@ func (f *verifyFixture) seedLookAlikeDeploy(t *testing.T, chainEvents *memory.Ch
 	return tx.Hash()
 }
 
-// TestReconcileDeploymentRejectsLookAlikeFromAnotherDeployer is the
-// deployment-hijack regression. RWAFactory.deploy is permissionless and both projectId and
-// profileDigest are public, so anyone can deploy a look-alike stack carrying
-// them. Adoption previously kept the LATEST matching event and recovered every
-// expected role/treasury/auditor value from that transaction's own calldata, so
-// the look-alike verified as internally consistent and replaced the live
-// project — pointing the SPA and every chain read at attacker contracts. The
-// deploy transaction's signer must be the configured admin.
+// TestReconcileDeploymentRejectsLookAlikeFromAnotherDeployer covers deployment
+// hijacking. RWAFactory.deploy is permissionless and both projectId and
+// profileDigest are public, so anyone can deploy a look-alike stack that carries
+// them. Because the expected roles, treasury and auditor come from the deploy
+// transaction's own calldata, a look-alike would verify as consistent and replace
+// the live project unless the transaction's sender must be the configured admin.
 func TestReconcileDeploymentRejectsLookAlikeFromAnotherDeployer(t *testing.T) {
 	f := newVerifyFixture(t)
 	chainEvents := memory.NewChainEventRepository()
@@ -797,9 +794,8 @@ func TestReconcileDeploymentRejectsLookAlikeFromAnotherDeployer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The live project must be untouched — neither re-pointed at the attacker's
-	// stack nor knocked out of Active, which would be a denial of service in
-	// place of the takeover.
+	// The live project must be untouched: neither pointed at the attacker's stack
+	// nor knocked out of Active, which would be a denial of service
 	if after.Status != models.ProjectStatusActive {
 		t.Fatalf("Status = %s (%s), want the legitimate project left Active", after.Status, after.VerificationNote)
 	}
@@ -815,9 +811,8 @@ func TestReconcileDeploymentRejectsLookAlikeFromAnotherDeployer(t *testing.T) {
 }
 
 // TestReconcileDeploymentIgnoresLookAlikeWithNoLegitimateDeployment: with only
-// an unauthorized deployment on chain, nothing is adopted at all — and no
-// project record is written, so the attacker cannot even force a Failed record
-// into existence.
+// an unauthorized deployment on chain, nothing is adopted and no project record
+// is written, so the attacker cannot force a Failed record into existence
 func TestReconcileDeploymentIgnoresLookAlikeWithNoLegitimateDeployment(t *testing.T) {
 	f := newVerifyFixture(t)
 	chainEvents := memory.NewChainEventRepository()
@@ -870,9 +865,8 @@ func TestVerifyDeploymentFailsForUnauthorizedDeployer(t *testing.T) {
 }
 
 // TestVerifyDeploymentUnauthenticatedWhenNoAdminConfigured: with no admin
-// address configured (development — production config refuses to start without
-// one) the binding is disabled and the old adopt-anything behavior is kept, so
-// existing local setups still work.
+// address configured (development only; production config refuses to start
+// without one) the binding is disabled and any matching deployment is adopted
 func TestVerifyDeploymentUnauthenticatedWhenNoAdminConfigured(t *testing.T) {
 	f := newVerifyFixture(t)
 	f.svc.adminAddress = common.Address{}
@@ -916,7 +910,7 @@ func TestReconcileDeploymentDemotesOnReorg(t *testing.T) {
 		t.Fatalf("precondition: expected Active, got %s", p.Status)
 	}
 
-	// The adopting event is rolled back (indexer deletes it on reorg).
+	// the adopting event is rolled back (the indexer deletes it on a reorg)
 	if _, err := chainEvents.DeleteFromBlock(context.Background(), 31337, f.factoryAddr.Hex(), 1); err != nil {
 		t.Fatal(err)
 	}

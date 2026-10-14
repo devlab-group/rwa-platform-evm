@@ -1,14 +1,15 @@
-// Package memory provides in-memory implementations of every
-// internal/dal/repository interface. It is used by unit tests (and MAY be used
-// for local development without Mongo) so business logic never requires a
-// live database to be exercised.
+// Package memory implements every internal/dal/repository interface in memory. It
+// backs unit tests, so business logic can be exercised without a database, and the
+// PERSISTENCE_MODE=memory setting for local runs. Its data is not durable and the
+// platform refuses to start with it in production. MongoDB is the production
+// store.
 package memory
 
 import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// New builds a fresh, empty repository.Repositories backed entirely by memory.
+// New returns a Repositories value backed entirely by empty in-memory repositories
 func New() *repository.Repositories {
 	chainEvents := NewChainEventRepository()
 	blockHashes := NewBlockHashRepository()

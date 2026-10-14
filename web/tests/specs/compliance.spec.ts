@@ -3,7 +3,7 @@ import { AdminCompliancePage } from "../pages/AdminCompliancePage";
 
 const INVESTOR_ADDRESS = "0x1234561234561234561234561234561234561234";
 
-test.describe("Compliance — allowlist and block", () => {
+test.describe("Compliance - allowlist and block", () => {
   mockOnly();
 
   test("allows a wallet and the table reflects it", async ({ page, api }) => {

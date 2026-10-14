@@ -2,7 +2,7 @@ package profile
 
 import "testing"
 
-// goldBarProfile is the worked gold-bar Asset Profile used as a fixture.
+// goldBarProfile is the worked gold-bar Asset Profile used as a fixture
 const goldBarProfile = `{
   "profileVersion": "1.0",
   "projectId": "4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61",

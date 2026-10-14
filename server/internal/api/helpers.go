@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// hexBytes decodes an optionally "0x"-prefixed hex string to raw bytes.
+// hexBytes decodes an optionally "0x"-prefixed hex string to raw bytes
 func hexBytes(s string) ([]byte, error) {
 	return hex.DecodeString(strings.TrimPrefix(s, "0x"))
 }

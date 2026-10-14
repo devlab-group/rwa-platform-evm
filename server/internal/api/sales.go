@@ -8,8 +8,8 @@ import (
 
 // getInventory implements GET /api/v1/sales/inventory (operationId
 // getInventory).
-// PUBLIC: market-facing supply/price figures an investor reads before ever
-// authenticating — the same on-chain state is trivially readable directly.
+// Public: supply and price figures an investor reads before authenticating.
+// The same state is readable on-chain.
 func (app *App) getInventory(c *gin.Context) {
 	if app.Sales == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "sales is not configured on this server")
@@ -25,16 +25,9 @@ func (app *App) getInventory(c *gin.Context) {
 
 // listPurchases implements GET /api/v1/sales/purchases (operationId
 // listPurchases).
-// Admin-only, keyset-paginated page of the indexed purchase history.
-//
-// Uses repository-level keyset pagination
-// (PurchaseRepository.ListPage): the database query itself is bounded to
-// one page — this handler no longer fetches the whole collection and
-// slices it. X-Total-Count is omitted (not cheaply knowable without an
-// extra full-collection count, which would reintroduce exactly the
-// unbounded work being removed here) — same "omitted rather than sent
-// wrong" convention setPaginationHeaders already documents for
-// listAuditLogs.
+// Admin-only, keyset-paginated page of the indexed purchase history. The query
+// is bounded to one page by PurchaseRepository.ListPage, and X-Total-Count is
+// omitted because counting would scan the whole collection.
 func (app *App) listPurchases(c *gin.Context) {
 	if app.Sales == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "sales is not configured on this server")

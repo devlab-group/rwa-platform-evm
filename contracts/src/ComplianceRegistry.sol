@@ -10,39 +10,30 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 
 /// @title ComplianceRegistry
-/// @notice Wallet allowlist with optional KYC expiry. Stores no PII.
-/// @dev The Vault and RedemptionEscrow are pinned system addresses — once wired via
-///      `setSystemAddresses`, `setStatus`/`setStatuses` reject any attempt to set them to a
-///      non-Allowed status, so a fat-fingered or compromised COMPLIANCE_ROLE cannot self-DoS
-///      the whole deployment by blocking the contracts that move RWA on every buy/claim.
-///      Pinning only the status isn't enough on its own: an `Allowed` record with a nonzero
-///      `validUntil` still flips `isAllowed` to false once that timestamp passes, disabling a
-///      system address just as effectively as `Blocked` would. So both setters also reject a
-///      nonzero `validUntil` for a system address — the only state one can ever hold is
-///      `Allowed` with `validUntil == 0` (permanently allowed, matching `isSystemAddress`'s
-///      lifetime).
-///      `AccessControlEnumerable` lets an off-chain verifier (e.g. the server's post-deploy
-///      check) enumerate every `COMPLIANCE_ROLE` and `DEFAULT_ADMIN_ROLE` holder on-chain —
-///      to confirm the factory's bootstrap `COMPLIANCE_ROLE` grant was renounced and that no
-///      unexpected address holds a role — without depending on a complete indexed event history.
+/// @notice Wallet allowlist with optional KYC expiry; stores no PII
+/// @dev After one-time system-address wiring, setStatus and setStatuses accept only
+///      Allowed with validUntil == 0 for the Vault and RedemptionEscrow. This prevents
+///      COMPLIANCE_ROLE from blocking or expiring the addresses needed for RWA flows.
+///      AccessControlEnumerable lets post-deployment verification check the full
+///      COMPLIANCE_ROLE and DEFAULT_ADMIN_ROLE holder sets, including factory bootstrap
+///      role removal, without requiring a complete event history.
 contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable, AccessControlDefaultAdminRules {
     bytes32 public constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
 
-    /// @notice The RWAFactory (or other deployer) that may call `setSystemAddresses` once.
+    /// @notice The deployer (normally RWAFactory), the only caller of `setSystemAddresses`
     address private immutable _deployer;
 
     mapping(address account => ComplianceRecord record) private _records;
     mapping(address account => bool isSystem) private _systemAddresses;
     bool private _systemAddressesSet;
 
-    /// @param adminTransferDelay AccessControlDefaultAdminRules delay for `admin`.
-    /// @param admin DEFAULT_ADMIN_ROLE holder.
-    /// @param complianceOperator granted COMPLIANCE_ROLE.
-    /// @dev The deployer (typically RWAFactory) is also granted COMPLIANCE_ROLE so it can
-    ///      allowlist the Vault/RedemptionEscrow it deploys; it is expected to renounce this
-    ///      bootstrap right once wiring is complete. The same deployer address is recorded for
-    ///      the one-time `setSystemAddresses` gate below (mirrors RWAToken's
-    ///      `setSupplyController` deployer-gated pattern).
+    /// @param adminTransferDelay AccessControlDefaultAdminRules delay for `admin`
+    /// @param admin DEFAULT_ADMIN_ROLE holder
+    /// @param complianceOperator granted COMPLIANCE_ROLE
+    /// @dev The deployer (normally RWAFactory) also receives COMPLIANCE_ROLE so it can allowlist
+    ///      the Vault and RedemptionEscrow it deploys, and is expected to renounce it once
+    ///      wiring is complete. The deployer address is also recorded for the one-time
+    ///      `setSystemAddresses` gate, the same pattern as RWAToken's `setSupplyController`.
     constructor(uint48 adminTransferDelay, address admin, address complianceOperator)
         AccessControlDefaultAdminRules(adminTransferDelay, admin)
     {
@@ -92,12 +83,12 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable, Acc
         return _records[account];
     }
 
-    /// @dev Diamond resolution: `AccessControlEnumerable` and `AccessControlDefaultAdminRules`
-    ///      each reach these `AccessControl` members via a different inheritance path (only
-    ///      `AccessControlDefaultAdminRules` actually changes their behavior; `_setRoleAdmin`
-    ///      is untouched by either and provided verbatim by `AccessControl`), so solc requires
-    ///      this contract to explicitly resolve every one of them. All just chain through
-    ///      `super` to run the full linearized chain.
+    /// @dev `AccessControlEnumerable` and `AccessControlDefaultAdminRules` both extend
+    ///      `AccessControl` and override some of its members: the first `_grantRole`,
+    ///      `_revokeRole` and `supportsInterface` (to track role members), the second every
+    ///      member overridden here (to add the two-step admin transfer rules). Solidity requires this
+    ///      contract to resolve each of them explicitly. Every override only calls `super`, so
+    ///      the full linearized chain runs.
     function _grantRole(bytes32 role, address account)
         internal
         override(AccessControlEnumerable, AccessControlDefaultAdminRules)
@@ -154,7 +145,7 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable, Acc
     function _setStatus(address account, ComplianceStatus status, uint64 validUntil) private {
         if (account == address(0)) revert ZeroAddressAccount();
         // A system address must stay Allowed with no expiry; either deviation
-        // (a non-Allowed status, or an Allowed record that will itself expire) reverts.
+        // (a non-Allowed status, or an Allowed record that will itself expire) reverts
         if (_systemAddresses[account] && (status != ComplianceStatus.Allowed || validUntil != 0)) {
             revert SystemAddressCannotBeBlocked(account);
         }

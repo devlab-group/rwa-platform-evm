@@ -23,7 +23,7 @@ http:
   write_timeout: "60s"
   idle_timeout: "120s"
   max_header_bytes: 32768        # 32 KiB
-  max_request_body_bytes: 2097152 # 2 MiB; 0 disables (production requires an override)
+  max_request_body_bytes: 2097152 # 2 MiB; <=0 disables (production requires an override)
   # Empty trusts no forwarding proxies; client-IP limits use the TCP peer.
   # Behind a proxy, list its actual addresses or CIDRs.
   trusted_proxies: []
@@ -78,8 +78,9 @@ ipfs:
   replication_threshold: 1       # must be 1..(configured backup count) in production
 
 security:
-  # SECRET. Empty outside production = webhook feature disabled. If set, must
-  # be at least 32 bytes; production requires it. Never use a placeholder.
+  # SECRET. Signs generic KYC webhooks (kyc.provider "none"). Empty disables
+  # them outside production. If set, must be at least 32 bytes; production
+  # requires it for provider "none" and rejects known placeholders.
   kyc_webhook_hmac_secret: ""
   idempotency_ttl: "24h"
   wallet_challenge_ttl: "15m"
@@ -118,14 +119,14 @@ kyc:
   # Selecting a provider requires that provider's fields below.
   provider: "none"
   sumsub:
-    app_token: ""              # SECRET — Sumsub app token
-    secret_key: ""             # SECRET — signs outbound Sumsub API calls
-    webhook_secret: ""         # SECRET — verifies inbound webhooks (dashboard "Webhook secret key"); >=32 bytes in production
+    app_token: ""              # SECRET: Sumsub app token
+    secret_key: ""             # SECRET: signs outbound Sumsub API calls
+    webhook_secret: ""         # SECRET: verifies inbound webhooks (dashboard "Webhook secret key"); >=32 bytes in production
     base_url: ""               # default https://api.sumsub.com
     level_name: ""             # verification level; default "basic-kyc-level"
   onfido:
-    api_token: ""              # SECRET — Onfido API token
-    webhook_token: ""          # SECRET — verifies inbound webhooks (X-SHA2-Signature)
+    api_token: ""              # SECRET: Onfido API token
+    webhook_token: ""          # SECRET: verifies inbound webhooks (X-SHA2-Signature)
     region: "eu"               # eu | us | ca (data residency / API host)
     workflow_id: ""            # Onfido Studio workflow to run
     referrer: ""               # SDK token referrer pattern; default "*://*/*"

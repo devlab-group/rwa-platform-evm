@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {IPriceStrategy} from "./IPriceStrategy.sol";
 
 /// @title IFixedPriceStrategy
-/// @notice Admin/pricer-updatable fixed purchase and redemption prices.
+/// @notice Fixed purchase and redemption prices that `PRICER_ROLE` holders can update.
 /// @dev Prices are denominated in quote-token smallest units per 10**tokenDecimals RWA units.
 interface IFixedPriceStrategy is IPriceStrategy {
     event PurchasePriceUpdated(uint256 previousPrice, uint256 newPrice, address indexed caller);

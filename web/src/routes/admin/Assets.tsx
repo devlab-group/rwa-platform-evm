@@ -105,7 +105,7 @@ export function Assets() {
           This is the <code className="mono">--policy policy.json</code> file
           the auditor needs for <code className="mono">signer sign</code>. It
           pins the chain, contracts, auditor, and project the auditor may sign
-          for — the signer refuses anything that disagrees. Download it and hand
+          for - the signer refuses anything that disagrees. Download it and hand
           it to the auditor alongside the .rwa package.
         </p>
         <SignerPolicySection
@@ -164,9 +164,9 @@ export function Assets() {
       <section className="card">
         <h2>Auditor signature upload &amp; mint</h2>
         <p className="field__hint">
-          Uploading a valid auditor signature broadcasts SupplyController.mint
-          from your connected wallet; the server observes the on-chain Minted
-          event and advances the record.
+          Upload a valid auditor signature to submit SupplyController.mint from
+          your wallet. The server updates the record after observing Minted
+          on-chain.
         </p>
         <SignatureUploadForm
           project={project.status === "success" ? project.data : undefined}
@@ -208,9 +208,8 @@ function SignerPolicySection({
   if (!policy) {
     return (
       <p className="field__hint">
-        Deploy the project and create the asset profile first — the signer
-        policy needs the deployed contract addresses, auditor, profile digest,
-        and project ID.
+        Create the Asset Profile and deploy the project first. The signer policy
+        needs the contract addresses, auditor, profile digest and project ID.
       </p>
     );
   }
@@ -301,8 +300,8 @@ function RecordRow({
         )}
       </td>
       <td>{formatTokenAmount(record.amount ?? "", rwaDecimals)}</td>
-      <td className="mono">{record.metadataDigest ?? "—"}</td>
-      <td className="mono">{record.cid ?? "—"}</td>
+      <td className="mono">{record.metadataDigest ?? "-"}</td>
+      <td className="mono">{record.cid ?? "-"}</td>
       <td>{formatIsoTimestamp(record.createdAt)}</td>
       <td>
         {record.recordId && (
@@ -366,7 +365,7 @@ function CreateRecordForm({
   async function handleCreate() {
     setError(null);
     if (rwaDecimals === undefined) {
-      setError("Token decimals not available yet — project still loading.");
+      setError("Token decimals not available yet - project still loading.");
       return;
     }
     let asset: unknown;
@@ -421,7 +420,7 @@ function CreateRecordForm({
         />
         <span className="field__hint" id="recordId-hint">
           A unique identifier for this asset record
-          {recordIdLabel ? ` — the ${recordIdLabel.toLowerCase()}` : ""} (your
+          {recordIdLabel ? ` - the ${recordIdLabel.toLowerCase()}` : ""} (your
           own reference, e.g. a serial/deed/invoice number). Immutable once
           created.
         </span>
@@ -435,9 +434,8 @@ function CreateRecordForm({
           aria-describedby="amount-hint"
         />
         <span className="field__hint" id="amount-hint">
-          How many whole tokens this record represents (e.g. 100.5). Converted
-          to the token&apos;s minimal units on submit using the project&apos;s
-          decimals.
+          Whole tokens represented by this record (e.g. 100.5). Submission
+          converts them to minimal units using the project&apos;s decimals.
         </span>
       </div>
       <div className="field">
@@ -454,9 +452,8 @@ function CreateRecordForm({
           aria-describedby="assetJson-hint"
         />
         <span className="field__hint" id="assetJson-hint">
-          The asset&apos;s metadata, matching this project&apos;s Asset Profile
-          schema. Pre-filled with the schema&apos;s fields — replace the
-          placeholder values. Validated against the schema server-side.
+          Asset metadata matching the Asset Profile schema. Replace the
+          pre-filled placeholders; the server validates the values.
         </span>
       </div>
       <div className="field">
@@ -525,7 +522,7 @@ function parseSignedResult(text: string): SignedResult {
   );
   if (missing.length > 0) {
     throw new Error(
-      `Not a signed-result.json — missing field(s): ${missing.join(", ")}.`,
+      `Not a signed-result.json - missing field(s): ${missing.join(", ")}.`,
     );
   }
   return {
@@ -578,7 +575,7 @@ function SignatureUploadForm({
 
     // Build the attestation from loaded record and project fields
     if (!project) {
-      setError("Project not loaded yet — try again in a moment.");
+      setError("Project not loaded yet - try again in a moment.");
       return;
     }
     const record = records.find((r) => r.recordId === recordId);
@@ -674,7 +671,7 @@ function SignatureUploadForm({
           aria-describedby="sigRecordId-hint"
         />
         <span className="field__hint" id="sigRecordId-hint">
-          The record this attestation mints — must match a record above (the ID
+          The record this attestation mints - must match a record above (the ID
           the .rwa package was built for). Its recordKey, nonce, validUntil,
           metadata digest, and amount are read from that record.
         </span>

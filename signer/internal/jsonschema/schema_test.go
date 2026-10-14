@@ -142,12 +142,10 @@ func TestValidate_ArrayConstraints(t *testing.T) {
 	}
 }
 
-// TestCompile_RejectsUnknownKeywordsByAllowlist pins the allowlist behavior:
-// rejecting a keyword outright, not silently ignoring it. A blacklist-only
-// approach would let a schema using e.g. multipleOf compile and simply never
-// enforce it. Compile must reject anything outside the explicit allowlist,
-// including valid Draft 2020-12 keywords this subset engine does not
-// implement. The allowlist follows the dialect in
+// TestCompile_RejectsUnknownKeywordsByAllowlist pins the allowlist behavior: Compile
+// rejects any keyword outside the allowlist instead of ignoring it, including valid
+// Draft 2020-12 keywords this engine does not implement. A denylist would let a schema
+// using multipleOf compile and never enforce it. The allowlist follows
 // docs/spec/profile-schema-dialect.md and
 // shared/vectors/schema-dialect-conformance.json.
 func TestCompile_RejectsUnknownKeywordsByAllowlist(t *testing.T) {
@@ -169,10 +167,9 @@ func TestCompile_RejectsUnknownKeywordsByAllowlist(t *testing.T) {
 	}
 }
 
-// TestCompile_RejectsRefSiblings: Draft 2020-12 gives $ref siblings
-// independent validation force, which this engine does not implement, so a
-// $ref with any sibling keyword must be rejected rather than silently
-// discarding the sibling.
+// TestCompile_RejectsRefSiblings: Draft 2020-12 gives $ref siblings independent
+// validation force, which this engine does not implement, so a $ref with any sibling
+// keyword is rejected instead of dropping the sibling
 func TestCompile_RejectsRefSiblings(t *testing.T) {
 	raw := `{
 		"$defs": {"pos": {"type": "integer", "minimum": 0}},
@@ -184,11 +181,10 @@ func TestCompile_RejectsRefSiblings(t *testing.T) {
 	}
 }
 
-// TestCompile_RejectsDirectRefCycle and TestCompile_RejectsIndirectRefCycle
-// guard the $ref cycle tracking. Without it a self-referential schema would
-// recurse until the process crashed with a stack overflow -- a malicious
-// package carrying such a schema is a local denial of service against an
-// auditor opening it.
+// TestCompile_RejectsDirectRefCycle and TestCompile_RejectsIndirectRefCycle guard the
+// $ref cycle tracking. Without it a self-referential schema would recurse until the
+// process crashed with a stack overflow, so a malicious package could crash the
+// auditor's signer.
 func TestCompile_RejectsDirectRefCycle(t *testing.T) {
 	raw := `{"$defs": {"a": {"$ref": "#/$defs/a"}}, "$ref": "#/$defs/a"}`
 	if _, err := CompileBytes([]byte(raw)); err == nil {
@@ -209,9 +205,8 @@ func TestCompile_RejectsIndirectRefCycle(t *testing.T) {
 	}
 }
 
-// TestCompile_RejectsExcessiveDepth covers the depth limit for non-cyclic
-// but pathologically deep schemas (whether via nesting or via a long $ref
-// chain).
+// TestCompile_RejectsExcessiveDepth covers the depth limit for acyclic but very deep
+// schemas, whether through nesting or a long $ref chain
 func TestCompile_RejectsExcessiveDepth(t *testing.T) {
 	defs := &strings.Builder{}
 	defs.WriteString(`{"$defs":{`)
@@ -233,8 +228,8 @@ func TestCompile_RejectsExcessiveDepth(t *testing.T) {
 	}
 }
 
-// TestValidate_ArchitectureGoldBarExample validates the gold-bar assetSchema
-// example against both a conforming and a non-conforming asset record.
+// TestValidate_ArchitectureGoldBarExample validates the gold-bar assetSchema example
+// against a conforming and a non-conforming asset record
 func TestValidate_ArchitectureGoldBarExample(t *testing.T) {
 	s := mustCompile(t, `{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -1,26 +1,25 @@
 // Builds a placeholder ("skeleton") instance from an Asset Profile's
-// `assetSchema` so the Create-record Metadata editor can start from the shape
-// the schema expects instead of an empty `{}`. It walks the schema the same way
-// the server's closed dialect (rwa-profile-assetSchema/1) is structured —
-// type/properties/items/$ref/$defs/enum/const/default — and emits a
-// type-appropriate placeholder for every declared property. It is a best-effort
-// authoring aid, not a validator: the server still validates the submitted
-// metadata against the real schema.
+// `assetSchema`, so the Create-record metadata editor starts from the expected
+// shape instead of an empty `{}`. It follows the server's closed dialect
+// (rwa-profile-assetSchema/1): type, properties, items, $ref, $defs, enum,
+// const and default, and emits a placeholder for every declared property. It
+// is an authoring aid, not a validator; the server validates the submitted
+// metadata against the schema.
 
-/** Matches the server's $ref chain bound (assets/schema_guard.go maxRefDepth). */
+/** Matches the server's $ref chain bound (maxRefDepth in assets/schema_guard.go) */
 const MAX_DEPTH = 32;
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** Decodes a single JSON Pointer reference token (RFC 6901: ~1→/, ~0→~). */
+/** Decodes one JSON Pointer reference token (RFC 6901: ~1 is "/", ~0 is "~") */
 function decodePointerToken(token: string): string {
   return token.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
-/** Resolves a local JSON-pointer `$ref` (e.g. "#" or "#/$defs/Foo") against the
- * root schema. Only local refs exist in this dialect; anything else → undefined. */
+// Resolves a local JSON-pointer `$ref` such as "#" or "#/$defs/Foo" against the
+// root schema; the dialect allows only local refs, so any other ref gives undefined
 function resolveRef(root: Record<string, unknown>, ref: string): unknown {
   if (ref === "#" || ref === "#/") return root;
   if (!ref.startsWith("#/")) return undefined;
@@ -32,8 +31,8 @@ function resolveRef(root: Record<string, unknown>, ref: string): unknown {
   return node;
 }
 
-/** Picks the concrete type name to build for, tolerating `type` given as an
- * array (e.g. ["string","null"]) by preferring the first non-null entry. */
+// Picks the type to build for; when `type` is an array such as
+// ["string","null"], the first non-null entry wins
 function pickType(node: Record<string, unknown>): string | undefined {
   const t = node.type;
   if (typeof t === "string") return t;
@@ -56,7 +55,7 @@ function skeletonForSchema(
 ): unknown {
   if (depth > MAX_DEPTH || !isObject(node)) return null;
 
-  // Resolve a $ref before anything else, guarding against reference cycles.
+  // Resolve a $ref first, guarding against reference cycles
   if (typeof node.$ref === "string") {
     if (seenRefs.has(node.$ref)) return null;
     const target = resolveRef(root, node.$ref);
@@ -68,7 +67,7 @@ function skeletonForSchema(
     );
   }
 
-  // Explicit authoring hints win over a synthesized placeholder.
+  // Explicit hints win over a synthesized placeholder
   if ("default" in node) return node.default;
   if ("const" in node) return node.const;
   if (Array.isArray(node.enum) && node.enum.length > 0) return node.enum[0];

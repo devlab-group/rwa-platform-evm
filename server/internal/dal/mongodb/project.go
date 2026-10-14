@@ -8,18 +8,14 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// projectDocID is the fixed technical _id every project document uses.
-// Using p.ProjectID as _id would let two concurrent deploys with two
-// different ProjectIDs each land as a
-// SEPARATE document, since nothing but application code enforced "one
-// project total" — Get's bson.M{} filter just grabbed whichever one
-// happened to match first. A fixed _id makes "one project total" a real
-// uniqueness guarantee at the database (every Mongo collection has an
-// automatic unique index on _id), not just a convention.
+// projectDocID is the fixed _id of the project document. Using ProjectID as the _id
+// would let two concurrent deploys with different ProjectIDs create two documents,
+// because only application code enforced one project. With a fixed _id, the unique
+// index on _id makes it a database guarantee.
 const projectDocID = "singleton"
 
-// projectRepo stores the single project document (one project per
-// deployment) under the fixed projectDocID.
+// projectRepo stores the single project document, one per deployment, under
+// projectDocID
 type projectRepo struct{ coll *mongo.Collection }
 
 func (r *projectRepo) Get(ctx context.Context) (*models.Project, error) {

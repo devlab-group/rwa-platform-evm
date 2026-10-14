@@ -11,59 +11,54 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// FakeClient is an in-memory Client used by unit tests. It never performs
-// network I/O. Callers configure canned responses and inspect SentTxs after
-// exercising code under test.
+// FakeClient is an in-memory Client for unit tests. It does no network I/O.
+// Tests set canned responses and inspect SentTxs afterwards.
 type FakeClient struct {
 	mu sync.Mutex
 
 	ChainIDValue *big.Int
 	BlockNum     uint64
-	// BaseFee is returned in HeaderByNumber; nil simulates a pre-London
-	// chain with no EIP-1559 support, forcing legacy tx construction.
+	// BaseFee is returned in HeaderByNumber. nil simulates a chain without
+	// EIP-1559, which forces legacy transactions.
 	BaseFee *big.Int
-	// Headers, when set for a given block number, is returned verbatim by
-	// HeaderByNumber instead of the synthesized default — lets a test pin a
-	// specific canonical header (and therefore a specific header.Hash()) at
-	// a height, or simulate that height no longer resolving at all (a nil
-	// map value), to exercise TxManager's reorg detection: a receipt
-	// whose BlockHash no longer matches the current canonical header's hash
-	// at BlockNumber, or whose block has disappeared entirely.
+	// Headers, when set for a block number, is returned as is by HeaderByNumber
+	// instead of the synthesized default. A test can pin a header (and so its
+	// Hash()) at a height, or use a nil map value to make the height stop
+	// resolving. That exercises TxManager's reorg detection: a receipt whose
+	// BlockHash no longer matches the canonical header at BlockNumber, or whose
+	// block has disappeared.
 	Headers map[uint64]*types.Header
-	// Nonces is the PENDING nonce (eth_getTransactionCount(...,"pending")):
-	// mempool-inclusive, what PendingNonceAt returns.
+	// Nonces is the pending nonce, as in eth_getTransactionCount(..., "pending"),
+	// which counts the node's pending transactions. PendingNonceAt returns it.
 	Nonces map[common.Address]uint64
-	// MinedNonces is the LATEST/mined nonce (eth_getTransactionCount(...,
-	// "latest")), what NonceAt(..., nil) returns. Deliberately a separate
-	// map from Nonces (not derived from it) so tests can simulate the two
-	// diverging — e.g. a stuck pending transaction (Nonces stays ahead of
-	// MinedNonces) or a nonce consumed by a transaction TxManager never
-	// tracked (MinedNonces jumps ahead of what TxManager itself broadcast) —
-	// exactly the inconsistent-pending-nonce scenario that reconciliation
-	// exists to handle. Defaults to 0 (== Nonces' zero default) when unset.
+	// MinedNonces is the latest (mined) nonce, as in eth_getTransactionCount(...,
+	// "latest"). NonceAt(..., nil) returns it. It is separate from Nonces so a
+	// test can make the two diverge: a stuck pending transaction (Nonces ahead of
+	// MinedNonces), or a nonce used by a transaction TxManager never tracked
+	// (MinedNonces ahead of what TxManager broadcast). Both are cases that nonce
+	// reconciliation handles. It defaults to 0 when unset.
 	MinedNonces   map[common.Address]uint64
 	GasTipCap     *big.Int
 	GasPrice      *big.Int
 	EstimatedGas  uint64
 	CallResponses map[string][]byte // keyed by hex(msg.Data)
-	// Calls records every CallContract in order, so a test can assert
-	// WHERE a read went, not only what it returned — CallResponses is
-	// keyed by calldata alone and so cannot distinguish two contracts
-	// exposing the same method.
+	// Calls records every CallContract in order, so a test can assert where a
+	// read went and not only what it returned. CallResponses is keyed by calldata
+	// alone and cannot tell two contracts with the same method apart.
 	Calls []ethereum.CallMsg
-	// DefaultCallResponse, if set, is returned by CallContract for any
-	// calldata not present in CallResponses, instead of erroring. Handy for
-	// tests that need every hasRole/isAllowed-style call in a batch to
-	// return the same canned bool without enumerating each exact selector+args.
+	// DefaultCallResponse, if set, is returned by CallContract for any calldata
+	// missing from CallResponses instead of an error. It lets a test give every
+	// hasRole or isAllowed call in a batch the same answer without listing each
+	// selector and argument set.
 	DefaultCallResponse []byte
 	Receipts            map[common.Hash]*types.Receipt
-	// Txs holds canned TransactionByHash responses keyed by hash; an absent
-	// hash returns ethereum.NotFound, matching a real node.
+	// Txs holds canned TransactionByHash responses keyed by hash; an absent hash
+	// returns ethereum.NotFound, as a node does
 	Txs  map[common.Hash]*types.Transaction
 	Logs []types.Log
-	// Code holds canned CodeAt responses keyed by address; an address
-	// absent from this map returns nil (empty bytecode), matching a real
-	// node's response for an address with no deployed contract.
+	// Code holds canned CodeAt responses keyed by address; an absent address
+	// returns nil (empty bytecode), as a node does for an address with no
+	// contract
 	Code map[common.Address][]byte
 
 	SentTxs []*types.Transaction
@@ -71,20 +66,16 @@ type FakeClient struct {
 	// SendTransactionErr, if set, is returned by every SendTransaction call.
 	SendTransactionErr error
 
-	// AutoIncrementNonce, if true, makes SendTransaction bump
-	// Nonces[sender] to tx.Nonce()+1 — simulating a real node's mempool,
-	// where a pending-nonce lookup reflects every broadcast-but-unconfirmed
-	// transaction. Off by default (existing tests seed/advance Nonces by
-	// hand via SetNonce).
+	// AutoIncrementNonce, if true, makes SendTransaction set Nonces[sender] to
+	// tx.Nonce()+1, as a node's pending nonce reflects every broadcast but
+	// unconfirmed transaction. It is off by default, and tests then set Nonces
+	// with SetNonce.
 	//
-	// Deliberately hooked on SendTransaction, not PendingNonceAt: a
-	// concurrency test proving TxManager's per-key lock actually
-	// serializes access needs the fake nonce to only advance at the point
-	// TxManager itself would have already broadcast (i.e. while its lock
-	// is still held) — auto-incrementing inside PendingNonceAt instead
-	// would make every call return a unique value on its own (this
-	// struct's mutex alone guarantees that), passing even if TxManager's
-	// lock were removed entirely and defeating the point of the test.
+	// It acts on SendTransaction, not PendingNonceAt, so that a concurrency test
+	// of TxManager's per-key lock sees the nonce advance only after TxManager
+	// has broadcast, while its lock is still held. Incrementing inside
+	// PendingNonceAt would give every call a unique value through this struct's
+	// mutex alone, so the test would pass even with the lock removed.
 	AutoIncrementNonce bool
 }
 
@@ -130,11 +121,10 @@ func (f *FakeClient) HeaderByNumber(ctx context.Context, number *big.Int) (*type
 	return &types.Header{Number: new(big.Int).SetUint64(n), BaseFee: f.BaseFee}, nil
 }
 
-// SetHeader pins the header returned for a given block number, overriding
-// the synthesized default so its Hash() is caller-controlled — used to
-// simulate a reorg that replaces the canonical block at a height a receipt
-// already referenced. Passing a nil header simulates that height no longer
-// resolving at all.
+// SetHeader pins the header returned for a block number, replacing the
+// synthesized default so the test controls its Hash(). It simulates a reorg that
+// replaces the canonical block at a height a receipt already referenced. A nil
+// header makes that height stop resolving.
 func (f *FakeClient) SetHeader(number uint64, h *types.Header) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -150,7 +140,7 @@ func (f *FakeClient) PendingNonceAt(ctx context.Context, account common.Address)
 	return f.Nonces[account], nil
 }
 
-// SetNonce lets tests seed the pending nonce for an account.
+// SetNonce seeds the pending nonce for an account
 func (f *FakeClient) SetNonce(account common.Address, nonce uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -163,8 +153,8 @@ func (f *FakeClient) NonceAt(ctx context.Context, account common.Address, blockN
 	return f.MinedNonces[account], nil
 }
 
-// SetMinedNonce lets tests seed the LATEST (mined) nonce for an account,
-// independent of the pending nonce set via SetNonce — see MinedNonces.
+// SetMinedNonce seeds the latest (mined) nonce for an account, independent of
+// the pending nonce set with SetNonce (see MinedNonces)
 func (f *FakeClient) SetMinedNonce(account common.Address, nonce uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -221,7 +211,7 @@ func (f *FakeClient) TransactionReceipt(ctx context.Context, txHash common.Hash)
 	return r, nil
 }
 
-// SetReceipt lets tests mark a transaction as mined with a given status/block.
+// SetReceipt marks a transaction as mined with the given status and block
 func (f *FakeClient) SetReceipt(txHash common.Hash, r *types.Receipt) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -238,17 +228,17 @@ func (f *FakeClient) TransactionByHash(ctx context.Context, txHash common.Hash) 
 	return tx, false, nil
 }
 
-// SetTx lets tests register a transaction (used to expose the observed
-// RWAFactory.deploy calldata to post-deploy verification).
+// SetTx registers a transaction for TransactionByHash, for example the observed
+// RWAFactory.deploy calldata that post-deploy verification reads
 func (f *FakeClient) SetTx(txHash common.Hash, tx *types.Transaction) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Txs[txHash] = tx
 }
 
-// RemoveReceipt lets tests simulate a reorg dropping a previously mined
-// transaction: a subsequent TransactionReceipt call returns ethereum.NotFound
-// exactly as it would for a transaction that fell out of the canonical chain.
+// RemoveReceipt simulates a reorg dropping a mined transaction: later
+// TransactionReceipt calls return ethereum.NotFound, as for a transaction that
+// left the canonical chain
 func (f *FakeClient) RemoveReceipt(txHash common.Hash) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

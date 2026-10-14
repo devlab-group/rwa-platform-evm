@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Manifest mirrors shared/schemas/rwa-manifest.schema.json.
+// Manifest mirrors shared/schemas/rwa-manifest.schema.json
 type Manifest struct {
 	PackageVersion string         `json:"packageVersion"`
 	PrimaryType    string         `json:"primaryType"` // "MintAttestation" | "BurnAttestation"
@@ -17,7 +17,7 @@ type Manifest struct {
 	Files          []ManifestFile `json:"files"`
 }
 
-// ManifestFile is one entry of Manifest.Files.
+// ManifestFile is one entry of Manifest.Files
 type ManifestFile struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
@@ -25,19 +25,18 @@ type ManifestFile struct {
 	MIME   string `json:"mime"`
 }
 
-// TypedDataDoc is the package's typed-data.json, matching
-// shared/schemas/typed-data.schema.json byte-for-byte (additionalProperties:
-// false — the server and the offline signer MUST agree on these field names
-// exactly). There is deliberately no digest field here: the signer
-// recomputes the EIP-712 digest itself from domain+message rather than
-// trusting a server-supplied value.
+// TypedDataDoc is the package's typed-data.json. Its fields match
+// shared/schemas/typed-data.schema.json, which sets additionalProperties to
+// false, so the server and the offline signer must use the same field names.
+// It has no digest field: the signer recomputes the EIP-712 digest from the
+// domain and message instead of trusting a supplied value.
 type TypedDataDoc struct {
 	PrimaryType string           `json:"primaryType"`
 	Domain      TypedDataDomain  `json:"domain"`
 	Message     TypedDataMessage `json:"message"`
 }
 
-// TypedDataDomain mirrors the EIP712Domain used for every attestation.
+// TypedDataDomain mirrors the EIP712Domain used for every attestation
 type TypedDataDomain struct {
 	Name              string `json:"name"`
 	Version           string `json:"version"`
@@ -45,10 +44,10 @@ type TypedDataDomain struct {
 	VerifyingContract string `json:"verifyingContract"`
 }
 
-// TypedDataMessage mirrors typed-data.schema.json's message object. amount
-// and nonce are decimal strings, not JSON numbers, per the schema pattern.
-// recordId/recordKey are set (and operationId omitted) for MintAttestation;
-// operationId is set (and recordId/recordKey omitted) for BurnAttestation.
+// TypedDataMessage mirrors the message object in typed-data.schema.json. amount
+// and nonce are decimal strings, not JSON numbers. A MintAttestation sets
+// recordId and recordKey and omits operationId. A BurnAttestation sets
+// operationId and omits recordId and recordKey.
 type TypedDataMessage struct {
 	Auditor        string `json:"auditor"`
 	ProfileDigest  string `json:"profileDigest"`
@@ -62,15 +61,15 @@ type TypedDataMessage struct {
 	Vault          string `json:"vault"`
 }
 
-// ProofFile is one offline-only or public attachment bundled under proofs/.
+// ProofFile is one attachment bundled under proofs/
 type ProofFile struct {
 	Name string
 	MIME string
 	Data []byte
 }
 
-// mandatoryManifestFiles are the only manifest.files entries permitted
-// outside proofs/ — every other declared file MUST live under proofs/.
+// mandatoryManifestFiles are the only manifest.files entries allowed outside
+// proofs/, and each must appear exactly once
 var mandatoryManifestFiles = map[string]bool{
 	"profile.json":    true,
 	"metadata.json":   true,
@@ -83,16 +82,15 @@ var (
 	manifestSHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
-// maxManifestFileSize mirrors shared/schemas/rwa-manifest.schema.json's
-// files[].size maximum (100 MiB).
+// maxManifestFileSize is the files[].size maximum in
+// shared/schemas/rwa-manifest.schema.json (100 MiB)
 const maxManifestFileSize = 104857600
 
-// parseManifestStrict decodes and validates raw as manifest.json against
-// shared/schemas/rwa-manifest.schema.json's exact constraints — a strict
-// decode rather than a permissive json.Unmarshal, so an unknown or malformed
-// field is rejected. It additionally enforces the file-set rules the JSON
-// Schema alone can't express: no duplicate declared paths, the three mandatory
-// JSON files present exactly once, and every other entry confined to proofs/.
+// parseManifestStrict decodes raw as manifest.json and checks it against the
+// constraints in shared/schemas/rwa-manifest.schema.json. Unknown fields and
+// trailing content are rejected. It also enforces file-set rules the schema
+// cannot express: no duplicate paths, the three mandatory files present, and
+// every other entry under proofs/.
 func parseManifestStrict(raw []byte) (Manifest, error) {
 	var m Manifest
 	dec := json.NewDecoder(bytes.NewReader(raw))

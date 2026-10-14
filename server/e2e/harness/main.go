@@ -1,28 +1,16 @@
-// Command harness drives the full self-hosted RWA platform lifecycle
-// end-to-end over the platform server's documented HTTP API (api/openapi.yaml)
-// against a live server + anvil + Mongo stack that server/e2e/run_e2e.sh has
-// booted with ONLY the RWAFactory deployed (bootstrap config). The harness
-// itself performs every wallet action the way the admin's web wallet would:
-// it broadcasts RWAFactory.deploy(config) and waits for the server to OBSERVE
-// the ProjectDeployed event and mark the project Active (deployment is
-// permissionless, not a server action); then wallet-ownership challenge ->
-// compliance allow -> asset record -> .rwa package download -> offline
-// signer-CLI signature -> broadcast SupplyController.mint(attestation,
-// signature) and wait for the server to observe the Minted event -> buy ->
-// request redemption -> fund -> claim, plus a second request that times out
-// and is cancelled.
+// Command harness tests the platform lifecycle through its HTTP API against the
+// server, Anvil and MongoDB started by server/e2e/run_e2e.sh. Initially only the
+// RWAFactory exists. The harness broadcasts an admin-bound deployment and waits
+// for the server to verify it and mark the project Active.
 //
-// It is a plain Go program (not a bash+curl script) because this sandbox's
-// permission policy denies direct curl/wget invocations; net/http from a Go
-// binary is unaffected, and go-ethereum is already a server module
-// dependency, so every wallet transaction (deploy, mint, buy, redemption
-// funding — none of which are server hot-key actions)
-// is signed and submitted directly here rather than shelling out to
-// `cast send`.
+// It then verifies wallet ownership, allows compliance, creates an asset record,
+// downloads its .rwa package, signs with the offline CLI and broadcasts mint.
+// After the server observes Minted, it tests purchase, redemption funding and
+// claim, a timeout and cancellation, and ERC-7943 freeze and seizure.
 //
-// All configuration is read from the environment; see run_e2e.sh. Exits 0
-// and prints "API E2E OK" only if every step (including every read-model
-// assertion) succeeds.
+// Wallet transactions use go-ethereum, already a module dependency. Configuration
+// comes from the environment; see run_e2e.sh. Every step and read-model assertion
+// must pass before the program prints "API E2E OK" and exits 0.
 package main
 
 import (
@@ -59,34 +47,32 @@ func main() {
 	fmt.Println("API E2E OK")
 }
 
-// ---- configuration ---------------------------------------------------
+// configuration
 
 type config struct {
 	baseURL string
 	rpcURL  string
 	chainID *big.Int
-	// adminBearer is the admin JWT acquired at runtime via the wallet-signature
-	// login (POST /auth/challenge + /auth/session), signed with deployerPK —
-	// which is the configured admin address. Attached as Authorization: Bearer
-	// on every admin-only request.
+	// adminBearer is the admin JWT from the wallet-signature login
+	// (POST /auth/challenge and /auth/session), signed with deployerPK, which is the
+	// configured admin address. It is sent as Authorization: Bearer on admin-only
+	// requests.
 	adminBearer string
 	deployerPK  string // anvil acct0: admin/auditor/treasurer/compliance-operator/etc (the compliance hot key reuses this too)
 	investorPK  string // anvil acct1
-	// quoteAddr is the pre-deployed quote/collateral MockERC20 whose address
-	// goes into the ProjectConfig the harness broadcasts to RWAFactory.deploy.
+	// quoteAddr is the quote token (a TestToken) that the harness puts in the
+	// ProjectConfig it sends to RWAFactory.deploy
 	quoteAddr common.Address
-	// projectUUID is the off-chain project identity. The on-chain
-	// ProjectConfig.projectId MUST be keccak256(bytes(projectUUID)) — the same
-	// derivation the server's project.ReconcileDeployment expects — or the
-	// deployment projector will not bind the ProjectDeployed event to the
-	// stored profile.
+	// projectUUID is the off-chain project identity. The on-chain ProjectConfig.projectId
+	// must be keccak256(bytes(projectUUID)), as project.Service.ReconcileDeployment
+	// expects, or the projector will not bind the ProjectDeployed event to the stored
+	// profile.
 	projectUUID     string
 	purchasePrice   *big.Int
 	redemptionPrice *big.Int
-	// The remaining deployed-contract addresses are NOT known up front: the
-	// harness broadcasts RWAFactory.deploy itself and reads them back from GET
-	// /api/v1/project once the server has observed the event and marked the
-	// project Active. auditorAddr == the deployer (single-operator V1).
+	// The deployed contract addresses are not known up front. The harness broadcasts
+	// RWAFactory.deploy and reads them from GET /api/v1/project once the server has
+	// marked the project Active. auditorAddr is the deployer.
 	supplyCtrlAddr common.Address
 	vaultAddr      common.Address
 	tokenAddr      common.Address
@@ -170,7 +156,7 @@ func mustBig(s string) *big.Int {
 	return n
 }
 
-// ---- run ----------------------------------------------------------------
+// run
 
 func run() error {
 	cfg, err := loadConfig()
@@ -195,7 +181,7 @@ func run() error {
 	}
 	investorAddr := crypto.PubkeyToAddress(investorKey.PublicKey)
 	deployerAddr := crypto.PubkeyToAddress(deployerKey.PublicKey)
-	// Single-operator V1: the deployer wallet is admin/auditor/treasurer/etc.
+	// Single-operator V1: the deployer wallet is admin/auditor/treasurer/etc
 	cfg.auditorAddr = deployerAddr
 
 	api := &apiClient{base: cfg.baseURL, hc: &http.Client{Timeout: 20 * time.Second}}
@@ -304,7 +290,7 @@ func run() error {
 
 func step(msg string) { fmt.Println("--- " + msg) }
 
-// ---- HTTP API client -------------------------------------------------
+// HTTP API client
 
 type apiClient struct {
 	base string
@@ -377,12 +363,11 @@ func (c *apiClient) postJSON(path, bearer string, in, out any, idempotencyKey st
 	return json.Unmarshal(raw, out)
 }
 
-// poll retries fn (done, err) every interval until it returns done=true, an
-// error, or timeout elapses. Every read-model assertion in this harness
-// (compliance allow, record Minted, redemption status transitions) goes
-// through here because the server's projector/reconcile loops only run on
-// their own tickers (5-15s; see cmd/platform/main.go's startBackgroundLoops),
-// never synchronously with the HTTP call that submitted the transaction.
+// poll calls fn every interval until it returns done, an error, or timeout passes.
+// Read-model assertions use it because the server's projectors and reconcile loops
+// run on tickers of 5 to 15 seconds (see startBackgroundLoops in
+// cmd/platform/main.go) and not as part of the HTTP call that submitted the
+// transaction.
 func poll(desc string, timeout, interval time.Duration, fn func() (bool, error)) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
@@ -401,16 +386,16 @@ func poll(desc string, timeout, interval time.Duration, fn func() (bool, error))
 	return fmt.Errorf("timed out waiting for %s", desc)
 }
 
-// ---- chain client: signs/submits investor & treasurer wallet txs ------
+// chain client: signs and sends the wallet transactions
 
 type chainClient struct {
 	eth     *ethclient.Client
 	chainID *big.Int
 }
 
-// sendTx signs a DynamicFeeTx from key's address to (to, data), submits it,
-// and waits for its mined receipt (anvil instamines on submit, so this
-// resolves immediately). Returns an error if the tx reverted.
+// sendTx signs an EIP-1559 transaction from key's address to (to, data), sends it,
+// and waits for its receipt, which arrives at once because anvil mines each
+// transaction on submit. It returns an error if the transaction reverted.
 func (cc *chainClient) sendTx(ctx context.Context, key *ecdsa.PrivateKey, to common.Address, data []byte) (*types.Receipt, error) {
 	from := crypto.PubkeyToAddress(key.PublicKey)
 	nonce, err := cc.eth.PendingNonceAt(ctx, from)
@@ -464,10 +449,9 @@ func waitReceipt(ctx context.Context, eth *ethclient.Client, hash common.Hash) (
 	return nil, fmt.Errorf("receipt for %s not found before deadline", hash.Hex())
 }
 
-// increaseTime and mineEmptyBlock call anvil's evm_* debug RPCs directly
-// through ethclient's underlying *rpc.Client (ethclient itself has no
-// wrapper for these anvil/hardhat-specific methods). Used for the
-// timeout->cancel branch, where redemptionTimeout must actually elapse.
+// increaseTime and mineEmptyBlock call anvil's evm_increaseTime and evm_mine
+// methods through ethclient's underlying rpc.Client, since ethclient has no wrapper
+// for them. The timeout and cancel step needs redemptionTimeout to elapse.
 func (cc *chainClient) increaseTime(ctx context.Context, seconds int64) error {
 	return cc.eth.Client().CallContext(ctx, nil, "evm_increaseTime", seconds)
 }
@@ -476,21 +460,18 @@ func (cc *chainClient) mineEmptyBlock(ctx context.Context) error {
 	return cc.eth.Client().CallContext(ctx, nil, "evm_mine")
 }
 
-// ---- quotes -------------------------------------------------------------
-//
-// Quotes are read straight off the chain: the server exposes no quote
-// endpoint (previewBuy/previewRedeem are plain view functions any client
-// reads itself), the same way this harness builds its own calldata rather
-// than asking the server for it.
+// quotes: the harness reads them from the chain. The server has no quote endpoint
+// (previewBuy and previewRedeem are view functions any client can call), and the
+// harness likewise builds its own calldata.
 
-// call performs a plain eth_call against to with data and returns the raw
-// return bytes, for the view functions the harness reads itself.
+// call performs an eth_call against to with data and returns the raw result, for
+// the view functions the harness reads
 func (cc *chainClient) call(ctx context.Context, to common.Address, data []byte) ([]byte, error) {
 	return cc.eth.CallContract(ctx, ethereum.CallMsg{To: &to, Data: data}, nil)
 }
 
-// previewBuy reads Vault.previewBuy(tokenAmount): the quote-token amount the
-// investor must approve and pass as maxQuoteAmount to Vault.buy.
+// previewBuy reads Vault.previewBuy(tokenAmount), the quote-token amount the
+// investor must approve and pass as maxQuoteAmount to Vault.buy
 func (cc *chainClient) previewBuy(ctx context.Context, vaultAddr common.Address, tokenAmount *big.Int) (*big.Int, error) {
 	vault := bindings.NewVault()
 	data, err := vault.PackPreviewBuy(tokenAmount)
@@ -504,8 +485,8 @@ func (cc *chainClient) previewBuy(ctx context.Context, vaultAddr common.Address,
 	return vault.UnpackPreviewBuy(out)
 }
 
-// previewRedeem reads RedemptionEscrow.previewRedeem(rwaAmount): the quote
-// amount the investor passes as minQuoteOut to requestRedemption.
+// previewRedeem reads RedemptionEscrow.previewRedeem(rwaAmount), the quote amount
+// the investor passes as minQuoteOut to requestRedemption
 func (cc *chainClient) previewRedeem(ctx context.Context, escrowAddr common.Address, rwaAmount *big.Int) (*big.Int, error) {
 	escrow := bindings.NewRedemptionEscrow()
 	data, err := escrow.PackPreviewRedeem(rwaAmount)
@@ -519,8 +500,8 @@ func (cc *chainClient) previewRedeem(ctx context.Context, escrowAddr common.Addr
 	return escrow.UnpackPreviewRedeem(out)
 }
 
-// ---- ERC20 mint/approve ABI (MockERC20.mint is permissionless; approve is
-// standard ERC20) ---------------------------------------------------------
+// ERC-20 mint and approve ABI. TestToken.mint is permissionless, and approve is
+// standard ERC-20.
 
 var erc20MutABI = mustABIJSON(`[
   {"type":"function","name":"mint","stateMutability":"nonpayable","inputs":[{"name":"to","type":"address"},{"name":"amount","type":"uint256"}],"outputs":[]},
@@ -551,10 +532,9 @@ func packApprove(spender common.Address, amount *big.Int) []byte {
 	return data
 }
 
-// ---- RedemptionEscrow.fundRedemption ABI --------------------------------
-// Funding is a role-gated wallet transaction the treasurer submits directly
-// (the server no longer generates its calldata), so the harness encodes it
-// itself, mirroring the web's connected-wallet flow.
+// RedemptionEscrow.fundRedemption ABI. The treasurer sends the role-gated funding
+// transaction from a wallet, so the harness encodes the call itself, as the web
+// app's connected-wallet flow does.
 
 var redemptionEscrowMutABI = mustABIJSON(`[
   {"type":"function","name":"fundRedemption","stateMutability":"nonpayable","inputs":[{"name":"id","type":"uint256"}],"outputs":[]}
@@ -568,10 +548,10 @@ func packFundRedemption(id *big.Int) []byte {
 	return data
 }
 
-// ---- RWAToken ERC-7943 enforcement ABI ----------------------------------
-// Freezing and seizure are admin wallet transactions: the server only observes
-// the resulting events, and has no endpoint that signs either one. The harness
-// therefore encodes them itself, exactly as the admin console does.
+// RWAToken ERC-7943 enforcement ABI. Freezing and seizure are admin wallet
+// transactions. The server only observes the resulting events and has no endpoint
+// that signs either, so the harness encodes them itself, as the admin console
+// does.
 
 var erc7943MutABI = mustABIJSON(`[
   {"type":"function","name":"setFrozenTokens","stateMutability":"nonpayable","inputs":[
@@ -598,11 +578,11 @@ func packForcedTransfer(from, to common.Address, amount *big.Int) []byte {
 	return data
 }
 
-// ---- flow steps ---------------------------------------------------------
+// flow steps
 
-// authenticateAdmin performs the wallet-signature -> JWT admin login: request
-// a challenge for addr, personal_sign the returned message with key, exchange
-// it for a JWT. key must control the server's configured admin address.
+// authenticateAdmin logs in as admin: it requests a challenge for addr, signs the
+// message with personal_sign using key, and exchanges the signature for a JWT. key
+// must control the server's configured admin address
 func authenticateAdmin(api *apiClient, key *ecdsa.PrivateKey, addr common.Address) (string, error) {
 	var ch struct {
 		Message   string `json:"message"`
@@ -637,18 +617,14 @@ func signPersonal(key *ecdsa.PrivateKey, message string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// go-ethereum's crypto.Sign returns v in {0,1}; personal_sign / ecrecover
-	// convention (and this server's eip712.RecoverSigner) expects {27,28}.
+	// crypto.Sign returns v as 0 or 1, and personal_sign and this server's
+	// eip712.RecoverSigner expect 27 or 28
 	sig[64] += 27
 	return sig, nil
 }
 
-// waitServerReady polls /healthz until the platform binary (started by
-// run_e2e.sh just before invoking this program) has finished connecting to
-// Mongo and the chain RPC and is accepting connections. This is the harness's
-// own readiness wait specifically so run_e2e.sh never needs to shell out to
-// curl/wget for it (this sandbox's permission policy denies both; see the
-// package doc comment above).
+// waitServerReady polls /healthz until the platform binary that run_e2e.sh
+// started has connected to MongoDB and the chain RPC and accepts connections
 func waitServerReady(api *apiClient) error {
 	return poll("platform server /healthz", 30*time.Second, 500*time.Millisecond, func() (bool, error) {
 		_, err := api.do(http.MethodGet, "/healthz", "", nil, "")
@@ -656,10 +632,8 @@ func waitServerReady(api *apiClient) error {
 	})
 }
 
-// checkHealthReady confirms /healthz and /readyz agree the platform is up and
-// bound to the configured chain. Unlike before, it does NOT assert a deployed
-// project — nothing is deployed yet at this point (the harness deploys it in
-// the next step, then reads the addresses back).
+// checkHealthReady checks that /healthz and /readyz report the platform up on the
+// configured chain. It does not check for a project, since none is deployed yet.
 func checkHealthReady(api *apiClient, cfg config) error {
 	var health struct {
 		Status  string `json:"status"`
@@ -680,7 +654,7 @@ func checkHealthReady(api *apiClient, cfg config) error {
 	return nil
 }
 
-// projectResponse is the subset of GET /api/v1/project the harness reads.
+// projectResponse is the part of GET /api/v1/project that the harness reads
 type projectResponse struct {
 	ProjectID        string `json:"projectId"`
 	Status           string `json:"status"`
@@ -699,15 +673,13 @@ type projectResponse struct {
 	Auditor string `json:"auditor"`
 }
 
-// deployProject broadcasts RWAFactory.deploy(config) from the admin wallet —
-// deployment is permissionless and no longer a server action — then polls GET
-// /api/v1/project until the server's deployment projector
-// (project.ReconcileDeployment) has observed the ProjectDeployed event,
-// verified the stack, and marked it Active. It populates cfg with the deployed
-// addresses read back from the project record so the rest of the lifecycle
-// (records, buy, redemption) runs against the freshly deployed stack.
+// deployProject broadcasts RWAFactory.deploy(config) from the admin wallet and
+// polls GET /api/v1/project until the deployment projector
+// (project.Service.ReconcileDeployment) has observed the ProjectDeployed event,
+// verified the stack and marked it Active. It fills cfg with the deployed addresses
+// from the project record, which the later steps use.
 func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg *config, deployerKey *ecdsa.PrivateKey, deployerAddr common.Address, profileDigest string) error {
-	// The factory address is a public bootstrap parameter served by GET /config.
+	// the factory address is a public bootstrap value served by GET /api/v1/config
 	var boot struct {
 		ChainID        int64  `json:"chainId"`
 		FactoryAddress string `json:"factoryAddress"`
@@ -724,8 +696,8 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 	if err != nil {
 		return fmt.Errorf("profileDigest %q: %w", profileDigest, err)
 	}
-	// projectId = keccak256(bytes(UUID)) — the exact derivation the server's
-	// ReconcileDeployment uses to bind the event to the stored profile.
+	// projectId is keccak256(bytes(UUID)), the derivation ReconcileDeployment uses to
+	// bind the event to the stored profile
 	projectID := crypto.Keccak256Hash([]byte(cfg.projectUUID))
 
 	config := bindings.ProjectConfig{
@@ -752,12 +724,13 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 		return fmt.Errorf("broadcast RWAFactory.deploy: %w", err)
 	}
 
-	// The server must observe ProjectDeployed, run VerifyDeployment, and reach
-	// Active. Generous window: the indexer poll (5s) + reconcile ticker (10s).
+	// the server must observe ProjectDeployed, verify the deployment and reach Active,
+	// which takes the indexer poll (5s) plus the reconcile ticker (10s) at most, so
+	// the window is generous
 	var proj projectResponse
 	if err := poll("project reaches Active (server-observed deploy + verification)", 120*time.Second, 3*time.Second, func() (bool, error) {
 		if err := api.getJSON("/api/v1/project", "", &proj); err != nil {
-			return false, nil // 404 until the projector creates the record — keep polling
+			return false, nil // 404 until the projector creates the record
 		}
 		switch proj.Status {
 		case "Active":
@@ -771,7 +744,7 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 		return err
 	}
 
-	// Populate cfg with the server-verified deployed addresses.
+	// fill cfg with the addresses the server verified
 	cfg.tokenAddr = common.HexToAddress(proj.Addresses.Token)
 	cfg.supplyCtrlAddr = common.HexToAddress(proj.Addresses.SupplyController)
 	cfg.vaultAddr = common.HexToAddress(proj.Addresses.Vault)
@@ -790,11 +763,10 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 		return fmt.Errorf("GET /api/v1/project: decimals = %d, want 18", proj.Decimals)
 	}
 
-	// The server wires its address-dependent services (records/sales/
-	// redemptions/compliance-status) asynchronously once the project reaches
-	// Active (cmd/platform watchProject rebuilds the app + router). Wait
-	// until a service-gated endpoint stops reporting 501 so the subsequent
-	// lifecycle steps don't race that rebuild.
+	// the server wires its address-dependent services (records, sales, redemptions,
+	// compliance status) asynchronously once the project is Active, when watchProject
+	// in cmd/platform rebuilds the app and router. Wait until a service-gated
+	// endpoint stops returning an error so later steps do not race that rebuild.
 	if err := poll("address-dependent services wired after activation", 60*time.Second, 2*time.Second, func() (bool, error) {
 		_, err := api.do(http.MethodGet, "/api/v1/sales/inventory", "", nil, "")
 		return err == nil, nil
@@ -847,7 +819,7 @@ func allowInvestor(api *apiClient, cfg config, investor common.Address) error {
 	}
 	return poll("investor Allowed in wallet read model", 60*time.Second, 2*time.Second, func() (bool, error) {
 		var wallets []walletStatus
-		// wallet/KYC history is operator/admin-gated.
+		// wallet and KYC history is admin-only
 		if err := api.getJSON("/api/v1/compliance/wallets", cfg.adminBearer, &wallets); err != nil {
 			return false, err
 		}
@@ -860,10 +832,9 @@ func allowInvestor(api *apiClient, cfg config, investor common.Address) error {
 	})
 }
 
-// validateProfile checks the profile via the pure POST /api/v1/profile/validate
-// (it has no persistence side effect), then
-// persists it via the admin-only, create-once POST /api/v1/profile — the
-// only endpoint that durably stores an Asset Profile now.
+// validateProfile checks the profile with the admin-only POST /api/v1/profile/validate,
+// which has no side effects, and then stores it with the admin-only, create-once
+// POST /api/v1/profile
 func validateProfile(api *apiClient, cfg config) (string, error) {
 	raw, err := os.ReadFile(cfg.workDir + "/profile.json")
 	if err != nil {
@@ -875,7 +846,7 @@ func validateProfile(api *apiClient, cfg config) (string, error) {
 		ProfileDigest string   `json:"profileDigest"`
 		CID           string   `json:"cid"`
 	}
-	raw2, err := api.do(http.MethodPost, "/api/v1/profile/validate", "", raw, "")
+	raw2, err := api.do(http.MethodPost, "/api/v1/profile/validate", cfg.adminBearer, raw, "")
 	if err != nil {
 		return "", err
 	}
@@ -920,7 +891,7 @@ func createRecord(api *apiClient, cfg config) (string, error) {
 }
 
 func downloadPackage(api *apiClient, cfg config, recordID string) (string, error) {
-	// package download is operator/admin-gated.
+	// package download is admin-only
 	raw, err := api.do(http.MethodGet, "/api/v1/assets/records/"+recordID+"/package", cfg.adminBearer, nil, "")
 	if err != nil {
 		return "", err
@@ -934,11 +905,11 @@ func downloadPackage(api *apiClient, cfg config, recordID string) (string, error
 
 func signPackage(cfg config, pkgPath, profileDigest string) (string, error) {
 	outPath := cfg.workDir + "/signed-result.json"
-	// The signer binds chain/controller/vault/auditor/projectId/profileDigest
-	// via a REQUIRED --policy trust-root file, not CLI flags. Write
-	// one from the deployed stack the harness observed. Addresses are compared
-	// case-insensitively; chainId is a decimal string; projectId is the UUID
-	// verbatim; maxAttestationLifetimeHours is omitted to use the signer default.
+	// the signer takes chain, controller, vault, auditor, projectId and profileDigest
+	// from a required --policy file and not from flags. The harness writes one from
+	// the deployed stack. Addresses compare case-insensitively, chainId is a decimal
+	// string, projectId is the UUID unchanged, and omitting
+	// maxAttestationLifetimeHours uses the signer's default.
 	policyPath := cfg.workDir + "/signer-policy.json"
 	policy := map[string]string{
 		"chainId":       cfg.chainID.String(),
@@ -974,11 +945,10 @@ func signPackage(cfg config, pkgPath, profileDigest string) (string, error) {
 }
 
 // mintOnChain broadcasts SupplyController.mint(attestation, signature) from the
-// admin wallet — the auditor-signed mint is no longer relayed by the server.
-// The exact MintAttestation the auditor signed is read back from the .rwa
-// package's typed-data.json (the same bytes the signer signed), and the
-// signature from the signer's signed-result.json; the server then observes the
-// resulting Minted event and flips the record to Minted (ReconcileMinted).
+// admin wallet. It reads the MintAttestation that the auditor signed from the
+// package's typed-data.json and the signature from the signer's signed-result.json.
+// The server then observes the Minted event and marks the record Minted
+// (ReconcileMinted).
 func mintOnChain(ctx context.Context, chain *chainClient, cfg config, deployerKey *ecdsa.PrivateKey, pkgPath, signedResultPath string) error {
 	zipBytes, err := os.ReadFile(pkgPath)
 	if err != nil {
@@ -1070,7 +1040,7 @@ func waitRecordMinted(api *apiClient, cfg config, recordID string) error {
 			RecordID string `json:"recordId"`
 			Status   string `json:"status"`
 		}
-		// the full asset-record list is operator/admin-gated.
+		// the full asset record list is admin-only
 		if err := api.getJSON("/api/v1/assets/records", cfg.adminBearer, &records); err != nil {
 			return false, err
 		}
@@ -1089,8 +1059,8 @@ func buy(ctx context.Context, api *apiClient, chain *chainClient, cfg config, in
 		return err
 	}
 
-	// MockERC20.mint is permissionless; the investor mints its own quote
-	// tokens and approves the Vault, exactly like E2EFlow.s.sol's _buy().
+	// TestToken.mint is permissionless, so the investor mints its own quote tokens
+	// and approves the Vault, as E2EFlow.s.sol's _buy() does
 	if _, err := chain.sendTx(ctx, investorKey, cfg.quoteAddr, packMint(investor, quoteAmount)); err != nil {
 		return fmt.Errorf("mint quote tokens: %w", err)
 	}
@@ -1112,7 +1082,7 @@ func buy(ctx context.Context, api *apiClient, chain *chainClient, cfg config, in
 			Buyer       string `json:"buyer"`
 			TokenAmount string `json:"tokenAmount"`
 		}
-		// the full purchase history list is operator/admin-gated.
+		// the full purchase history list is admin-only
 		if err := api.getJSON("/api/v1/sales/purchases", cfg.adminBearer, &purchases); err != nil {
 			return false, err
 		}
@@ -1125,10 +1095,10 @@ func buy(ctx context.Context, api *apiClient, chain *chainClient, cfg config, in
 	})
 }
 
-// requestRedemption approves the RedemptionEscrow for rwaAmount and submits
-// requestRedemption from the investor's wallet, decoding the new request's
-// id directly from the RedemptionRequested log in the tx receipt (avoids a
-// racy poll-and-diff against /redemptions to find "the new one").
+// requestRedemption approves the RedemptionEscrow for rwaAmount and sends
+// requestRedemption from the investor's wallet. It takes the new request's id from
+// the RedemptionRequested log in the receipt, which avoids polling and diffing the
+// redemption list to find the new one.
 func requestRedemption(ctx context.Context, api *apiClient, chain *chainClient, cfg config, investorKey *ecdsa.PrivateKey, investor common.Address, rwaAmount *big.Int) (string, error) {
 	minQuoteOut, err := chain.previewRedeem(ctx, cfg.escrowAddr, rwaAmount)
 	if err != nil {
@@ -1189,8 +1159,8 @@ func fundAndClaim(ctx context.Context, api *apiClient, chain *chainClient, cfg c
 		return fmt.Errorf("bad quoteAmount %q", r.QuoteAmount)
 	}
 
-	// treasurer==deployer by default (Deploy.s.sol); mint+approve then fund,
-	// mirroring E2EFlow.s.sol's _fundAndClaim().
+	// the treasurer is the deployer here; mint and approve, then fund, as
+	// E2EFlow.s.sol's _fundAndClaim() does
 	if _, err := chain.sendTx(ctx, treasurerKey, cfg.quoteAddr, packMint(treasurer, quoteAmount)); err != nil {
 		return fmt.Errorf("mint quote for funding: %w", err)
 	}
@@ -1198,9 +1168,8 @@ func fundAndClaim(ctx context.Context, api *apiClient, chain *chainClient, cfg c
 		return fmt.Errorf("approve escrow for funding: %w", err)
 	}
 
-	// Funding is now a role-gated wallet tx the treasurer submits directly
-	// (no server fund-calldata endpoint); encode fundRedemption locally,
-	// mirroring the web's connected-wallet flow.
+	// funding is a role-gated wallet transaction the treasurer sends, so the harness
+	// encodes fundRedemption itself, as the web app's connected-wallet flow does
 	fundID, ok := new(big.Int).SetString(id, 10)
 	if !ok {
 		return fmt.Errorf("bad redemption id %q", id)
@@ -1209,10 +1178,8 @@ func fundAndClaim(ctx context.Context, api *apiClient, chain *chainClient, cfg c
 		return fmt.Errorf("submit fund calldata: %w", err)
 	}
 
-	// Mine one more block so confirmations>=CHAIN_CONFIRMATIONS(=1) and the
-	// read model's `claimable` convenience flag flips true (architecture:
-	// "A Pending redemption is never a payment guarantee" — same idea
-	// applies to Funded-but-not-yet-confirmed).
+	// mine one more block so the confirmations reach the configured 1 and the
+	// read model's claimable flag turns true
 	if err := chain.mineEmptyBlock(ctx); err != nil {
 		return fmt.Errorf("mine block after funding: %w", err)
 	}
@@ -1238,7 +1205,7 @@ func fundAndClaim(ctx context.Context, api *apiClient, chain *chainClient, cfg c
 	if err != nil {
 		return err
 	}
-	// claimRedemption is permissionless; any funded wallet can submit it.
+	// anyone can send claimRedemption
 	if _, err := chain.sendTx(ctx, treasurerKey, cfg.escrowAddr, claimData); err != nil {
 		return fmt.Errorf("submit RedemptionEscrow.claimRedemption: %w", err)
 	}
@@ -1281,9 +1248,9 @@ func timeoutAndCancel(ctx context.Context, api *apiClient, chain *chainClient, c
 	})
 }
 
-// enforcementState is the admin-only GET /api/v1/project/enforcement view the
-// server projects from RWAToken's Frozen and ForcedTransfer events. It is not
-// on the public GET /api/v1/project: naming frozen wallets is operational
+// enforcementState is the admin-only GET /api/v1/project/enforcement view, which
+// the server projects from RWAToken's Frozen and ForcedTransfer events. It is not
+// on the public GET /api/v1/project, because naming frozen wallets is operational
 // compliance data.
 type enforcementState struct {
 	FrozenBalances     map[string]string `json:"frozenBalances"`
@@ -1296,8 +1263,9 @@ type enforcementState struct {
 	} `json:"lastForcedTransfer"`
 }
 
-// frozenAmount returns the projected frozen amount for holder, case-insensitively
-// (the projection checksums its keys), and whether an entry exists at all.
+// frozenAmount returns the projected frozen amount for holder, matching the
+// address ignoring case because the projection checksums its keys, and whether an
+// entry exists
 func (e enforcementState) frozenAmount(holder common.Address) (string, bool) {
 	for addr, amount := range e.FrozenBalances {
 		if strings.EqualFold(addr, holder.Hex()) {
@@ -1307,15 +1275,15 @@ func (e enforcementState) frozenAmount(holder common.Address) (string, bool) {
 	return "", false
 }
 
-// enforcementLifecycle drives the ERC-7943 admin powers against the live chain
-// and proves the server's read model follows: freeze part of the investor's
-// balance, seize more than the unfrozen part (which reduces the freeze), then
-// release what is left. Every write is a wallet transaction the admin signs;
-// the server only indexes the events, so each assertion polls GET /project
-// rather than reading anything back from the transaction it just sent.
+// enforcementLifecycle sends the ERC-7943 admin transactions and checks that the
+// server's read model follows. It freezes part of the investor's balance, seizes
+// more than the unfrozen part, which reduces the freeze, and then releases what is
+// left. The admin signs every write and the server only indexes the events, so each
+// assertion polls GET /project/enforcement and does not read anything back from the
+// transaction just sent.
 //
-// It runs last so the redemption assertions above are made against an
-// unencumbered balance.
+// It runs last so the redemption assertions above run against an unfrozen
+// balance.
 func enforcementLifecycle(
 	ctx context.Context,
 	api *apiClient,
@@ -1324,7 +1292,7 @@ func enforcementLifecycle(
 	adminKey *ecdsa.PrivateKey,
 	adminAddr, investor common.Address,
 ) error {
-	// The seizure destination has to be compliance-Allowed, admin or not.
+	// the seizure destination must be compliance-Allowed, even if it is the admin
 	if err := allowRecoveryWallet(api, cfg, adminAddr); err != nil {
 		return fmt.Errorf("allow recovery wallet: %w", err)
 	}
@@ -1349,10 +1317,10 @@ func enforcementLifecycle(
 		return err
 	}
 
-	// The investor holds 60 RWA here (100 bought, 40 redeemed and claimed, 10
-	// escrowed and returned by the cancel), so a 25 freeze leaves 35 movable.
-	// Seizing 40 therefore has to release 5 frozen tokens first, and the
-	// projection must land on 20 rather than the original 25.
+	// the investor holds 60 RWA here (100 bought, 40 redeemed and claimed, and 10
+	// escrowed and returned by the cancel), so a freeze of 25 leaves 35 movable.
+	// Seizing 40 must release 5 frozen tokens first, so the projection should show 20
+	// and not the original 25.
 	if _, err := chain.sendTx(ctx, adminKey, cfg.tokenAddr, packForcedTransfer(investor, adminAddr, amount40)); err != nil {
 		return fmt.Errorf("submit forcedTransfer: %w", err)
 	}
@@ -1370,8 +1338,8 @@ func enforcementLifecycle(
 		return err
 	}
 
-	// Zero releases the hold, and the holder drops out of the map entirely
-	// rather than lingering with a zero balance.
+	// zero releases the hold, and the holder leaves the map instead of staying with a
+	// zero balance
 	if _, err := chain.sendTx(ctx, adminKey, cfg.tokenAddr, packSetFrozenTokens(investor, big.NewInt(0))); err != nil {
 		return fmt.Errorf("submit setFrozenTokens(0): %w", err)
 	}
@@ -1382,9 +1350,9 @@ func enforcementLifecycle(
 		})
 }
 
-// allowRecoveryWallet marks addr Allowed so it can receive seized tokens. Same
-// admin compliance endpoint as the investor onboarding above, with its own
-// idempotency key.
+// allowRecoveryWallet marks addr Allowed so it can receive seized tokens. It uses
+// the admin compliance endpoint that onboarding uses, with its own idempotency
+// key.
 func allowRecoveryWallet(api *apiClient, cfg config, addr common.Address) error {
 	var tx struct{ TxHash, Status string }
 	if err := api.postJSON("/api/v1/compliance/status", cfg.adminBearer, map[string]any{

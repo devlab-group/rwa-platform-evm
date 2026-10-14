@@ -48,11 +48,9 @@ func TestRateLimitPerIPIsolation(t *testing.T) {
 	}
 }
 
-// TestRateLimitEvictsStaleBuckets checks bucket eviction: a bucket untouched
-// for longer than ttl must be evicted on a later sweep, instead of the map
-// growing forever under a flood of rotating IPv6 source addresses — modeled
-// here with a fake clock and tiny ttl/sweep windows so the test doesn't need
-// to sleep for the real 10-minute default.
+// TestRateLimitEvictsStaleBuckets checks that a bucket untouched for longer
+// than ttl is evicted on a later sweep, so rotating source addresses cannot
+// grow the map forever. A fake clock and short windows avoid real sleeps.
 func TestRateLimitEvictsStaleBuckets(t *testing.T) {
 	now := time.Unix(0, 0)
 	clock := func() time.Time { return now }
@@ -65,8 +63,8 @@ func TestRateLimitEvictsStaleBuckets(t *testing.T) {
 		t.Fatalf("bucketCount after 50 requests from 1 IP = %d, want 1", got)
 	}
 
-	// A different IP arrives well past ttl+sweep later; the sweep triggered
-	// by ITS request must evict the first IP's now-stale bucket.
+	// A different IP arrives well past ttl+sweep, and its request's sweep must
+	// evict the first IP's stale bucket
 	now = now.Add(10 * time.Second)
 	doRequest(handler, "10.0.2.2:1")
 
@@ -75,8 +73,8 @@ func TestRateLimitEvictsStaleBuckets(t *testing.T) {
 	}
 }
 
-// TestRateLimitDoesNotEvictActiveBuckets: a bucket that keeps getting used
-// within ttl must never be evicted, regardless of how many sweeps run.
+// TestRateLimitDoesNotEvictActiveBuckets checks that a bucket used within ttl
+// survives any number of sweeps
 func TestRateLimitDoesNotEvictActiveBuckets(t *testing.T) {
 	now := time.Unix(0, 0)
 	clock := func() time.Time { return now }

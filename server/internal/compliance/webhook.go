@@ -19,67 +19,59 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// ErrInvalidSignature is returned when the webhook HMAC does not verify.
+// ErrInvalidSignature is returned when the webhook HMAC does not verify
 var ErrInvalidSignature = errors.New("compliance: invalid webhook signature")
 
-// ErrReplayed is returned for a webhook payload already processed once —
-// either a byte-for-byte resend (same payload hash) or the same logical
-// event reserialized/re-signed under the same (provider,eventId).
+// ErrReplayed is returned for a delivery that was already processed, either a
+// byte-for-byte resend (same payload hash) or the same (provider, eventId)
+// resent with different bytes
 var ErrReplayed = errors.New("compliance: webhook payload already processed (replay)")
 
-// ErrStale is returned when a webhook's OccurredAt is outside the bounded
-// delivery window, or is not strictly newer than the latest already-applied
-// decision for the same address. Deliveries must fall inside a bounded
-// window, and newer/older decisions have a defined ordering.
+// ErrStale is returned when a webhook's occurredAt is outside the delivery
+// window, or when a newer decision for the same address already holds the
+// claim
 var ErrStale = errors.New("compliance: webhook decision is stale (outside the delivery window, or older than an already-applied decision)")
 
-// ErrOwnershipNotVerified is returned when the webhook targets a wallet
-// that has not completed the ownership challenge and the caller did not
-// pass allowManualOverride.
+// ErrOwnershipNotVerified is returned when the webhook targets a wallet that
+// has not completed the ownership challenge and allowManualOverride is not
+// set
 var ErrOwnershipNotVerified = errors.New("compliance: wallet has not proven ownership; requires a documented manual override")
 
 const (
-	// MaxWebhookAge bounds how old a delivery's occurredAt may be — the
-	// bounded delivery window. Without it, a correctly signed decision that
-	// was captured but never delivered remains valid indefinitely.
+	// MaxWebhookAge is how old a delivery's occurredAt may be. Without a limit,
+	// a correctly signed decision that was captured and held back would stay
+	// valid indefinitely.
 	MaxWebhookAge = 24 * time.Hour
-	// MaxWebhookClockSkewAhead tolerates modest clock drift between this
-	// server and the provider without accepting an implausibly
-	// far-future occurredAt.
+	// MaxWebhookClockSkewAhead is how far occurredAt may be ahead of this
+	// server's clock, to tolerate drift between it and the provider
 	MaxWebhookClockSkewAhead = 5 * time.Minute
-	// MaxValidUntilHorizon bounds how far in the future a compliance
-	// validUntil may be — an out-of-policy-expiration ceiling, independent
-	// of rejecting a negative value outright.
+	// MaxValidUntilHorizon is how far in the future a validUntil may be
 	MaxValidUntilHorizon = 100 * 365 * 24 * time.Hour // ~100 years
 )
 
-// WebhookPayload is the generic (provider-agnostic) KYC decision shape the
-// platform expects. Provider-specific KYC adapters are out of scope; this is
-// the minimal contract the platform commits to. Provider, EventID, and
-// OccurredAt are all required: together they're the replay/freshness identity
-// of a delivery, not optional metadata.
+// WebhookPayload is the provider-agnostic KYC decision the platform processes.
+// Provider, EventID and OccurredAt are required, because together they identify
+// a delivery for replay and freshness checks.
 type WebhookPayload struct {
 	EventID  string `json:"eventId"`
 	Address  string `json:"address"`
 	Provider string `json:"provider"`
-	Status   string `json:"status"` // "Allowed" | "Blocked" | "Pending" (api Schemas.WebhookEvent.outcome)
-	// OccurredAt is a Unix-seconds timestamp for when the provider made
-	// this decision, covered by the same HMAC signature as the rest of
-	// the payload — a signed occurrence timestamp.
+	Status   string `json:"status"` // "Allowed", "Blocked" or "Pending"
+	// OccurredAt is the Unix time in seconds at which the provider made the
+	// decision. The generic HMAC signature covers it with the rest of the
+	// payload.
 	OccurredAt int64 `json:"occurredAt"`
 	ValidUntil int64 `json:"validUntil,omitempty"`
 }
 
-// VerifyHMAC reports whether signatureHex (hex-encoded, optionally
-// "0x"-prefixed) is a valid HMAC-SHA256 of payload under secret. It uses a
-// constant-time comparison to avoid timing side channels.
+// VerifyHMAC reports whether signatureHex (hex, optionally "0x"-prefixed) is a
+// valid HMAC-SHA256 of payload under secret, compared in constant time.
 //
-// An empty secret ALWAYS fails, independent of signatureHex: HMAC-SHA256
-// with an empty key is a well-defined, publicly computable function, so
-// treating it as "valid" would let anyone forge a signature for an
-// unconfigured webhook. config.Load's production checks are
-// the primary defense (see MinWebhookSecretBytes); this is the
-// defense-in-depth backstop for every other environment/call site.
+// An empty secret always fails. HMAC with an empty key is computable by anyone,
+// so accepting it would let anyone forge a signature for an unconfigured
+// webhook. config.Load also rejects missing and short secrets where it
+// requires them (see MinWebhookSecretBytes), and this check covers every other
+// caller.
 func VerifyHMAC(payload []byte, signatureHex, secret string) bool {
 	if secret == "" {
 		return false
@@ -95,24 +87,22 @@ func VerifyHMAC(payload []byte, signatureHex, secret string) bool {
 	return subtle.ConstantTimeCompare(expected, given) == 1
 }
 
-// WebhookService validates and records inbound KYC webhook deliveries.
+// WebhookService validates and records inbound KYC webhook deliveries
 type WebhookService struct {
 	events    repository.KYCEventRepository
 	investors repository.InvestorRepository
 	secret    string
 }
 
-// NewWebhookService constructs a WebhookService.
+// NewWebhookService constructs a WebhookService
 func NewWebhookService(events repository.KYCEventRepository, investors repository.InvestorRepository, hmacSecret string) *WebhookService {
 	return &WebhookService{events: events, investors: investors, secret: hmacSecret}
 }
 
-// Process verifies the HMAC signature, rejects a replayed payload, and
-// requires the target wallet to have already proven ownership unless
-// allowManualOverride is set: the server must not accept a wallet address
-// from a KYC webhook unless the wallet has previously proven ownership, or
-// the operator explicitly performs a documented manual override. It returns
-// the parsed decision for the caller to relay on-chain via SubmitStatus.
+// Process verifies the HMAC signature of a generic-shape webhook, parses the
+// payload and passes it to ProcessDecision. It returns the accepted decision,
+// which the WebhookReconciler relays on-chain. A wallet that has not proven
+// ownership is rejected unless allowManualOverride is set.
 func (s *WebhookService) Process(ctx context.Context, payload []byte, signatureHex string, allowManualOverride bool) (WebhookPayload, error) {
 	if !VerifyHMAC(payload, signatureHex, s.secret) {
 		return WebhookPayload{}, ErrInvalidSignature
@@ -124,26 +114,19 @@ func (s *WebhookService) Process(ctx context.Context, payload []byte, signatureH
 	return s.ProcessDecision(ctx, payload, wp, allowManualOverride)
 }
 
-// ProcessDecision runs the provider-INDEPENDENT half of webhook handling on an
-// already-authenticated, already-parsed decision: byte-for-byte replay dedup,
-// field validation/normalization, the wallet-ownership requirement, and the
-// durable inbox/outbox write. It is what a provider adapter (internal/kyc)
-// calls after it has verified a provider-native signature (Sumsub
-// X-Payload-Digest, Onfido X-SHA2-Signature) and mapped the provider payload to
-// this generic WebhookPayload — the signature/parse step Process does for the
-// generic HMAC shape is exactly what those adapters replace, so it must not run
-// twice. rawForHash is the exact raw delivery bytes, hashed for replay dedup
-// (pass the raw request body). wp's fields are validated and normalized here,
-// so a caller need not pre-validate them.
+// ProcessDecision handles an already-authenticated, already-parsed decision. It
+// rejects a repeated payload, validates and normalizes wp, requires proven
+// wallet ownership unless allowManualOverride is set, and durably records the
+// event for the reconciler. The KYC webhook handler calls it after a provider
+// adapter (internal/kyc) has verified the provider's own signature and mapped
+// the payload to a WebhookPayload. rawForHash is the raw request body, hashed
+// to detect resends.
 func (s *WebhookService) ProcessDecision(ctx context.Context, rawForHash []byte, wp WebhookPayload, allowManualOverride bool) (WebhookPayload, error) {
 	sum := sha256.Sum256(rawForHash)
 	payloadHash := hex.EncodeToString(sum[:])
-	// Fast-path only: under a genuine race between two concurrent
-	// deliveries of the same payload, both can pass this check before
-	// either has Create()d — that's fine, since it's just an optimization
-	// to skip ownership-verification work for an ALREADY-known replay; the
-	// real, atomic authority is Create's unique-payloadHash rejection
-	// below, whose error this function maps to ErrReplayed either way.
+	// Fast path only. Two concurrent deliveries of one payload can both pass
+	// this check, and the atomic check is the unique payloadHash constraint in
+	// Create below, which also maps to ErrReplayed
 	if exists, err := s.events.Exists(ctx, payloadHash); err != nil {
 		return WebhookPayload{}, err
 	} else if exists {
@@ -153,9 +136,7 @@ func (s *WebhookService) ProcessDecision(ctx context.Context, rawForHash []byte,
 	if wp.Status != "Allowed" && wp.Status != "Blocked" && wp.Status != "Pending" {
 		return WebhookPayload{}, fmt.Errorf("compliance: unsupported status %q", wp.Status)
 	}
-	// provider and eventId are required identity fields, not
-	// optional metadata — an empty value can never satisfy the
-	// (provider,eventId) uniqueness constraint meaningfully.
+	// provider and eventId together identify the delivery, so neither may be empty
 	if wp.Provider == "" {
 		return WebhookPayload{}, errors.New("compliance: webhook payload missing required provider")
 	}
@@ -165,7 +146,7 @@ func (s *WebhookService) ProcessDecision(ctx context.Context, rawForHash []byte,
 	if !common.IsHexAddress(wp.Address) {
 		return WebhookPayload{}, errors.New("compliance: webhook payload address is not a valid hex address")
 	}
-	wp.Address = common.HexToAddress(wp.Address).Hex() // checksummed/normalized before any lookup, storage, or relay
+	wp.Address = common.HexToAddress(wp.Address).Hex() // checksummed before any lookup, storage or relay
 
 	if wp.OccurredAt <= 0 {
 		return WebhookPayload{}, errors.New("compliance: webhook payload missing required occurredAt")
@@ -179,9 +160,8 @@ func (s *WebhookService) ProcessDecision(ctx context.Context, rawForHash []byte,
 		return WebhookPayload{}, fmt.Errorf("%w: occurredAt %s is older than the %s delivery window", ErrStale, occurredAt, MaxWebhookAge)
 	}
 
-	// Reject a negative validUntil BEFORE any int64->uint64
-	// conversion happens (the caller casts this for the on-chain call),
-	// and cap how far in the future one may be.
+	// Reject a negative validUntil before the later int64 to uint64 conversion
+	// for the on-chain call, and cap how far ahead it may be
 	if wp.ValidUntil < 0 {
 		return WebhookPayload{}, errors.New("compliance: webhook validUntil must not be negative")
 	}
@@ -206,20 +186,13 @@ func (s *WebhookService) ProcessDecision(ctx context.Context, rawForHash []byte,
 
 	eventKey := kycEventIDKey(wp.Provider, wp.EventID)
 
-	// Durably record the delivery in the append-only kyc_events
-	// history FIRST — as Claiming — BEFORE advancing the per-address claim.
-	// The reverse order (ClaimLatestForAddress, then Create) is not atomic:
-	// if Create failed after the claim advanced, the claim pointed at an
-	// event that did not exist, the same (provider,eventId) could no longer
-	// win the "strictly newer" claim on retry (returned ErrReplayed), and any
-	// older Accepted event was superseded — so a legitimate newest Blocked
-	// decision could disappear from the durable outbox and never reach the
-	// chain. Ordering the durable write first (and having the reconciler
-	// re-resolve any orphaned Claiming event) guarantees the decision is
-	// never lost by a transient failure at the claim/finalize boundary.
-	// Create still enforces the payloadHash and (provider,eventId) uniqueness
-	// constraints atomically, so a byte-identical or reserialized resend is
-	// rejected as a replay rather than double-recorded.
+	// Record the delivery in the kyc_events history as Claiming before
+	// advancing the per-address claim. If the claim advanced first and Create
+	// then failed, the claim would point at a missing event, a retry could not
+	// win the claim again, and a newest Blocked decision could be lost. With
+	// this order a failure between the two steps leaves a Claiming event that
+	// the reconciler resolves. Create enforces the unique payloadHash and
+	// (provider, eventId) constraints, so a resend is rejected as a replay.
 	event := &models.KYCEvent{
 		ID: uuid.NewString(), Address: wp.Address, Status: wp.Status, Provider: wp.Provider, EventID: wp.EventID,
 		Outcome: wp.Status, ApplyStatus: models.KYCApplyClaiming, ValidUntil: wp.ValidUntil, OccurredAt: occurredAt,
@@ -227,32 +200,27 @@ func (s *WebhookService) ProcessDecision(ctx context.Context, rawForHash []byte,
 	}
 	if err := s.events.Create(ctx, event); err != nil {
 		if errors.Is(err, repository.ErrAlreadyExists) {
-			// A resend of an already-durable decision (same payload hash, or
-			// the same logical (provider,eventId) reserialized as different
-			// bytes). If a prior attempt died before its claim/finalize
-			// completed, the stored event is left Claiming and the reconciler
-			// repairs it independently of this HTTP retry — so reporting
-			// replay here never loses the decision.
+			// A resend of a stored decision. If the earlier attempt died before
+			// finalizing, the event stays Claiming and the reconciler resolves it
+			// regardless of this retry, so reporting a replay loses nothing
 			return WebhookPayload{}, ErrReplayed
 		}
 		return WebhookPayload{}, err
 	}
 
-	// Advance the per-address claim to this now-durable event and resolve its
-	// outbox state: Accepted/Recorded if it holds the claim, else Superseded
-	// by the deterministic (occurredAt,eventKey) ordering. A transient
-	// failure here leaves the event Claiming and durable — the reconciler
-	// finalizes it on a later tick — so the decision survives even though this
-	// call returns an error.
+	// Advance the per-address claim to the stored event and set its outbox
+	// state: Accepted or Recorded if it holds the claim, otherwise Superseded
+	// by the (occurredAt, eventKey) ordering. A failure here leaves the event
+	// Claiming, and the reconciler finalizes it on a later tick.
 	holds, err := finalizeClaim(ctx, s.events, event)
 	if err != nil {
 		return WebhookPayload{}, err
 	}
 	if !holds {
-		// A newer-or-equal decision for this address already holds the claim.
-		// This delivery is durably recorded as Superseded history but must
-		// not be applied on-chain. Distinguish an exact (provider,eventId)
-		// re-claim (replay) from a genuinely older/lower decision (stale).
+		// A newer or equal decision already holds the claim. This delivery is
+		// stored as Superseded and is not applied on-chain. The same
+		// (provider, eventId) holding the claim is a replay, anything else is
+		// stale.
 		if currentKey, err := s.events.CurrentClaimEventKey(ctx, wp.Address); err == nil && currentKey == eventKey {
 			return WebhookPayload{}, ErrReplayed
 		}
@@ -262,17 +230,14 @@ func (s *WebhookService) ProcessDecision(ctx context.Context, rawForHash []byte,
 	return wp, nil
 }
 
-// finalizeClaim resolves a durably-created (Claiming) event by running the
-// atomic per-address claim compare-and-set and promoting the event to its
-// resolved outbox state: it holds the claim -> Accepted (Allowed/Blocked,
-// queued for the reconciler) or Recorded (Pending, no on-chain effect); a
-// newer decision holds the claim -> Superseded. It is idempotent and safe to
-// call from both WebhookService.Process and the reconciler's repair path:
-// re-finalizing an event that already holds the claim
-// re-observes holds=true via CurrentClaimEventKey (its own (occurredAt,
-// eventKey) is not strictly newer than itself, but it IS the current claim)
-// and leaves the resolved state intact. Returns whether the event holds the
-// claim after the call.
+// finalizeClaim resolves a stored Claiming event. It runs the per-address claim
+// compare-and-set and sets the event to Accepted (Allowed or Blocked, queued
+// for the reconciler), Recorded (Pending, no on-chain effect) or, if a newer
+// decision holds the claim, Superseded. It is idempotent, so both
+// ProcessDecision and the reconciler can call it: an event that already holds
+// the claim is not strictly newer than itself, but CurrentClaimEventKey shows
+// it holds the claim, so its state is unchanged. It returns whether the event
+// holds the claim.
 func finalizeClaim(ctx context.Context, events repository.KYCEventRepository, e *models.KYCEvent) (bool, error) {
 	eventKey := kycEventIDKey(e.Provider, e.EventID)
 	won, err := events.ClaimLatestForAddress(ctx, e.Address, e.OccurredAt, eventKey)
@@ -302,9 +267,7 @@ func finalizeClaim(ctx context.Context, events repository.KYCEventRepository, e 
 	return holds, nil
 }
 
-// kycEventIDKey builds the deterministic identity key ClaimLatestForAddress
-// uses as the (occurredAt,eventKey) tie-break's secondary component. MUST
-// match every KYCEventRepository implementation's own derivation exactly
-// (memory and mongodb each build the identical string independently, since
-// neither depends on this package).
+// kycEventIDKey is the eventKey that ClaimLatestForAddress compares after
+// occurredAt. It must equal the string the memory and mongodb repositories
+// derive on their own, since neither imports this package.
 func kycEventIDKey(provider, eventID string) string { return provider + "|" + eventID }

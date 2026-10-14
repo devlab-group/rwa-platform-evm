@@ -1,12 +1,8 @@
 // Minimal promise wrapper over a single IndexedDB key/value object store.
 //
-// The admin JWT (lib/authSession.ts) is persisted here so it survives a page
-// reload. Browser storage for this bearer token is a deliberate, accepted
-// tradeoff — an earlier design kept the session in memory only. We use
-// IndexedDB rather than localStorage because it's async, isn't enumerable as
-// plain strings on `window.localStorage`, and fits the "one owner per key"
-// shape we want. It's still same-origin readable, so the usual XSS caveat
-// applies and the token stays short-lived (server-set `expiresAt`).
+// The admin JWT (lib/authSession.ts) is stored here so it survives a page
+// reload. Any script on the same origin can read IndexedDB, so the token stays
+// short-lived (the server sets `expiresAt`).
 const DB_NAME = "rwa";
 const STORE = "kv";
 const DB_VERSION = 1;

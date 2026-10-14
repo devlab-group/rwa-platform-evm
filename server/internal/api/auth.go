@@ -14,10 +14,9 @@ import (
 // createAuthChallenge implements POST /auth/challenge (operationId
 // createAuthChallenge).
 // Public step 1 of admin wallet login: issues a single-use, time-limited
-// message for the connected wallet to personal_sign. Anyone may request one —
-// only createSession's signer-recovery + admin-address comparison decides
-// authorization, so this deliberately does not reveal whether the address is
-// the admin.
+// message for the wallet to personal_sign. Anyone may request one. Authorization
+// is decided in createSession by recovering the signer and comparing it with the
+// admin address, so this step does not reveal whether the address is the admin.
 func (app *App) createAuthChallenge(c *gin.Context) {
 	if app.AdminChallenges == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "admin auth is not configured on this server")
@@ -41,8 +40,8 @@ func (app *App) createAuthChallenge(c *gin.Context) {
 // createSession implements POST /auth/session (operationId createSession).
 // Public step 2 of admin wallet login: recovers the signer of the personal_sign
 // signature over the challenge message and, if it equals the configured admin
-// address, issues a stateless HMAC JWT. There is no DELETE counterpart — the
-// JWT is stateless, so logout is client-side (drop the token).
+// address, issues an HS256 JWT. There is no DELETE counterpart; the JWT is
+// stateless, so logout drops the token on the client.
 func (app *App) createSession(c *gin.Context) {
 	if app.AdminChallenges == nil || len(app.JWTSecret) == 0 || app.AdminAddress == "" {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "admin auth is not configured on this server")
@@ -62,10 +61,9 @@ func (app *App) createSession(c *gin.Context) {
 		return
 	}
 
-	// Verify enforces single-use + expiry and recovers the signer. Any failure
-	// here — unknown/expired challenge, replay, bad signature, address mismatch,
-	// or a signer that is simply not the admin — collapses to one opaque 401 so
-	// a login probe never learns which case it hit.
+	// Verify enforces single use and expiry and recovers the signer. An unknown
+	// or expired challenge, a replay, a bad signature, an address mismatch and a
+	// non-admin signer all return the same 401, so a probe cannot tell them apart
 	recovered, err := app.AdminChallenges.Verify(c.Request.Context(), body.Address, sigBytes)
 	if err != nil || !strings.EqualFold(recovered.Hex(), common.HexToAddress(app.AdminAddress).Hex()) {
 		fail(c, http.StatusUnauthorized, CodeUnauthorized, "invalid credentials")
@@ -78,8 +76,7 @@ func (app *App) createSession(c *gin.Context) {
 		failInternal(c, err)
 		return
 	}
-	// Attribute the admin login in the operational audit trail (a security
-	// event worth recording); best-effort, never blocks issuing the token.
+	// Record the login in the audit trail; best effort, never blocks the token
 	app.recordAudit(c.Request.Context(), "auth", adminAddr, "auth.login", adminAddr, nil)
 	c.JSON(http.StatusOK, dto.AuthSession{
 		Token: token, ExpiresAt: expiresAt.Unix(), Role: string(auth.RoleAdmin), Address: adminAddr,

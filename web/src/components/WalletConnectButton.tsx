@@ -3,14 +3,12 @@ import { clearSession } from "../lib/authSession";
 import { shortenAddress } from "../lib/format";
 
 /**
- * Global header wallet affordance, present on every screen. When no wallet is
- * connected it's the single "Connect wallet" entry point (and, on admin, the
- * prerequisite for signing in — see components/Login.tsx). When connected it
- * shows the shortened address and a Disconnect button.
+ * Header wallet control, shown on every screen. Without a connected wallet it
+ * is a "Connect wallet" button. With one it shows the shortened address and a
+ * Disconnect button.
  *
- * Disconnecting is a full sign-out: it forgets the wallet locally and drops
- * any admin JWT, since an admin session is only meaningful while the wallet
- * that proved the admin address stays connected.
+ * Disconnect also clears the admin JWT: it forgets the wallet locally and signs
+ * the admin out.
  */
 export function WalletConnectButton() {
   const wallet = useWalletContext();

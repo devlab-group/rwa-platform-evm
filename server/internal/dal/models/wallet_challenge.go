@@ -3,7 +3,7 @@ package models
 import "time"
 
 // WalletChallenge is a one-time wallet-ownership proof challenge
-// (collection: wallet_challenges).
+// (collection: wallet_challenges)
 type WalletChallenge struct {
 	ID        string    `json:"id" bson:"_id"`
 	Address   string    `json:"address" bson:"address"`

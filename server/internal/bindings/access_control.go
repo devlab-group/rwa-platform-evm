@@ -21,13 +21,13 @@ const accessControlABIJSON = `[
     "outputs":[{"name":"","type":"address"}]}
 ]`
 
-// AccessControl encodes calldata / decodes reads for OZ AccessControl's
-// standard surface (hasRole/getRoleAdmin) plus the AccessControlEnumerable
-// extension (getRoleMemberCount/getRoleMember). Every governance contract
-// hosts its own roles through AccessControlEnumerable (docs/spec/roles.md), so
-// one binding works against any of them. The enumerable calls let deployment
-// verification enumerate the complete holder set of every role and reject an
-// unexpected holder, which a candidate-only hasRole check cannot detect.
+// AccessControl encodes calldata for, and decodes results from, OpenZeppelin
+// AccessControl's hasRole and getRoleAdmin plus AccessControlEnumerable's
+// getRoleMemberCount and getRoleMember. Every governance contract hosts its
+// roles through AccessControlEnumerable (docs/spec/roles.md), so one binding
+// works against any of them. The enumerable calls let deployment verification
+// list every holder of a role and reject an unexpected one, which a hasRole
+// check on a known candidate cannot detect.
 type AccessControl struct{ ABI abi.ABI }
 
 // NewAccessControl parses the shared AccessControl ABI once.
@@ -75,8 +75,8 @@ func (a AccessControl) UnpackGetRoleMember(data []byte) (common.Address, error) 
 	return *abi.ConvertType(out[0], new(common.Address)).(*common.Address), nil
 }
 
-// Role IDs per docs/spec/roles.md (FROZEN). DefaultAdminRole
-// is OZ's fixed bytes32(0); the rest are keccak256 of the exact role name string.
+// Role IDs as defined in docs/spec/roles.md. DefaultAdminRole is OpenZeppelin's
+// bytes32(0); the others are the keccak256 of the role name.
 var (
 	DefaultAdminRole      = [32]byte{}
 	PauserRole            = crypto.Keccak256Hash([]byte("PAUSER_ROLE"))

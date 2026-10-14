@@ -47,8 +47,8 @@ func driftProject() *models.Project {
 	}
 }
 
-// stubWiring answers every view CheckConfigDrift makes, all matching p —
-// the clean baseline a test then breaks in exactly one place.
+// stubWiring answers every view that CheckConfigDrift calls with values that
+// match p, the clean baseline a test then breaks in one place
 func stubWiring(t *testing.T, c *perContractClient, p *models.Project) {
 	t.Helper()
 	tokenABI := bindings.NewERC20().ABI
@@ -110,8 +110,8 @@ func TestCheckConfigDriftClean(t *testing.T) {
 	}
 }
 
-// TestCheckConfigDriftDetectsRewiring: this is the whole point — a wiring
-// value that changed after adoption, which nothing re-evaluated before.
+// TestCheckConfigDriftDetectsRewiring: a wiring value that changed after
+// adoption is reported
 func TestCheckConfigDriftDetectsRewiring(t *testing.T) {
 	p := driftProject()
 	c := newPerContractClient()
@@ -132,10 +132,9 @@ func TestCheckConfigDriftDetectsRewiring(t *testing.T) {
 	}
 }
 
-// TestCheckConfigDriftAcceptsProjectedRotations: setTreasury/setAuditor are
-// ordinary admin actions that ReconcileSecurity already tracks. Comparing
-// them against the deploy snapshot would report every legitimate rotation as
-// drift, which would train an operator to ignore the alert.
+// TestCheckConfigDriftAcceptsProjectedRotations: setTreasury and setAuditor are
+// ordinary admin actions that ReconcileSecurity tracks. Comparing them with the
+// deploy snapshot would report every legitimate rotation as drift.
 func TestCheckConfigDriftAcceptsProjectedRotations(t *testing.T) {
 	p := driftProject()
 	newTreasury := common.HexToAddress("0x00000000000000000000000000000000BEEF01")
@@ -177,9 +176,9 @@ func TestCheckConfigDriftIgnoresPriceMoves(t *testing.T) {
 }
 
 // TestCheckConfigDriftFlagsVaultEscrowStrategySplit: a strategy swap is
-// legitimate for the Vault, but RedemptionEscrow.strategy is immutable and
-// cannot follow — so purchases and redemptions end up quoted by different
-// contracts. That is a standing condition an operator has to be told about.
+// legitimate for the Vault, but RedemptionEscrow.strategy is immutable, so
+// purchases and redemptions end up quoted by different contracts and an
+// operator needs to be told
 func TestCheckConfigDriftFlagsVaultEscrowStrategySplit(t *testing.T) {
 	p := driftProject()
 	swapped := common.HexToAddress("0x00000000000000000000000000000000B11B01")

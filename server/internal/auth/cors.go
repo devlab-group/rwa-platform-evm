@@ -9,11 +9,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// corsAllowedHeaders is every request header a browser client may send.
+// corsAllowedHeaders lists the request headers a browser client may send.
 // Authorization carries the admin JWT, X-Wallet-Session the investor session,
-// and Idempotency-Key is required on state-changing calls — omitting any one of
-// them makes the corresponding request fail preflight while looking like a
-// server bug rather than a CORS one.
+// and Idempotency-Key is required by the idempotent admin routes. A header
+// missing from this list fails the preflight, which looks like a server bug
+// rather than a CORS error.
 var corsAllowedHeaders = strings.Join([]string{
 	"Authorization",
 	"Content-Type",
@@ -21,8 +21,8 @@ var corsAllowedHeaders = strings.Join([]string{
 	WalletSessionHeader,
 }, ", ")
 
-// corsAllowedMethods covers every method the API routes actually use, plus
-// OPTIONS for the preflight itself.
+// corsAllowedMethods lists the methods a cross-origin client may use, plus
+// OPTIONS for the preflight itself
 var corsAllowedMethods = strings.Join([]string{
 	http.MethodGet,
 	http.MethodPost,
@@ -33,39 +33,25 @@ var corsAllowedMethods = strings.Join([]string{
 }, ", ")
 
 // corsMaxAge is how long a browser may cache a preflight result. Ten minutes
-// keeps an origin-list change from lingering for hours while still collapsing
-// the preflight for a burst of calls.
+// lets an origin-list change take effect within the hour while still sparing a
+// burst of calls a preflight each.
 const corsMaxAge = 10 * time.Minute
 
-// CORS answers cross-origin requests for the origins in allowedOrigins, and
-// only those.
+// CORS permits browser access from allowedOrigins. The embedded admin console
+// is same-origin; the standalone investor SPA needs this allowlist for public
+// and X-Wallet-Session routes.
 //
-// The admin console does NOT need this: it is embedded in this binary and
-// served same-origin. The standalone investor SPA (investor-web/) does — it is
-// a separate deployable that talks to this server's public + X-Wallet-Session
-// API from its own origin, which is the whole reason the setting exists.
-//
-// An empty list disables CORS entirely (no headers emitted, preflights fall
-// through to the router's own 404/405): same-origin only, which is the correct
-// default for a deployment that serves just the embedded console.
-//
-// Deliberate properties:
-//
-//   - The Origin is ECHOED, never reflected blindly and never "*". A request
-//     from an unlisted origin gets no CORS headers at all, so the browser
-//     blocks it — the server does not need to (and must not) reject the request
-//     itself, since CORS is a browser-enforced policy and a non-browser client
-//     is unaffected either way.
-//   - "*" is rejected at config load, not here (see config.Load): with
-//     Authorization allowed, a wildcard would let any site on the internet
-//     drive an authenticated admin session from a victim's browser.
-//   - Access-Control-Allow-Credentials is NOT sent. This API authenticates with
-//     Authorization/X-Wallet-Session headers, never cookies, so credentialed
-//     mode buys nothing and would forbid the wildcard-free echo pattern from
-//     ever being loosened safely.
-//   - Vary: Origin is always set when a list is configured, including on
-//     non-matching origins, so a shared cache can never serve one origin's
-//     CORS headers to another.
+// An empty list emits no CORS headers and lets preflight requests reach the
+// router, which has no OPTIONS routes. With a configured list:
+//   - A matching Origin is echoed in Access-Control-Allow-Origin. An unmatched
+//     origin gets no CORS headers; the browser blocks access to the response,
+//     while the server still handles the request. Non-browser clients are unaffected.
+//   - Configuration rejects "*" to avoid exposing authenticated API responses
+//     to arbitrary origins.
+//   - Access-Control-Allow-Credentials is omitted because authentication uses
+//     Authorization and X-Wallet-Session headers, not cookies.
+//   - Vary: Origin appears on matched and unmatched responses to prevent a
+//     shared cache from mixing origins' CORS headers.
 func CORS(allowedOrigins []string) gin.HandlerFunc {
 	allowed := make(map[string]struct{}, len(allowedOrigins))
 	for _, o := range allowedOrigins {
@@ -79,9 +65,8 @@ func CORS(allowedOrigins []string) gin.HandlerFunc {
 
 	maxAge := strconv.Itoa(int(corsMaxAge.Seconds()))
 	return func(c *gin.Context) {
-		// Vary goes on every response once CORS is configured, matched or not:
-		// the response body/headers now depend on Origin, and a cache that
-		// doesn't know that could hand origin A the headers computed for B.
+		// The response headers depend on Origin from here on, so every response
+		// carries Vary, matched or not
 		c.Writer.Header().Add("Vary", "Origin")
 
 		origin := c.GetHeader("Origin")
@@ -90,8 +75,7 @@ func CORS(allowedOrigins []string) gin.HandlerFunc {
 			return
 		}
 		if _, ok := allowed[origin]; !ok {
-			// Unlisted: emit nothing. The browser blocks the response; a
-			// non-browser caller is unaffected, exactly as CORS intends.
+			// Unlisted: emit nothing, the browser blocks the response
 			c.Next()
 			return
 		}
@@ -100,10 +84,8 @@ func CORS(allowedOrigins []string) gin.HandlerFunc {
 		h.Set("Access-Control-Allow-Origin", origin)
 
 		if c.Request.Method == http.MethodOptions {
-			// Preflight: answer here and stop. It must NOT continue down the
-			// chain — Authenticate would reject it (a preflight carries no
-			// Authorization header, by design), and the router has no OPTIONS
-			// route to match anyway.
+			// Answer the preflight here. Browsers send no Authorization header on
+			// it, and the router has no OPTIONS routes
 			h.Set("Access-Control-Allow-Methods", corsAllowedMethods)
 			h.Set("Access-Control-Allow-Headers", corsAllowedHeaders)
 			h.Set("Access-Control-Max-Age", maxAge)

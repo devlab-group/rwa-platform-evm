@@ -8,7 +8,7 @@ import { needsAttention, transactionStatusLabel } from "../../lib/status";
 
 type Transaction = components["schemas"]["Transaction"];
 
-/** Transactions: pending/final/reorged transactions and explorer links. */
+/** Transactions the server tracks, by lifecycle status, with explorer links */
 export function Transactions() {
   const transactions = usePaginatedList<Transaction>(
     (cursor, signal) => api.listTransactions({ signal, cursor }),
@@ -46,13 +46,13 @@ export function Transactions() {
                     <p>
                       {flagged.length} transaction
                       {flagged.length === 1 ? "" : "s"} need
-                      {flagged.length === 1 ? "s" : ""} operator attention —
-                      automated progress is stopped or unsafe. These reverted or
-                      failed on-chain, had their block dropped by a reorg, have
-                      an ambiguous broadcast outcome that must not be blindly
-                      resubmitted, had their nonce consumed elsewhere, or
-                      exhausted automatic replacement and require manual
-                      intervention.
+                      {flagged.length === 1 ? "s" : ""} operator attention:
+                      automated progress is stopped or unsafe. These reverted
+                      on-chain, were rejected before reaching the mempool, had
+                      their block dropped by a reorg, have an ambiguous
+                      broadcast outcome that must not be blindly resubmitted,
+                      had their nonce consumed elsewhere, or exhausted automatic
+                      replacement and require manual intervention.
                     </p>
                     <ul className="u-mt-2">
                       {flagged.map((tx) => (
@@ -79,9 +79,8 @@ export function Transactions() {
                               </a>
                             </>
                           )}
-                          {/* Operator-intervention detail: sender identity and
-                              replacement lineage, shown only when the server
-                              populates these optional fields. */}
+                          {/* Sender, nonce and replacement details, shown only when the
+                              server sends these optional fields */}
                           {(tx.sender != null ||
                             tx.nonce != null ||
                             tx.replacedBy != null ||
@@ -133,13 +132,13 @@ export function Transactions() {
                       {data.map((tx) => (
                         <tr key={tx.txHash}>
                           <td className="mono">{tx.txHash}</td>
-                          <td>{tx.kind ?? "—"}</td>
+                          <td>{tx.kind ?? "-"}</td>
                           <td>
                             {tx.status && (
                               <TransactionStatusBadge status={tx.status} />
                             )}
                           </td>
-                          <td>{tx.blockNumber ?? "—"}</td>
+                          <td>{tx.blockNumber ?? "-"}</td>
                           <td>
                             {tx.explorerUrl && (
                               <a

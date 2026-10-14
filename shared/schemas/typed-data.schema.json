@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rwa-platform/schemas/typed-data.schema.json",
   "title": "Typed Data Attestation Request (.rwa/typed-data.json)",
-  "description": "The EIP-712 attestation request embedded in a .rwa package. The server package-builder and the offline signer MUST agree on these field names byte-for-byte. For MintAttestation, `message.recordId` is carried alongside `recordKey` so the signer can independently recompute recordKey = keccak256(bytes(recordId)). Digests are 0x-prefixed hex; amount/nonce are decimal strings; validUntil is a unix-seconds integer.",
+  "description": "EIP-712 attestation request inside a .rwa package. The server builder and offline signer MUST use identical field names. MintAttestation includes message.recordId alongside recordKey for independent verification of recordKey = keccak256(bytes(recordId)). Digests are 0x-prefixed hex; amount and nonce are decimal strings; validUntil is integer Unix seconds.",
   "type": "object",
   "additionalProperties": false,
   "required": ["primaryType", "domain", "message"],

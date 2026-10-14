@@ -1,15 +1,10 @@
 package main
 
-// Command implementations: the audited operator commands for checkpoint
-// reset, DLQ inspect/retry/dismiss, replication retry, local restore, and
-// tx replace. Every function here is deliberately shaped
-// to take already-constructed dependencies (a repository.Repositories, an
-// *indexer.Indexer, a blockchain.TxManager, an *ipfs.ReplicationManager) and
-// write human-readable progress to an io.Writer, rather than reading flags
-// or touching os.Stdout/os.Exit directly — main.go owns process wiring
-// (config, Mongo/chain connections, flag parsing) so these can be smoke
-// tested directly against in-memory repos and fakes (commands_test.go), the
-// same split cmd/reindex's snapshotCounts uses for its one helper.
+// Command implementations for checkpoint reset, DLQ inspect, retry and dismiss,
+// replication retry, local restore and tx replace. Each takes constructed
+// dependencies and writes progress to an io.Writer instead of reading flags or
+// using os.Stdout, so tests can run them against in-memory repositories and
+// fakes. main.go owns config, connections and flag parsing.
 
 import (
 	"context"
@@ -25,37 +20,28 @@ import (
 	"github.com/rwa-platform/server/internal/ipfs"
 )
 
-// blockNumberBig converts a block number to the *big.Int HeaderByNumber
-// expects.
+// blockNumberBig converts a block number to the *big.Int HeaderByNumber takes
 func blockNumberBig(n uint64) *big.Int { return new(big.Int).SetUint64(n) }
 
-// opsCtx bundles what every command needs to run and to audit-log its own
-// invocation.
+// opsCtx bundles what a command needs to run and to write its audit entries
 type opsCtx struct {
 	ctx   context.Context
 	repos *repository.Repositories
 	audit *auditlog.Logger
-	// actor is the attributable audit label for this invocation (main.go's
-	// auditActor sets it to "opsctl:"+the --actor flag or OS user). opsctl is
-	// not credential-gated, so this is for attribution only, not authorization.
+	// actor labels audit entries, as set by auditActor, and does not authorize anything
 	actor string
 	out   io.Writer
 }
 
-// audited runs op (the actual mutation) wrapped in the
-// intent-before-effect / fail-closed pattern: it first persists a durable
-// audit INTENT and, if that cannot be made durable, REFUSES to run op at all
-// (a privileged chain/checkpoint/DLQ/replication mutation with no durable
-// actor/action trail is worse than not running it). After op it records a
-// completion linked to that intent, capturing success/failure — a failure to
-// write the RESULT is only a warning, since the intent already durably
-// captured who invoked what. This supersedes the old "run op, then best-effort
-// append one entry" flow, which recorded nothing until AFTER the mutation and
-// only warned on an audit failure (fail-open).
+// audited runs op between a durable audit intent and a result entry. If the
+// intent cannot be persisted, op does not run, because a privileged mutation
+// with no durable record of who invoked it is worse than not running it. A
+// failure to write the result entry is only a warning, since the intent already
+// records the invocation.
 func (o opsCtx) audited(action, target string, metadata map[string]any, op func() error) error {
 	intentID, err := o.audit.RecordIntent(o.ctx, "opsctl", o.actor, action, target, metadata)
 	if err != nil {
-		fmt.Fprintf(o.out, "ERROR: refusing to run %s %s — its audit intent could not be made durable: %v\n", action, target, err)
+		fmt.Fprintf(o.out, "ERROR: refusing to run %s %s - its audit intent could not be made durable: %v\n", action, target, err)
 		return fmt.Errorf("opsctl: audit intent for %s %s could not be persisted; refusing to proceed: %w", action, target, err)
 	}
 
@@ -86,16 +72,12 @@ func runTxReplace(o opsCtx, txs blockchain.TxManager, signer blockchain.Signer, 
 
 // --- indexer checkpoint reset ---
 
-// errTrustedHashMismatch is returned (and the checkpoint left untouched)
-// when the operator-supplied trusted hash disagrees with what the chain
-// source itself reports at trustedBlock. Requiring an explicit trusted
-// block/hash for the reorg-recovery reset is a SECOND, independent check on
-// top of what Indexer.ResetToTrustedCheckpoint already does (it derives the
-// hash from the source itself): the operator
-// must state, from their own independent source of truth (a block
-// explorer, another node), what they believe the correct hash is, and this
-// command refuses to proceed — rather than silently trusting whatever the
-// configured RPC endpoint happens to return — if that live answer disagrees.
+// errTrustedHashMismatch means the hash the operator supplied differs from the
+// chain source's header hash at trustedBlock, and the checkpoint is left
+// untouched. Indexer.ResetToTrustedCheckpoint reads the hash from the source
+// itself, so this check against a hash the operator verified elsewhere, such as
+// on a block explorer or another node, stops the reset from trusting the
+// configured RPC endpoint alone.
 var errTrustedHashMismatch = errors.New("opsctl: trusted hash does not match the chain source's header at that block")
 
 func runIndexerResetCheckpoint(o opsCtx, idx *indexer.Indexer, source indexer.ChainSource, trustedBlock uint64, trustedHashHex string) error {

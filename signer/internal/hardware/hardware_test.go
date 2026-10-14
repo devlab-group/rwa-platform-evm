@@ -18,10 +18,8 @@ func TestStubAdapter_AlwaysReportsNotSupported(t *testing.T) {
 	}
 }
 
-// TestOpen_SupportedKindsReturnStubAdapter covers every DeviceKind Open
-// recognizes: each is a real, distinct integration seam, and every one currently
-// resolves to the same not-yet-implemented StubAdapter, never a silent
-// fallback to software signing.
+// TestOpen_SupportedKindsReturnStubAdapter covers every DeviceKind Open recognizes:
+// each resolves to the StubAdapter, never to a silent fallback to software signing.
 func TestOpen_SupportedKindsReturnStubAdapter(t *testing.T) {
 	for _, kind := range SupportedDeviceKinds {
 		s, err := Open(kind)

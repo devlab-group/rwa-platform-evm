@@ -13,16 +13,17 @@ interface IRWAToken is IERC20 {
     error SupplyControllerAlreadySet();
     error OnlyTokenDeployer(address caller);
 
-    /// @notice One-time deploy wiring: set the SupplyController address. Resolves the
+    /// @notice One-time deploy wiring: set the SupplyController address, which resolves the
     ///         Token<->Controller<->Vault construction cycle. Callable exactly once, only by
-    ///         the deployer recorded at construction (the RWAFactory). Permanently locked after.
-    ///         Effectively immutable after factory setup; not the Solidity `immutable` keyword.
+    ///         the deployer recorded at construction (normally the RWAFactory), and locked
+    ///         afterwards. It behaves as immutable after setup but is not the Solidity
+    ///         `immutable` keyword.
     function setSupplyController(address controller) external;
 
-    /// @notice Mint `value` to `to`. Callable only by SupplyController.
+    /// @notice Mint `value` to `to`. Callable only by SupplyController
     function controllerMint(address to, uint256 value) external;
 
-    /// @notice Burn `value` from `from`. Callable only by SupplyController.
+    /// @notice Burn `value` from `from`. Callable only by SupplyController
     function controllerBurn(address from, uint256 value) external;
 
     function paused() external view returns (bool);

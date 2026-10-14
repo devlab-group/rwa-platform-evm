@@ -1,11 +1,6 @@
-// Fixed allow-list of networks the in-app switcher offers. Extend by adding an
-// entry — each carries both the UI label and the full EIP-3085
-// (wallet_addEthereumChain) parameters, so a chain the wallet doesn't know yet
-// (e.g. a local anvil node) can be added on demand before switching to it.
-//
-// Transports always run over the injected provider (custom(provider), see
-// lib/wallet.ts), never a direct RPC, so `rpcUrls` here is used only as
-// wallet_addEthereumChain input — it's what the wallet itself dials, not the app.
+// Allowlisted network labels and EIP-3085 parameters for the switcher.
+// Add entries here to support another chain. rpcUrls is input to
+// wallet_addEthereumChain; the wallet dials it while app RPC uses the injected provider.
 export interface AllowedNetwork {
   chainId: number;
   /** Short label shown in the switcher and by networkLabel(). */
@@ -29,8 +24,8 @@ export const ALLOWED_NETWORKS: AllowedNetwork[] = [
     label: "Ethereum",
     chainName: "Ethereum Mainnet",
     nativeCurrency: ETH,
-    // Mainnet is always present in wallets, so add-chain is never actually
-    // invoked for it; the params are here only for completeness/consistency.
+    // Wallets already include Ethereum mainnet, so add-chain is not expected
+    // for it; the params keep the entries uniform
     rpcUrls: ["https://cloudflare-eth.com"],
     blockExplorerUrls: ["https://etherscan.io"],
   },
@@ -44,12 +39,12 @@ export const ALLOWED_NETWORKS: AllowedNetwork[] = [
   },
 ];
 
-/** The allow-listed network for `chainId`, or undefined if it isn't one we offer. */
+/** The allow-listed network for `chainId`, or undefined if it isn't offered. */
 export function findNetwork(chainId: number): AllowedNetwork | undefined {
   return ALLOWED_NETWORKS.find((n) => n.chainId === chainId);
 }
 
-/** Human label for a chainId — the allow-listed label, or "Unsupported network". */
+/** Human label for a chainId: the allow-listed label, or "Unsupported network". */
 export function networkLabel(chainId: number | null): string {
   if (chainId === null) return "Unsupported network";
   return findNetwork(chainId)?.label ?? "Unsupported network";

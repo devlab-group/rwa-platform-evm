@@ -14,9 +14,8 @@ func (i keysetItem) SortValue() int64 { return i.sortValue }
 func (i keysetItem) ID() string       { return i.id }
 
 func sortedDescItems(n int) []keysetItem {
-	// Descending sortValue, id ties broken descending too — the exact
-	// order every ListPage caller in this codebase sorts by before
-	// calling KeysetPage.
+	// sortValue descending, with ties broken by id descending, the order every ListPage
+	// caller sorts by before calling KeysetPage
 	items := make([]keysetItem, n)
 	for i := 0; i < n; i++ {
 		items[i] = keysetItem{sortValue: int64(n - i), id: fmt.Sprintf("id-%04d", n-i)}
@@ -35,10 +34,9 @@ func TestKeysetPageFirstPage(t *testing.T) {
 	}
 }
 
-// TestKeysetPageWalksEveryItemExactlyOnceOver200Records exercises paging
-// across more than 200 records: walking
-// page by page via the returned cursor must visit every item exactly
-// once, in the declared sorted order, with no gaps or duplicates.
+// TestKeysetPageWalksEveryItemExactlyOnceOver200Records checks paging through more
+// than 200 records: following the returned cursor page by page visits every item
+// exactly once, in sorted order, with no gaps or duplicates
 func TestKeysetPageWalksEveryItemExactlyOnceOver200Records(t *testing.T) {
 	const total = 237
 	const pageSize = 25
@@ -76,12 +74,11 @@ func TestKeysetPageWalksEveryItemExactlyOnceOver200Records(t *testing.T) {
 	}
 }
 
-// TestKeysetPageStableUnderConcurrentPrepend proves the core advantage of
-// keyset over offset cursors: inserting new items AHEAD of
-// the walk (the newest-first case — a new purchase/redemption always sorts
-// first) does not shift, skip, or duplicate anything in a page the caller
-// already has a cursor into, unlike an offset cursor which "row 50" would
-// now name a different record for.
+// TestKeysetPageStableUnderConcurrentPrepend checks the advantage of keyset over
+// offset cursors: items inserted ahead of the walk, as new purchases and
+// redemptions are in a newest-first list, do not shift, skip or duplicate anything
+// in a page the caller already has a cursor into, where an offset such as "row 50"
+// would name a different record
 func TestKeysetPageStableUnderConcurrentPrepend(t *testing.T) {
 	items := sortedDescItems(20) // sortValue 20..1, ids id-0020..id-0001
 	firstPage, cursor := KeysetPage(items, keysetItem.SortValue, keysetItem.ID, "", 5, true)
@@ -89,9 +86,8 @@ func TestKeysetPageStableUnderConcurrentPrepend(t *testing.T) {
 		t.Fatalf("first page = %+v", firstPage)
 	}
 
-	// Simulate 5 new items landing ahead of everything (newest-first) —
-	// exactly what a live purchases/redemption collection does between
-	// two page requests.
+	// 5 new items land ahead of everything, as new purchases and redemptions do
+	// between two page requests
 	grown := make([]keysetItem, 0, 25)
 	for i := 25; i >= 21; i-- {
 		grown = append(grown, keysetItem{sortValue: int64(i), id: fmt.Sprintf("id-%04d", i)})
@@ -102,9 +98,9 @@ func TestKeysetPageStableUnderConcurrentPrepend(t *testing.T) {
 	if len(secondPage) != 5 {
 		t.Fatalf("second page len = %d, want 5", len(secondPage))
 	}
-	// The cursor named "strictly after id-0016" — the new items (21-25)
-	// all sort ABOVE that cursor, so they must NOT appear in this page;
-	// the second page must resume exactly where the first left off.
+	// the cursor means strictly after id-0016, and the new items 21 to 25 sort above
+	// it, so they do not appear in this page and the second page resumes where the
+	// first ended
 	want := []string{"id-0015", "id-0014", "id-0013", "id-0012", "id-0011"}
 	for i, it := range secondPage {
 		if it.id != want[i] {
@@ -124,10 +120,9 @@ func TestKeysetPageLastPageHasNoNextCursor(t *testing.T) {
 	}
 }
 
-// TestKeysetPageAscendingWalksEveryItem covers the desc=false direction
-// (asset records/transactions keep their pre-existing
-// oldest-first order) — the mirror of
-// TestKeysetPageWalksEveryItemExactlyOnceOver200Records.
+// TestKeysetPageAscendingWalksEveryItem is the desc=false counterpart of
+// TestKeysetPageWalksEveryItemExactlyOnceOver200Records, for the oldest-first
+// collections (asset records, transactions)
 func TestKeysetPageAscendingWalksEveryItem(t *testing.T) {
 	const total = 53
 	items := make([]keysetItem, total)

@@ -1,9 +1,9 @@
-// Package auditpkg implements the deterministic hashing/CID convention and
-// builds/verifies .rwa audit packages. JCS canonicalization uses
-// github.com/gowebpki/jcs, the reference Go
-// implementation of RFC 8785 by the RFC's authors, so canonical bytes match
-// any other conformant implementation (the Go signer, the TS client) without
-// reimplementing the ECMAScript number/string serialization rules by hand.
+// Package auditpkg canonicalizes, hashes and content-addresses profile and
+// metadata documents, and builds and verifies .rwa audit packages.
+// Canonicalization uses github.com/gowebpki/jcs, a fork of the reference Go
+// implementation of RFC 8785, so canonical bytes match other conformant
+// implementations without reimplementing the ECMAScript number and string
+// serialization rules.
 package auditpkg
 
 import (
@@ -16,8 +16,9 @@ import (
 	"github.com/multiformats/go-multihash"
 )
 
-// Limits enforced even when a schema omits its own bounds — the frozen
-// structural-limits table every implementation shares.
+// The structural limits from docs/spec/asset-profile.md ("Structural limits").
+// They apply even when a schema declares no bounds of its own.
+// MaxStringLength counts UTF-8 bytes and covers object keys as well as values.
 const (
 	MaxDocumentBytes = 1 << 20 // 1,048,576 bytes (1 MiB)
 	MaxObjectDepth   = 32
@@ -26,20 +27,15 @@ const (
 	MaxObjectKeys    = 4096
 )
 
-// CheckLimits validates that raw is a well-formed, size/UTF-8-safe JSON
-// document within the platform-wide structural limits (document size,
-// nesting depth, string length, and array/object element counts — the
-// frozen structural limits), independent of any JSON Schema a caller may
-// separately apply.
+// CheckLimits rejects raw unless it is non-empty, valid UTF-8 and well-formed
+// JSON within the structural limits: document size, nesting depth, string
+// length, array length and object key count. The limits apply regardless of
+// any JSON Schema the caller also uses.
 //
-// Exported so a caller that must itself recurse into the document via a
-// generic `any` tree or a JSON Schema compiler (server/internal/assets:
-// guardAssetSchema, compileAssetSchema, jsonschema.Schema.Validate) can
-// enforce these bounds BEFORE that recursion happens, not only as a
-// byproduct of a later Canonicalize/digest call. checkLimits' walk is an
-// iterative token-stream scan (an explicit stack, not Go call recursion),
-// so it fails closed on adversarial depth/size instead of itself risking a
-// stack-exhaustion DoS.
+// Callers that recurse into an untrusted document, such as the asset schema
+// guard, compiler and validator in internal/assets, call it first. The scan
+// reads tokens with an explicit stack instead of recursing, so deeply nested
+// input cannot exhaust the Go stack.
 func CheckLimits(raw []byte) error {
 	if len(raw) == 0 {
 		return fmt.Errorf("auditpkg: empty document")
@@ -53,10 +49,9 @@ func CheckLimits(raw []byte) error {
 	return checkLimits(raw)
 }
 
-// Canonicalize validates that raw is well-formed, size/UTF-8-safe JSON and
-// returns its RFC 8785 canonical byte form. It rejects duplicate object keys
-// (via the underlying jcs.Transform) and depth/size/length limits before
-// transforming, since jcs.Transform alone does not enforce platform limits.
+// Canonicalize returns the RFC 8785 canonical form of raw. It runs CheckLimits
+// first because jcs.Transform does not enforce the structural limits, and it
+// rejects duplicate object keys through jcs.Transform.
 func Canonicalize(raw []byte) ([]byte, error) {
 	if err := CheckLimits(raw); err != nil {
 		return nil, err
@@ -68,15 +63,14 @@ func Canonicalize(raw []byte) ([]byte, error) {
 	return canonical, nil
 }
 
-// Digest returns SHA-256(canonicalBytes). Callers MUST pass
-// already-canonicalized bytes (the output of Canonicalize), not arbitrary
-// JSON, so the digest is reproducible.
+// Digest returns SHA-256(canonicalBytes). Callers must pass the output of
+// Canonicalize, not arbitrary JSON, so the digest is reproducible.
 func Digest(canonicalBytes []byte) [32]byte {
 	return sha256.Sum256(canonicalBytes)
 }
 
-// CIDv1Raw builds an IPFS CIDv1 using codec `raw` and multihash `sha2-256`
-// from the same canonical bytes used for Digest.
+// CIDv1Raw returns the CIDv1 string (raw codec, sha2-256 multihash, base32)
+// of canonicalBytes, the same bytes Digest hashes
 func CIDv1Raw(canonicalBytes []byte) (string, error) {
 	mh, err := multihash.Sum(canonicalBytes, multihash.SHA2_256, -1)
 	if err != nil {
@@ -86,9 +80,8 @@ func CIDv1Raw(canonicalBytes []byte) (string, error) {
 	return c.String(), nil
 }
 
-// CanonicalizeAndDigest is a convenience wrapper running Canonicalize,
-// Digest, and CIDv1Raw together, returning the canonical bytes, the 32-byte
-// digest, and the CID string.
+// CanonicalizeAndDigest runs Canonicalize, Digest and CIDv1Raw on raw and
+// returns the canonical bytes, the digest and the CID string
 func CanonicalizeAndDigest(raw []byte) (canonical []byte, digest [32]byte, cidStr string, err error) {
 	canonical, err = Canonicalize(raw)
 	if err != nil {
@@ -102,10 +95,8 @@ func CanonicalizeAndDigest(raw []byte) (canonical []byte, digest [32]byte, cidSt
 	return canonical, digest, cidStr, nil
 }
 
-// checkLimits walks raw JSON tokens with encoding/json's tokenizer to bound
-// nesting depth, string length, and array/object element counts before
-// canonicalization, independent of whatever bounds (if any) a caller's JSON
-// Schema declares.
+// checkLimits walks raw with the encoding/json tokenizer and enforces the
+// nesting depth, string length, and array and object size limits
 func checkLimits(raw []byte) error {
 	dec := newLimitDecoder(raw)
 	return dec.walk()

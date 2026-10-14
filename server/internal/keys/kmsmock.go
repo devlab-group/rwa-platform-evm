@@ -13,19 +13,14 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// kmsMockProvider is an explicit, clearly-labeled stand-in for a real KMS
-// (AWS KMS, GCP Cloud KMS, ...) so the Provider abstraction and every call
-// site that depends on it can be exercised in CI/local dev without a real
-// KMS account or credentials. NEVER use in production — Load logs a loud
-// warning every time this mode is selected.
+// kmsMockProvider is a stand-in for a real KMS, for CI and local development.
+// It is not for production, and newKMSMockProvider logs a warning each time it
+// is constructed.
 //
-// With a non-empty seed, the per-role key is deterministic
-// (keccak256(seed || role)), so the same seed always reproduces the same
-// address across restarts — useful for a repeatable local/CI environment.
-// An empty seed generates a random ephemeral key and logs its address once;
-// that address will NOT survive a restart, so on-chain role grants made
-// against it become stale immediately — fine for a one-off smoke test,
-// useless for anything longer-lived.
+// With a non-empty seed, the per-role key is keccak256(seed || role), so the
+// address is the same across restarts. An empty seed generates a random key
+// and logs its address; that address changes on every restart, so on-chain role
+// grants made to it go stale.
 type kmsMockProvider struct {
 	role string
 	seed string
@@ -36,7 +31,7 @@ type kmsMockProvider struct {
 }
 
 func newKMSMockProvider(role, seedHex string) (*kmsMockProvider, error) {
-	log.Printf("keys: WARNING — role %q is using kms-mock, a non-production stand-in for a real KMS. Never use this mode in production.", role)
+	log.Printf("keys: WARNING - role %q is using kms-mock, a non-production stand-in for a real KMS. Never use this mode in production.", role)
 	p := &kmsMockProvider{role: role, seed: seedHex}
 	if err := p.derive(); err != nil {
 		return nil, err
@@ -52,7 +47,7 @@ func (p *kmsMockProvider) derive() error {
 			return fmt.Errorf("keys: kms-mock: generating ephemeral key: %w", err)
 		}
 		key = k
-		log.Printf("keys: kms-mock: role %q got a random ephemeral key (address %s) — will NOT survive a restart", p.role, crypto.PubkeyToAddress(key.PublicKey).Hex())
+		log.Printf("keys: kms-mock: role %q got a random ephemeral key (address %s) - will NOT survive a restart", p.role, crypto.PubkeyToAddress(key.PublicKey).Hex())
 	} else {
 		digest := crypto.Keccak256([]byte(p.seed), []byte(p.role))
 		k, err := crypto.ToECDSA(digest)
@@ -81,13 +76,13 @@ func (p *kmsMockProvider) SignTx(_ context.Context, tx *types.Transaction, chain
 	return types.SignTx(tx, types.LatestSignerForChainID(chainID), p.key)
 }
 
-// Reload re-derives the key from the same seed (a no-op for a deterministic
-// seed; regenerates a new random key, logged again, for an empty one).
+// Reload re-derives the key from the seed. With an empty seed it generates a
+// new random key and logs the new address
 func (p *kmsMockProvider) Reload(context.Context) error {
 	return p.derive()
 }
 
-// Close zeroes the in-memory private key. See Provider.Close's doc comment.
+// Close zeroes the in-memory private key
 func (p *kmsMockProvider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

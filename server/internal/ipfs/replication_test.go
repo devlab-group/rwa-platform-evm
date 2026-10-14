@@ -9,8 +9,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// failingClient always errors, for tests simulating a backup destination
-// that is unavailable.
+// failingClient returns an error from every call, simulating an unavailable
+// backup
 type failingClient struct{ err error }
 
 func (f *failingClient) AddRaw(ctx context.Context, data []byte) (string, error) { return "", f.err }
@@ -19,11 +19,9 @@ func (f *failingClient) Get(ctx context.Context, cid string) ([]byte, error)    
 
 var _ Client = (*failingClient)(nil)
 
-// wrongCIDClient always succeeds AddRaw/Pin, but AddRaw returns a
-// DIFFERENT CID than whatever the caller expects — simulating a
-// destination that silently stores/computes something else. Embeds
-// *FakeClient (a pointer) rather than a value so nothing ever copies its
-// internal mutex.
+// wrongCIDClient stores the data but returns a CID other than the one the
+// caller expects from AddRaw, simulating a destination that stores something
+// else. It embeds *FakeClient by pointer so its mutex is never copied.
 type wrongCIDClient struct{ *FakeClient }
 
 func (w *wrongCIDClient) AddRaw(ctx context.Context, data []byte) (string, error) {
@@ -33,21 +31,18 @@ func (w *wrongCIDClient) AddRaw(ctx context.Context, data []byte) (string, error
 	return "bafkreiWRONGCIDbafkreiWRONGCIDbafkreiWRONGCID", nil
 }
 
-// pinOKRetrieveFailsClient accepts AddRaw/Pin normally but Get always
-// fails — simulating a destination that reports success without the
-// content actually being retrievable.
+// pinOKRetrieveFailsClient accepts AddRaw and Pin but fails every Get,
+// simulating a destination that reports success without being able to serve the
+// content
 type pinOKRetrieveFailsClient struct{ *FakeClient }
 
 func (p *pinOKRetrieveFailsClient) Get(ctx context.Context, cid string) ([]byte, error) {
 	return nil, errors.New("simulated: content not actually retrievable")
 }
 
-// TestReplicationManagerPublishRejectsWrongReturnedCID checks the
-// synchronous requirement that a destination's returned CID equal the
-// locally computed CID. A backup whose AddRaw returns a
-// mismatched CID must never be counted toward the replication threshold,
-// checked at PUBLISH time, not only discovered later by the periodic
-// Verify ticker.
+// TestReplicationManagerPublishRejectsWrongReturnedCID checks that a backup
+// whose AddRaw returns a different CID is not counted toward the threshold and
+// that Publish reports it, rather than leaving it for the periodic Verify
 func TestReplicationManagerPublishRejectsWrongReturnedCID(t *testing.T) {
 	local := NewFakeClient()
 	backup := &wrongCIDClient{FakeClient: NewFakeClient()}
@@ -72,13 +67,9 @@ func TestReplicationManagerPublishRejectsWrongReturnedCID(t *testing.T) {
 	}
 }
 
-// TestReplicationManagerPublishDetectsPinOKRetrieveFailSynchronously is the
-// other half of the synchronous-verification requirement: a destination
-// that accepts AddRaw/Pin but cannot actually be retrieved from must be
-// caught immediately at publish time (not just eventually, by the 30-
-// minute Verify ticker) — "successful AddRaw plus Pin calls count as
-// Replicated before any retrieval/digest verification" was the exact
-// finding.
+// TestReplicationManagerPublishDetectsPinOKRetrieveFailSynchronously checks that
+// a destination that accepts AddRaw and Pin but cannot serve the content is
+// caught at publish time, not only by the periodic Verify
 func TestReplicationManagerPublishDetectsPinOKRetrieveFailSynchronously(t *testing.T) {
 	local := NewFakeClient()
 	backup := &pinOKRetrieveFailsClient{FakeClient: NewFakeClient()}
@@ -98,10 +89,9 @@ func TestReplicationManagerPublishDetectsPinOKRetrieveFailSynchronously(t *testi
 	}
 }
 
-// TestReplicationManagerLocalPinOnly: with no backups configured and a
-// positive threshold, a publish pins locally but the record must NEVER
-// reach PublicationReplicated: an asset package must not be marked durably
-// published until the configured replication threshold has been met.
+// TestReplicationManagerLocalPinOnly checks that with no backups and a positive
+// threshold, a publish pins locally but the record never reaches
+// PublicationReplicated
 func TestReplicationManagerLocalPinOnly(t *testing.T) {
 	local := NewFakeClient()
 	records := memory.NewPublicationRepository()
@@ -131,10 +121,9 @@ func TestReplicationManagerLocalPinOnly(t *testing.T) {
 	}
 }
 
-// TestReplicationManagerReplicatesToSecondDestination is the core
-// acceptance criterion: "the same CID is replicated to a second
-// destination," and once the threshold is met the record becomes
-// PublicationReplicated.
+// TestReplicationManagerReplicatesToSecondDestination checks that the same CID
+// is replicated to a second destination and that the record becomes
+// PublicationReplicated once the threshold is met
 func TestReplicationManagerReplicatesToSecondDestination(t *testing.T) {
 	local := NewFakeClient()
 	backup := NewFakeClient()
@@ -163,13 +152,11 @@ func TestReplicationManagerReplicatesToSecondDestination(t *testing.T) {
 	}
 }
 
-// TestReplicationManagerFailureVisibleAndRetryable: a backup failure must
-// be visible (ReplicationFailed/Pending, LastError populated, AND returned
-// to the publishing caller — a backup failure must not be swallowed) and a
-// later Retry with the same content must recover it. The
-// content is still considered created (local pinned+verified) despite the
-// backup failure — Publish's error is informational/non-fatal for that
-// reason, not a rejection of the whole call.
+// TestReplicationManagerFailureVisibleAndRetryable checks that a backup failure
+// shows in the record (ReplicationFailed or ReplicationPending, LastError set)
+// and in Publish's returned error, and that a later Retry with the same content
+// recovers it. The content is still pinned and verified locally, so the error
+// does not mean the publish was rejected.
 func TestReplicationManagerFailureVisibleAndRetryable(t *testing.T) {
 	local := NewFakeClient()
 	flaky := &failingClient{err: errors.New("simulated backup outage")}
@@ -201,7 +188,7 @@ func TestReplicationManagerFailureVisibleAndRetryable(t *testing.T) {
 		t.Fatalf("expected a visible, unpinned failure status, got %+v", flakyStatus)
 	}
 
-	// The backup recovers; retry with the same content.
+	// The backup recovers; retry with the same content
 	working := NewFakeClient()
 	rm2 := NewReplicationManager(local, []Destination{{Name: "flaky-backup", Client: working}}, 1, records)
 	if err := rm2.Retry(context.Background(), "record-2", data); err != nil {
@@ -216,9 +203,9 @@ func TestReplicationManagerFailureVisibleAndRetryable(t *testing.T) {
 	}
 }
 
-// TestReplicationManagerPublishRejectsCIDRebind checks that an existing
-// publication id is immutably bound to its recorded CID; publishing different
-// bytes under the same id must be a conflict, never an overwrite.
+// TestReplicationManagerPublishRejectsCIDRebind checks that publishing
+// different bytes under an id already bound to a CID is a conflict, not an
+// overwrite
 func TestReplicationManagerPublishRejectsCIDRebind(t *testing.T) {
 	local := NewFakeClient()
 	backup := NewFakeClient()
@@ -231,8 +218,7 @@ func TestReplicationManagerPublishRejectsCIDRebind(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A second publish for the SAME id with DIFFERENT bytes (a duplicate
-	// asset create with changed metadata) must be rejected.
+	// a second publish for the same id with different bytes must be rejected
 	if _, err := rm.Publish(context.Background(), "record-1", []byte(`{"asset":"gold-bar-B"}`)); !errors.Is(err, ErrPublicationCIDConflict) {
 		t.Fatalf("expected ErrPublicationCIDConflict, got %v", err)
 	}
@@ -245,9 +231,8 @@ func TestReplicationManagerPublishRejectsCIDRebind(t *testing.T) {
 	}
 }
 
-// TestIsDurablyPublishedRejectsWrongExpectedCID covers the mint gate: even a
-// fully replicated record must not report durable for a CID other than the
-// one it is actually bound to.
+// TestIsDurablyPublishedRejectsWrongExpectedCID checks that a replicated record
+// does not report durable for a CID other than the one it is bound to
 func TestIsDurablyPublishedRejectsWrongExpectedCID(t *testing.T) {
 	local := NewFakeClient()
 	backup := NewFakeClient()
@@ -266,11 +251,9 @@ func TestIsDurablyPublishedRejectsWrongExpectedCID(t *testing.T) {
 	}
 }
 
-// TestReplicationManagerRetryDoesNotPromoteUnverified checks that Retry
-// re-runs the full add+verify path, counting only VERIFIED backups. A
-// destination that is Pinned=true but Verified=false (its content is not
-// actually retrievable) must not be counted toward the replication threshold
-// just because a prior Pin succeeded.
+// TestReplicationManagerRetryDoesNotPromoteUnverified checks that Retry re-adds
+// and re-verifies a backup that is Pinned but not Verified, and counts only
+// verified backups toward the threshold
 func TestReplicationManagerRetryDoesNotPromoteUnverified(t *testing.T) {
 	local := NewFakeClient()
 	backup := &pinOKRetrieveFailsClient{FakeClient: NewFakeClient()}
@@ -283,8 +266,7 @@ func TestReplicationManagerRetryDoesNotPromoteUnverified(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Precondition: the backup is Pinned but not Verified — exactly the state
-	// the old Retry counted as success.
+	// the backup is Pinned but not Verified
 	for _, d := range rec.Destinations {
 		if d.Name == "b" && (!d.Pinned || d.Verified) {
 			t.Fatalf("test precondition not met: want Pinned && !Verified, got %+v", d)
@@ -298,9 +280,8 @@ func TestReplicationManagerRetryDoesNotPromoteUnverified(t *testing.T) {
 	}
 }
 
-// TestRestoreLocalRejectsWrongReturnedCID checks that on restore the
-// local node's own returned CID must equal the recorded CID before the local
-// destination is marked verified.
+// TestRestoreLocalRejectsWrongReturnedCID checks that RestoreLocal fails when
+// the local node returns a CID other than the recorded one
 func TestRestoreLocalRejectsWrongReturnedCID(t *testing.T) {
 	local := NewFakeClient()
 	backup := NewFakeClient()
@@ -312,7 +293,7 @@ func TestRestoreLocalRejectsWrongReturnedCID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A local node that returns a wrong CID from AddRaw during restore.
+	// a local node that returns a wrong CID from AddRaw during restore
 	badLocal := &wrongCIDClient{FakeClient: NewFakeClient()}
 	rm2 := NewReplicationManager(badLocal, []Destination{{Name: "b", Client: backup}}, 1, records)
 	if err := rm2.RestoreLocal(context.Background(), "record-1"); err == nil {
@@ -320,9 +301,8 @@ func TestRestoreLocalRejectsWrongReturnedCID(t *testing.T) {
 	}
 }
 
-// TestReplicationManagerRestoresAfterLocalRepoLoss covers the required
-// integration scenario: simulated loss of the local IPFS repository,
-// restored from the retained archive backup.
+// TestReplicationManagerRestoresAfterLocalRepoLoss checks that content is
+// restored from the archive backup after the local repository is lost
 func TestReplicationManagerRestoresAfterLocalRepoLoss(t *testing.T) {
 	local := NewFakeClient()
 	archive, err := NewFileArchiveClient(t.TempDir())
@@ -338,7 +318,7 @@ func TestReplicationManagerRestoresAfterLocalRepoLoss(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate the local node losing its repository entirely.
+	// the local node loses its repository
 	local.Reset()
 	if _, err := local.Get(context.Background(), cid); err == nil {
 		t.Fatal("expected local content to be gone after Reset")
@@ -356,11 +336,8 @@ func TestReplicationManagerRestoresAfterLocalRepoLoss(t *testing.T) {
 	}
 }
 
-// TestReplicationManagerVerifyDetectsUnretrievableContent: a destination
-// that accepted AddRaw/Pin (an API-level success) but can no longer
-// actually serve the content must be caught by Verify, not just trusted
-// because the original publish succeeded: a successful HTTP or API response
-// from a pinning provider is insufficient by itself.
+// TestReplicationManagerVerifyDetectsUnretrievableContent checks that Verify
+// catches a destination that accepted the content but can no longer serve it
 func TestReplicationManagerVerifyDetectsUnretrievableContent(t *testing.T) {
 	local := NewFakeClient()
 	backup := NewFakeClient()
@@ -383,8 +360,7 @@ func TestReplicationManagerVerifyDetectsUnretrievableContent(t *testing.T) {
 		t.Fatalf("State = %s, want %s after a successful verify", rec.State, models.PublicationReplicated)
 	}
 
-	// The backup silently loses the block (e.g. its own storage failed
-	// after reporting success) without the publish path ever knowing.
+	// the backup loses the block after the publish succeeded
 	backup.Reset()
 
 	if err := rm.Verify(context.Background(), "record-4"); err != nil {
@@ -402,9 +378,8 @@ func TestReplicationManagerVerifyDetectsUnretrievableContent(t *testing.T) {
 	}
 }
 
-// TestFileArchiveClientDownloadVerifiesCID exercises the archive
-// destination directly: content retrieved from it must hash to the CID it
-// was stored under.
+// TestFileArchiveClientDownloadVerifiesCID checks that content read from the
+// archive hashes to the CID it was stored under
 func TestFileArchiveClientDownloadVerifiesCID(t *testing.T) {
 	archive, err := NewFileArchiveClient(t.TempDir())
 	if err != nil {

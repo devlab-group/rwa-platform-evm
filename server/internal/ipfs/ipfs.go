@@ -1,8 +1,12 @@
-// Package ipfs implements a minimal Kubo (go-ipfs) HTTP API client for
-// pinning public asset metadata. Only raw-block
-// add + pin + get are needed: the platform always derives the CID from
-// already-canonicalized bytes itself (internal/auditpkg), so it uploads
-// pre-hashed raw blocks rather than asking Kubo to chunk/DAG arbitrary files.
+// Package ipfs pins and retrieves public asset metadata. It provides a minimal
+// client for the Kubo HTTP RPC API (add, pin and cat), a local-directory
+// archive and an in-memory fake that implement the same Client interface, and a
+// ReplicationManager that publishes content to a local node and backup
+// destinations and tracks and verifies replication.
+//
+// The platform derives each CID itself from canonical bytes (internal/auditpkg).
+// Content is addressed as CIDv1 with the raw codec and a sha2-256 multihash, and
+// every verification re-hashes retrieved bytes to that CID.
 package ipfs
 
 import (
@@ -17,56 +21,49 @@ import (
 	"time"
 )
 
-// Client pins and retrieves raw IPFS blocks.
+// Client stores, pins and retrieves content addressed by CIDv1 (raw codec,
+// sha2-256)
 type Client interface {
-	// AddRaw uploads data as a raw (codec 0x55) block and returns its CID.
-	// The caller (internal/auditpkg) already knows the expected CID from
-	// the canonical bytes' digest; callers SHOULD verify the returned CID
-	// matches before trusting the pin.
+	// AddRaw stores data, pins it and returns its CID. Callers should compare
+	// the returned CID with the one they computed from data.
 	AddRaw(ctx context.Context, data []byte) (cid string, err error)
-	// Pin explicitly pins an existing CID (idempotent).
+	// Pin pins cid. FileArchiveClient and FakeClient fail when they do not hold it
 	Pin(ctx context.Context, cid string) error
-	// Get retrieves a block's raw bytes by CID.
+	// Get returns the content stored under cid
 	Get(ctx context.Context, cid string) ([]byte, error)
 }
 
-// Default transport/header/overall timeouts and response-size limits. Without
-// them the client would use http.Client{} with no timeout at all, so a wedged
-// or maliciously configured endpoint could hang an API publication call or the
-// 30-minute verification loop indefinitely, and read every response body fully
-// unbounded.
+// Default timeouts and response-size limit for KuboClient. They stop an
+// unresponsive endpoint from hanging a publication call or the periodic
+// verification loop, and bound how much of a response is read.
 const (
 	DefaultDialTimeout           = 5 * time.Second
 	DefaultTLSHandshakeTimeout   = 5 * time.Second
 	DefaultResponseHeaderTimeout = 10 * time.Second
-	// DefaultOverallTimeout bounds one ENTIRE request (connect through
-	// reading the full response body — Go's http.Client.Timeout covers
-	// the whole round trip, not just headers), generous enough for a
-	// large raw-block upload/download on a slow local Kubo node.
+	// DefaultOverallTimeout bounds a whole request, from connecting through
+	// reading the response body (http.Client.Timeout)
 	DefaultOverallTimeout = 60 * time.Second
-	// DefaultMaxResponseBytes bounds every response body this client will
-	// read, success or error — matches auditpkg's own package-size class
-	// of bound (MaxExpandedPackageSize); nothing this platform ever
-	// legitimately publishes/retrieves is larger.
+	// DefaultMaxResponseBytes bounds every response body the client reads, 64 MiB
+	// like auditpkg.MaxExpandedPackageSize
 	DefaultMaxResponseBytes = 64 << 20
 )
 
-// KuboClient talks to a local/remote Kubo HTTP API (default :5001).
+// KuboClient is a Client backed by a Kubo node's HTTP RPC API. Kubo serves the
+// RPC API on port 5001 by default.
 type KuboClient struct {
 	baseURL          string
 	http             *http.Client
 	maxResponseBytes int64
 }
 
-// NewKuboClient constructs a client against the Kubo HTTP API at baseURL
-// (e.g. "http://127.0.0.1:5001") using the default timeouts/limits. Use
-// NewKuboClientWithLimits to override them.
+// NewKuboClient returns a KuboClient for the RPC API at baseURL (for example
+// "http://127.0.0.1:5001") with the default timeout and response limit
 func NewKuboClient(baseURL string) *KuboClient {
 	return NewKuboClientWithLimits(baseURL, DefaultOverallTimeout, DefaultMaxResponseBytes)
 }
 
-// NewKuboClientWithLimits is NewKuboClient with an explicit overall
-// per-request timeout and response-size cap.
+// NewKuboClientWithLimits is NewKuboClient with an explicit per-request timeout
+// and response-size cap
 func NewKuboClientWithLimits(baseURL string, overallTimeout time.Duration, maxResponseBytes int64) *KuboClient {
 	transport := &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: DefaultDialTimeout}).DialContext,
@@ -76,11 +73,9 @@ func NewKuboClientWithLimits(baseURL string, overallTimeout time.Duration, maxRe
 	return &KuboClient{baseURL: baseURL, http: &http.Client{Timeout: overallTimeout, Transport: transport}, maxResponseBytes: maxResponseBytes}
 }
 
-// readLimited reads at most k.maxResponseBytes+1 bytes from r (streaming
-// through a bounded reader rather than buffering an arbitrary amount
-// before checking), returning an error if the response was larger than
-// the configured limit, so content above the documented limit is rejected
-// rather than read in full.
+// readLimited reads r through a bounded reader and returns an error when the
+// body is longer than k.maxResponseBytes, so an oversized body is never read in
+// full
 func (k *KuboClient) readLimited(r io.Reader) ([]byte, error) {
 	b, err := io.ReadAll(io.LimitReader(r, k.maxResponseBytes+1))
 	if err != nil {
@@ -92,7 +87,20 @@ func (k *KuboClient) readLimited(r io.Reader) ([]byte, error) {
 	return b, nil
 }
 
+// maxSingleBlockBytes is the largest content AddRaw stores as one raw leaf. It is
+// the chunk size AddRaw asks Kubo for, 1 MiB, which every Kubo version accepts and
+// which covers auditpkg.MaxDocumentBytes.
+const maxSingleBlockBytes = 1 << 20
+
+// AddRaw adds data with POST /api/v0/add using cid-version=1, raw-leaves=true,
+// pin=true and chunker=size-1048576, so data up to 1 MiB comes back as a single
+// raw leaf whose CID equals the CIDv1Raw of data. Kubo's default chunker
+// (size-262144) would split larger content into a multi-block DAG with a different
+// root CID, so AddRaw returns an error for data over 1 MiB.
 func (k *KuboClient) AddRaw(ctx context.Context, data []byte) (string, error) {
+	if len(data) > maxSingleBlockBytes {
+		return "", fmt.Errorf("ipfs: %d bytes exceeds the %d byte single-block limit", len(data), maxSingleBlockBytes)
+	}
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	part, err := mw.CreateFormFile("file", "block")
@@ -106,7 +114,7 @@ func (k *KuboClient) AddRaw(ctx context.Context, data []byte) (string, error) {
 		return "", err
 	}
 
-	url := k.baseURL + "/api/v0/add?cid-version=1&raw-leaves=true&pin=true"
+	url := k.baseURL + "/api/v0/add?cid-version=1&raw-leaves=true&pin=true&chunker=size-1048576"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &body)
 	if err != nil {
 		return "", err
@@ -135,6 +143,7 @@ func (k *KuboClient) AddRaw(ctx context.Context, data []byte) (string, error) {
 	return out.Hash, nil
 }
 
+// Pin pins cid with POST /api/v0/pin/add
 func (k *KuboClient) Pin(ctx context.Context, cid string) error {
 	url := k.baseURL + "/api/v0/pin/add?arg=" + cid
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
@@ -153,6 +162,7 @@ func (k *KuboClient) Pin(ctx context.Context, cid string) error {
 	return nil
 }
 
+// Get reads cid with POST /api/v0/cat
 func (k *KuboClient) Get(ctx context.Context, cid string) ([]byte, error) {
 	url := k.baseURL + "/api/v0/cat?arg=" + cid
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)

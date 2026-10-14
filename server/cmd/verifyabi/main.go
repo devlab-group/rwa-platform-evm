@@ -1,18 +1,11 @@
-// Command verifyabi checks that internal/bindings' hand-written ABI
-// literals produce the same function selectors and event topic0 hashes as
-// the real compiled contract artifacts under contracts/out (forge build
-// output). internal/bindings exists because it was written before the
-// contracts compiled; this tool is the CI drift check that verifies the
-// stand-in hasn't drifted from the frozen interfaces it was hand-transcribed
-// from. It exits 0 (skipping) if contracts/out is absent entirely — e.g.
-// before `forge build` has run — so it never requires a Foundry build to exist
-// for unrelated `go build`/`go test` runs. Once the directory IS there, though,
-// every contract it checks is required: a missing or unreadable artifact is a
-// hard failure, not a skip, so a renamed Foundry output can't silently take a
-// contract out of the drift gate.
+// Command verifyabi compares the function selectors and event topic0 hashes in
+// internal/bindings with compiled artifacts under contracts/out.
 //
-// Once internal/bindings is replaced by real abigen output, this command
-// (and its whole rationale) can be deleted.
+// If contracts/out is absent, it prints a notice and exits 0, allowing Go builds
+// and tests without Foundry output. When the directory exists, each checked
+// artifact is required; a missing or unreadable file fails the check.
+//
+// Generated abigen bindings could replace the hand-written literals and this check.
 package main
 
 import (
@@ -52,7 +45,7 @@ type check struct {
 func main() {
 	root := findContractsOut()
 	if root == "" {
-		fmt.Println("verifyabi: contracts/out not found (run `forge build` first) — skipping drift check")
+		fmt.Println("verifyabi: contracts/out not found (run `forge build` first) - skipping drift check")
 		return
 	}
 
@@ -64,18 +57,16 @@ func main() {
 		{"FixedPriceStrategy", filepath.Join(root, "FixedPriceStrategy.sol", "FixedPriceStrategy.json"), func() abi.ABI { return bindings.NewFixedPriceStrategy().ABI }},
 		{"RWAFactory", filepath.Join(root, "RWAFactory.sol", "RWAFactory.json"), func() abi.ABI { return bindings.NewFactory().ABI }},
 		{"RWAToken", filepath.Join(root, "RWAToken.sol", "RWAToken.json"), func() abi.ABI { return bindings.NewRWAToken().ABI }},
-		// The ERC-20 binding is reused for the quote token, but every entry in it —
-		// the plain ERC-20 views plus IRWAToken's own compliance()/supplyController()/
-		// redemptionEscrow()/paused() getters — is declared by RWAToken, so the token
-		// artifact is the right thing to hold it to.
+		// The ERC-20 binding is also used for the quote token, but each entry in it
+		// (the ERC-20 views plus the compliance(), supplyController(),
+		// redemptionEscrow() and paused() getters) is declared by RWAToken, so
+		// the RWAToken artifact is the one to check it against
 		{"RWAToken (ERC-20 views)", filepath.Join(root, "RWAToken.sol", "RWAToken.json"), func() abi.ABI { return bindings.NewERC20().ABI }},
 	}
 
-	// Once contracts/out exists, every contract in `checks` is required: an
-	// artifact that cannot be loaded means a renamed/missing Foundry output,
-	// and skipping it would leave that contract's drift unchecked while the
-	// gate still reported success. Fail closed, and prove afterwards that
-	// every expected artifact was actually compared.
+	// An artifact that cannot be loaded counts as a mismatch, so a renamed or
+	// missing Foundry output fails the check instead of skipping that contract.
+	// The compared count confirms that every expected artifact was checked.
 	mismatches := 0
 	compared := 0
 	for _, c := range checks {
@@ -100,9 +91,9 @@ func main() {
 	fmt.Printf("verifyabi: OK, no drift between internal/bindings and the %d compiled contract ABIs\n", compared)
 }
 
-// findContractsOut looks for ../contracts/out or contracts/out relative to
-// common working directories, since this tool may be invoked either from
-// the repo root or from server/.
+// findContractsOut returns the absolute path of contracts/out, found relative
+// to the working directory, which is the repository root or server/. It
+// returns "" if none exists.
 func findContractsOut() string {
 	for _, candidate := range []string{
 		filepath.Join("..", "contracts", "out"),

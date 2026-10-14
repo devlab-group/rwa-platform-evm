@@ -14,15 +14,12 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// delayedPurchaseRepo wraps a repository.PurchaseRepository and inserts a
-// small sleep around every write Reconcile's generation-swap performs,
-// widening the window during which a concurrent reader's List() call can
-// interleave with an in-flight rebuild — the concurrent
-// API-reader test (TestReconcileNeverExposesEmptyOrPartialPurchasesToConcurrentReaders
-// below) needs some real chance of that interleaving actually happening;
-// against the bare memory repo's fast, individually-mutex-protected calls,
-// an unmodified test would essentially never sample a mid-rebuild state
-// even if the rebuild were still buggy.
+// delayedPurchaseRepo wraps a repository.PurchaseRepository and sleeps briefly
+// around every write that Reconcile's generation swap performs. That widens the
+// window in which a concurrent List() can interleave with a rebuild, which
+// TestReconcileNeverExposesEmptyOrPartialPurchasesToConcurrentReaders needs: the
+// memory repository's calls are fast and individually locked, so without the
+// delay the test would almost never observe a mid-rebuild state.
 type delayedPurchaseRepo struct {
 	repository.PurchaseRepository
 }
@@ -83,7 +80,7 @@ func TestReconcileRebuildsPurchases(t *testing.T) {
 		t.Errorf("Confirmations = %d, want 5", list[0].Confirmations)
 	}
 
-	// Reconcile again after a simulated rollback must reflect the smaller set.
+	// Reconcile again after a simulated rollback must reflect the smaller set
 	if _, err := events.DeleteFromBlock(ctx, 31337, vaultAddr.Hex(), 5); err != nil {
 		t.Fatal(err)
 	}
@@ -99,15 +96,12 @@ func TestReconcileRebuildsPurchases(t *testing.T) {
 	}
 }
 
-// TestReconcileNeverExposesEmptyOrPartialPurchasesToConcurrentReaders
-// rebuilds the purchases read model
-// TWICE, the second time replacing every previously-seeded purchase with
-// entirely different ones (the worst case for a delete-then-reinsert
-// rebuild — every old id disappears, every new id is new) while a
-// concurrent goroutine polls List() in a tight loop. The old
-// DeleteAll-then-Create implementation would let that reader observe an
-// empty (or partially rebuilt) list; the generation-swap implementation
-// must never let the observed count drop below the pre-rebuild count.
+// TestReconcileNeverExposesEmptyOrPartialPurchasesToConcurrentReaders rebuilds
+// the purchases read model twice, the second time replacing every seeded
+// purchase with a different one, while a goroutine polls List() in a tight
+// loop. That is the worst case for a rebuild that deletes before it inserts: a
+// reader could see an empty or partial list. The observed count must never drop
+// below the pre-rebuild count.
 func TestReconcileNeverExposesEmptyOrPartialPurchasesToConcurrentReaders(t *testing.T) {
 	vaultAddr := common.HexToAddress("0x0000000000000000000000000000000000000A")
 	events := memory.NewChainEventRepository()
@@ -131,8 +125,7 @@ func TestReconcileNeverExposesEmptyOrPartialPurchasesToConcurrentReaders(t *test
 		t.Fatalf("seed: got %d purchases, err=%v", len(seeded), err)
 	}
 
-	// Reorg: every seeded tx is gone, replaced by three entirely
-	// different ones.
+	// reorg: every seeded tx is gone, replaced by three different ones
 	if _, err := events.DeleteFromBlock(ctx, 31337, vaultAddr.Hex(), 0); err != nil {
 		t.Fatal(err)
 	}

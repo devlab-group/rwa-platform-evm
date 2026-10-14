@@ -1,7 +1,7 @@
 // Package auditlog appends operational audit records to the audit_logs
-// collection — a record of what the server itself did (whose API call
-// triggered a compliance change, a mint relay, a redemption action, etc.),
-// distinct from the on-chain event log.
+// collection. They record what the server did and on whose request, such as a
+// compliance change or an asset record, and are separate from the on-chain
+// event log.
 package auditlog
 
 import (
@@ -14,22 +14,20 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// Logger appends audit entries.
+// Logger appends audit entries
 type Logger struct {
 	repo repository.AuditLogRepository
 }
 
-// New constructs a Logger backed by repo.
+// New constructs a Logger backed by repo
 func New(repo repository.AuditLogRepository) *Logger {
 	return &Logger{repo: repo}
 }
 
-// Record appends one audit entry under category (e.g. "compliance",
-// "assets", "sales", "redemptions", "project" — matches api
-// Schemas.AuditLog.category and the listAuditLogs `category` filter).
-// Errors are returned rather than swallowed so callers can decide whether a
-// failed audit write should block the triggering operation (V1 default:
-// log and continue, see api handlers).
+// Record appends one audit entry under category, such as "compliance" or
+// "assets", which is also the category filter of listAuditLogs. The error is
+// returned so the caller decides whether a failed write blocks the operation.
+// The API handlers log it and continue.
 func (l *Logger) Record(ctx context.Context, category, actor, action, target string, metadata map[string]any) error {
 	return l.repo.Append(ctx, &models.AuditLogEntry{
 		ID:        uuid.NewString(),
@@ -43,13 +41,12 @@ func (l *Logger) Record(ctx context.Context, category, actor, action, target str
 }
 
 // Recent returns up to limit of the most recently appended entries,
-// optionally filtered by category (empty string means all categories).
+// optionally filtered by category (empty string means all categories)
 func (l *Logger) Recent(ctx context.Context, category string, limit int) ([]*models.AuditLogEntry, error) {
 	return l.repo.List(ctx, category, limit)
 }
 
-// cloneMeta copies metadata so the intent/result tagging below never mutates
-// the caller's map (which may be reused or inspected afterwards).
+// cloneMeta copies metadata so tagging an entry does not modify the caller's map
 func cloneMeta(metadata map[string]any) map[string]any {
 	m := make(map[string]any, len(metadata)+2)
 	for k, v := range metadata {
@@ -58,14 +55,12 @@ func cloneMeta(metadata map[string]any) map[string]any {
 	return m
 }
 
-// RecordIntent appends a durable pre-effect audit INTENT and returns its id.
-// The immutable operation intent is persisted durably BEFORE any external
-// effect. A privileged caller records the intent, treats a
-// non-nil error as FATAL (fail closed — the external effect must not happen if
-// the actor/action cannot be made durable), performs the effect, then calls
-// RecordResult with the returned id. The entry is tagged phase="intent" so an
-// intent with no matching result is a visible signal that an effect may have
-// been attempted but never confirmed durable.
+// RecordIntent appends an audit entry for an operation before its external
+// effect and returns the entry's id. A privileged caller must treat an error as
+// fatal and skip the effect, since the actor and action could not be recorded.
+// After the effect it calls RecordResult with the returned id. The entry is
+// tagged phase="intent", so an intent with no matching result shows an effect
+// that may have been attempted without a recorded outcome.
 func (l *Logger) RecordIntent(ctx context.Context, category, actor, action, target string, metadata map[string]any) (string, error) {
 	id := uuid.NewString()
 	m := cloneMeta(metadata)
@@ -84,12 +79,11 @@ func (l *Logger) RecordIntent(ctx context.Context, category, actor, action, targ
 	return id, nil
 }
 
-// RecordResult appends the completion entry for a prior RecordIntent, linked
-// by intentId and tagged phase="result" with ok plus any outcome fields
-// (txHash, error) in metadata — so completion/txhash/failure/retries are
-// linked back to that intent. A persistence failure here is returned so the
-// caller can log/alert, but — unlike the intent — it does NOT need to fail the
-// operation: the actor/action was already durably captured by the intent.
+// RecordResult appends the completion entry for an earlier RecordIntent. The
+// entry is tagged phase="result" with the intentId and ok, plus any outcome
+// fields the caller puts in metadata, such as txHash or error. A failure is
+// returned so the caller can log it. It need not fail the operation, because
+// the intent already recorded the actor and action.
 func (l *Logger) RecordResult(ctx context.Context, intentID, category, actor, action, target string, ok bool, metadata map[string]any) error {
 	m := cloneMeta(metadata)
 	m["phase"] = "result"

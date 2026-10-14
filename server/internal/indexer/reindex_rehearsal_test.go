@@ -15,23 +15,17 @@ import (
 	"github.com/rwa-platform/server/internal/redemption"
 )
 
-// TestReindexRehearsalReconstructsIdenticalReadModel is the "chain
-// reindex rehearsal" proof, on the fake path (internal/indexer.FakeSource
-// stands in for a live chain RPC, so this needs no live infrastructure —
-// see server/ops/reindex_rehearsal.sh for the equivalent runbook against a
-// real deployment).
+// TestReindexRehearsalReconstructsIdenticalReadModel is the chain reindex
+// rehearsal on the fake path: FakeSource stands in for the RPC, so no live
+// infrastructure is needed (server/ops/reindex_rehearsal.sh is the equivalent
+// procedure against a real deployment).
 //
-// It builds a small RedemptionEscrow event history, indexes and
-// reconciles it once (the "before" state), then simulates total loss of
-// this server's own index — chain_events wiped, the redemption_requests
-// read model wiped, and a brand new (never-polled) indexer checkpoint —
-// while the underlying chain (FakeSource) keeps its full log history
-// intact, exactly like a real chain would. Re-running Poll+Reconcile from
-// that reset state must reconstruct byte-for-byte the same read model:
-// this is the entire architectural premise behind "redemption status is
-// derived only from events, never server-side optimistic writes" (see
-// internal/redemption's package doc) — if reconstruction ever silently
-// diverged from the original, that premise would be false.
+// It builds a small RedemptionEscrow event history, indexes and reconciles it (the
+// "before" state), then simulates total loss of the server's own index: chain_events
+// and the redemption_requests read model are wiped and the indexer checkpoint is
+// new, while FakeSource keeps the full log history as a real chain would. Running
+// Poll and Reconcile again must rebuild the same read model. That is the premise
+// of deriving redemption status only from events (see internal/redemption).
 func TestReindexRehearsalReconstructsIdenticalReadModel(t *testing.T) {
 	ctx := context.Background()
 	const chainID = 31337
@@ -71,7 +65,7 @@ func TestReindexRehearsalReconstructsIdenticalReadModel(t *testing.T) {
 		return got
 	}
 
-	// "Before": a normal, never-interrupted index.
+	// "before": a normal, uninterrupted index
 	checkpoints := memory.NewIndexerCheckpointRepository()
 	chainEvents := memory.NewChainEventRepository()
 	requests := memory.NewRedemptionRequestRepository()
@@ -80,10 +74,9 @@ func TestReindexRehearsalReconstructsIdenticalReadModel(t *testing.T) {
 		t.Fatalf("before.Status = %s, want Funded", before.Status)
 	}
 
-	// Simulate total index loss: drop every indexed event for this
-	// address, drop the derived read model, and start from a brand new
-	// (never-polled) checkpoint repo — the underlying chain (source) is
-	// untouched, exactly like reality.
+	// simulate total index loss: drop every indexed event for this address, drop the
+	// derived read model, and start from a new (never polled) checkpoint repo, while
+	// the underlying chain (source) is untouched
 	if _, err := chainEvents.DeleteFromBlock(ctx, chainID, escrowAddr.Hex(), 0); err != nil {
 		t.Fatalf("DeleteFromBlock: %v", err)
 	}
@@ -95,7 +88,7 @@ func TestReindexRehearsalReconstructsIdenticalReadModel(t *testing.T) {
 	}
 	freshCheckpoints := memory.NewIndexerCheckpointRepository()
 
-	// "After": replay from scratch against the same underlying chain.
+	// "after": replay from scratch against the same underlying chain
 	after := buildAndRun(freshCheckpoints, chainEvents, requests)
 
 	if before.ID != after.ID || before.Beneficiary != after.Beneficiary ||

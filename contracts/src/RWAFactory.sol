@@ -11,16 +11,11 @@ import {SupplyControllerDeployer} from "./factory/SupplyControllerDeployer.sol";
 import {RedemptionEscrowDeployer} from "./factory/RedemptionEscrowDeployer.sol";
 
 /// @title RWAFactory
-/// @notice Deploys and wires one versioned project stack in a single transaction.
-/// @dev The actual `new X()` calls for the 6 child contracts live in four stateless deployer
-///      helpers (src/factory/*Deployer.sol), invoked here via `delegatecall`, so that RWAFactory
-///      itself stays well under the EIP-170 24,576-byte runtime bytecode limit — see
-///      ComplianceTokenDeployer's NatSpec for why bundling them all directly in RWAFactory
-///      doesn't fit. `delegatecall` (not `call`) preserves `address(this) == RWAFactory`
-///      through each helper, so every child's constructor still sees the same `msg.sender` it
-///      would if RWAFactory had called `new X()` inline — required for ComplianceRegistry's
-///      factory-bootstrap COMPLIANCE_ROLE grant and RWAToken's one-time deployer-gated
-///      `setSupplyController`/`setRedemptionEscrow`.
+/// @notice Deploys and wires a versioned project stack in one transaction
+/// @dev Four stateless helpers hold child creation code to keep runtime bytecode below
+///      EIP-170's 24,576-byte limit; see ComplianceTokenDeployer. delegatecall preserves
+///      the factory as constructor msg.sender for the registry's bootstrap compliance
+///      role and RWAToken's one-time controller and escrow wiring.
 contract RWAFactory is IRWAFactory {
     string private constant VERSION = "rwa-v2";
 
@@ -63,11 +58,11 @@ contract RWAFactory is IRWAFactory {
         address escrow = _deployEscrow(config, token, vault, strategy);
 
         RWAToken(token).setSupplyController(supplyController);
-        // Wire the escrow-only pause-bypass path (RWAToken.returnEscrowedRWA).
+        // Wire the escrow-only pause-bypass path (RWAToken.returnEscrowedRWA)
         RWAToken(token).setRedemptionEscrow(escrow);
 
         ComplianceRegistry complianceRegistry = ComplianceRegistry(compliance);
-        // Pin Vault + RedemptionEscrow so COMPLIANCE_ROLE can never block them later.
+        // Pin Vault + RedemptionEscrow so COMPLIANCE_ROLE can never block them later
         complianceRegistry.setSystemAddresses(vault, escrow);
         complianceRegistry.setStatus(vault, IComplianceRegistry.ComplianceStatus.Allowed, 0);
         complianceRegistry.setStatus(escrow, IComplianceRegistry.ComplianceStatus.Allowed, 0);
@@ -137,9 +132,9 @@ contract RWAFactory is IRWAFactory {
     }
 
     function _delegateDeploy(address target, bytes memory data) private returns (bytes memory) {
-        // `target` is one of four immutable, constructor-validated deployer addresses and `data`
-        // is always an abi.encodeCall(...) with a compile-time-fixed selector — never caller-
-        // controlled, so this delegatecall is not attacker-redirectable.
+        // `target` is one of four immutable deployer addresses checked nonzero in the
+        // constructor, and `data` is an abi.encodeCall(...) with a fixed selector, so a caller
+        // cannot redirect the delegatecall to another target or function
         // slither-disable-next-line controlled-delegatecall
         (bool ok, bytes memory ret) = target.delegatecall(data);
         if (!ok) {

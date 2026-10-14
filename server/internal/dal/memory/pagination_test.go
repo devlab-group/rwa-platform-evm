@@ -10,12 +10,10 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// TestPurchaseRepositoryListPageWalksAllRecordsOver200 exercises paging at
-// the repository level (the pure-algorithm equivalent
-// lives in internal/dal/repository/keyset_test.go — this proves the actual
-// PurchaseRepository.ListPage wiring, sort, and cursor round-trip through
-// EncodeKeysetCursor/DecodeKeysetCursor, not just the KeysetPage helper in
-// isolation).
+// TestPurchaseRepositoryListPageWalksAllRecordsOver200 checks paging through
+// PurchaseRepository.ListPage: its sort and the cursor round trip through
+// EncodeKeysetCursor and DecodeKeysetCursor. The KeysetPage helper alone is tested
+// in internal/dal/repository/keyset_test.go.
 func TestPurchaseRepositoryListPageWalksAllRecordsOver200(t *testing.T) {
 	repo := NewPurchaseRepository()
 	ctx := context.Background()
@@ -60,11 +58,9 @@ func TestPurchaseRepositoryListPageWalksAllRecordsOver200(t *testing.T) {
 	}
 }
 
-// TestPurchaseRepositoryListPageStableUnderConcurrentInsert proves a
-// cursor obtained from one page still resumes correctly after new
-// purchases (which always sort ahead, being newer/higher-block) are
-// created — the concrete regression for avoiding offset cursors on
-// changing, newest-first data.
+// TestPurchaseRepositoryListPageStableUnderConcurrentInsert checks that a cursor
+// from one page still resumes correctly after newer purchases, which sort first,
+// are created. An offset cursor would shift.
 func TestPurchaseRepositoryListPageStableUnderConcurrentInsert(t *testing.T) {
 	repo := NewPurchaseRepository()
 	ctx := context.Background()
@@ -82,7 +78,7 @@ func TestPurchaseRepositoryListPageStableUnderConcurrentInsert(t *testing.T) {
 		t.Fatalf("first page = %+v", firstPage)
 	}
 
-	// New purchases land with HIGHER block numbers — ahead of the walk.
+	// new purchases get higher block numbers, so they land ahead of the walk
 	for i := 10; i < 15; i++ {
 		if err := repo.Create(ctx, &models.Purchase{ID: fmt.Sprintf("tx-%04d:0", i), BlockNumber: uint64(i)}); err != nil {
 			t.Fatal(err)
@@ -93,17 +89,15 @@ func TestPurchaseRepositoryListPageStableUnderConcurrentInsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// firstPage covered BlockNumber 9,8,7,6 — the second page must resume
-	// at 5, unaffected by the 5 newly inserted higher-numbered purchases.
+	// firstPage covered block numbers 9, 8, 7 and 6, so the second page resumes at 5
+	// whatever was inserted above
 	if len(secondPage) != 4 || secondPage[0].BlockNumber != 5 {
 		t.Fatalf("second page = %+v, want to resume at BlockNumber 5", secondPage)
 	}
 }
 
-// TestAssetRecordRepositoryListPageWalksAllRecordsOver200 mirrors
-// TestPurchaseRepositoryListPageWalksAllRecordsOver200 for the OTHER sort
-// direction (asset records keep their pre-existing
-// oldest-first order).
+// TestAssetRecordRepositoryListPageWalksAllRecordsOver200 is the same check for
+// the ascending direction, since asset records are listed oldest first
 func TestAssetRecordRepositoryListPageWalksAllRecordsOver200(t *testing.T) {
 	repo := NewAssetRecordRepository()
 	ctx := context.Background()
@@ -149,9 +143,8 @@ func TestAssetRecordRepositoryListPageWalksAllRecordsOver200(t *testing.T) {
 	}
 }
 
-// TestTransactionRepositoryListPageWalksAllRecordsOver200 mirrors
-// TestPurchaseRepositoryListPageWalksAllRecordsOver200 for transactions
-// (ascending SubmittedAt), including the address filter.
+// TestTransactionRepositoryListPageWalksAllRecordsOver200 is the same check for
+// transactions, in ascending SubmittedAt order, including the address filter
 func TestTransactionRepositoryListPageWalksAllRecordsOver200(t *testing.T) {
 	repo := NewTransactionRepository()
 	ctx := context.Background()
@@ -191,8 +184,7 @@ func TestTransactionRepositoryListPageWalksAllRecordsOver200(t *testing.T) {
 		t.Fatalf("visited %d of %d transactions", len(seen), total)
 	}
 
-	// The address filter (case-insensitive) must combine correctly with
-	// the keyset walk, not just the unfiltered case above.
+	// the case-insensitive address filter must combine with the keyset walk
 	page, next, err := repo.ListPage(ctx, "0xaaaa", "", 5)
 	if err != nil {
 		t.Fatal(err)
@@ -205,10 +197,10 @@ func TestTransactionRepositoryListPageWalksAllRecordsOver200(t *testing.T) {
 	}
 }
 
-// TestRedemptionRequestRepositoryListPageFiltersByBeneficiary covers the
-// public investor-UI filter: an `address` narrows results to one beneficiary
-// (case-insensitively), combines with the status filter, and still walks via
-// the keyset cursor. Mirrors TransactionRepository.ListPage's address filter.
+// TestRedemptionRequestRepositoryListPageFiltersByBeneficiary checks that an
+// address filter narrows results to one beneficiary, ignoring case, combines with
+// the status filter, and still pages through the keyset cursor, as in
+// TransactionRepository.ListPage
 func TestRedemptionRequestRepositoryListPageFiltersByBeneficiary(t *testing.T) {
 	repo := NewRedemptionRequestRepository()
 	ctx := context.Background()
@@ -232,8 +224,8 @@ func TestRedemptionRequestRepositoryListPageFiltersByBeneficiary(t *testing.T) {
 		}
 	}
 
-	// walk pages with a small limit so the filter must survive the keyset walk,
-	// asserting no other beneficiary leaks in and no id is visited twice.
+	// walk with a small limit so the filter has to hold across pages, with no other
+	// beneficiary included and no id visited twice
 	count := func(status, address string) int {
 		seen := map[string]bool{}
 		cursor := ""
@@ -266,7 +258,7 @@ func TestRedemptionRequestRepositoryListPageFiltersByBeneficiary(t *testing.T) {
 	if n := count("", bob); n != 5 {
 		t.Errorf("bob address filter = %d, want 5", n)
 	}
-	// status + address combine.
+	// status and address combine
 	if n := count(string(models.RedemptionFunded), alice); n != 0 {
 		t.Errorf("alice+Funded = %d, want 0 (alice is Pending)", n)
 	}

@@ -12,12 +12,10 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// TestAllTxStatusesUniqueAndComplete guards the single source-of-truth list
-// models.AllTxStatuses against duplicates and empties. The
-// two tests below then pin that list to both the Go const block usage and the
-// frozen OpenAPI enum, so a newly added TxStatus that is not surfaced through
-// the API contract fails CI here rather than rendering as an undefined badge
-// in the SPA at runtime.
+// TestAllTxStatusesUniqueAndComplete guards models.AllTxStatuses, the single
+// list of statuses, against duplicates and empties. The two tests below pin it to
+// the TxStatus constants and to the OpenAPI enum, so a status missing from the API
+// contract fails CI instead of rendering as an undefined badge in the SPA.
 func TestAllTxStatusesUniqueAndComplete(t *testing.T) {
 	seen := map[models.TxStatus]bool{}
 	for _, s := range models.AllTxStatuses {
@@ -29,10 +27,9 @@ func TestAllTxStatusesUniqueAndComplete(t *testing.T) {
 		}
 		seen[s] = true
 	}
-	// Every status the handler can emit is string(tx.Status); the const
-	// values below are exactly what TxManager assigns. Keeping this explicit
-	// mirror here (rather than reflecting over the package) makes a forgotten
-	// AllTxStatuses entry a compile-visible, reviewable diff.
+	// Every status the handler emits is string(tx.Status). This explicit list of the
+	// TxStatus constants, instead of reflection, makes a status missing from
+	// AllTxStatuses fail this test
 	wantConsts := []models.TxStatus{
 		models.TxPending, models.TxMined, models.TxConfirmed, models.TxReplaced,
 		models.TxReverted, models.TxReorged, models.TxFailed, models.TxBroadcastUnknown,
@@ -48,13 +45,11 @@ func TestAllTxStatusesUniqueAndComplete(t *testing.T) {
 	}
 }
 
-// TestTransactionStatusEnumMatchesDomain is the contract test: the
-// set of statuses the Go transactions handler is allowed to emit
-// (models.AllTxStatuses, since toTransactionResponse returns the raw
-// string(tx.Status)) MUST equal the api/openapi.yaml Transaction.status enum
-// exactly — no more, no fewer. A status the server can persist but the schema
-// omits produces an out-of-contract value the generated client and UI cannot
-// render.
+// TestTransactionStatusEnumMatchesDomain checks that the statuses the handler
+// can emit (models.AllTxStatuses, since the handler returns string(tx.Status))
+// equal the api/openapi.yaml Transaction.status enum exactly. A status the server
+// can persist but the schema omits is out of contract, and the generated client
+// and UI cannot render it.
 func TestTransactionStatusEnumMatchesDomain(t *testing.T) {
 	enum := transactionStatusEnumFromOpenAPI(t)
 
@@ -96,16 +91,16 @@ func transactionStatusEnumFromOpenAPI(t *testing.T) []string {
 	if !ok {
 		t.Fatal("cannot resolve test file path")
 	}
-	// internal/api -> internal -> server -> repo root, where api/openapi.yaml lives.
+	// internal/api -> internal -> server -> repo root, where api/openapi.yaml lives
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "..", ".."))
 	path := filepath.Join(repoRoot, "api", "openapi.yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	// Scope to the Transaction schema block: the file has other `status:`
-	// enums (e.g. compliance Allowed/Blocked/Unknown) whose values must not
-	// be confused for transaction statuses.
+	// Scope to the Transaction schema block, because other `status:` enums in the
+	// file (such as compliance Allowed, Blocked and Unknown) are not transaction
+	// statuses
 	body := string(data)
 	idx := strings.Index(body, "\n    Transaction:")
 	if idx < 0 {

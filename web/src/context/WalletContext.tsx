@@ -19,13 +19,11 @@ import {
 } from "./walletContextValue";
 
 /**
- * App-wide connected-wallet state, built on lib/wallet's viem + injected
- * provider stack (no wagmi). A single provider is mounted at the app root so
- * every screen — the admin login, the always-present header Connect button,
- * Setup's on-chain decimals read, and the investor SPA — shares one wallet
- * connection and one set of `accountsChanged`/`chainChanged` subscriptions,
- * rather than each hook opening its own. The context value/type/hook live in
- * ./walletContextValue so this file only exports the component (react-refresh).
+ * App-wide connected-wallet state, built on viem and the injected provider in
+ * lib/wallet. One provider at the app root gives every screen the same wallet
+ * connection and one set of `accountsChanged` and `chainChanged` subscriptions.
+ * The context value, type and hook live in ./walletContextValue so this file
+ * exports only the component, as react-refresh requires.
  */
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<Address | null>(null);
@@ -51,9 +49,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const disconnect = useCallback(() => {
-    // MetaMask & co. expose no "disconnect this dApp" RPC, so connection is a
-    // purely client-side notion: forget the account and the app falls back to
-    // the Connect affordance. The admin JWT is dropped separately on logout.
+    // Injected wallets have no disconnect RPC, so disconnecting only forgets
+    // the account here and the header shows Connect again. The admin JWT is
+    // cleared separately
     setAddress(null);
     setChainId(null);
     setError(null);
@@ -72,8 +70,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       await requestSwitchChain(expectedChainId);
-      // Wallets that don't emit chainChanged reliably still get a fresh read
-      // here; wallets that do will additionally trigger the listener below.
+      // Read the chain here for wallets that do not emit chainChanged reliably;
+      // wallets that do also trigger the listener below
       const provider = getInjectedProvider();
       if (provider) {
         const chainIdHex = (await provider.request({
@@ -90,12 +88,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // React to the wallet's own account/chain changes rather than only reading
-  // them at connect time — a network switch or account swap after connect
-  // must be reflected immediately, not just at the next reload.
-  // Connection is only ever established by an explicit connect() (the header
-  // Connect button / admin login), never silently, so the investor and admin
-  // flows both start disconnected until the user acts.
+  // Follow the wallet's account and chain changes, so a network switch or
+  // account swap shows at once. Nothing calls connect() until the user clicks
+  // Connect, so the app starts disconnected.
   useEffect(() => {
     const provider = getInjectedProvider();
     if (!provider?.on) return;

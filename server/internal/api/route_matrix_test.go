@@ -6,16 +6,13 @@ import (
 	"testing"
 )
 
-// TestRouteAuthorizationMatrix asserts an authorization outcome for every
-// route. It exercises every route
-// NewRouter registers with NO Authorization header (a missing/invalid admin
-// JWT reads as RoleReadOnly per auth.Authenticate — see api.go's adminOnly
-// doc comment) and asserts the expected outcome: a gated route must reject
-// with 403 before the handler ever runs (regardless of a missing/invalid
-// body or path parameter — RequireRole is upstream middleware); a public
-// route must NOT be rejected with 403 (it may still fail for other
-// reasons — bad params, 404, 501 not_configured — none of which is an
-// authorization decision).
+// TestRouteAuthorizationMatrix asserts an authorization outcome for every route
+// NewRouter registers. Each route is called without an Authorization header (a
+// missing or invalid admin JWT reads as RoleReadOnly; see auth.Authenticate). A
+// gated route must return 403 before the handler runs, whatever the body or path
+// parameters, because RequireRole is upstream middleware. A public route must not
+// return 403, though it may fail for other reasons (bad params, 404, 501
+// not_configured) that are not authorization decisions.
 func TestRouteAuthorizationMatrix(t *testing.T) {
 	env := setupTestApp(t)
 
@@ -32,7 +29,7 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 		{http.MethodGet, "/api/v1/project/enforcement", true},
 		{http.MethodGet, "/api/v1/config", false},
 
-		{http.MethodPost, "/api/v1/profile/validate", false},
+		{http.MethodPost, "/api/v1/profile/validate", true},
 		{http.MethodPost, "/api/v1/profile", true},
 
 		{http.MethodGet, "/api/v1/compliance/wallets", true},

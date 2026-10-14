@@ -1,11 +1,13 @@
-// Package auth provides RBAC, idempotency, and rate-limit middleware for the
-// Gin API. Admin auth is wallet-signature -> JWT
-// (api/openapi.yaml's BearerJwt scheme, single-admin model): the SPA proves
-// control of the configured admin wallet at POST /auth/challenge + /auth/session
-// and receives an HMAC-signed JWT it presents as `Authorization: Bearer <jwt>`.
-// Authenticate below verifies that token and sets the request role; RequireRole
-// gates the actual admin routes. Investor read routes use a separate,
-// narrower wallet SessionManager (X-Wallet-Session), unchanged.
+// Package auth provides role, idempotency, rate-limit, CORS and security-header
+// middleware for the Gin API.
+//
+// Admin auth is a wallet signature exchanged for a JWT (the BearerJwt scheme in
+// api/openapi.yaml). The admin SPA proves control of the configured admin
+// wallet through POST /auth/challenge and POST /auth/session and receives an
+// HS256 JWT, which it sends as "Authorization: Bearer <jwt>". Authenticate
+// verifies the token and sets the request role, and RequireRole gates the admin
+// routes. Investor routes use a separate, narrower wallet session
+// (SessionManager, X-Wallet-Session header).
 package auth
 
 import (
@@ -14,12 +16,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Role is a coarse, server-side permission bucket. The platform is
-// single-admin: a request either carries a valid admin JWT (RoleAdmin) or it
-// does not (RoleReadOnly). The finer authorities (auditor/compliance/pricer/
-// treasurer/redemption-manager) live on-chain and are independently
-// re-authorized by each contract's role checks — so server RBAC only needs to
-// gate which HTTP routes a caller may reach.
+// Role is a coarse server-side permission bucket. A request either carries a
+// valid admin JWT (RoleAdmin) or it does not (RoleReadOnly). The finer
+// authorities (auditor, compliance, pricer, treasurer, redemption manager) are
+// enforced by the contracts' own role checks, so the server only gates which
+// HTTP routes a caller may reach.
 type Role string
 
 const (
@@ -27,33 +28,28 @@ const (
 	RoleReadOnly Role = "readonly"
 )
 
-// contextRoleKey is the gin.Context key RequireRole reads from.
+// contextRoleKey is the gin.Context key RequireRole reads from
 const contextRoleKey = "auth.role"
 
 // contextPrincipalKey is the gin.Context key PrincipalFromContext reads from.
-// Idempotency scoping needs a stable per-credential identity, not just the
-// coarse Role bucket. For an admin JWT this is the
-// admin wallet address; for an unauthenticated caller it is anonymousPrincipal.
+// It holds the admin wallet address for a valid admin JWT and
+// anonymousPrincipal otherwise.
 const contextPrincipalKey = "auth.principal"
 
-// anonymousPrincipal is PrincipalFromContext's value for a request that
-// presented no valid admin JWT. It is a single shared bucket (every anonymous
-// caller collides on it), which is fine for idempotency scoping specifically
-// because RequireRole runs before Idempotency on every state-changing route
-// (see api.go) and those routes require RoleAdmin, which an anonymous caller
-// (RoleReadOnly) can never satisfy; PrincipalFromContext never gates
-// authorization itself, RequireRole still does that.
+// anonymousPrincipal is PrincipalFromContext's value for a request without a
+// valid admin JWT. All anonymous callers share it, which is harmless for
+// idempotency scoping because the routes using Idempotency require RoleAdmin
+// first. Authorization stays with RequireRole.
 const anonymousPrincipal = "anonymous"
 
-// Authenticate resolves the caller's role from an `Authorization: Bearer <jwt>`
-// admin token verified against jwtSecret. A valid admin JWT sets RoleAdmin and
-// records the admin wallet address as the request principal; a missing or
-// invalid token falls through to RoleReadOnly (so public read routes keep
-// working without a token). RequireRole enforces the actual gate per route.
+// Authenticate resolves the caller's role from an "Authorization: Bearer <jwt>"
+// token verified against jwtSecret. A valid admin JWT sets RoleAdmin and
+// records the admin wallet address as the principal. A missing or invalid token
+// falls through to RoleReadOnly, so public routes work without one. RequireRole
+// enforces the per-route gate.
 //
-// jwtSecret being empty (admin JWT auth not configured) means no token can ever
-// verify, so every request is RoleReadOnly — matching every other
-// optional-dependency degrade in this codebase.
+// An empty jwtSecret means no token can verify, so every request is
+// RoleReadOnly.
 func Authenticate(jwtSecret []byte) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role := RoleReadOnly
@@ -63,8 +59,7 @@ func Authenticate(jwtSecret []byte) gin.HandlerFunc {
 			if tok := BearerToken(c); tok != "" {
 				if addr, err := ParseAdminJWT(jwtSecret, tok); err == nil {
 					role = RoleAdmin
-					// The admin wallet address is a stable, non-secret identity —
-					// use it directly as the idempotency/audit principal.
+					// The wallet address is not secret, so it serves as the principal
 					principal = addr
 				}
 			}
@@ -76,9 +71,9 @@ func Authenticate(jwtSecret []byte) gin.HandlerFunc {
 	}
 }
 
-// PrincipalFromContext returns the stable per-credential identity Authenticate
-// recorded for this request (the admin wallet address, or anonymousPrincipal
-// if no valid admin JWT was presented).
+// PrincipalFromContext returns the identity Authenticate recorded for this
+// request: the admin wallet address, or anonymousPrincipal if no valid admin
+// JWT was presented
 func PrincipalFromContext(c *gin.Context) string {
 	v, ok := c.Get(contextPrincipalKey)
 	if !ok {
@@ -92,7 +87,7 @@ func PrincipalFromContext(c *gin.Context) string {
 }
 
 // RequireRole rejects the request with 403 unless the authenticated role is
-// in allowed.
+// in allowed
 func RequireRole(allowed ...Role) gin.HandlerFunc {
 	set := make(map[Role]bool, len(allowed))
 	for _, r := range allowed {
@@ -112,7 +107,7 @@ func RequireRole(allowed ...Role) gin.HandlerFunc {
 	}
 }
 
-// RoleFromContext returns the authenticated role, defaulting to RoleReadOnly.
+// RoleFromContext returns the authenticated role, defaulting to RoleReadOnly
 func RoleFromContext(c *gin.Context) Role {
 	role, ok := c.Get(contextRoleKey)
 	if !ok {

@@ -7,9 +7,9 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
-    // tests/ is the Playwright critical-flow suite (npm run test:e2e), not
-    // vitest specs — without this, vitest's default include glob also picks
-    // up tests/specs/*.spec.ts and fails on test.describe() outside Playwright.
+    // tests/ holds the Playwright suite (npm run test:e2e); vitest's default
+    // include glob would also match tests/specs/*.spec.ts and fail on
+    // test.describe() outside Playwright
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
   },
 });

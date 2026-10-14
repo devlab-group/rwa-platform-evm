@@ -12,13 +12,9 @@ func TestLoadUnknownModeErrors(t *testing.T) {
 	}
 }
 
-// TestProviderSatisfiesBlockchainSigner is a compile-time check (it will
-// fail to build, not just fail at runtime, if this ever regresses): every
-// Provider this package returns must be directly usable as a
-// blockchain.Signer without an adapter — that's the whole point of keeping
-// the two interfaces structurally compatible so this package need not
-// import internal/blockchain in production code (see keys.go's doc
-// comment). cmd/platform/main.go's loadSigner relies on exactly this.
+// TestProviderSatisfiesBlockchainSigner is a compile-time check that a Provider
+// is usable as a blockchain.Signer without an adapter, which loadSigner in
+// cmd/platform relies on
 func TestProviderSatisfiesBlockchainSigner(t *testing.T) {
 	p, err := Load("compliance", Config{Mode: ModeRaw, RawHexKey: testHexKey})
 	if err != nil {

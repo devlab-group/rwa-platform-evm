@@ -51,7 +51,7 @@ contract RWAFactoryTest is TestBase {
         IRWAFactory.ProjectConfig memory cfg = _defaultConfig();
         cfg.projectId = keccak256("event-project");
         // Only check topics we can predict ahead of the call (projectId, profileDigest); data
-        // fields (addresses) are asserted via the returned Deployment instead.
+        // fields (addresses) are asserted via the returned Deployment instead
         vm.recordLogs();
         IRWAFactory.Deployment memory dep = factory.deploy(cfg);
         assertTrue(dep.token != address(0));
@@ -82,6 +82,34 @@ contract RWAFactoryTest is TestBase {
         IRWAFactory.ProjectConfig memory cfg = _defaultConfig();
         cfg.treasury = address(0);
         vm.expectRevert(abi.encodeWithSelector(IRWAFactory.InvalidConfig.selector, "treasury"));
+        factory.deploy(cfg);
+    }
+
+    function test_deploy_zeroComplianceOperatorReverts() public {
+        IRWAFactory.ProjectConfig memory cfg = _defaultConfig();
+        cfg.complianceOperator = address(0);
+        vm.expectRevert(abi.encodeWithSelector(IRWAFactory.InvalidConfig.selector, "complianceOperator"));
+        factory.deploy(cfg);
+    }
+
+    function test_deploy_zeroPricerReverts() public {
+        IRWAFactory.ProjectConfig memory cfg = _defaultConfig();
+        cfg.pricer = address(0);
+        vm.expectRevert(abi.encodeWithSelector(IRWAFactory.InvalidConfig.selector, "pricer"));
+        factory.deploy(cfg);
+    }
+
+    function test_deploy_zeroTreasurerReverts() public {
+        IRWAFactory.ProjectConfig memory cfg = _defaultConfig();
+        cfg.treasurer = address(0);
+        vm.expectRevert(abi.encodeWithSelector(IRWAFactory.InvalidConfig.selector, "treasurer"));
+        factory.deploy(cfg);
+    }
+
+    function test_deploy_zeroRedemptionManagerReverts() public {
+        IRWAFactory.ProjectConfig memory cfg = _defaultConfig();
+        cfg.redemptionManager = address(0);
+        vm.expectRevert(abi.encodeWithSelector(IRWAFactory.InvalidConfig.selector, "redemptionManager"));
         factory.deploy(cfg);
     }
 
@@ -122,7 +150,7 @@ contract RWAFactoryTest is TestBase {
 
     function test_deploy_failedAttemptLeavesNoZombieState() public {
         // A reverted deploy() must not leave any partially-wired contracts behind, nor block a
-        // subsequent successful deploy.
+        // subsequent successful deploy
         IRWAFactory.ProjectConfig memory bad = _defaultConfig();
         bad.decimals = 200;
         vm.expectRevert(abi.encodeWithSelector(IRWAFactory.InvalidConfig.selector, "decimals"));

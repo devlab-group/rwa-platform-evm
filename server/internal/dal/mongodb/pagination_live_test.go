@@ -12,12 +12,9 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// liveDB dials the Mongo instance named by MONGO_TEST_URI and hands back a
-// throwaway database, skipping the test entirely when that variable is unset —
-// `go test ./...` must never require a running Mongo (see the package doc).
-// Point it at the e2e harness's instance to run these:
-//
-//	MONGO_TEST_URI=mongodb://127.0.0.1:27017 go test ./internal/dal/mongodb/
+// liveDB connects to the MongoDB named by MONGO_TEST_URI and returns a throwaway
+// database, and skips the test when the variable is unset, so `go test ./...` needs
+// no running MongoDB. To run these tests, point it at the e2e harness's instance:
 func liveDB(t *testing.T) *mongo.Database {
 	t.Helper()
 	uri := os.Getenv("MONGO_TEST_URI")
@@ -42,8 +39,8 @@ func liveDB(t *testing.T) *mongo.Database {
 	return db
 }
 
-// pageAll walks every page a ListPage-style function yields, guarding against
-// the "cursor never advances" failure mode as well as the empty-page one.
+// pageAll walks every page a ListPage-style function returns. It fails if the
+// cursor never advances or a page is empty.
 func pageAll(t *testing.T, limit int, next func(cursor string) ([]string, string)) []string {
 	t.Helper()
 	var ids []string
@@ -64,12 +61,11 @@ func pageAll(t *testing.T, limit int, next func(cursor string) ([]string, string
 	}
 }
 
-// TestLiveAssetRecordListPagePagesPastTheFirstPage is the live-Mongo half of
-// the keyset-pagination regression test. asset_records.createdAt is a BSON Date; before the
-// fix the keyset filter compared it against an int64 nanosecond operand, which
-// MongoDB's type bracketing never matches — so page 2 came back empty and the
-// record ledger was only partially retrievable through the API. The in-memory
-// adapter cannot catch this: there, both sides are the same int64.
+// TestLiveAssetRecordListPagePagesPastTheFirstPage checks against a live MongoDB
+// that asset_records pages past the first page. createdAt is a BSON Date, and the
+// keyset filter once compared it with an int64 nanosecond operand, which MongoDB
+// never matches, so page 2 was empty. The in-memory adapter cannot catch this,
+// because both sides are int64 there.
 func TestLiveAssetRecordListPagePagesPastTheFirstPage(t *testing.T) {
 	db := liveDB(t)
 	ctx := context.Background()
@@ -110,9 +106,8 @@ func TestLiveAssetRecordListPagePagesPastTheFirstPage(t *testing.T) {
 	}
 }
 
-// TestLiveTransactionListPagePagesPastTheFirstPage is the same regression test
-// for transactions.submittedAt, the other BSON Date sort field — the
-// operational transaction history.
+// TestLiveTransactionListPagePagesPastTheFirstPage is the same check for
+// transactions.submittedAt, the other BSON Date sort field
 func TestLiveTransactionListPagePagesPastTheFirstPage(t *testing.T) {
 	db := liveDB(t)
 	ctx := context.Background()

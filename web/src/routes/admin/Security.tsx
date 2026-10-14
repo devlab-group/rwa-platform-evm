@@ -92,12 +92,12 @@ function SecurityStalenessNotice({
       className={`security-staleness ${securityStale ? "security-staleness--stale" : ""}`}
       role={securityStale ? "alert" : "status"}
     >
-      {securityStale ? "Possibly stale — " : ""}
+      {securityStale ? "Possibly stale - " : ""}
       as of
       {securityAsOfBlock !== undefined ? ` block ${securityAsOfBlock}` : ""}
       {age ? ` (${age})` : ""}
       {securityAsOfBlock === undefined && !age ? " an unknown point" : ""}. Not
-      guaranteed current — reload to refresh.
+      guaranteed current - reload to refresh.
     </p>
   );
 }
@@ -170,7 +170,7 @@ export function Security() {
                 </div>
                 <div className="tx-preview__row">
                   <dt>Version</dt>
-                  <dd>{data.version ?? "—"}</dd>
+                  <dd>{data.version ?? "-"}</dd>
                 </div>
                 <div className="tx-preview__row">
                   <dt>Bytecode verified</dt>
@@ -184,15 +184,15 @@ export function Security() {
                 </div>
                 <div className="tx-preview__row">
                   <dt>Decimals</dt>
-                  <dd>{data.decimals ?? "—"}</dd>
+                  <dd>{data.decimals ?? "-"}</dd>
                 </div>
                 <div className="tx-preview__row">
                   <dt>Token unit</dt>
-                  <dd>{data.tokenUnit ?? "—"}</dd>
+                  <dd>{data.tokenUnit ?? "-"}</dd>
                 </div>
                 <div className="tx-preview__row">
                   <dt>Finality confirmations</dt>
-                  <dd>{data.finalityConfirmations ?? "—"}</dd>
+                  <dd>{data.finalityConfirmations ?? "-"}</dd>
                 </div>
                 <div className="tx-preview__row">
                   <dt>Auditor</dt>
@@ -538,8 +538,9 @@ function PauseControls({
         >
           {paused ? "Paused" : "Active"}
         </span>
-        . Pausing halts all token transfers (buys, redemptions, and wallet
-        transfers) until unpaused.
+        . Pausing stops purchases, ordinary transfers and redemption requests,
+        funding, claims and rejection. Timed-out cancellation and admin
+        enforcement remain available.
       </p>
       <div className="tx-preview__actions">
         <button
@@ -603,7 +604,7 @@ function PriceControls({
         decimals = await resolveQuoteDecimals(project, chainId);
       } catch {
         setError(
-          "Couldn't determine the quote token's decimals — connect your wallet to the project chain and try again.",
+          "Couldn't determine the quote token's decimals - connect your wallet to the project chain and try again.",
         );
         return;
       }
@@ -759,11 +760,10 @@ function isSystemAddress(
 function FrontRunningWarning() {
   return (
     <p className="field__hint">
-      This transaction is visible in the mempool before it lands, so a holder
-      watching for it can move their balance first. Pause the project and
-      confirm the pause landed before freezing or seizing, then unpause:
-      ordinary transfers stop while these two calls keep working. On a chain
-      where a pause is too disruptive, submit through a private relay instead.
+      A holder may see this transaction in the mempool and move tokens first.
+      Pause the project and confirm the pause before freezing or seizing, then
+      unpause. These enforcement calls still work while ordinary transfers are
+      paused. If pausing is too disruptive, use a private relay.
     </p>
   );
 }
@@ -1058,16 +1058,14 @@ function ForcedTransferControls({
             </div>
           </dl>
           <p>
-            <strong>This moves someone else&apos;s tokens.</strong> It goes
-            through even if the holder is blocked or expired in the compliance
-            registry, and even while trading is paused. It also reduces their
-            frozen amount if it reaches into frozen tokens. The recipient must
-            still be Allowed on-chain, and the transfer reverts otherwise.
+            <strong>This moves someone else&apos;s tokens.</strong> This works
+            while paused and when the holder is blocked or expired. It reduces
+            their frozen amount if it spends frozen tokens. The recipient must
+            be Allowed or the call reverts.
           </p>
           <p>
-            If the holder may be watching the mempool, pause the project first
-            and confirm the pause landed: this call still works while paused,
-            ordinary transfers do not.
+            If the holder may watch the mempool, pause and confirm first. This
+            call works while paused; ordinary transfers stop.
           </p>
           <div className="tx-preview__actions">
             <button
@@ -1142,7 +1140,7 @@ function RoleAdminControls({
     }
     const targets = roleTargets(role, addresses);
     if (targets.length === 0) {
-      setError("No target contracts for this role — project not deployed?");
+      setError("No target contracts for this role - project not deployed?");
       return;
     }
     const hashRole = roleHash(role);
@@ -1196,7 +1194,7 @@ function RoleAdminControls({
     }
     const targets = adminTransferTargets(addresses);
     if (targets.length === 0) {
-      setError("No governance contracts found — project not deployed?");
+      setError("No governance contracts found - project not deployed?");
       return;
     }
     if (route.kind === "safe") {
@@ -1282,9 +1280,9 @@ function RoleAdminControls({
 
       <h3 className="u-mt-5">Transfer admin</h3>
       <p className="field__hint">
-        Begins a two-step DEFAULT_ADMIN transfer on every governance contract.
-        The new admin must then accept on each contract after the configured
-        on-chain delay — until then, you remain admin.
+        Begins a two-step DEFAULT_ADMIN transfer on each governance contract.
+        You remain admin until the new admin accepts on that contract after its
+        configured delay.
       </p>
       <div className="field">
         <label htmlFor="new-admin">New admin address</label>
@@ -1358,7 +1356,7 @@ function AcceptAdminControls({
     }
     const targets = adminTransferTargets(addresses);
     if (targets.length === 0) {
-      setError("No governance contracts found — project not deployed?");
+      setError("No governance contracts found - project not deployed?");
       return;
     }
     setBusy(true);
@@ -1403,7 +1401,7 @@ function AcceptAdminControls({
         <p className="field__hint">
           An admin transfer is pending to{" "}
           <span className="mono" title={pendingAdmin}>
-            {pendingAdmin ? shortenAddress(pendingAdmin) : "—"}
+            {pendingAdmin ? shortenAddress(pendingAdmin) : "-"}
           </span>
           . The incoming admin must accept after the on-chain delay. For a Safe,
           save a Safe{"{Wallet}"} acceptance batch for its owners to approve and
@@ -1433,10 +1431,8 @@ function AcceptAdminControls({
   return (
     <div>
       <p className="field__hint">
-        A two-step admin transfer is pending to your wallet. Accepting completes
-        it and makes you the DEFAULT_ADMIN — you must accept on every governance
-        contract. This reverts if the configured on-chain delay has not elapsed
-        yet; if so, wait and try again.
+        Accept the pending transfer to become DEFAULT_ADMIN on each governance
+        contract. If its configured delay has not elapsed, wait and try again.
       </p>
       <button
         type="button"

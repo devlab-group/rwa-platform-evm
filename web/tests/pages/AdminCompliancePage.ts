@@ -19,13 +19,13 @@ export class AdminCompliancePage {
   async setStatus(fields: { address: string; status: "Allowed" | "Blocked" | "Unknown" }): Promise<void> {
     await this.page.locator("#wallet-address").fill(fields.address);
     await this.page.locator("#wallet-status").selectOption(fields.status);
-    // Hot-key action — goes through the two-step ConfirmStep gate.
+    // This action calls the server hot key, so it passes the two-step ConfirmStep gate
     await this.setStatusSection.getByRole("button", { name: "Review status change" }).click();
     await this.setStatusSection.getByRole("button", { name: "Confirm set status" }).click();
   }
 
-  // shortenAddress() renders "0x" + 4 hex chars + "…" + last 4 (src/lib/format.ts);
-  // matching the first 6 chars of the raw address is enough to find the row.
+  // shortenAddress() keeps the first 6 characters ("0x" plus 4 hex digits) and
+  // the last 4 (src/lib/format.ts), so the first 6 characters find the row
   walletRow(address: string) {
     return this.walletsSection.locator("tr", { hasText: address.slice(0, 6) });
   }

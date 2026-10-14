@@ -14,21 +14,21 @@ import {RedemptionEscrow} from "../src/RedemptionEscrow.sol";
 import {FixedPriceStrategy} from "../src/pricing/FixedPriceStrategy.sol";
 import {MockERC20} from "../test/mocks/token/MockERC20.sol";
 
-/// @notice The full integration exit scenario, run against a LIVE chain with real
-///         broadcast transactions: deploy -> allow investor -> mint (locally-signed
-///         attestation) -> buy -> requestRedemption -> fund -> claim -> auditor burn of the
-///         returned Vault inventory. Then a timeout -> cancel branch on a second request.
+/// @notice The full exit scenario against a live chain with real broadcast transactions:
+///         deploy -> allow investor -> mint (locally signed attestation) -> buy ->
+///         requestRedemption -> fund -> claim -> auditor burn of the returned Vault inventory,
+///         then a timeout -> cancel branch on a second request.
 ///
 /// Usage: forge script script/E2EFlow.s.sol --broadcast --rpc-url http://localhost:8545 -vv
 ///
-/// Extends DeployBase so the whole lifecycle — deploy + full flow — happens in one broadcast
-/// session against the addresses `deployAll()` prints.
+/// Extends DeployBase so the deploy and the full flow run in one broadcast session against
+/// the addresses `deployAll()` prints.
 ///
-/// @dev All step data lives in state (not `run()` locals) — a single function juggling every
-///      contract handle, role address/key, and attestation local at once blows solc's stack
-///      (needs --via-ir otherwise); state variables cost SLOADs, not stack slots.
+/// @dev Step data lives in state variables instead of `run()` locals: one function holding
+///      every contract handle, role address and key, and attestation would hit solc's
+///      stack-too-deep limit without `--via-ir`.
 contract E2EFlow is DeployBase {
-    // Anvil's default account 1, used as the investor.
+    // Anvil's default account 1, used as the investor
     uint256 internal constant ANVIL_ACCT1_PK = 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d;
 
     uint256 internal _nonce = 1;
@@ -46,8 +46,8 @@ contract E2EFlow is DeployBase {
     FixedPriceStrategy internal _strategy;
     MockERC20 internal _quoteToken;
 
-    /// @notice The full flow: deploy -> allow -> mint -> buy -> request -> fund -> claim
-    ///         -> burn. Ends with a distinct "E2E OK" log marker e2e.sh greps for.
+    /// @notice The full flow: deploy -> allow -> mint -> buy -> request -> fund -> claim ->
+    ///         burn. Ends with the "E2E OK" log marker that e2e.sh greps for.
     function run() external {
         _deploy();
         _allowInvestor();
@@ -59,13 +59,10 @@ contract E2EFlow is DeployBase {
         console2.log("E2E OK");
     }
 
-    /// @notice Nice-to-have branch, step 1/2: create a second Pending request against the
-    ///         ALREADY-deployed contracts from `run()` (wired via env, not redeployed). Called
-    ///         as a separate `forge script --sig` invocation so e2e.sh can advance the live
-    ///         chain's clock with `cast rpc` (a plain Solidity `vm.rpc("evm_increaseTime", ...)`
-    ///         call was tried first but reliably reverts on this forge/anvil build's handling
-    ///         of evm_increaseTime's non-hex numeric RPC response — reproduced in isolation,
-    ///         unrelated to contract logic) between this call and `cancelIt`.
+    /// @notice Cancel branch, step 1 of 2: create a second Pending request against the contracts
+    ///         `run()` already deployed, wired from env instead of redeployed. It runs as its own
+    ///         `forge script --sig` invocation so e2e.sh can advance the live chain's clock with
+    ///         `cast rpc` between this call and `cancelIt`.
     function requestForCancelDemo() external returns (uint256 id) {
         _wireExisting();
 
@@ -79,9 +76,9 @@ contract E2EFlow is DeployBase {
         console2.log("Requested (for cancel demo) redemption id", id);
     }
 
-    /// @notice Nice-to-have branch, step 2/2: cancel the request created by
-    ///         `requestForCancelDemo`, after e2e.sh has advanced the live chain's clock past
-    ///         `redemptionTimeout` via `cast rpc evm_increaseTime` + `evm_mine`.
+    /// @notice Cancel branch, step 2 of 2: cancel the request created by `requestForCancelDemo`
+    ///         after e2e.sh has advanced the live chain's clock past `redemptionTimeout` with
+    ///         `cast rpc evm_increaseTime` and `evm_mine`
     function cancelIt(uint256 id) external {
         _wireExisting();
 
@@ -97,9 +94,9 @@ contract E2EFlow is DeployBase {
         _wireDeployment(dep, quoteTokenAddr);
     }
 
-    /// @dev For `requestForCancelDemo`/`cancelIt`: wire up handles to the contracts `run()`
-    ///      already deployed, read from env (TOKEN/COMPLIANCE/SUPPLY_CONTROLLER/VAULT/ESCROW/
-    ///      STRATEGY/QUOTE_TOKEN), instead of deploying a fresh, unrelated project.
+    /// @dev For `requestForCancelDemo` and `cancelIt`: wire handles to the contracts `run()`
+    ///      already deployed, read from env (TOKEN, COMPLIANCE, SUPPLY_CONTROLLER, VAULT,
+    ///      ESCROW, STRATEGY, QUOTE_TOKEN), instead of deploying a new project
     function _wireExisting() internal {
         _wireKeys();
         IRWAFactory.Deployment memory dep = IRWAFactory.Deployment({
@@ -120,8 +117,8 @@ contract E2EFlow is DeployBase {
         _investor = vm.addr(_investorPk);
     }
 
-    /// @dev Same anvil-only-fallback guard as `_deployerPrivateKey` (DeployBase) — never
-    ///      silently use the well-known anvil account 1 key outside anvil's default chain id.
+    /// @dev Same anvil-only fallback guard as `_deployerPrivateKey` in DeployBase: the
+    ///      well-known anvil account 1 key is used only on anvil's default chain id
     function _investorPrivateKey() internal view returns (uint256) {
         if (block.chainid == ANVIL_CHAIN_ID) {
             return vm.envOr("INVESTOR_PK", ANVIL_ACCT1_PK);

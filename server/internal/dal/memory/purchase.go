@@ -41,8 +41,8 @@ func (r *PurchaseRepository) DeleteAll(ctx context.Context) error {
 	return nil
 }
 
-// Upsert is the reader-safe half of a generation-swap rebuild —
-// see the interface doc comment.
+// Upsert is the in-place step of the generation-swap rebuild, see the interface doc
+// comment
 func (r *PurchaseRepository) Upsert(ctx context.Context, p *models.Purchase) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -57,8 +57,7 @@ func (r *PurchaseRepository) Upsert(ctx context.Context, p *models.Purchase) err
 	return nil
 }
 
-// DeleteStaleGeneration is the cleanup half — see the interface
-// doc comment.
+// DeleteStaleGeneration is the cleanup step, see the interface doc comment
 func (r *PurchaseRepository) DeleteStaleGeneration(ctx context.Context, gen int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -72,8 +71,7 @@ func (r *PurchaseRepository) DeleteStaleGeneration(ctx context.Context, gen int6
 	return nil
 }
 
-// ListPage returns one bounded page — see the interface doc
-// comment. Newest-block-first, matching purchaseRepo's mongodb sort.
+// ListPage returns one page, newest block first, as in mongodb.purchaseRepo
 func (r *PurchaseRepository) ListPage(ctx context.Context, cursor string, limit int) ([]*models.Purchase, string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

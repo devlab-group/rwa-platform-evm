@@ -1,9 +1,9 @@
 # Public-testnet qualification runbook
 
-Qualify each release on at least two materially different public EVM test networks, such as an
-OP-stack testnet and an Ethereum L1 testnet. Choose networks with different fee markets, block
-times and reorg behavior. This is a manual procedure requiring funded testnet wallets and RPC
-endpoints; CI's local-chain tests do not replace it.
+Qualify each release on at least two public EVM test networks with different fee markets,
+block times and reorg behavior, such as an OP-stack testnet and an Ethereum L1 testnet.
+This manual run requires funded wallets and RPC endpoints; CI's local-chain tests do not
+replace it.
 
 ## Per environment
 

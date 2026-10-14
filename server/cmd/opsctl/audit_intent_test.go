@@ -13,7 +13,7 @@ import (
 
 // failingAuditRepo fails Append for a chosen phase, so a test can drive a
 // durable-store fault before the intent (failIntent) or after the op while
-// writing the result (failResult).
+// writing the result (failResult)
 type failingAuditRepo struct {
 	failIntent bool
 	failResult bool
@@ -43,7 +43,7 @@ func opsCtxWithAudit(repo *failingAuditRepo, out *bytes.Buffer) opsCtx {
 
 // TestAuditedFailsClosedWhenIntentUndurable covers the DB-failure-before-
 // mutation case: if the audit intent cannot be persisted, op must NOT
-// run and audited returns an error.
+// run and audited returns an error
 func TestAuditedFailsClosedWhenIntentUndurable(t *testing.T) {
 	var out bytes.Buffer
 	o := opsCtxWithAudit(&failingAuditRepo{failIntent: true}, &out)
@@ -66,7 +66,7 @@ func TestAuditedFailsClosedWhenIntentUndurable(t *testing.T) {
 
 // TestAuditedRunsOpWhenOnlyResultWriteFails covers the DB-failure-after-
 // mutation case: once the intent is durable, a failure to write the RESULT is
-// only a warning — op still runs and its outcome is returned.
+// only a warning, and op still runs and its outcome is returned
 func TestAuditedRunsOpWhenOnlyResultWriteFails(t *testing.T) {
 	var out bytes.Buffer
 	o := opsCtxWithAudit(&failingAuditRepo{failResult: true}, &out)

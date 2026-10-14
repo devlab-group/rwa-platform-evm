@@ -23,8 +23,8 @@ func hexToBytes32(s string) ([32]byte, error) {
 	return out, nil
 }
 
-// projectIDToBytes32 derives ProjectConfig.projectId as keccak256(utf8(projectId)) from the
-// profile's UUID string, per docs/spec/asset-profile.md "Derivation conventions"
+// projectIDToBytes32 derives ProjectConfig.projectId as keccak256 of the UTF-8
+// bytes of the profile's UUID string, as docs/spec/asset-profile.md specifies
 func projectIDToBytes32(projectID string) ([32]byte, error) {
 	if projectID == "" {
 		return [32]byte{}, fmt.Errorf("projectId must not be empty")

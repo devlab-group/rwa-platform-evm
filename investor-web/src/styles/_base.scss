@@ -175,7 +175,7 @@ table {
   font-size: 0.875rem;
 }
 
-// Small layout utilities — kept as classes (not inline `style` props) so the
+// Small layout utilities - kept as classes (not inline `style` props) so the
 // CSP can drop `style-src 'unsafe-inline'` (see index.html).
 .u-mt-4 {
   margin-top: var(--space-4);

@@ -1,7 +1,7 @@
-// Package metadata validates a metadata envelope document against the
-// fixed platform schema (shared/schemas/metadata.schema.json) and exposes
-// the parsed fields the signer must cross-check against
-// the typed attestation (issuance.amount, recordId, proof hashes).
+// Package metadata validates a metadata envelope against the platform schema
+// (shared/schemas/metadata.schema.json) and exposes the parsed fields the signer
+// cross-checks against the typed attestation: issuance.amount, recordId and the proof
+// hashes
 package metadata
 
 import (
@@ -22,12 +22,11 @@ var (
 	uuidPattern     = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 )
 
-// maxIssuanceAmount is uint256's maximum value -- every issuance.amount
-// eventually becomes a Solidity uint256 mint amount (SupplyController.mint).
-// Mirrors server/internal/assets/record.go's identical constant.
+// maxIssuanceAmount is the uint256 maximum, because issuance.amount becomes the mint
+// amount in SupplyController.mint; server/internal/assets/record.go applies the same bound
 var maxIssuanceAmount = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 
-// Proof binds an external document to the record by content hash.
+// Proof binds an external document to the record by content hash
 type Proof struct {
 	Type   string
 	SHA256 string
@@ -50,8 +49,9 @@ type Metadata struct {
 }
 
 // Validate parses and validates raw metadata envelope JSON against
-// shared/schemas/metadata.schema.json plus the platform rules (recordId
-// pattern, issuance.amount is a decimal string, proofs[].sha256 is hex).
+// shared/schemas/metadata.schema.json, the structural limits in canonical.DefaultLimits
+// and the platform rules (recordId pattern, issuance.amount is a positive decimal string
+// within uint256, proofs[].sha256 is lowercase hex)
 func Validate(raw []byte) (*Metadata, error) {
 	v, err := canonical.ParseWithLimits(raw, canonical.DefaultLimits())
 	if err != nil {
@@ -125,12 +125,10 @@ func Validate(raw []byte) (*Metadata, error) {
 	if !ok || !amountPattern.MatchString(amt) {
 		return nil, fmt.Errorf("metadata: issuance.amount must be a decimal string matching ^[0-9]+$")
 	}
-	// amountPattern alone accepts "0" and arbitrarily large numerals, but
-	// SupplyController.mint reverts ZeroAmount() on a zero attestation amount
-	// and the value must fit a uint256. Mirror the identical semantic bound
-	// in server/internal/assets/record.go exactly so the two validators agree
-	// on every amount string -- otherwise the signer would happily sign a
-	// zero-amount attestation the server and contract both reject.
+	// The pattern accepts "0" and arbitrarily large numerals, but SupplyController
+	// reverts with ZeroAmount() on a zero amount and the value must fit a uint256. The
+	// same bound is applied in server/internal/assets/record.go so both validators agree
+	// on every amount string.
 	amtInt, ok := new(big.Int).SetString(amt, 10)
 	if !ok || amtInt.Sign() <= 0 || amtInt.Cmp(maxIssuanceAmount) > 0 {
 		return nil, fmt.Errorf("metadata: issuance.amount must be a positive integer no greater than 2^256-1 (the contract rejects a zero mint amount)")
@@ -145,11 +143,10 @@ func Validate(raw []byte) (*Metadata, error) {
 	if !ok || unit == "" {
 		return nil, fmt.Errorf("metadata: issuance.unit must be a non-empty string")
 	}
-	// unit and proofs[].type are both rendered on the offline review screen.
-	// A control character there is never legitimate and is how a package would
-	// try to move the terminal cursor over the amount or digest the auditor is
-	// confirming, so refuse the document rather than lean on the review
-	// screen's own escaping alone.
+	// unit and proofs[].type are printed on the review screen. A control character in
+	// either has no legitimate use and is how a package would try to move the terminal
+	// cursor over the amount or digest line, so reject the document instead of relying
+	// on the screen's escaping alone.
 	if !textsafe.IsPrintable(unit) {
 		return nil, fmt.Errorf("metadata: issuance.unit contains a control or non-printable character (%s); only printable text is allowed", textsafe.SanitizeForTerminal(unit))
 	}

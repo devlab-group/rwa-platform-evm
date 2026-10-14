@@ -10,38 +10,29 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// LocalDestinationName is the fixed name ReplicationManager uses for its
-// primary local node's DestinationStatus entry.
+// LocalDestinationName is the DestinationStatus name ReplicationManager uses
+// for the local node
 const LocalDestinationName = "local"
 
-// ErrPublicationCIDConflict is returned by Publish/AddRaw when an existing
-// PublicationRecord for the caller-chosen id is already bound to a DIFFERENT
-// CID than the one being published. A publication id (e.g. an
-// AssetRecord's RecordID) is immutably bound to the content whose durable
-// availability the mint gate later proves; rebinding it to different bytes —
-// a duplicate asset create with changed metadata, or a retried create with
-// changed input — would let relay prove durability for content the record was
-// never signed against. The binding is a conflict, never an overwrite.
+// ErrPublicationCIDConflict is returned by Publish when the PublicationRecord
+// for id is already bound to a different CID. A publication id, such as an
+// AssetRecord's RecordID, stays bound to one CID, so changed content under the
+// same id is rejected instead of overwriting the record. Otherwise the record's
+// durability status could describe content other than what was signed.
 var ErrPublicationCIDConflict = errors.New("ipfs: publication id already bound to a different CID")
 
-// Destination is one independent backup pinning target for replicated
-// content; the platform requires at least one. It reuses Client's shape
-// (AddRaw/Pin/Get) — a second live
-// Kubo node, an IPFS Cluster HTTP shim, and a FileArchiveClient are all
-// equally valid backing implementations.
+// Destination is a named backup target for replicated content. Any Client can
+// back one, such as a second Kubo node or a FileArchiveClient.
 type Destination struct {
 	Name   string
 	Client Client
 }
 
-// ReplicationManager coordinates publishing content to a local node plus a
-// configured set of independent backup Destinations, and durably tracks
-// per-item replication status through models.PublicationState. It implements
-// the same AddRaw(ctx, data) (string, error) shape
-// internal/assets' ipfsPinner interface expects, so it is a drop-in
-// replacement for a bare Client wherever that interface is used — Publish
-// is the richer entry point for callers that have their own meaningful
-// record ID to key the PublicationRecord by.
+// ReplicationManager publishes content to a local node and a set of backup
+// Destinations and stores each item's replication status as a PublicationRecord
+// (models.PublicationState). Its AddRaw has the signature internal/assets'
+// ipfsPinner expects. Publish does the same but keys the record by a
+// caller-chosen id.
 type ReplicationManager struct {
 	local     Client
 	backups   []Destination
@@ -50,21 +41,16 @@ type ReplicationManager struct {
 	now       func() time.Time
 }
 
-// NewReplicationManager constructs a ReplicationManager. threshold is how
-// many of the configured backups (NOT counting local) must successfully
-// pin+verify before a PublicationRecord is considered PublicationReplicated.
-// An asset package must not be marked durably published until the configured
-// replication threshold has been met. threshold<=0 means
-// "local pin alone is sufficient" — an explicit, documented single-copy
-// opt-out, not the default a caller falls into by omission.
+// NewReplicationManager returns a ReplicationManager. threshold is the number of
+// backups, not counting the local node, that must pin and verify the content
+// before the record reaches PublicationReplicated. A threshold of zero or less
+// makes the local pin alone sufficient (a single copy).
 func NewReplicationManager(local Client, backups []Destination, threshold int, records repository.PublicationRepository) *ReplicationManager {
 	return &ReplicationManager{local: local, backups: backups, threshold: threshold, records: records, now: func() time.Time { return time.Now().UTC() }}
 }
 
-// AddRaw implements the ipfsPinner shape (see internal/assets), keying the
-// PublicationRecord by the content's own CID. Prefer Publish when the
-// caller has a more meaningful id (e.g. an AssetRecord's RecordID) to look
-// up publication status by later.
+// AddRaw publishes data and keys the PublicationRecord by the content's CID.
+// Use Publish to key it by an id such as an AssetRecord's RecordID.
 func (rm *ReplicationManager) AddRaw(ctx context.Context, data []byte) (string, error) {
 	cid, err := rm.local.AddRaw(ctx, data)
 	if err != nil {
@@ -73,7 +59,7 @@ func (rm *ReplicationManager) AddRaw(ctx context.Context, data []byte) (string, 
 	return cid, rm.replicate(ctx, cid, cid, data)
 }
 
-// Publish is AddRaw plus a caller-chosen id to key the PublicationRecord by.
+// Publish is AddRaw with a caller-chosen id as the PublicationRecord key
 func (rm *ReplicationManager) Publish(ctx context.Context, id string, data []byte) (cid string, err error) {
 	cid, err = rm.local.AddRaw(ctx, data)
 	if err != nil {
@@ -82,47 +68,27 @@ func (rm *ReplicationManager) Publish(ctx context.Context, id string, data []byt
 	return cid, rm.replicate(ctx, id, cid, data)
 }
 
-// replicate pins data locally, attempts every configured backup, and
-// persists the resulting PublicationRecord.
+// replicate pins locally, adds each backup and stores the PublicationRecord.
+// A destination counts toward the threshold only after fetching and rehashing
+// the content; a backup's AddRaw CID must also match the local CID.
 //
-// Every destination — local included — is verified
-// SYNCHRONOUSLY before counting toward Replicated, not just on the later
-// periodic Verify ticker: a destination's own returned CID from AddRaw
-// MUST equal the locally computed cid (a destination that silently
-// computed/stored something else is a failure, not a success with a
-// surprising CID), and the content is immediately retrieved back and
-// digest-checked (a bare AddRaw+Pin API success is not proof the content
-// is actually retrievable — see Verify's doc comment for the same
-// reasoning applied on the recurring path).
-//
-// It does not itself return an error for a BACKUP failure (that is
-// exactly what PublicationReplicationFailed/ReplicationPending are for —
-// visible via Status/DestinationStatus.LastError and retryable via Retry,
-// not raised as an exception on the publish path, so one flaky backup
-// does not block ordinary content creation); it only errors if the LOCAL
-// pin+verify fails or the record can't be persisted at all — local is
-// this content's only source of truth until at least one backup is
-// verified, so a local failure IS fatal to publishing at all.
+// Local pin or verification failures and record-storage failures return errors.
+// Backup failures set DestinationStatus.LastError and leave replication Pending
+// or Failed for Retry. Their joined errors return after the record is stored,
+// so a backup failure does not discard the local publication.
 func (rm *ReplicationManager) replicate(ctx context.Context, id, cid string, data []byte) error {
 	now := rm.now()
 	rec, err := rm.records.Get(ctx, id)
 	switch {
 	case err == nil:
-		// An existing publication row for id is immutably bound
-		// to its recorded CID. A publish carrying a DIFFERENT CID is a
-		// conflict, never an overwrite — otherwise a duplicate/retried asset
-		// create with changed metadata could move the durable-publication gate
-		// onto content the signed record never covered (see
-		// ErrPublicationCIDConflict).
+		// the record for id stays bound to its CID; see ErrPublicationCIDConflict
 		if rec.CID != "" && rec.CID != cid {
 			return fmt.Errorf("%w: id %s is bound to %s, refusing to rebind to %s", ErrPublicationCIDConflict, id, rec.CID, cid)
 		}
 	case errors.Is(err, repository.ErrNotFound):
 		rec = &models.PublicationRecord{ID: id, CreatedAt: now}
 	default:
-		// A transient read failure is NOT "no such row" — do
-		// not fabricate a fresh replacement row that would silently drop an
-		// existing CID binding; surface the error and let the caller retry.
+		// a read failure is not "not found"; a fresh row would drop an existing CID binding
 		return fmt.Errorf("ipfs: load publication record %s: %w", id, err)
 	}
 	rec.CID = cid
@@ -152,18 +118,13 @@ func (rm *ReplicationManager) replicate(ctx context.Context, id, cid string, dat
 	if err := rm.records.Upsert(ctx, rec); err != nil {
 		return err
 	}
-	// Backup failures ARE surfaced to the publishing caller (joined,
-	// non-fatal to the publish having happened at all: the content IS
-	// locally pinned and verified, and DestinationStatus/Status remain
-	// the durable record) so a caller that wants to log/alert immediately
-	// can, without forcing every publish to hard-fail on one flaky
-	// backup.
+	// the content is pinned and verified locally, so backup failures are
+	// informational
 	return errors.Join(backupErrs...)
 }
 
-// pinAndVerifySynchronously pins cid on client (already holding the
-// content, from a prior AddRaw) and immediately retrieves+digest-verifies
-// it, updating status in place.
+// pinAndVerifySynchronously pins cid on client, which already holds the content,
+// fetches it back and checks its digest, and records the outcome in status
 func (rm *ReplicationManager) pinAndVerifySynchronously(ctx context.Context, client Client, cid string, status *models.DestinationStatus, now time.Time) error {
 	if err := client.Pin(ctx, cid); err != nil {
 		status.Pinned = false
@@ -183,10 +144,8 @@ func (rm *ReplicationManager) pinAndVerifySynchronously(ctx context.Context, cli
 	return nil
 }
 
-// addAndVerifySynchronously is pinAndVerifySynchronously plus the AddRaw
-// step and the returned-CID check: a destination's returned CID must equal
-// the locally computed CID (discarding AddRaw's returned value would let a
-// destination silently store something else).
+// addAndVerifySynchronously is pinAndVerifySynchronously preceded by AddRaw. The
+// CID the client returns must equal cid.
 func (rm *ReplicationManager) addAndVerifySynchronously(ctx context.Context, client Client, cid string, data []byte, status *models.DestinationStatus, now time.Time) error {
 	gotCID, err := client.AddRaw(ctx, data)
 	if err != nil {
@@ -204,10 +163,7 @@ func (rm *ReplicationManager) addAndVerifySynchronously(ctx context.Context, cli
 	return rm.pinAndVerifySynchronously(ctx, client, cid, status, now)
 }
 
-// retrieveAndVerify fetches cid from client and confirms the retrieved
-// bytes actually hash to it — shared by the synchronous publish-time check
-// above and the periodic Verify below, so both apply the exact same
-// standard.
+// retrieveAndVerify fetches cid from client and checks that the bytes hash to it
 func (rm *ReplicationManager) retrieveAndVerify(ctx context.Context, client Client, cid string) error {
 	data, err := client.Get(ctx, cid)
 	if err != nil {
@@ -220,26 +176,24 @@ func (rm *ReplicationManager) retrieveAndVerify(ctx context.Context, client Clie
 	return nil
 }
 
-// replicationState decides the overall PublicationState from how many of
-// the configured backups just succeeded against the replication threshold.
+// replicationState returns the PublicationState for succeeded verified backups
+// out of configured, given threshold
 func replicationState(succeeded, configured, threshold int) models.PublicationState {
 	switch {
 	case threshold <= 0:
-		return models.PublicationReplicated // explicit single-copy opt-out — see NewReplicationManager's doc comment
+		return models.PublicationReplicated // single-copy mode, see NewReplicationManager
 	case succeeded >= threshold:
 		return models.PublicationReplicated
 	case succeeded > 0 || configured == 0:
-		// configured==0 with threshold>0 is a MISCONFIGURATION (a threshold
-		// that can never be met) — ReplicationPending forever is the
-		// correct, honest reflection of that, not silently Replicated.
+		// no backups with a positive threshold can never be met, so it stays pending
 		return models.PublicationReplicationPending
 	default:
 		return models.PublicationReplicationFailed
 	}
 }
 
-// findOrAppendDestination returns the DestinationStatus for name within
-// *destinations, appending a fresh zero-value one if absent.
+// findOrAppendDestination returns the DestinationStatus named name in
+// *destinations, appending an empty one if absent
 func findOrAppendDestination(destinations *[]models.DestinationStatus, name string) *models.DestinationStatus {
 	for i := range *destinations {
 		if (*destinations)[i].Name == name {
@@ -250,12 +204,8 @@ func findOrAppendDestination(destinations *[]models.DestinationStatus, name stri
 	return &(*destinations)[len(*destinations)-1]
 }
 
-// IsDurablyPublished reports whether id has met its configured replication
-// threshold AND is still bound to expectedCID: the durability proof must be
-// for the EXACT content the caller is about to mint against, not merely "some
-// content under this id is replicated". A missing publication row is reported as
-// not-durable (false, nil), not an error, so the mint relay path surfaces its
-// own friendly "retry once replicated" message rather than a raw lookup error.
+// IsDurablyPublished reports whether id's record is PublicationReplicated and
+// bound to expectedCID. A missing record returns false and a nil error.
 func (rm *ReplicationManager) IsDurablyPublished(ctx context.Context, id, expectedCID string) (bool, error) {
 	rec, err := rm.records.Get(ctx, id)
 	if err != nil {
@@ -267,13 +217,12 @@ func (rm *ReplicationManager) IsDurablyPublished(ctx context.Context, id, expect
 	return rec.State == models.PublicationReplicated && rec.CID == expectedCID, nil
 }
 
-// Status returns id's current PublicationRecord.
+// Status returns id's PublicationRecord
 func (rm *ReplicationManager) Status(ctx context.Context, id string) (*models.PublicationRecord, error) {
 	return rm.records.Get(ctx, id)
 }
 
-// clientFor resolves a DestinationStatus's Name back to the Client that
-// owns it (local or a configured backup), used by Verify.
+// clientFor returns the Client configured under name, the local node or a backup
 func (rm *ReplicationManager) clientFor(name string) (Client, bool) {
 	if name == LocalDestinationName {
 		return rm.local, true
@@ -286,15 +235,11 @@ func (rm *ReplicationManager) clientFor(name string) (Client, bool) {
 	return nil, false
 }
 
-// Verify re-fetches id's content from EVERY configured destination (local
-// and every backup) and confirms the retrieved bytes actually hash to the
-// recorded CID. Verification retrieves the content and confirms its digest
-// matches the expected CID — a successful HTTP or API response is
-// insufficient by itself. Updates each
-// DestinationStatus's Verified/LastVerifiedAt/LastError and recomputes the
-// record's overall PublicationState from how many destinations verify
-// successfully right now (a destination that reports success but can't
-// actually be retrieved no longer counts toward the replication threshold).
+// Verify fetches id's content from every destination recorded on its
+// PublicationRecord, checks that it hashes to the recorded CID, and updates each
+// DestinationStatus (Verified, LastVerifiedAt, LastError). It then recomputes
+// the record's state from the backups that verified, so a backup that can no
+// longer serve the content stops counting toward the threshold.
 func (rm *ReplicationManager) Verify(ctx context.Context, id string) error {
 	rec, err := rm.records.Get(ctx, id)
 	if err != nil {
@@ -306,7 +251,7 @@ func (rm *ReplicationManager) Verify(ctx context.Context, id string) error {
 		status := &rec.Destinations[i]
 		client, ok := rm.clientFor(status.Name)
 		if !ok {
-			continue // a destination removed from config since this record was written; leave its last-known status as-is
+			continue // no longer configured; its last status is kept
 		}
 		if err := rm.retrieveAndVerify(ctx, client, rec.CID); err != nil {
 			status.Verified = false
@@ -325,9 +270,10 @@ func (rm *ReplicationManager) Verify(ctx context.Context, id string) error {
 	return rm.records.Upsert(ctx, rec)
 }
 
-// RestoreLocal recovers from the local IPFS node losing its repository by
-// fetching id's content from the first backup destination that still has
-// it and re-adding/pinning it locally.
+// RestoreLocal repopulates the local node after it loses its repository. It takes
+// id's content from the first backup that returns bytes hashing to the recorded
+// CID, re-adds it locally, and requires the CID the local node returns to equal
+// the recorded one. It then pins and verifies the content as publication does.
 func (rm *ReplicationManager) RestoreLocal(ctx context.Context, id string) error {
 	rec, err := rm.records.Get(ctx, id)
 	if err != nil {
@@ -348,12 +294,6 @@ func (rm *ReplicationManager) RestoreLocal(ctx context.Context, id string) error
 		if err != nil {
 			return fmt.Errorf("ipfs: restore to local node: %w", err)
 		}
-		// Require the local node's own returned CID to equal the
-		// recorded CID (a node that stored something else is a failed restore,
-		// not a success with a surprising CID), then pin + retrieve + rehash
-		// via the same synchronous verification the publish path uses before
-		// marking the local destination Verified — a bare AddRaw+Pin success
-		// is not proof the content is actually retrievable.
 		if restoredCID != rec.CID {
 			return fmt.Errorf("ipfs: restored local CID %s does not match recorded CID %s", restoredCID, rec.CID)
 		}
@@ -373,13 +313,9 @@ func (rm *ReplicationManager) RestoreLocal(ctx context.Context, id string) error
 	return fmt.Errorf("ipfs: restore local repository for %s: %w", id, lastErr)
 }
 
-// Retry re-attempts every backup destination NOT currently Pinned for id,
-// given the caller-supplied data, so replication failures stay visible and
-// retryable. data MUST hash to the
-// record's already-recorded CID; ReplicationManager does not itself retain
-// raw bytes (they live in Mongo via the caller's own record, or in a
-// FileArchiveClient backup, not duplicated here) so a retry needs them
-// re-supplied.
+// Retry re-adds and re-verifies id's content on every backup that is not
+// currently Verified, then recomputes the record's state. data must hash to the
+// recorded CID; the manager does not keep the bytes, so the caller supplies them
 func (rm *ReplicationManager) Retry(ctx context.Context, id string, data []byte) error {
 	rec, err := rm.records.Get(ctx, id)
 	if err != nil {
@@ -389,14 +325,8 @@ func (rm *ReplicationManager) Retry(ctx context.Context, id string, data []byte)
 		return fmt.Errorf("ipfs: retry data does not hash to publication %s's recorded CID %s", id, rec.CID)
 	}
 	now := rm.now()
-	// Retry runs the SAME addAndVerifySynchronously path as
-	// initial publication (returned-CID check + pin + retrieve + rehash) and
-	// counts ONLY verified backups toward PublicationReplicated. Counting any
-	// destination whose Pinned flag was set — including one the periodic
-	// Verify had already found unretrievable (Pinned=true, Verified=false) —
-	// could restore Replicated without re-proving durability at all. Only a
-	// currently-Verified destination is skipped; every other is re-added and
-	// re-verified.
+	// a backup with Pinned set but Verified cleared, as Verify leaves one it could
+	// not read, is retried; only a Verified backup is skipped
 	verified := 0
 	for _, b := range rm.backups {
 		status := findOrAppendDestination(&rec.Destinations, b.Name)

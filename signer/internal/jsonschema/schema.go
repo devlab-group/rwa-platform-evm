@@ -1,33 +1,17 @@
-// Package jsonschema implements the operator assetSchema dialect defined in
-// docs/spec/profile-schema-dialect.md (dialect id "rwa-profile-assetSchema/1"):
-// it validates operator-defined Asset Profile "assetSchema"
-// documents against submitted asset data.
+// Package jsonschema compiles and validates the operator assetSchema dialect,
+// "rwa-profile-assetSchema/1", defined in docs/spec/profile-schema-dialect.md.
 //
-// Supported validation keywords: type, properties, required,
-// additionalProperties, items, $ref, enum, const, minLength, maxLength,
-// pattern, minimum, maximum, exclusiveMinimum, exclusiveMaximum, minItems,
-// maxItems, uniqueItems. Supported annotations (accepted, ignored for
-// validation): title, description, default, examples, $comment, $defs,
-// $id, $schema, deprecated, readOnly, writeOnly.
+// Validation keywords: type, properties, required, additionalProperties, items,
+// $ref, enum, const, minLength, maxLength, pattern, minimum, maximum,
+// exclusiveMinimum, exclusiveMaximum, minItems, maxItems and uniqueItems.
+// Accepted annotations and containers: title, description, default, examples,
+// $comment, $defs, $id, $schema, deprecated, readOnly and writeOnly.
 //
-// Compile REJECTS every other keyword by allowlist, not by blacklist: an
-// unrecognized keyword (multipleOf, minProperties, maxProperties,
-// patternProperties, dependentRequired, contains, format, oneOf, anyOf,
-// allOf, not, if/then/else, $dynamicRef, $dynamicAnchor, $anchor,
-// unevaluatedProperties, unevaluatedItems, or anything else) fails to
-// compile rather than being silently ignored. This is deliberate: the
-// server compiles the same profile with a full Draft 2020-12 engine, and a
-// signer that ignored unknown keywords instead of rejecting them could
-// accept a hand-built package the server would reject (or vice versa),
-// which would let a mismatched schema authorize minting. The
-// allowlist is enforced on schema objects only: enum/const/default/examples
-// values are opaque data and are never walked for keywords.
-//
-// $ref is likewise restricted beyond "local pointer only": Draft 2020-12
-// sibling-keyword semantics for $ref are not implemented, so a schema
-// object containing $ref alongside any other keyword (validation or
-// annotation) is rejected outright rather than silently discarding the
-// siblings.
+// Compile rejects other keywords rather than ignoring constraints the server's
+// Draft 2020-12 engine might enforce differently. The allowlist applies to schema
+// objects; enum, const, default and examples contain opaque data. Local $ref
+// pointers cannot have sibling keywords, including annotations, because this
+// dialect does not implement Draft 2020-12 sibling semantics.
 package jsonschema
 
 import (
@@ -42,15 +26,12 @@ import (
 	"github.com/rwa-platform/signer/internal/canonical"
 )
 
-// allowedKeywords is the exhaustive set of keywords Compile will accept
-// anywhere in a schema document -- the allowlist from
-// docs/spec/profile-schema-dialect.md. Anything not listed here is
-// rejected, even if it is a valid Draft 2020-12 keyword this engine simply
-// doesn't implement (see the package doc comment above for why).
+// allowedKeywords is the set of keywords Compile accepts anywhere in a schema document,
+// matching the allowlist in docs/spec/profile-schema-dialect.md. Any other key is
+// rejected, even a valid Draft 2020-12 keyword this engine does not implement (see the
+// package comment)
 var allowedKeywords = map[string]bool{
-	// Non-validating annotations/containers, accepted and ignored (except
-	// $defs, which is not itself compiled -- it is only ever reached via a
-	// local $ref pointer).
+	// Annotations and the $defs container, which have no validation effect of their own
 	"$schema": true, "$id": true, "$comment": true, "$defs": true,
 	"title": true, "description": true, "default": true, "examples": true,
 	"deprecated": true, "readOnly": true, "writeOnly": true,
@@ -64,15 +45,14 @@ var allowedKeywords = map[string]bool{
 	"minItems": true, "maxItems": true, "uniqueItems": true,
 }
 
-// maxSchemaDepth bounds recursive schema compilation (both nested
-// sub-schemas and $ref chains, which share one counter) so a pathological
-// or self-referential schema cannot exhaust the stack.
+// maxSchemaDepth bounds recursive schema compilation, nested sub-schemas and $ref
+// chains alike (they share one counter), so a pathologically deep schema cannot exhaust
+// the stack
 const maxSchemaDepth = 100
 
-// maxSchemaNodes bounds the total number of schema nodes a single Compile
-// call will process, independent of depth, so a wide-but-shallow schema
-// (or a $ref graph with many distinct, individually-non-cyclic paths)
-// cannot cause unbounded work either.
+// maxSchemaNodes bounds the total number of schema nodes one Compile call processes,
+// independent of depth, so a wide, shallow schema or a $ref graph with many distinct
+// acyclic paths cannot cause unbounded work
 const maxSchemaNodes = 10000
 
 // Schema is a compiled node of the supported keyword subset.
@@ -98,15 +78,14 @@ type Schema struct {
 	uniqueItems          bool
 }
 
-// Compile parses raw schema JSON (as an already-decoded canonical.Value, so
-// duplicate-key and UTF-8 checks have already run) into a Schema, rejecting
-// unsupported or dangerous keywords.
+// Compile compiles an already-parsed schema document (so the duplicate-key and UTF-8
+// checks have run) into a Schema. It rejects every keyword outside the allowlist.
 func Compile(root canonical.Value) (*Schema, error) {
 	c := &compiler{root: root, visiting: make(map[string]bool)}
 	return c.compile(root, "#", 0)
 }
 
-// CompileBytes parses and compiles a schema document from raw JSON bytes.
+// CompileBytes parses and compiles a schema document from raw JSON bytes
 func CompileBytes(raw []byte) (*Schema, error) {
 	v, err := canonical.ParseWithLimits(raw, canonical.DefaultLimits())
 	if err != nil {
@@ -117,14 +96,12 @@ func CompileBytes(raw []byte) (*Schema, error) {
 
 type compiler struct {
 	root canonical.Value
-	// visiting is the set of local $ref pointers currently being resolved
-	// on the current DFS path, keyed by the literal ref string. A pointer
-	// entering this set twice on the same path means the schema is
-	// self-referential (directly or through intermediate $refs); that is
-	// rejected deterministically instead of recursing forever.
+	// visiting holds the local $ref pointers being resolved on the current path, keyed
+	// by the ref string. A pointer entering the set twice means the schema is cyclic,
+	// directly or through other $refs, and is rejected instead of recursed into forever.
 	visiting map[string]bool
-	// nodes counts every schema node compiled so far across the whole
-	// Compile call, bounding total work independent of depth.
+	// nodes counts every schema node compiled so far in this Compile call, bounding
+	// total work independent of depth
 	nodes int
 }
 
@@ -179,12 +156,9 @@ func (c *compiler) compile(v canonical.Value, path string, depth int) (*Schema, 
 		case string:
 			s.types = []string{t}
 		case []canonical.Value:
-			// Reject an empty type array explicitly. Left alone it would
-			// collect no types, leaving s.types nil, i.e. "any type" -- the
-			// same meaning as omitting `type` entirely. But the server's full
-			// Draft 2020-12 compiler rejects {"type":[]} outright, so without
-			// this check {"type":[]} would compile and accept any instance
-			// here while the server refused the schema.
+			// An empty array would leave s.types nil, which means any type, the same as
+			// omitting type. The server's Draft 2020-12 compiler rejects {"type":[]}, so
+			// reject it here too or the two would disagree on the schema.
 			if len(t) == 0 {
 				return nil, fmt.Errorf("jsonschema: %s.type: type array must not be empty", path)
 			}
@@ -212,16 +186,9 @@ func (c *compiler) compile(v canonical.Value, path string, depth int) (*Schema, 
 		}
 	}
 
-	// The dialect requires every $defs member to satisfy it at compile
-	// time, even one never reached through $ref. If we left $defs untouched
-	// until (if ever) a $ref pointer resolved into it, an unreferenced
-	// $defs entry using a forbidden keyword (e.g. {"$defs":{"unused":
-	// {"multipleOf":2}}}) would compile cleanly here while the server's full
-	// compiler, which walks every definition, rejected it. The compiled
-	// result is discarded -- $defs is not itself part of the validation
-	// tree, only a pool $ref may later draw from -- this call exists
-	// purely to enforce the dialect (and, as a side effect, to catch a
-	// self-referential $defs entry that no $ref outside $defs ever visits).
+	// Compile every $defs member, including unused definitions, to reject unsupported
+	// keywords and self-reference consistently with the server. Discard the result:
+	// $defs supplies the pool for $ref, not an instance-validation branch.
 	if defsVal, present := obj.Get("$defs"); present {
 		defsObj, ok := defsVal.(*canonical.Object)
 		if !ok {
@@ -379,8 +346,7 @@ func (c *compiler) compile(v canonical.Value, path string, depth int) (*Schema, 
 		s.uniqueItems = b
 	}
 
-	// title/description/default are accepted as pure annotations and
-	// intentionally ignored for validation purposes.
+	// Annotations (title, description, default and the like) have no validation effect
 
 	return s, nil
 }
@@ -409,7 +375,7 @@ func requireNumber(v canonical.Value, path, kw string) (*big.Float, error) {
 	return f, nil
 }
 
-// resolvePointer resolves a local JSON pointer "#/a/b/0" against root.
+// resolvePointer resolves a local JSON pointer such as "#/a/b/0" against root
 func resolvePointer(root canonical.Value, ref string) (canonical.Value, error) {
 	if ref == "#" {
 		return root, nil
@@ -439,7 +405,7 @@ func resolvePointer(root canonical.Value, ref string) (canonical.Value, error) {
 	return cur, nil
 }
 
-// ValidateBytes parses raw JSON data and validates it against s.
+// ValidateBytes parses raw JSON data and validates it against s
 func (s *Schema) ValidateBytes(data []byte) error {
 	v, err := canonical.ParseWithLimits(data, canonical.DefaultLimits())
 	if err != nil {
@@ -448,7 +414,7 @@ func (s *Schema) ValidateBytes(data []byte) error {
 	return s.Validate(v)
 }
 
-// Validate validates an already-parsed canonical.Value against s.
+// Validate validates an already-parsed canonical.Value against s
 func (s *Schema) Validate(v canonical.Value) error {
 	return s.validateAt(v, "$")
 }
@@ -478,7 +444,7 @@ func typeOf(v canonical.Value) string {
 func isIntegerLiteral(n json.Number) bool {
 	s := n.String()
 	if strings.ContainsAny(s, ".eE") {
-		// Still an integer if it round-trips through big.Float with a zero fractional part.
+		// Still an integer if it round-trips through big.Float with a zero fractional part
 		f, ok := new(big.Float).SetString(s)
 		if !ok {
 			return false

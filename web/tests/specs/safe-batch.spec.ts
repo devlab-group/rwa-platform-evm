@@ -7,7 +7,7 @@ const SAFE = "0x9a7F3dfDEeBb51eAbBbA3c8eCCf8cF2a983A1C72";
 test.describe("Safe batch export", () => {
   mockOnly();
 
-  // Exercise the real batch download in the built console
+  // Run the real batch download in the built console
   test("a role held by a Safe saves a Transaction Builder batch instead of broadcasting", async ({
     page,
     api,

@@ -18,13 +18,8 @@ type KYCEventRepository struct {
 	byHash    map[string]bool
 	byEventID map[string]bool // key: provider + "|" + eventId
 
-	// claims tracks, per address, which event currently holds the
-	// "latest decision" claim. It is the atomic
-	// analogue of the removed LatestForAddress query: instead of racing
-	// a read-then-write against concurrent webhook deliveries, callers
-	// CAS into this map via ClaimLatestForAddress using the deterministic
-	// (occurredAt, eventKey) ordering, the same
-	// singleton-claim pattern used elsewhere.
+	// claims holds, per address, the event that currently has the latest-decision
+	// claim. ClaimLatestForAddress updates it with the (occurredAt, eventKey) order.
 	claims map[string]claimState
 }
 
@@ -106,9 +101,8 @@ func (r *KYCEventRepository) ListPending(ctx context.Context) ([]*models.KYCEven
 	defer r.mu.RUnlock()
 	out := make([]*models.KYCEvent, 0)
 	for _, v := range r.byID {
-		// Claiming is included so the reconciler picks up an event whose
-		// claim was never resolved because Process died at the claim/finalize
-		// boundary.
+		// Claiming is included so the reconciler picks up an event whose claim was never
+		// resolved because Process stopped at the claim and finalize step
 		if v.ApplyStatus != models.KYCApplyClaiming && v.ApplyStatus != models.KYCApplyAccepted && v.ApplyStatus != models.KYCApplyApplying {
 			continue
 		}
@@ -119,15 +113,11 @@ func (r *KYCEventRepository) ListPending(ctx context.Context) ([]*models.KYCEven
 	return out, nil
 }
 
-// ClaimLatestForAddress atomically decides whether the event described by
-// (occurredAt, eventKey) is the newest decision seen so far for address,
-// using the deterministic tie-break (occurredAt first, eventKey as a
-// stable secondary key so two events with an identical timestamp resolve
-// the same way everywhere). It replaces
-// the removed LatestForAddress-then-Create race: the caller never reads
-// the current latest and separately writes: the compare-and-set happens
-// under a single lock acquisition, so concurrent webhook deliveries for
-// the same address cannot both believe they "won".
+// ClaimLatestForAddress reports whether the event (occurredAt, eventKey) is the
+// newest decision for address. The later occurredAt wins, and eventKey breaks a tie
+// so two events with the same timestamp resolve the same way on every replica. The
+// compare-and-set runs under one lock, so concurrent deliveries for the same
+// address cannot both win.
 func (r *KYCEventRepository) ClaimLatestForAddress(ctx context.Context, address string, occurredAt time.Time, eventKey string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -149,11 +139,9 @@ func (r *KYCEventRepository) CurrentClaimEventKey(ctx context.Context, address s
 	return cur.eventKey, nil
 }
 
-// claimIsNewer reports whether (at, key) strictly outranks (curAt, curKey)
-// under the (occurredAt, eventKey) ordering: later occurredAt wins; on an
-// exact tie, the lexicographically greater eventKey wins. This must match
-// the Mongo implementation's comparison exactly so memory- and
-// Mongo-backed deployments make identical claim decisions.
+// claimIsNewer reports whether (at, key) strictly outranks (curAt, curKey): a later
+// occurredAt wins, and on an exact tie the greater eventKey wins. The MongoDB
+// implementation uses the same comparison, so both stores decide alike.
 func claimIsNewer(at time.Time, key string, curAt time.Time, curKey string) bool {
 	if at.After(curAt) {
 		return true

@@ -134,7 +134,7 @@ contract SupplyControllerTest is TestBase {
 
     function test_mint_crossChainDomainReverts() public {
         ISupplyController.MintAttestation memory a = _mintAttestation(auditor, 1 ether, "REC-1", 1);
-        // Sign a digest built for a different chain id -> recovers to a different address.
+        // Sign a digest built for a different chain id -> recovers to a different address
         bytes32 wrongDomain = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
@@ -260,7 +260,7 @@ contract SupplyControllerTest is TestBase {
         supplyController.setAuditor(outsider);
         assertEq(supplyController.auditor(), outsider);
 
-        // Old auditor's signature must now be rejected.
+        // Old auditor's signature must now be rejected
         ISupplyController.MintAttestation memory a = _mintAttestation(auditor, 1 ether, "REC-1", 1);
         bytes memory sig = _signMint(a, AUDITOR_PK);
         vm.expectRevert(abi.encodeWithSelector(ISupplyController.WrongAuditor.selector, outsider, auditor));

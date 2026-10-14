@@ -1,11 +1,9 @@
-// Package project OBSERVES on-chain deployments and runs post-deployment
-// verification. The server no longer submits the factory transaction from a
-// hot key: RWAFactory.deploy is permissionless and
-// is broadcast from the admin's own wallet. The server instead indexes the
-// factory's ProjectDeployed event and, once one that binds to the stored
-// (digest-verified) Asset Profile appears, adopts and fully verifies the
-// resulting stack before marking the project Active — so no server key is
-// part of deployment at all.
+// Package project observes on-chain deployments and runs post-deployment
+// verification. RWAFactory.deploy is permissionless and the admin's own wallet
+// broadcasts it, so no server key takes part in deployment. The server indexes
+// the factory's ProjectDeployed event and, once one that binds to the stored,
+// digest-verified Asset Profile appears, adopts the resulting stack, verifies
+// it and marks the project Active.
 package project
 
 import (
@@ -34,10 +32,10 @@ type Service struct {
 	factoryAddr common.Address
 	repo        repository.ProjectRepository
 	chainID     int64
-	// adminAddress is the configured operator wallet — the trust anchor for
-	// adoption. RWAFactory.deploy is permissionless and projectId/profileDigest
-	// are both public, so matching them proves only that someone read the
-	// chain. A deployment is adopted only when the admin's own wallet sent it.
+	// adminAddress is the configured admin wallet, the trust anchor for
+	// adoption. RWAFactory.deploy is permissionless and projectId and
+	// profileDigest are public, so matching them proves only that someone read
+	// the chain. A deployment is adopted only when the admin's wallet sent it.
 	adminAddress common.Address
 
 	warnUnauthenticatedOnce sync.Once
@@ -46,12 +44,12 @@ type Service struct {
 	loggedRejections sync.Map
 }
 
-// New constructs a deployment-observing Service. The server holds no deployer
-// key: it only reads the chain and the DB, never signs a factory transaction.
+// New constructs a deployment-observing Service. It only reads the chain and the
+// database and never signs a transaction.
 //
-// adminAddress is the configured admin wallet (config ADMIN_ADDRESS) and is
-// what binds an observed deployment to this operator. A zero adminAddress
-// disables that binding — see adminBindingError.
+// adminAddress is the configured admin wallet (ADMIN_ADDRESS), which binds an
+// observed deployment to this operator. A zero adminAddress disables that
+// binding; see adminBindingError.
 func New(client blockchain.Client, factoryAddr common.Address, repo repository.ProjectRepository, chainID int64, adminAddress common.Address) *Service {
 	return &Service{
 		client: client, factory: bindings.NewFactory(), factoryAddr: factoryAddr,
@@ -64,33 +62,19 @@ func (s *Service) GetProject(ctx context.Context) (*models.Project, error) {
 	return s.repo.Get(ctx)
 }
 
-// SupportedFactoryVersions is the exact set of RWAFactory.version() strings
-// this server's verification logic understands.
+// SupportedFactoryVersions is the set of RWAFactory.version() strings that this
+// server's verification logic supports
 var SupportedFactoryVersions = map[string]bool{"rwa-v2": true}
 
-// ReconcileDeployment is the reorg-safe deployment projector that replaces the
-// former server-broadcast-plus-reconciler flow. It looks for a ProjectDeployed
-// event (indexed from the configured factory) that binds to the stored,
-// digest-verified Asset Profile and, when one appears, adopts and fully
-// verifies the resulting stack; if a project previously reached Active/
-// Verifying via an event that is no longer canonical (rolled back by a reorg),
-// it demotes the project back to Undeployed. Safe to call repeatedly on a
-// ticker.
+// ReconcileDeployment adopts and verifies an indexed ProjectDeployed event
+// from the configured factory. It is safe to call repeatedly. If the event
+// backing an Active or Verifying project is rolled back, demote to Undeployed.
 //
-// BINDING: a ProjectDeployed event is adopted ONLY when its projectId AND
-// profileDigest match the stored profile — projectId is
-// keccak256(the profile's UUID projectId), profileDigest is the profile's own
-// digest — so the on-chain token can never be bound to a profile the server
-// will not validate every record/mint against.
-//
-// AUTHORIZATION: that binding alone is not enough, because both values are
-// public and RWAFactory.deploy is permissionless — anyone can deploy a
-// look-alike stack carrying them. The deploy transaction must ALSO be signed by
-// the configured admin and name that same admin in its ProjectConfig; see
-// adminBindingError. Everything else the verification pass treats as expected
-// (roles, treasury, auditor, prices, quote token) comes from that transaction's
-// calldata, so without this check the server would be verifying an attacker's
-// stack against the attacker's own configuration and finding it consistent.
+// The event's projectId must equal keccak256 of the stored profile's UUID, and
+// profileDigest must match that profile's digest. Both values are public, so
+// also require the configured admin as transaction sender and ProjectConfig.admin
+// (see adminBindingError). Verification takes roles, treasury, auditor, prices
+// and quote token from that authorized transaction's calldata.
 func (s *Service) ReconcileDeployment(ctx context.Context, chainEvents repository.ChainEventRepository, profiles repository.AssetProfileRepository) error {
 	current, err := s.repo.Get(ctx)
 	if err != nil && !errors.Is(err, repository.ErrNotFound) {
@@ -102,7 +86,7 @@ func (s *Service) ReconcileDeployment(ctx context.Context, chainEvents repositor
 
 	profile, perr := profiles.GetCurrent(ctx)
 	if errors.Is(perr, repository.ErrNotFound) {
-		return nil // no profile yet — nothing to bind or adopt
+		return nil // no profile yet, so nothing to bind or adopt
 	} else if perr != nil {
 		return fmt.Errorf("project: load stored asset profile: %w", perr)
 	}
@@ -134,25 +118,24 @@ func (s *Service) ReconcileDeployment(ctx context.Context, chainEvents repositor
 		}
 	}
 
-	// Only an admin-bound event is an adoption candidate. Walking newest-first
-	// and taking the first authorized one (ListByName is (block,logIndex)
-	// ascending) means a later look-alike deployment is EXCLUDED rather than
-	// preferred — the old "keep the latest match" rule handed the project to
-	// whoever deployed most recently.
+	// Only an admin-bound event is an adoption candidate. The search walks
+	// newest first (ListByName returns (block, logIndex) ascending) and takes the
+	// first authorized event, so a later look-alike deployment is excluded
+	// instead of winning because it is newer.
 	match, err := s.latestAuthorizedDeploy(ctx, matches)
 	if err != nil {
 		return err
 	}
 
 	if match == nil {
-		// Reorg safety: a previously-adopted deployment lost its backing event.
+		// reorg safety: an adopted deployment has lost its backing event
 		if current != nil && (current.Status == models.ProjectStatusActive || current.Status == models.ProjectStatusVerifying) {
 			return s.demoteOrphaned(ctx, current)
 		}
 		return nil
 	}
 
-	// Idempotent no-op: already Active and adopted from this exact deploy tx.
+	// idempotent no-op: already Active and adopted from this exact deploy tx
 	if current != nil && current.Status == models.ProjectStatusActive && strings.EqualFold(current.DeployTxHash, match.TxHash) {
 		return nil
 	}
@@ -161,15 +144,15 @@ func (s *Service) ReconcileDeployment(ctx context.Context, chainEvents repositor
 	return err
 }
 
-// latestAuthorizedDeploy picks the newest event in matches (which are already
-// filtered to this profile's projectId+profileDigest, ascending) whose deploy
-// transaction is bound to the configured admin, or nil when none is.
+// latestAuthorizedDeploy returns the newest event in matches whose deploy
+// transaction is bound to the configured admin, or nil when none is. matches are
+// already filtered to this profile's projectId and profileDigest and sorted
+// ascending.
 //
-// An unauthorized event is skipped, not recorded: it must never be able to
-// touch the stored project, because marking it Failed would overwrite — and so
-// take down — a legitimately Active deployment, handing an attacker a denial of
-// service in place of the takeover. It is logged once per transaction so an
-// operator sees the attempt without the reconcile ticker flooding the log.
+// An unauthorized event is skipped, not recorded. Marking it Failed would
+// overwrite a legitimately Active project, which would let an attacker cause a
+// denial of service. Each rejected transaction is logged once so the reconcile
+// ticker does not flood the log.
 func (s *Service) latestAuthorizedDeploy(ctx context.Context, matches []*models.ChainEvent) (*models.ChainEvent, error) {
 	for i := len(matches) - 1; i >= 0; i-- {
 		e := matches[i]
@@ -181,7 +164,7 @@ func (s *Service) latestAuthorizedDeploy(ctx context.Context, matches []*models.
 			return e, nil
 		}
 		if _, seen := s.loggedRejections.LoadOrStore(strings.ToLower(e.TxHash), true); !seen {
-			log.Printf("project: ignoring ProjectDeployed in tx %s — it matches this profile but is not authorized by the configured admin: %s", e.TxHash, reason)
+			log.Printf("project: ignoring ProjectDeployed in tx %s - it matches this profile but is not authorized by the configured admin: %s", e.TxHash, reason)
 		}
 	}
 	return nil, nil
@@ -189,8 +172,8 @@ func (s *Service) latestAuthorizedDeploy(ctx context.Context, matches []*models.
 
 // deployAuthorizationError reports why the deploy transaction at txHash is not
 // an adoption candidate, or "" when it is one. A non-nil error is an RPC
-// failure — "we could not tell", which is not the same as "not authorized" and
-// must not be treated as a verdict.
+// failure, which means the check could not be made and is not a verdict of "not
+// authorized".
 func (s *Service) deployAuthorizationError(ctx context.Context, txHash common.Hash) (string, error) {
 	tx, _, err := s.client.TransactionByHash(ctx, txHash)
 	if err != nil {
@@ -203,22 +186,17 @@ func (s *Service) deployAuthorizationError(ctx context.Context, txHash common.Ha
 	return s.adminBindingError(tx, cfg), nil
 }
 
-// adminBindingError is the deployment-authorization trust anchor: it reports why tx/cfg is not a
-// deployment this operator authorized, or "" when it is.
+// adminBindingError returns a rejection reason or "" for an authorized deploy.
+// The recovered sender and ProjectConfig.admin must both equal the configured
+// admin, preventing adoption of a profile-matching deployment sent by another
+// wallet or naming another admin.
 //
-// Two independent bindings, both required. The transaction's recovered SENDER
-// must be the configured admin — that is a signature over the deploy calldata,
-// the one thing an attacker cannot forge — and the ProjectConfig's own admin
-// field must name that same address, so a deployment cannot hand its roles to
-// someone else even if the admin's wallet were tricked into broadcasting it.
-//
-// An unset admin address (development, where ADMIN_ADDRESS is optional)
-// disables the binding and restores the old adopt-any-matching-event behavior,
-// with a warning. Production config refuses to start without ADMIN_ADDRESS.
+// With no configured admin, this check permits profile-matching deployments
+// and logs one warning. Production configuration requires security.admin_address.
 func (s *Service) adminBindingError(tx *types.Transaction, cfg bindings.ProjectConfig) string {
 	if s.adminAddress == (common.Address{}) {
 		s.warnUnauthenticatedOnce.Do(func() {
-			log.Print("project: WARNING — no admin address configured, so deployment adoption is unauthenticated: any wallet that deploys a stack matching this profile's projectId/profileDigest will be adopted. Set ADMIN_ADDRESS.")
+			log.Print("project: WARNING - no admin address configured, so deployment adoption is unauthenticated: any wallet that deploys a stack matching this profile's projectId/profileDigest will be adopted. Set ADMIN_ADDRESS.")
 		})
 		return ""
 	}
@@ -235,11 +213,10 @@ func (s *Service) adminBindingError(tx *types.Transaction, cfg bindings.ProjectC
 	return ""
 }
 
-// demoteOrphaned mirrors ReconcileMinted's orphan-demotion pattern: a project
-// whose adopting ProjectDeployed event is no longer canonical is reset to
-// Undeployed with its chain-derived fields cleared, so a genuine redeploy can
-// be adopted cleanly and no service keeps running against rolled-back
-// addresses.
+// demoteOrphaned follows the orphan demotion in assets.RecordService.ReconcileMinted.
+// A project whose adopting ProjectDeployed event is no longer canonical is reset
+// to Undeployed with its chain-derived fields cleared, so a later deployment can
+// be adopted cleanly and no service keeps using rolled-back addresses.
 func (s *Service) demoteOrphaned(ctx context.Context, p *models.Project) (err error) {
 	p.Status = models.ProjectStatusUndeployed
 	p.Addresses = models.Addresses{}
@@ -259,16 +236,14 @@ func (s *Service) demoteOrphaned(ctx context.Context, p *models.Project) (err er
 	return nil
 }
 
-// VerifyDeployment adopts the ProjectDeployed transaction at txHash and runs
-// the full post-deploy verification pass. The expected
-// projectId/profileDigest/decimals are anchored to the stored,
-// digest-verified profile (the binding);
-// every OTHER expected value (role holders, treasury, auditor, prices,
-// redemptionTimeout, quoteToken) is recovered from the observed deploy
-// transaction's INPUT calldata — the exact ProjectConfig the admin's wallet
-// signed — and cross-checked against on-chain state. ANY failure marks the
-// project Failed with a recorded reason; only a genuine RPC/decode error
-// returns a non-nil Go error.
+// VerifyDeployment adopts the ProjectDeployed transaction at txHash and runs the
+// full post-deploy verification pass. The expected projectId, profileDigest and
+// decimals come from the stored, digest-verified profile. Every other expected
+// value (role holders, treasury, auditor, prices, redemptionTimeout, quoteToken)
+// is recovered from the deploy transaction's input calldata, the ProjectConfig
+// the admin's wallet signed, and cross-checked against on-chain state. A failed
+// check marks the project Failed with the reason recorded. Only an RPC or
+// decoding error returns a non-nil Go error.
 func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, profile *models.AssetProfile) (*models.Project, error) {
 	receipt, err := s.client.TransactionReceipt(ctx, txHash)
 	if err != nil {
@@ -293,7 +268,7 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 	var deployed *bindings.ProjectDeployedEvent
 	for _, lg := range receipt.Logs {
 		if lg.Address != s.factoryAddr {
-			continue // the log must be emitted BY the configured factory
+			continue // the log must be emitted by the configured factory
 		}
 		if len(lg.Topics) == 0 || lg.Topics[0] != s.factory.EventID("ProjectDeployed") {
 			continue
@@ -324,10 +299,10 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 		return s.markVerificationFailed(ctx, p, fmt.Sprintf("factory reported unsupported version %q", deployed.Version))
 	}
 
-	// Recover the intended ProjectConfig from the observed deploy transaction's
-	// calldata — the ProjectDeployed event carries none of the role/treasury/
-	// auditor/price configuration, so the expected verification allowlist comes
-	// from the exact bytes the admin's wallet signed.
+	// Recover the intended ProjectConfig from the deploy transaction's calldata.
+	// The ProjectDeployed event carries none of the role, treasury, auditor or
+	// price configuration, so the expected values come from the bytes the admin's
+	// wallet signed.
 	tx, _, err := s.client.TransactionByHash(ctx, txHash)
 	if err != nil {
 		return nil, fmt.Errorf("project: fetch deploy transaction: %w", err)
@@ -336,9 +311,8 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 	if err != nil {
 		return s.markVerificationFailed(ctx, p, "deploy transaction calldata could not be decoded to an RWAFactory.deploy(ProjectConfig): "+err.Error())
 	}
-	// Cross-check the signed calldata against the profile binding: the deployer
-	// must have submitted THIS profile's identity/decimals, not some other one
-	// the factory happened to echo into the event.
+	// Cross-check the signed calldata against the profile: the deployer must have
+	// submitted this profile's identity and decimals, not different ones
 	if cfg.ProjectID != common.Hash(wantProjectID) {
 		return s.markVerificationFailed(ctx, p, "deploy calldata projectId disagrees with the stored asset profile")
 	}
@@ -348,11 +322,11 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 	if cfg.Decimals != profile.TokenDecimals {
 		return s.markVerificationFailed(ctx, p, fmt.Sprintf("deploy calldata decimals %d disagrees with the stored asset profile's %d", cfg.Decimals, profile.TokenDecimals))
 	}
-	// The calldata is only a trustworthy allowlist if this operator authorized
-	// the transaction that carried it — otherwise every check below just
-	// confirms the attacker's stack agrees with the attacker's own config.
-	// ReconcileDeployment already filters unauthorized events out before they
-	// get here; this repeats the check for any direct caller.
+	// The calldata is a trustworthy allowlist only if this operator authorized the
+	// transaction that carried it, because otherwise every check below confirms
+	// that an attacker's stack matches the attacker's own config.
+	// ReconcileDeployment already filters unauthorized events, so this repeats the
+	// check for direct callers.
 	if reason := s.adminBindingError(tx, cfg); reason != "" {
 		return s.markVerificationFailed(ctx, p, reason)
 	}
@@ -366,8 +340,8 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 	}
 	p.Version = deployed.Version
 
-	// The event's version is emitted by the very contract under scrutiny, so
-	// trust it only if the live factory.version() agrees.
+	// The event comes from the contract being verified, so trust its version only
+	// if the live factory.version() agrees
 	liveVersion, err := viewString(ctx, s.client, s.factory.ABI, s.factoryAddr, "version")
 	if err != nil {
 		return nil, fmt.Errorf("project: read factory.version(): %w", err)
@@ -399,12 +373,12 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 		reasons = append(reasons, fmt.Sprintf("unexpected role holders: %v", unexpectedRoles))
 	}
 
-	factoryRolesClean, err := verifyNoFactoryRoles(ctx, s.client, s.factoryAddr, p.Addresses)
+	factoryRoles, err := verifyNoFactoryRoles(ctx, s.client, s.factoryAddr, p.Addresses)
 	if err != nil {
 		return nil, fmt.Errorf("project: verify factory role absence: %w", err)
 	}
-	if !factoryRolesClean {
-		reasons = append(reasons, "factory retains DEFAULT_ADMIN_ROLE on a deployed contract")
+	if len(factoryRoles) > 0 {
+		reasons = append(reasons, "factory retains roles on deployed contracts: "+strings.Join(factoryRoles, ", "))
 	}
 
 	allowlisted, err := verifySystemAllowlist(ctx, s.client, p.Addresses)
@@ -427,8 +401,8 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 		return s.markVerificationFailed(ctx, p, strings.Join(reasons, "; "))
 	}
 
-	// Persist the quote token's ERC-20 decimals once, best-effort: a read
-	// failure must NOT fail an otherwise-good deployment.
+	// Persist the quote token's ERC-20 decimals, best effort: a read failure does
+	// not fail an otherwise good deployment
 	if p.Addresses.QuoteToken != "" {
 		if dec, derr := viewUint8(ctx, s.client, bindings.NewERC20().ABI, common.HexToAddress(p.Addresses.QuoteToken), "decimals"); derr != nil {
 			log.Printf("project: read quote token decimals(%s) failed, leaving quoteDecimals unset: %v", p.Addresses.QuoteToken, derr)
@@ -446,10 +420,10 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 	return p, nil
 }
 
-// applyConfig copies the signed ProjectConfig's expected role/treasury/
-// auditor/price/timeout values onto the project record so the existing
-// verifyRoles / verifyImmutableConfig checks compare on-chain state against
-// exactly what the admin's wallet submitted.
+// applyConfig copies the signed ProjectConfig's role, treasury, auditor, price
+// and timeout values onto the project record, so verifyRoles and
+// verifyImmutableConfig compare on-chain state with what the admin's wallet
+// submitted
 func applyConfig(p *models.Project, cfg bindings.ProjectConfig) {
 	p.Admin = cfg.Admin.Hex()
 	p.Auditor = cfg.Auditor.Hex()
@@ -468,8 +442,8 @@ func applyConfig(p *models.Project, cfg bindings.ProjectConfig) {
 	p.RedemptionTimeout = int64(cfg.RedemptionTimeout)
 }
 
-// markVerificationFailed persists p as Failed with reason recorded and returns
-// it as a normal, non-error result.
+// markVerificationFailed persists p as Failed with reason recorded and returns p
+// with a nil error
 func (s *Service) markVerificationFailed(ctx context.Context, p *models.Project, reason string) (*models.Project, error) {
 	p.Status = models.ProjectStatusFailed
 	p.VerificationNote = reason

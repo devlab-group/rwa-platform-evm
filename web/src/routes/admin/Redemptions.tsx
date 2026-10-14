@@ -230,7 +230,7 @@ function RedemptionDetail({
   const from = useWalletContext().address;
   const detail = useAsync<Redemption>(() => api.getRedemption(id), [id]);
   const [reasonCode, setReasonCode] = useState("");
-  // Include claim by default so atomic payout failure also reverts funding
+  // Include the claim by default, so a failed payout also reverts the funding
   const [claimInBatch, setClaimInBatch] = useState(true);
   const [busy, setBusy] = useState<"fund" | "reject" | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
@@ -265,7 +265,7 @@ function RedemptionDetail({
       detail.status === "success" ? detail.data.quoteAmount : undefined;
     if (!escrow || !quoteToken || !quoteAmount) {
       setError(
-        "Missing escrow / quote token address or quote amount — project not deployed?",
+        "Missing escrow / quote token address or quote amount - project not deployed?",
       );
       return;
     }
@@ -334,7 +334,7 @@ function RedemptionDetail({
     }
     const escrow = addresses?.redemptionEscrow;
     if (!escrow) {
-      setError("Missing escrow address — project not deployed?");
+      setError("Missing escrow address - project not deployed?");
       return;
     }
     let encoded: Hex;
@@ -498,8 +498,8 @@ function RedemptionDetail({
 
       {blocked && (
         <p className="async-state--error" role="alert">
-          Blocked by compliance — the recorded beneficiary is not currently
-          Allowed, so funding will revert until compliance status is restored.
+          Funding is blocked because the beneficiary is not Allowed. Restore
+          their compliance status before funding.
         </p>
       )}
 

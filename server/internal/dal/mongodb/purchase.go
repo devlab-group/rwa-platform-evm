@@ -23,8 +23,8 @@ func (r *purchaseRepo) DeleteAll(ctx context.Context) error {
 	return err
 }
 
-// Upsert and DeleteStaleGeneration implement the generation-swap
-// rebuild — see the interface doc comments.
+// Upsert and DeleteStaleGeneration implement the generation-swap rebuild, see the
+// interface doc comments
 func (r *purchaseRepo) Upsert(ctx context.Context, p *models.Purchase) error {
 	return upsertByID(ctx, r.coll, p.ID, p)
 }
@@ -34,11 +34,9 @@ func (r *purchaseRepo) DeleteStaleGeneration(ctx context.Context, gen int64) err
 	return err
 }
 
-// ListPage returns one bounded, repository-level keyset page — see
-// the interface doc comment. Sorted (blockNumber desc, _id desc); the
-// filter/limit are pushed into the query itself (keysetFilter +
-// SetLimit(limit+1)) rather than fetching the collection and slicing in
-// the caller.
+// ListPage returns one keyset page sorted by (blockNumber, _id) descending. The
+// filter and limit are part of the query (keysetFilter and SetLimit(limit+1)), so
+// the whole collection is not fetched and sliced in the caller.
 func (r *purchaseRepo) ListPage(ctx context.Context, cursor string, limit int) ([]*models.Purchase, string, error) {
 	items, err := findMany[models.Purchase](ctx, r.coll, keysetFilter(cursor, "blockNumber"),
 		options.Find().SetSort(bson.D{{Key: "blockNumber", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(int64(limit+1)))

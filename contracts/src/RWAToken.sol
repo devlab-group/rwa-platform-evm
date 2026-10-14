@@ -16,10 +16,11 @@ import {IRWAToken} from "./interfaces/IRWAToken.sol";
 import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 
 /// @title RWAToken
-/// @notice Permissioned ERC-20 with pause; mint/burn restricted to SupplyController.
-/// @dev `AccessControlEnumerable` lets an off-chain verifier enumerate
-///      `PAUSER_ROLE`/`DEFAULT_ADMIN_ROLE` holders on-chain — see ComplianceRegistry's
-///      NatSpec for the full rationale and the diamond-override pattern reused below.
+/// @notice Permissioned ERC-20 with pause and ERC-7943 freeze and seizure controls. Only
+///         SupplyController can mint or burn.
+/// @dev `AccessControlEnumerable` lets an off-chain verifier enumerate `PAUSER_ROLE` and
+///      `DEFAULT_ADMIN_ROLE` holders on-chain. ComplianceRegistry explains the inheritance
+///      overrides reused below.
 contract RWAToken is
     IRWAToken,
     IERC7943,
@@ -30,7 +31,7 @@ contract RWAToken is
 {
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
-    /// @notice The RWAFactory (or other deployer) that may set `supplyController` once.
+    /// @notice The deployer (normally RWAFactory), the only caller of the one-time wiring setters
     address private immutable _deployer;
     uint8 private immutable _decimals;
 
@@ -38,33 +39,32 @@ contract RWAToken is
     address public supplyController;
     bool private _supplyControllerSet;
 
-    /// @notice The RedemptionEscrow wired once by the deployer, at factory setup — see
-    ///         `setRedemptionEscrow` and `returnEscrowedRWA`.
+    /// @notice The RedemptionEscrow, wired once by the deployer; see `setRedemptionEscrow` and
+    ///         `returnEscrowedRWA`
     address public redemptionEscrow;
     bool private _redemptionEscrowSet;
 
     /// @notice ERC-7943 frozen amounts: absolute, not a delta, and allowed to exceed the
-    ///         holder's balance, so every read derives the unfrozen part via `_unfrozen`.
+    ///         holder's balance, so every read derives the unfrozen part via `_unfrozen`
     mapping(address account => uint256 amount) private _frozenTokens;
 
     error ZeroAddress();
     error RedemptionEscrowAlreadySet();
     error OnlyRedemptionEscrow(address caller);
-    /// @dev The Vault and RedemptionEscrow move RWA on every buy, claim, and cancel; freezing
-    ///      either would wedge those flows for everyone, so they are refused outright.
+    /// @dev The Vault sells through ordinary transfers and the RedemptionEscrow returns rejected
+    ///      RWA through one, so freezing either would block `buy` or `rejectRedemption` for
+    ///      everyone; a nonzero freeze on either is refused
     error SystemAddressCannotBeFrozen(address account);
-    /// @dev The same two contracts hold RWA on the whole project's behalf: the Vault's unsold
-    ///      float, and the escrow's in-flight redemptions. Seizing from either moves tokens
-    ///      out from behind the contract's own accounting, so both are refused as a seizure
-    ///      source exactly as they are refused a freeze.
+    /// @dev The Vault holds the unsold float and the escrow holds in-flight redemptions.
+    ///      Seizing from either moves tokens out from behind that contract's own accounting, so
+    ///      both are refused as a seizure source.
     error SystemAddressCannotBeSeized(address account);
     error ForcedTransferToSelf(address account);
 
-    /// @dev `supplyController` cannot be known at construction time because SupplyController's
-    ///      own constructor requires the Vault address, which in turn requires this token's
-    ///      address. It is wired once, immediately after SupplyController deployment, by the
-    ///      same deployer that created this token; `setSupplyController` is then permanently
-    ///      locked.
+    /// @dev `supplyController` is unknown at construction: SupplyController's constructor needs
+    ///      the Vault address, and the Vault needs this token's address. The deployer that
+    ///      created this token wires it once through `setSupplyController` after deploying
+    ///      SupplyController, and the setter is then permanently locked.
     constructor(
         string memory name_,
         string memory symbol_,
@@ -88,9 +88,8 @@ contract RWAToken is
         supplyController = controller;
     }
 
-    /// @dev Same one-time deployer-gated wiring pattern as `setSupplyController` (see its
-    ///      NatSpec): the RedemptionEscrow can't be known at this token's construction time
-    ///      either, since it in turn is constructed with this token's address.
+    /// @dev One-time, deployer-only wiring like `setSupplyController`: the RedemptionEscrow is
+    ///      constructed with this token's address, so the constructor cannot receive it
     function setRedemptionEscrow(address escrow) external {
         if (msg.sender != _deployer) revert OnlyTokenDeployer(msg.sender);
         if (_redemptionEscrowSet) revert RedemptionEscrowAlreadySet();
@@ -99,16 +98,12 @@ contract RWAToken is
         redemptionEscrow = escrow;
     }
 
-    /// @notice Lets the wired RedemptionEscrow return RWA it is currently holding in
-    ///         escrow to a compliant beneficiary even while the token is paused, so a
-    ///         timed-out `cancelRedemption` (and `claimRedemption`'s return of the redeemed RWA
-    ///         to the Vault) are never trapped by an emergency pause. This is intentionally
-    ///         narrow, not a general pause bypass: only the wired RedemptionEscrow may call it,
-    ///         it always debits the caller's own balance (never an arbitrary `from`), the
-    ///         recipient must still be `isAllowed`, and it cannot mint, burn, or move anyone
-    ///         else's tokens. `ERC20._update` is called directly (bypassing this contract's
-    ///         `_update` override and, with it, `ERC20Pausable`'s `whenNotPaused` check) —
-    ///         both invariants that override exists for are re-asserted explicitly first.
+    /// @notice Returns escrow-held RWA to an Allowed recipient, including while paused
+    /// @dev Only the wired escrow can call this, and both caller and recipient must be Allowed.
+    ///      It debits the escrow's own balance and cannot mint or burn. Calling ERC20._update
+    ///      bypasses the pause and frozen-balance checks; the escrow is a system address and
+    ///      cannot hold a frozen amount. This permits timed-out cancellation while paused.
+    ///      claimRedemption uses the same return path but checks the pause flag first.
     function returnEscrowedRWA(address to, uint256 value) external {
         if (msg.sender != redemptionEscrow) revert OnlyRedemptionEscrow(msg.sender);
         if (!IComplianceRegistry(compliance).isAllowed(msg.sender)) revert SenderNotAllowed(msg.sender);
@@ -140,8 +135,8 @@ contract RWAToken is
         return IComplianceRegistry(compliance).isAllowed(account);
     }
 
-    /// @dev Same registry rule as `canSend` today. The two stay separate because the standard's
-    ///      API is directional, so an asymmetric policy later needs no ABI change.
+    /// @dev Same registry rule as `canSend`. The two stay separate because the ERC-7943 API is
+    ///      directional, so an asymmetric policy would need no ABI change.
     function canReceive(address account) public view override returns (bool) {
         return IComplianceRegistry(compliance).isAllowed(account);
     }
@@ -150,12 +145,10 @@ contract RWAToken is
         return _frozenTokens[account];
     }
 
-    /// @notice Whether the permissioned rules would let `from` send `amount` to `to` right now.
-    /// @dev Deliberately silent about ERC-20 balance: an `amount` above `from`'s balance is not
-    ///      a permissioned refusal, so a holder with nothing frozen answers `true` and the
-    ///      ERC-20 transfer is what rejects it. The frozen rule is evaluated on its own terms
-    ///      rather than skipped for over-balance amounts, so a fully frozen holder answers
-    ///      `false` for any positive amount, including one they could not afford anyway.
+    /// @notice Whether permission rules permit from to send amount to to
+    /// @dev False when paused, either endpoint is not Allowed, or frozen tokens leave too
+    ///      little unfrozen balance. Balance and allowance checks belong to ERC-20 execution:
+    ///      without a frozen amount, an above-balance transfer can pass this query and revert.
     function canTransfer(address from, address to, uint256 amount) public view override returns (bool) {
         if (paused()) return false;
         if (!canSend(from) || !canReceive(to)) return false;
@@ -165,10 +158,11 @@ contract RWAToken is
 
     // ---- ERC-7943 (uRWA) enforcement ----
 
-    /// @notice Overwrite `account`'s frozen amount. Absolute, so passing 0 releases everything
-    ///         and a second call replaces the first rather than adding to it.
-    /// @dev An amount above the current balance is legitimate: it withholds tokens the account
-    ///      has not received yet.
+    /// @notice Overwrite `account`'s frozen amount. The amount is absolute: 0 releases
+    ///         everything, and a second call replaces the first instead of adding to it.
+    /// @dev An amount above the current balance is allowed and withholds tokens the account has
+    ///      not received yet. Reverts for the zero address and, for a nonzero amount, for a
+    ///      system address.
     function setFrozenTokens(address account, uint256 amount)
         external
         override
@@ -184,15 +178,11 @@ contract RWAToken is
         return true;
     }
 
-    /// @notice Move `amount` out of `from` on the admin's authority alone, for a seizure or a
-    ///         court-ordered recovery.
-    /// @dev Three bypasses, all deliberate: `from`'s own eligibility is not checked (a blocked or
-    ///      expired wallet is precisely the one an order names), the frozen balance does not
-    ///      block the move (it reduces instead), and `ERC20._update` is called directly so an
-    ///      emergency pause cannot disable enforcement. What stays enforced: the destination
-    ///      must be compliant, neither side may be the zero address (so this can never mint or
-    ///      burn), and the balance itself comes from the ordinary ERC-20 path, which reverts if
-    ///      `from` does not hold `amount`.
+    /// @notice Admin-authorized seizure or court-ordered recovery from a holder
+    /// @dev Calls ERC20._update directly, bypassing sender eligibility, freeze restrictions
+    ///      and pause. Spending frozen tokens reduces the hold. The recipient must be eligible,
+    ///      endpoints must be nonzero and distinct, and the source cannot be a system address.
+    ///      ERC-20 enforces the source balance; total supply is unchanged.
     function forcedTransfer(address from, address to, uint256 amount)
         external
         override
@@ -200,17 +190,17 @@ contract RWAToken is
         returns (bool)
     {
         if (from == address(0) || to == address(0)) revert ZeroAddress();
-        // A self-transfer moves nothing but would still consume frozen tokens.
+        // A self-transfer moves nothing but would still consume frozen tokens
         if (from == to) revert ForcedTransferToSelf(from);
         if (IComplianceRegistry(compliance).isSystemAddress(from)) revert SystemAddressCannotBeSeized(from);
-        // The standard's own error, since this is the ERC-7943 surface an integrator calls;
-        // ordinary transfers keep reverting with RecipientNotAllowed for the console's sake.
+        // This is the ERC-7943 entry point, so it raises the standard's error; ordinary
+        // transfers revert with RecipientNotAllowed
         if (!canReceive(to)) revert ERC7943CannotReceive(to);
 
         uint256 balance = balanceOf(from);
         uint256 unfrozen = _unfrozen(from, balance);
         // Over-balance amounts are left to ERC20._update to reject, so frozen state is never
-        // reduced for a transfer that cannot happen.
+        // reduced for a transfer that cannot happen
         if (amount > unfrozen && amount <= balance) {
             uint256 newFrozen = _frozenTokens[from] - (amount - unfrozen);
             _frozenTokens[from] = newFrozen;
@@ -222,7 +212,7 @@ contract RWAToken is
         return true;
     }
 
-    /// @dev `_frozenTokens` may exceed `balance`, hence the branch instead of a subtraction.
+    /// @dev `_frozenTokens` may exceed `balance`, hence the branch instead of a subtraction
     function _unfrozen(address account, uint256 balance) private view returns (uint256) {
         uint256 frozen = _frozenTokens[account];
         return balance > frozen ? balance - frozen : 0;
@@ -242,7 +232,7 @@ contract RWAToken is
             if (!IComplianceRegistry(compliance).isAllowed(to)) revert RecipientNotAllowed(to);
             uint256 balance = balanceOf(from);
             uint256 unfrozen = _unfrozen(from, balance);
-            // Above the balance is ERC-20's own error to raise, not a frozen-balance refusal.
+            // Above the balance is ERC-20's own error to raise, not a frozen-balance refusal
             if (value > unfrozen && value <= balance) {
                 revert ERC7943InsufficientUnfrozenBalance(from, value, unfrozen);
             }
@@ -250,7 +240,7 @@ contract RWAToken is
         super._update(from, to, value);
     }
 
-    // ---- AccessControl diamond resolution — see ComplianceRegistry.sol for rationale ----
+    // ---- AccessControl overrides, see ComplianceRegistry.sol ----
 
     function _grantRole(bytes32 role, address account)
         internal

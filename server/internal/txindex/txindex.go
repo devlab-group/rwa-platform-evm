@@ -1,22 +1,12 @@
-// Package txindex projects indexed chain events into Transaction records for
-// on-chain transactions the server did NOT itself submit. Now that
-// admin/treasurer/investor actions (treasury withdrawals, role changes,
-// pauses, price updates, buys, redemption lifecycle, admin transfers,
-// compliance status changes) are broadcast from connected wallets rather than
-// the server tx-manager, those transactions never get a tx-manager Transaction
-// record, so GET /transactions (and the investor/admin tx lists) would miss
-// them. ReconcileStackTransactions closes that gap by synthesizing one
-// event-derived Transaction per emitting txHash.
+// Package txindex creates Transaction records for indexed wallet actions that
+// the server's transaction manager did not submit, including purchases,
+// redemptions, withdrawals and governance changes. One record per emitting
+// txHash makes these actions visible in GET /transactions.
 //
-// Like project.ReconcileSecurity and the other read-model reconcilers, it is a
-// FULL REPLAY over whatever chain_events currently holds — not an append-only
-// delta feed — which is what makes it reorg-safe: the indexer soft-marks
-// reorged rows Removed and deletes them on deep rollback, and re-deriving from
-// scratch every tick reflects both an out-of-band action AND its later reorg.
-// It is idempotent: each record's ID is a deterministic function of the txHash
-// (EventDerivedTxIDPrefix+txHash) and its SubmittedAt is pinned to the earliest
-// event's IndexedAt (preserved once written), so repeated runs and stable
-// keyset pagination both hold.
+// Each run replays surviving chain_events and skips Removed rows, reflecting
+// actions and subsequent indexer rollbacks. IDs use EventDerivedTxIDPrefix+txHash;
+// SubmittedAt keeps the earliest event's IndexedAt once stored, stabilizing
+// repeated runs and keyset pagination.
 package txindex
 
 import (
@@ -31,18 +21,11 @@ import (
 	"github.com/rwa-platform/server/internal/indexer"
 )
 
-// stackTxKinds maps each decoded stack event to a human-readable Transaction
-// Kind, in PRIMARY-EVENT PRIORITY ORDER (earliest = highest priority). A single
-// transaction can emit several events (a buy emits Purchased plus ERC20
-// Transfers; accepting an admin transfer emits RoleRevoked+RoleGranted); the
-// record's Kind/From/To/Value come from the highest-priority decoded event in
-// the tx. Business/value-bearing actions rank above pure authority bookkeeping
-// (RoleGranted/RoleRevoked rank last) so, e.g., a buy reads as "purchase" not a
-// token Transfer, and an admin accept reads by its role move. Both price events
-// collapse to "price_updated". A decoded event absent from this list still
-// yields a record with Kind = its raw event name (lowest priority); only
-// undecodable logs (Name "unknown", e.g. raw ERC20 Transfers) are ignored — a
-// txHash with no decoded stack event produces no record.
+// stackTxKinds ranks decoded events for a transaction's Kind, From, To and Value.
+// Business and value-bearing events outrank RoleGranted/RoleRevoked; both price
+// events use "price_updated". An unlisted decoded event uses its name at the
+// lowest priority. Undecodable "unknown" logs, including raw ERC-20 Transfers,
+// are ignored; a transaction without a decoded stack event produces no record.
 var stackTxKinds = []struct{ event, kind string }{
 	{"ProceedsWithdrawn", "treasury_withdrawal"},
 	{"Purchased", "purchase"},
@@ -50,8 +33,7 @@ var stackTxKinds = []struct{ event, kind string }{
 	{"Burned", "burn"},
 	{"RedemptionRequested", "redemption_requested"},
 	{"RedemptionFunded", "redemption_funded"},
-	// claimRedemption emits RedemptionCompleted (there is no distinct
-	// "RedemptionClaimed" event) — it is the claim, so it maps to that kind.
+	// claimRedemption emits RedemptionCompleted; there is no RedemptionClaimed event
 	{"RedemptionCompleted", "redemption_claimed"},
 	{"RedemptionRejected", "redemption_rejected"},
 	{"RedemptionCancelled", "redemption_cancelled"},
@@ -81,36 +63,28 @@ func init() {
 	}
 }
 
-// actorKeys are the event-data fields, in priority order, that name the acting
-// EOA behind a transaction. The first present, valid, non-zero address wins;
-// events that carry none (e.g. Minted/Burned, whose relayer isn't in the log)
-// leave From empty.
+// actorKeys are the event-data fields, in priority order, that name the account
+// acting in a transaction. The first valid, non-zero address wins. Events that
+// carry none, such as Minted and Burned, leave From empty.
 var actorKeys = []string{"caller", "sender", "funder", "buyer", "account", "beneficiary"}
 
 // valueKeys are the event-data amount fields, in priority order, used for the
-// record's Value (quote-token minimal units where applicable). "0" when none
-// apply (e.g. a role change carries no amount).
+// record's Value, which is "0" when none is present (a role change has no
+// amount)
 var valueKeys = []string{"quoteAmount", "amount", "rwaAmount"}
 
-// ReconcileStackTransactions replays every chain event for chainID into
-// event-derived Transaction records — see the package doc comment. It:
-//   - skips a txHash a tx-manager record already owns (dedup, so a
-//     server-relayed tx such as a mint isn't double-listed);
-//   - upserts one record per remaining txHash that has ≥1 non-removed decoded
-//     stack event, Status confirmed;
-//   - flips any previously-written event-derived record whose txHash is no
-//     longer live (all events soft-removed or deleted on deep rollback) to
-//     TxReorged (updated, not deleted, so the UI keeps a distinct reorged
-//     state).
+// ReconcileStackTransactions replays chainID's events into Transaction records:
+//   - Skip txHashes already owned by the transaction manager to avoid duplicates.
+//   - Upsert one confirmed record per remaining hash with a non-removed decoded event.
+//   - Mark an existing event-derived record TxReorged when no live event remains,
+//     retaining it for display after removal or indexer rollback.
 //
-// Safe to call repeatedly and before any deployment. Like the other derived
-// read models it freezes while the indexer is mid-reorg
-// (checkpoint.ReconciliationRequired), returning nil rather than projecting a
-// known-inconsistent view.
+// Repeated calls and calls before deployment are safe. While the checkpoint has
+// ReconciliationRequired set, return nil without writing an inconsistent view.
 func ReconcileStackTransactions(ctx context.Context, txs repository.TransactionRepository, chainEvents repository.ChainEventRepository, checkpoints repository.IndexerCheckpointRepository, chainID int64) error {
 	if cp, err := checkpoints.Get(ctx, chainID, indexer.CheckpointAddress); err == nil {
 		if cp.ReconciliationRequired {
-			return nil // indexer frozen mid-reorg — do not project a stale view
+			return nil // indexer frozen mid-reorg
 		}
 	} else if err != repository.ErrNotFound {
 		return fmt.Errorf("txindex: load indexer checkpoint: %w", err)
@@ -137,7 +111,7 @@ func ReconcileStackTransactions(ctx context.Context, txs repository.TransactionR
 		}
 		primary := pickPrimary(live)
 		if primary == nil {
-			continue // no non-removed decoded stack event → nothing to track
+			continue // no non-removed decoded stack event
 		}
 		liveHashes[txHash] = true
 
@@ -146,7 +120,7 @@ func ReconcileStackTransactions(ctx context.Context, txs repository.TransactionR
 			return fmt.Errorf("txindex: get tx by hash %s: %w", txHash, err)
 		}
 		if existing != nil && !models.IsEventDerived(existing) {
-			continue // a tx-manager record already lists this tx — don't duplicate
+			continue // a transaction-manager record already lists this tx
 		}
 
 		rec := buildEventDerivedTx(chainID, txHash, live, primary, existing, now)
@@ -159,9 +133,9 @@ func ReconcileStackTransactions(ctx context.Context, txs repository.TransactionR
 		}
 	}
 
-	// Reorg pass: an event-derived record whose txHash is no longer live had
-	// all its events soft-removed or deleted out from under it — mark it
-	// reorged (a resurrected txHash is re-confirmed by the upsert loop above).
+	// Reorg pass: an event-derived record whose txHash is no longer live lost
+	// all its events to a Removed flag or an indexer rollback. A txHash that returns
+	// is confirmed again by the upsert loop above.
 	all, err := txs.List(ctx)
 	if err != nil {
 		return fmt.Errorf("txindex: list transactions: %w", err)
@@ -179,10 +153,9 @@ func ReconcileStackTransactions(ctx context.Context, txs repository.TransactionR
 	return nil
 }
 
-// pickPrimary returns the highest-priority decoded event among the tx's
-// non-removed events, or nil when none is a decoded stack event (only
-// undecodable "unknown" logs). Ties on priority break by (block, logIndex) for
-// determinism.
+// pickPrimary returns the highest-priority decoded event among live, or nil
+// when none is a decoded stack event. Ties break by (block, logIndex) so the
+// choice is deterministic.
 func pickPrimary(live []*models.ChainEvent) *models.ChainEvent {
 	var best *models.ChainEvent
 	bestRank := 0
@@ -192,7 +165,7 @@ func pickPrimary(live []*models.ChainEvent) *models.ChainEvent {
 		}
 		r, ok := rankByEvent[e.Name]
 		if !ok {
-			r = len(stackTxKinds) // decoded but unmapped: lowest priority, still eligible
+			r = len(stackTxKinds) // decoded but unmapped: lowest priority
 		}
 		if best == nil || r < bestRank || (r == bestRank && earlier(e, best)) {
 			best, bestRank = e, r
@@ -202,12 +175,11 @@ func pickPrimary(live []*models.ChainEvent) *models.ChainEvent {
 }
 
 // buildEventDerivedTx assembles the event-derived Transaction from the tx's
-// non-removed events and its chosen primary event. To is the primary event's
-// emitting contract; From the primary's acting EOA; Value its amount; Kind the
-// mapped (or raw) event name. BlockNumber/BlockHash come from the latest event
-// and SubmittedAt from the earliest (preserved once first written), both stable
-// under replay. existing, when an event-derived record, contributes only its
-// pinned SubmittedAt.
+// live events and its primary event. To is the primary event's emitting
+// contract, From its acting account, Value its amount and Kind its mapped (or
+// raw) event name. BlockNumber and BlockHash come from the latest event and
+// SubmittedAt from the earliest, so both are stable under replay. existing, when
+// it is an event-derived record, contributes only its pinned SubmittedAt.
 func buildEventDerivedTx(chainID int64, txHash string, live []*models.ChainEvent, primary *models.ChainEvent, existing *models.Transaction, now time.Time) *models.Transaction {
 	earliest, latest := live[0], live[0]
 	for _, e := range live {
@@ -242,8 +214,8 @@ func buildEventDerivedTx(chainID int64, txHash string, live []*models.ChainEvent
 	}
 }
 
-// actorFrom returns the first valid, non-zero acting-EOA address among
-// actorKeys in data, or "" when none is present.
+// actorFrom returns the first valid, non-zero address among actorKeys in data,
+// or "" when there is none
 func actorFrom(data map[string]any) string {
 	for _, k := range actorKeys {
 		v, _ := data[k].(string)
@@ -257,7 +229,7 @@ func actorFrom(data map[string]any) string {
 	return ""
 }
 
-// valueFrom returns the first present amount among valueKeys in data, or "0".
+// valueFrom returns the first non-empty amount among valueKeys in data, or "0"
 func valueFrom(data map[string]any) string {
 	for _, k := range valueKeys {
 		if v, _ := data[k].(string); v != "" {

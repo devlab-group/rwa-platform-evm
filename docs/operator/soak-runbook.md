@@ -1,9 +1,8 @@
 # Shadow replay and soak-test runbook
 
-Before deploying a release candidate to production, replay a representative event history and
-run a live testnet soak. Short load tests and the failure drills in
-[testnet-qualification.md](testnet-qualification.md) do not establish stability over days.
-Watch for memory leaks, goroutine growth and state drift.
+Before production deployment, replay representative event history and run a live testnet
+soak. Short load tests and [testnet-qualification.md](testnet-qualification.md) failure drills
+cannot establish stability over days. Monitor memory leaks, goroutine growth and state drift.
 
 The gate requires both runs:
 

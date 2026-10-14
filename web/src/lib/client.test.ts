@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./client";
 
-/**
- * Minimal fetch Response stand-in — client.ts only touches `.ok`, `.status`,
- * `.headers.get()`, and `.json()`, so a real Response/Headers isn't needed.
- */
+// Minimal fetch Response stand-in; client.ts uses only `.ok`, `.status`,
+// `.headers.get()` and `.json()`
 function fakeResponse(
   body: unknown,
   {
@@ -100,12 +98,9 @@ describe("client Idempotency-Key", () => {
     expect(headers["Idempotency-Key"]).toBe("compliance-0xabc-Allowed");
   });
 
-  // Not directly runtime-observable (TypeScript enforces this at compile
-  // time — createProfile/setComplianceStatus/createRecord all now require
-  // idempotencyKey: string, not string | undefined, so `npm run typecheck`
-  // fails if a caller omits it).
-  // This asserts the one remaining runtime behavior: whatever value the
-  // caller provides is exactly what goes out on the wire, unmodified.
+  // The type checker enforces that callers pass a key: createProfile,
+  // setComplianceStatus and createRecord require `idempotencyKey: string`.
+  // This test covers the runtime side: the key goes out on the wire unmodified.
   it("forwards the exact key value given, without generating or defaulting one", async () => {
     const fetchMock = vi
       .fn()

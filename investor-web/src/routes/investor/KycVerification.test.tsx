@@ -18,9 +18,9 @@ vi.mock("../../lib/client", async (importOriginal) => {
   };
 });
 
-// Both provider SDKs are replaced by stand-ins: the real ones pull code from
-// the provider's CDN and drive a camera, neither of which exists under jsdom.
-// The stand-ins keep the props contract, so a wrong prop name still fails here.
+// Both provider SDKs are replaced by stand-ins: the real ones load code from
+// the provider and drive a camera, which jsdom can't do. The stand-ins keep the
+// props contract, so a wrong prop name still fails here.
 vi.mock("@sumsub/websdk-react", () => ({
   default: ({
     accessToken,
@@ -60,7 +60,7 @@ vi.mock("onfido-sdk-ui", () => ({
 
 const ADDRESS = "0x1111111111111111111111111111111111111111";
 
-/** A loaded wallet-status result — `data !== null` is what "has a live session" means. */
+/** A loaded wallet-status result; `data !== null` means the wallet has a live session. */
 function statusProp(
   status: "Unknown" | "Allowed" | "Blocked" | null,
   reload: () => void = vi.fn(),
@@ -99,9 +99,7 @@ describe("KycVerificationSection", () => {
       />,
     );
 
-    expect(
-      screen.getByText(/Generate and sign an ownership challenge/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Sign an ownership challenge/)).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Start verification" }),
     ).toBeNull();
@@ -167,7 +165,7 @@ describe("KycVerificationSection", () => {
     expect(api.startKYC).toHaveBeenCalledWith("session-token");
 
     fireEvent.click(screen.getByRole("button", { name: "finish sumsub" }));
-    await screen.findByText(/Verification submitted — awaiting approval/);
+    await screen.findByText(/Verification submitted - awaiting approval/);
   });
 
   it("mounts Onfido in workflow mode with the returned ref as workflowRunId", async () => {
@@ -195,7 +193,7 @@ describe("KycVerificationSection", () => {
 
     // Completion is signalled by the SDK's own onComplete callback.
     act(() => params.onComplete());
-    await screen.findByText(/Verification submitted — awaiting approval/);
+    await screen.findByText(/Verification submitted - awaiting approval/);
   });
 
   /**
@@ -227,7 +225,7 @@ describe("KycVerificationSection", () => {
       fireEvent.click(screen.getByRole("button", { name: "finish sumsub" }));
     });
     expect(
-      screen.getByText(/Verification submitted — awaiting approval/),
+      screen.getByText(/Verification submitted - awaiting approval/),
     ).toBeInTheDocument();
     return rendered;
   }
@@ -255,7 +253,7 @@ describe("KycVerificationSection", () => {
       />,
     );
     expect(
-      screen.getByText(/Approved — your wallet is now Allowed/),
+      screen.getByText(/Approved - your wallet is now Allowed/),
     ).toBeInTheDocument();
 
     reload.mockClear();
@@ -292,7 +290,7 @@ describe("KycVerificationSection", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "finish sumsub" }),
     );
-    // The expired Allowed record does not count as renewed approval
+    // An expired Allowed record does not count as a renewed approval
     await screen.findByText(/awaiting approval/);
     expect(screen.queryByText(/Approved/)).toBeNull();
   });

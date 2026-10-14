@@ -34,13 +34,27 @@ func (r *transactionRepo) GetByTxHash(ctx context.Context, chainID int64, txHash
 	if txHash == "" {
 		return nil, repository.ErrNotFound
 	}
-	// Sort by _id so a manager-submitted record (whose id does NOT start with
-	// the "evt:" prefix, which sorts after most hex/hyphenated ids) is
-	// returned ahead of any coexisting event-derived record, keeping the
-	// projector's dedup deterministic — mirrors the memory adapter.
-	return findOne[models.Transaction](ctx, r.coll,
-		bson.M{"chainId": chainID, "txHash": txHash},
-		options.FindOne().SetSort(bson.D{{Key: "_id", Value: 1}}))
+	txs, err := findMany[models.Transaction](ctx, r.coll, bson.M{"chainId": chainID, "txHash": txHash})
+	if err != nil {
+		return nil, err
+	}
+	if tx := preferSubmitted(txs); tx != nil {
+		return tx, nil
+	}
+	return nil, repository.ErrNotFound
+}
+
+// preferSubmitted returns the first manager-submitted record, or else the first
+// event-derived one, so the projector's dedup is deterministic as in the memory
+// adapter. It returns nil for an empty slice.
+func preferSubmitted(txs []*models.Transaction) *models.Transaction {
+	var match *models.Transaction
+	for _, tx := range txs {
+		if match == nil || (models.IsEventDerived(match) && !models.IsEventDerived(tx)) {
+			match = tx
+		}
+	}
+	return match
 }
 
 func (r *transactionRepo) Update(ctx context.Context, tx *models.Transaction) error {
@@ -54,15 +68,12 @@ func (r *transactionRepo) Update(ctx context.Context, tx *models.Transaction) er
 	return nil
 }
 
-// UpdateConditional replaces tx only if the document currently stored under
-// _id=tx.ID has version==expectedVersion — the filter's match/no-match IS
-// the atomicity (same pattern as idempotencyRepo.Reserve/nonceLeaseRepo.
-// Acquire above): MatchedCount 0 means either the id doesn't exist at all
-// or a concurrent writer already advanced version past what this caller
-// last read, and this method cannot tell those apart from the ReplaceOne
-// result alone, so it re-Gets to distinguish "not found" (returns
-// ErrNotFound) from "version moved" (returns false, nil — a lost race, not
-// an error) for the caller.
+// UpdateConditional replaces tx only if the stored document has version
+// expectedVersion. The filter match is the atomic step, as in idempotencyRepo.Reserve
+// and nonceLeaseRepo.Acquire. MatchedCount 0 means the id does not exist or another
+// writer advanced the version, and the result cannot say which, so it reads the
+// record again: not found returns ErrNotFound, and a moved version returns
+// (false, nil).
 func (r *transactionRepo) UpdateConditional(ctx context.Context, tx *models.Transaction, expectedVersion int) (bool, error) {
 	cp := *tx
 	cp.Version = expectedVersion + 1
@@ -93,9 +104,8 @@ func (r *transactionRepo) ListByStatuses(ctx context.Context, statuses ...models
 	return findMany[models.Transaction](ctx, r.coll, bson.M{"status": bson.M{"$in": statuses}})
 }
 
-// ListUnfinalized narrows the refresh tick to the records that can still
-// change — see the interface doc comment. Both branches are served by the
-// (status, blockNumber) index declared in EnsureIndexes.
+// ListUnfinalized returns the records that can still change, see the interface doc
+// comment. Both branches use the (status, blockNumber) index from EnsureIndexes.
 func (r *transactionRepo) ListUnfinalized(ctx context.Context, confirmedFromBlock uint64) ([]*models.Transaction, error) {
 	filter := bson.M{"$or": bson.A{
 		bson.M{"status": bson.M{"$nin": bson.A{models.TxReplaced, models.TxFailed, models.TxConfirmed}}},
@@ -108,13 +118,9 @@ func (r *transactionRepo) ListReplacements(ctx context.Context) ([]*models.Trans
 	return findMany[models.Transaction](ctx, r.coll, bson.M{"replaces": bson.M{"$gt": ""}})
 }
 
-// ListPage returns one bounded, repository-level keyset page — see
-// the interface doc comment. Sorted (submittedAt asc, _id asc), matching
-// List's pre-existing order. address, when non-empty, is matched
-// case-insensitively against From OR To directly in the query (a
-// case-insensitive regex anchor, mirroring the exact
-// strings.ToLower(...) comparison api.listTransactions used to do in the
-// handler) rather than fetched-then-filtered in Go.
+// ListPage returns one keyset page sorted by (submittedAt, _id) ascending, the same
+// order as List. A non-empty address is matched against from or to in the query with
+// a case-insensitive anchored regex, not by filtering in Go.
 func (r *transactionRepo) ListPage(ctx context.Context, address, cursor string, limit int) ([]*models.Transaction, string, error) {
 	clauses := bson.A{keysetFilterDirDate(cursor, "submittedAt", false)}
 	if address != "" {

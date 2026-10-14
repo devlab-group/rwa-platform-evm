@@ -8,8 +8,8 @@
   white-space: nowrap;
 }
 
-// Lays out a status badge alongside a secondary badge (e.g. a compliance
-// warning) without wrapping them in an inline `style` (see index.html CSP).
+// Lays out a status badge beside a secondary badge, such as a compliance
+// warning, without an inline `style` (the CSP in vite.config.ts forbids it)
 .badge-row {
   display: flex;
   align-items: center;

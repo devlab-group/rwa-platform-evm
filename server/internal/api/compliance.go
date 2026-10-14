@@ -63,7 +63,7 @@ func (app *App) createChallenge(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.ToChallengeResponse(ch))
 }
 
-// ChallengeVerifyBody mirrors components.schemas.ChallengeVerify.
+// ChallengeVerifyBody mirrors components.schemas.ChallengeVerify
 type ChallengeVerifyBody struct {
 	Address   string `json:"address" binding:"required"`
 	Nonce     string `json:"nonce" binding:"required"`
@@ -163,7 +163,7 @@ func (app *App) listAuditLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
-// SetStatusRequestBody mirrors components.schemas.SetStatusRequest.
+// SetStatusRequestBody mirrors components.schemas.SetStatusRequest
 type SetStatusRequestBody struct {
 	Address    string `json:"address" binding:"required"`
 	Status     string `json:"status" binding:"required"`

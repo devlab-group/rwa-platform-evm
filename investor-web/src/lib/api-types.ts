@@ -45,7 +45,7 @@ export interface paths {
     };
     /**
      * Public project/market data.
-     * @description Public, and depended on by the investor SPA. It carries no per-wallet enforcement state: which wallets the issuer has frozen, and the last seizure, are admin-only (GET /api/v1/project/enforcement), and a holder reads their own frozen amount from GET /api/v1/me/wallet-status.
+     * @description Public project data for investor clients. Per-wallet freeze amounts and the latest seizure are admin-only at GET /api/v1/project/enforcement. Holders read their own frozen amount at GET /api/v1/me/wallet-status.
      */
     get: operations["getProject"];
     put?: never;
@@ -65,7 +65,7 @@ export interface paths {
     };
     /**
      * ERC-7943 enforcement state (admin only).
-     * @description The frozen-balance map and the most recent forced transfer, projected from RWAToken's Frozen and ForcedTransfer events. ADMIN-ONLY: naming the wallets an issuer has frozen is operational compliance data, the same class as GET /api/v1/compliance/wallets, even though the underlying events are public on-chain. Values are point-in-time indexed state; see securityStale.
+     * @description Admin-only freeze amounts and latest forced transfer, projected from RWAToken's Frozen and ForcedTransfer events. These identify wallets subject to enforcement and are treated as operational compliance data, like GET /api/v1/compliance/wallets, although the events are public on-chain. See securityStale before using indexed state.
      */
     get: operations["getEnforcement"];
     put?: never;
@@ -85,7 +85,7 @@ export interface paths {
     };
     /**
      * Bootstrap chain configuration (public).
-     * @description Non-sensitive bootstrap values the web/admin console needs before any project exists — the chain id and the RWAFactory address — so the admin can assemble and broadcast RWAFactory.deploy(ProjectConfig) directly from their own wallet (the project is deployed by the admin, not relayed by the server). Available before the first deployment, when GET /project 404s.
+     * @description Public chain ID, RWAFactory address and configured projectId for assembling RWAFactory.deploy(ProjectConfig) in the admin wallet. Available before deployment, when GET /api/v1/project returns 404. The server does not relay deployment.
      */
     get: operations["getConfig"];
     put?: never;
@@ -105,13 +105,13 @@ export interface paths {
     };
     /**
      * Fetch the deployment's stored asset profile, if one exists (admin-only).
-     * @description Returns the single stored Asset Profile for this deployment (one asset per project), including the raw profile document, so the admin UI can repopulate after a reload or navigation instead of forcing re-creation. 404 when no profile has been created yet.
+     * @description Returns this deployment's stored Asset Profile, including its raw document, so the admin UI can restore the editor after navigation or reload. Returns 404 before a profile exists. Each deployment has one profile.
      */
     get: operations["getProfile"];
     put?: never;
     /**
      * Create the deployment's asset profile (admin-only, create-once).
-     * @description Persists the asset profile for this deployment exactly once (create-once / compare-and-set on projectId; immutable for the life of the deployment). Requires the admin role. Unlike POST /api/v1/profile/validate — which is pure and never persists — this is the only endpoint that stores a profile. Persistence failures are surfaced to the caller (500), never silently discarded. Every record/package/signature path additionally cross-checks the stored profile digest against the project's persisted profileDigest.
+     * @description Admin-only, create-once storage of the deployment's Asset Profile, using a compare-and-set on projectId. The profile is immutable; POST /api/v1/profile/validate only validates. Storage failure returns 500. Record, package and signature paths check the stored digest against the project's persisted profileDigest.
      */
     post: operations["createProfile"];
     delete?: never;
@@ -130,8 +130,8 @@ export interface paths {
     get?: never;
     put?: never;
     /**
-     * Validate an asset profile (pure — no persistence side effect).
-     * @description Pure validation: checks the profile against the platform schema and the operator assetSchema dialect and returns the computed digest/cid. It does NOT persist anything. Use POST /api/v1/profile to store one.
+     * Validate an asset profile (pure, no persistence).
+     * @description Admin-only validation against the platform schema and operator assetSchema dialect. Returns digest and cid without storing the profile; use POST /api/v1/profile to persist it.
      */
     post: operations["validateProfile"];
     delete?: never;
@@ -181,7 +181,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** @description Submit the wallet signature over a previously issued challenge to prove ownership. On success also mints a short-lived subject-scoped session (bound to `address` only) so an investor can read their own status without an admin credential. */
+    /** @description Verifies a wallet signature over its issued challenge and returns a short-lived session scoped to address. The session lets investors read their own status without an admin credential. */
     post: operations["verifyChallenge"];
     delete?: never;
     options?: never;
@@ -198,7 +198,7 @@ export interface paths {
     };
     /**
      * This session's own wallet status (subject-scoped).
-     * @description Returns the WalletStatus for the address bound to the presented wallet session only. Authenticated by the X-Wallet-Session bearer minted at challenge-verify, NOT by the admin JWT. Replaces the investor page's former dependency on the admin-only global wallet list.
+     * @description Returns WalletStatus for the address in the X-Wallet-Session token issued by challenge verification. Admin JWTs do not authorize this route.
      */
     get: operations["getMyWalletStatus"];
     put?: never;
@@ -218,7 +218,7 @@ export interface paths {
     };
     /**
      * Public transfer-preflight eligibility.
-     * @description Minimal, unauthenticated lookup for transfer-recipient preflight. Returns only whether a transfer to `address` would currently be permitted — deliberately not the full WalletStatus, so an anonymous caller cannot enumerate a third party's exact status / validUntil / ownership.
+     * @description Public transfer-recipient preflight returning only the registry's Allowed eligibility for address. It omits exact status, validUntil and ownership details. This does not check token pause, frozen amounts or sender eligibility.
      */
     get: operations["isAddressAllowed"];
     put?: never;
@@ -271,6 +271,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
+    /** @description Admin-only. Submits ComplianceRegistry.setStatus with the server's compliance key and returns the tracked transaction. */
     post: operations["setComplianceStatus"];
     delete?: never;
     options?: never;
@@ -287,7 +288,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** @description HMAC-signed KYC provider webhook. Signature header `X-Webhook-Signature` = lowercase hex of HMAC-SHA256(rawBody, sharedSecret), constant-time compared. When a specific provider is configured this endpoint ALSO accepts that provider's own signed webhook shape instead — Sumsub's `X-Payload-Digest` or Onfido's `X-SHA2-Signature`, each verified against that provider's webhook secret and mapped server-side to the same provider-agnostic decision. The generic shape documented here remains the default (`KYC_PROVIDER=none`) and is unchanged. Replay/freshness-protected: the server requires provider + eventId + occurredAt, enforces uniqueness on (provider, eventId) in addition to raw-body-hash dedup, rejects occurredAt outside a 24h-past / 5min-future window, rejects a strictly-older decision for an address than the latest already-applied one, normalizes the address to EIP-55, and rejects negative / >100y-future validUntil before the int64→uint64 cast. The occurrence timestamp travels in-body, so it is covered by the existing HMAC-over-raw-body signature (no separate header). Not protected by BearerJwt. */
+    /** @description Accepts signed KYC decisions without BearerJwt. With kyc.provider: none (default), X-Webhook- Signature is lowercase hex HMAC-SHA256(rawBody, sharedSecret), compared in constant time. A configured Sumsub or Onfido adapter instead verifies X-Payload-Digest or X-SHA2-Signature with its provider secret and maps the payload to the same decision format. Decisions require provider, eventId and occurredAt. The server deduplicates (provider, eventId) and the raw-body hash, accepts timestamps from 24 hours ago through 5 minutes ahead, and rejects decisions older than the latest applied decision for the wallet. It normalizes addresses to EIP-55 and rejects negative validUntil or values more than about 100 years ahead. The raw-body signature also covers occurredAt. */
     post: operations["kycWebhook"];
     delete?: never;
     options?: never;
@@ -306,7 +307,7 @@ export interface paths {
     put?: never;
     /**
      * Begin a KYC verification for this session's own wallet.
-     * @description Begin a KYC verification with the server's configured provider for the wallet bound to the presented session. Returns the provider SDK token / hosted URL the investor SPA launches. The subject wallet is taken from the session, never a request parameter. Approval is applied on-chain asynchronously by the server when the provider's signed webhook arrives (see POST /api/v1/compliance/webhook) — this endpoint does not itself change on-chain state. 501 means no KYC provider is configured, or the configured one has no server-initiated flow (the default `none` provider).
+     * @description Starts verification for the wallet in X-Wallet-Session with the configured provider and returns its SDK token or hosted URL. The wallet cannot be selected by a request parameter. This call changes no on-chain state; approval is applied asynchronously after the provider's signed webhook. Returns 501 for providers without a server-initiated flow, including the default none provider.
      */
     post: operations["startKYC"];
     delete?: never;
@@ -357,8 +358,8 @@ export interface paths {
     get?: never;
     put?: never;
     /**
-     * Reissue an expired record with a fresh nonce/expiry.
-     * @description Audited recovery for a record whose attestation window lapsed before it was signed. Creates a NEW nonce and validUntil for the SAME immutable metadata identity (recordId, metadata, digests unchanged) so a stuck record can be re-attested without violating record-ID uniqueness. Admin-only. Only permitted for a record that is still Pending (never Signed/Minted).
+     * Reissue an expired record with a fresh nonce and expiry.
+     * @description Admin-only audited recovery for a Pending record whose attestation window expired before signing. Replaces nonce and validUntil while keeping recordId, metadata and digests, allowing another attestation without a duplicate record ID.
      */
     post: operations["reissueRecord"];
     delete?: never;
@@ -406,7 +407,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** @description Public, paginated list of redemption requests. On-chain-public data (the RedemptionEscrow's events), exposed unauthenticated so issuers can build their own investor UIs. Filter by `address` (beneficiary) for a single investor's requests, and/or by `status`. */
+    /** @description Public, paginated redemption requests derived from RedemptionEscrow events for issuer-built investor UIs. Filter by beneficiary address, status or both. */
     get: operations["listRedemptions"];
     put?: never;
     post?: never;
@@ -439,7 +440,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** @description Public, paginated list of server-tracked transactions. On-chain-public data, exposed unauthenticated so issuers can build their own investor UIs. Pass `address` to filter to a single wallet (matches from/to/beneficiary/buyer). */
+    /** @description Public, paginated server-tracked transactions for issuer-built investor UIs. Filter by address to match from, to, beneficiary or buyer. */
     get: operations["listTransactions"];
     put?: never;
     post?: never;
@@ -460,7 +461,7 @@ export interface paths {
     put?: never;
     /**
      * Request a wallet-signature challenge for admin login (step 1).
-     * @description Admin auth is wallet-signature based. The SPA sends the connected wallet address; the server returns a single-use, time-limited message for the wallet to personal_sign. Public — this is the login entry point.
+     * @description Public admin login entry point. Send the connected wallet address to receive a single-use, time-limited challenge for personal_sign.
      */
     post: operations["createAuthChallenge"];
     delete?: never;
@@ -480,7 +481,7 @@ export interface paths {
     put?: never;
     /**
      * Verify a signed challenge and issue an admin JWT (step 2).
-     * @description The SPA submits the wallet address and the signature over the challenge message from POST /auth/challenge. The server recovers the signer and, if it equals the configured project admin address, returns a signed JWT to attach as `Authorization: Bearer <token>` on subsequent requests. The JWT is stateless — logout is client-side (drop the token). Public — this is the exchange endpoint.
+     * @description Public exchange of the wallet address and signed POST /auth/challenge message for an admin JWT. The recovered signer must equal the configured admin. Send Authorization: Bearer <token> on subsequent requests. The JWT is stateless; logout removes it client-side.
      */
     post: operations["createSession"];
     delete?: never;
@@ -508,16 +509,16 @@ export interface components {
       version?: string;
       chainId?: number;
       /**
-       * @description Deployment lifecycle state. The admin UI hides the deploy form once this is Deploying/Verifying/Active and polls GET /project until it reaches a terminal state (Active or Failed).
+       * @description Deployment lifecycle state. Active and Failed are the terminal states.
        * @enum {string}
        */
       status?: "Undeployed" | "Deploying" | "Verifying" | "Active" | "Failed";
-      /** @description Why the deployment is Failed — e.g. a role-holder mismatch, a bytecode mismatch, or a reorg that demoted the adopted ProjectDeployed event. Empty when verification succeeded (a project is never left Active with a recorded gap). */
+      /** @description Deployment verification or reorg-demotion detail. May explain a Failed deployment or a non- fatal verification gap on an Active project; empty when no note is needed. */
       verificationNote?: string;
       decimals?: number;
-      /** @description Decimals of the quote/collateral token (addresses.quoteToken), read on-chain once at project setup/deploy and stored with the project settings. Lets the UI scale quote-denominated amounts to/from whole units without its own on-chain read. Omitted if not yet resolved. */
+      /** @description Quote-token decimals, read on-chain at setup and stored for scaling quote amounts without a client-side read. Omitted until resolved. */
       quoteDecimals?: number;
-      /** @description Live on-chain purchase price per whole token, in quote-token minimal units (scale by quoteDecimals for display). Projected from FixedPriceStrategy PurchasePriceUpdated events — the current chain value, overlaying the deploy-time price. Omitted if not yet projected. */
+      /** @description Purchase price per whole token, in quote-token minimal units (scale by quoteDecimals for display). It starts at the deploy-time price and follows FixedPriceStrategy PurchasePriceUpdated events. Omitted if not yet projected. */
       purchasePricePerWholeToken?: string;
       /** @description Live on-chain redemption price per whole token, in quote-token minimal units. See purchasePricePerWholeToken. */
       redemptionPricePerWholeToken?: string;
@@ -528,21 +529,21 @@ export interface components {
       auditor?: string;
       treasury?: string;
       redemptionManager?: string;
-      /** @description The incoming DEFAULT_ADMIN address of an in-progress two-step admin transfer (OZ AccessControlDefaultAdminRules): set from the DefaultAdminTransferScheduled event when the current admin begins a transfer, and cleared (empty/omitted) once the new admin has accepted (DEFAULT_ADMIN_ROLE moved to them) or the transfer was canceled. Event-sourced like the other security fields; see securityStale. The web shows the pending admin an "Accept admin role" action while their wallet matches this. */
+      /** @description Incoming DEFAULT_ADMIN address for the first governance contract with a pending two-step transfer. Projected from scheduling, cancellation and role events; see securityStale. Remains set while any contract awaits acceptance. The admin console offers acceptance to the matching wallet or a Safe batch for a pending Safe. */
       pendingAdmin?: string;
       finalityConfirmations?: number;
-      /** @description V1: true when non-empty code exists at all deployed addresses (presence check). Byte-for-byte / init-code-hash verification against the released artifacts is a separate hardening step and is not implied by this flag. */
+      /** @description True when non-empty code exists at every deployed address. This is a presence check; it does not compare the code with released artifacts. */
       bytecodeVerified?: boolean;
-      /** @description Complete role-holder sets enumerated via AccessControlEnumerable at deployment verification: every role on every deployed contract, compared against the deploy allowlist, so an unexpected out-of-band holder is detected. This is a verification-time snapshot — see securityStale. */
+      /** @description Holders of every role on every deployed contract, enumerated through AccessControlEnumerable. Deployment verification compares them with the deploy allowlist to detect an unexpected holder. Once the governance projection exists, the sets follow role events; see securityStale. */
       roles?: components["schemas"]["RoleHolders"];
-      /** @description Last indexed block, i.e. how current the server's chain view is when it reported the security-authority fields (paused/auditor/treasury/roles). Omitted when no indexer checkpoint exists yet. */
+      /** @description Last indexed block the security-authority fields (paused, auditor, treasury, roles) reflect. Omitted before the first projection. */
       securityAsOfBlock?: number;
       /**
        * Format: date-time
        * @description Timestamp of securityAsOfBlock (RFC3339). Omitted when no checkpoint exists.
        */
       securityAsOfTime?: string;
-      /** @description True when the authority fields (paused/auditor/treasury/roles) may not reflect live chain state — they are a deployment/verification-time snapshot that is not yet continuously reconciled against governance/role events, so an out-of-band pause, role grant, or auditor rotation would not appear here. Clients MUST NOT present these values as guaranteed-current while this is true. */
+      /** @description True when indexed authority fields may lag the chain: no projection, missing or unreadable checkpoint, reconciliation paused, or a projection older than 60 seconds. Clients must not show these values as current. */
       securityStale?: boolean;
     };
     Addresses: {
@@ -554,13 +555,13 @@ export interface components {
       strategy?: string;
       quoteToken?: string;
     };
-    /** @description ERC-7943 (uRWA) enforcement state for the deployed project. Admin-only; see GET /api/v1/project/enforcement. */
+    /** @description ERC-7943 (uRWA) enforcement state for the deployed project. Admin-only; returned by GET /api/v1/project/enforcement. */
     Enforcement: {
-      /** @description Holder address -> frozen amount in token minimal units, as a base-10 string so a uint256 survives JSON intact. Projected from RWAToken Frozen events, which carry an ABSOLUTE amount rather than a delta; an amount of zero releases the hold and removes the entry, so only currently frozen holders appear and the map stays bounded. A frozen amount may exceed the holder's balance (it withholds tokens they have not received yet). Omitted when nothing is frozen. */
+      /** @description Holder address to frozen amount in token minimal units, encoded as a base-10 string to preserve uint256 values. Frozen events replace absolute amounts; zero removes the hold. A hold may exceed the balance and withhold future receipts. Omitted when no holder has a frozen amount. */
       frozenBalances?: {
         [key: string]: string;
       };
-      /** @description The most recent forced transfer (admin seizure), as a bounded audit hint with the chain coordinates to look it up. NOT a history: the full record lives in the indexed chain events and the transaction list. Omitted when none has occurred. */
+      /** @description Latest admin seizure with chain coordinates. For history, use indexed chain events and the transaction list. Omitted when none has occurred. */
       lastForcedTransfer?: components["schemas"]["ForcedTransfer"];
       /** @description Last indexed block this projection reflects. Omitted with no checkpoint. */
       securityAsOfBlock?: number;
@@ -569,7 +570,7 @@ export interface components {
        * @description Timestamp of securityAsOfBlock (RFC3339).
        */
       securityAsOfTime?: string;
-      /** @description True when the projection may lag live chain state, computed exactly as the identically-named field on Project. */
+      /** @description True when the projection may lag the chain. Computed as for the field of the same name on Project. */
       securityStale?: boolean;
     };
     /** @description One ERC-7943 forced transfer, identified by its canonical log position. */
@@ -589,7 +590,7 @@ export interface components {
     RoleHolders: {
       [key: string]: string[];
     };
-    /** @description Non-sensitive bootstrap values for the admin console. The admin assembles ProjectConfig (see IRWAFactory.ProjectConfig) client-side — using the server-configured projectId and deriving profileDigest and decimals from the stored Asset Profile — and broadcasts RWAFactory.deploy from their own wallet. The server never signs or relays the deploy; it observes the on-chain ProjectDeployed event. */
+    /** @description Public bootstrap values for the admin console. It builds ProjectConfig from the configured projectId and stored profile digest and decimals, then broadcasts RWAFactory.deploy through the admin wallet. The server observes ProjectDeployed without signing or relaying deployment. */
     BootstrapConfig: {
       /**
        * Format: int64
@@ -598,7 +599,7 @@ export interface components {
       chainId: number;
       /** @description RWAFactory address the admin calls deploy(ProjectConfig) on. */
       factoryAddress: string;
-      /** @description The operator-configured projectId (UUID) this deployment is pinned to. The admin console builds its Asset Profile with this value instead of generating one, and the server rejects any profile whose projectId differs. Empty when the operator has not set project_id in the server config yet — the console then blocks profile creation. */
+      /** @description The projectId (UUID) this deployment is pinned to by `contract.project_id` in the server config. The admin console uses it in the Asset Profile, and the server rejects a profile whose projectId differs. Empty when the operator has not set it; the console then blocks profile creation. */
       projectId: string;
     };
     ValidationResult: {
@@ -613,7 +614,7 @@ export interface components {
       status?: "Unknown" | "Allowed" | "Blocked";
       validUntil?: number;
       ownershipVerified?: boolean;
-      /** @description This wallet's ERC-7943 frozen amount in token minimal units (base-10 string), omitted when nothing is frozen. Frozen tokens stay in the wallet but cannot be sent, so a holder needs this to tell an enforcement hold apart from a failure. Only ever reported for the caller's own address on GET /me/wallet-status; the aggregate map is admin-only. */
+      /** @description This wallet's ERC-7943 frozen amount in minimal units as a base-10 string. Frozen tokens remain in the wallet but cannot be sent. Omitted when no hold exists. Reported only for the caller's address at GET /me/wallet-status; the aggregate map is admin-only. */
       frozenTokens?: string;
     };
     /** @description WalletStatus for the verified address plus a short-lived subject-scoped session. */
@@ -627,12 +628,12 @@ export interface components {
       sessionToken?: string;
       /**
        * Format: date-time
-       * @description Session expiry (≈15 min TTL).
+       * @description Session expiry (15 minutes after issue by default).
        */
       sessionExpiresAt?: string;
     };
     AllowedResult: {
-      /** @description Whether a transfer to the address is currently permitted. Nothing else is disclosed. */
+      /** @description Registry Allowed eligibility for the address, including expiry. Does not check token pause, frozen amounts or sender eligibility; reveals no other state. */
       allowed: boolean;
     };
     Challenge: {
@@ -647,7 +648,7 @@ export interface components {
       status: "Unknown" | "Allowed" | "Blocked";
       validUntil?: number;
     };
-    /** @description recordKey, nonce and validUntil are exposed so the admin can assemble the SupplyController.MintAttestation and broadcast SupplyController.mint(attestation, signature) directly from their wallet (the server no longer relays the mint; it observes the on-chain Minted event and advances the record). */
+    /** @description recordKey, nonce and validUntil let the admin assemble the SupplyController.MintAttestation and broadcast SupplyController.mint(attestation, signature) from their wallet. The server does not relay the mint; it observes the on-chain Minted event and advances the record. */
     AssetRecord: {
       recordId?: string;
       /** @enum {string} */
@@ -686,7 +687,7 @@ export interface components {
       purchasePrice?: string;
       redemptionPrice?: string;
     };
-    /** @description `status` is the on-chain enum. `claimable` is a server-derived convenience: true when status==Funded AND confirmations>=finalityConfirmations. There is no on-chain Claimable status. A Pending redemption is never a payment guarantee. */
+    /** @description `status` is the on-chain enum. `claimable` is derived by the server: true when status is Funded and confirmations is at least finalityConfirmations. There is no on-chain Claimable status. A Pending redemption is not a payment guarantee. */
     Redemption: {
       id?: string;
       beneficiary?: string;
@@ -713,7 +714,7 @@ export interface components {
       eventId: string;
       /**
        * Format: int64
-       * @description Provider decision time, unix seconds. Rejected if outside 24h-past / 5min-future, or older than the latest applied decision for this address.
+       * @description Provider decision time, unix seconds. Rejected if more than 24 hours in the past or 5 minutes in the future, or older than the latest applied decision for this address.
        */
       occurredAt: number;
       /** @description Subject wallet; normalized to EIP-55 checksum server-side. */
@@ -725,7 +726,7 @@ export interface components {
       status: "Allowed" | "Blocked" | "Pending";
       /**
        * Format: int64
-       * @description Expiry (unix seconds) for an Allowed decision; 0 = no expiry. Negative or >100y-future is rejected before the int64→uint64 cast.
+       * @description Expiry (unix seconds) for an Allowed decision; 0 = no expiry. A negative value, or one more than about 100 years ahead, is rejected.
        */
       validUntil?: number;
     };
@@ -818,10 +819,10 @@ export interface components {
       nonce?: number;
       /** @description txHash of the replacement, if this attempt was replaced. */
       replacedBy?: string;
-      /** @description How many times this nonce has been fee-bumped/replaced. */
+      /** @description How many times this nonce has been fee-bumped or replaced. */
       replacementCount?: number;
     };
-    /** @description The deployment's single persisted Asset Profile (GET /api/v1/profile) — the raw document plus the server-derived identity fields, enough for the admin UI to repopulate the editor and the deploy form after a reload. */
+    /** @description The deployment's single persisted Asset Profile (GET /api/v1/profile): the raw document plus the server-derived identity fields. */
     StoredProfile: {
       /** @description The raw Asset Profile JSON document as stored. */
       profile: Record<string, never>;
@@ -832,9 +833,9 @@ export interface components {
       decimals?: number;
       tokenUnit?: string;
     };
-    /** @description Response of POST /auth/session — the admin JWT and its metadata. */
+    /** @description Response of POST /auth/session, the admin JWT and its metadata. */
     AuthSession: {
-      /** @description Signed JWT — attach as `Authorization: Bearer <token>`. */
+      /** @description Signed JWT; attach as `Authorization: Bearer <token>`. */
       token: string;
       /** @description Unix seconds; JWT expiry. */
       expiresAt: number;
@@ -856,9 +857,9 @@ export interface components {
     };
   };
   parameters: {
-    /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
+    /** @description Required on authenticated admin POST routes that change state; at most 256 bytes. Scoped to principal, operation, concrete path and normalized query, so different path parameters cannot share a cached response. */
     IdempotencyKey: string;
-    /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+    /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
     Limit: number;
     /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
     Cursor: string;
@@ -1010,7 +1011,7 @@ export interface operations {
     parameters: {
       query?: never;
       header: {
-        /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
+        /** @description Required on authenticated admin POST routes that change state; at most 256 bytes. Scoped to principal, operation, concrete path and normalized query, so different path parameters cannot share a cached response. */
         "Idempotency-Key": components["parameters"]["IdempotencyKey"];
       };
       path?: never;
@@ -1066,12 +1067,13 @@ export interface operations {
           "application/json": components["schemas"]["ValidationResult"];
         };
       };
+      403: components["responses"]["Error"];
     };
   };
   listWallets: {
     parameters: {
       query?: {
-        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
         limit?: components["parameters"]["Limit"];
         /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
         cursor?: components["parameters"]["Cursor"];
@@ -1193,7 +1195,7 @@ export interface operations {
   listWebhookEvents: {
     parameters: {
       query?: {
-        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
         limit?: components["parameters"]["Limit"];
         /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
         cursor?: components["parameters"]["Cursor"];
@@ -1222,7 +1224,7 @@ export interface operations {
     parameters: {
       query?: {
         category?: string;
-        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
         limit?: components["parameters"]["Limit"];
         /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
         cursor?: components["parameters"]["Cursor"];
@@ -1233,7 +1235,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description Audit log entries (bounded/paginated; the underlying store is a most-recent-N query so X-Total-Count is omitted — only X-Page-Size/X-Next-Cursor are sent). */
+      /** @description Audit log entries (bounded/paginated; the underlying store is a most-recent-N query so X-Total-Count is omitted; only X-Page-Size and X-Next-Cursor are sent). */
       200: {
         headers: {
           "X-Page-Size": components["headers"]["XPageSize"];
@@ -1250,7 +1252,7 @@ export interface operations {
     parameters: {
       query?: never;
       header: {
-        /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
+        /** @description Required on authenticated admin POST routes that change state; at most 256 bytes. Scoped to principal, operation, concrete path and normalized query, so different path parameters cannot share a cached response. */
         "Idempotency-Key": components["parameters"]["IdempotencyKey"];
       };
       path?: never;
@@ -1289,7 +1291,7 @@ export interface operations {
       };
     };
     responses: {
-      /** @description Accepted and durably queued. The decision is stored and applied on-chain asynchronously by the reconciler; it is NOT yet applied when this returns. Poll the webhook events list for applyStatus. */
+      /** @description Valid decisions are durably queued for asynchronous on-chain application; poll webhook events for applyStatus. Acknowledgement does not mean applied. Irrelevant signed provider events, monitoring-only signals and provider decisions without a usable timestamp are also acknowledged but are not queued as decisions. */
       202: {
         headers: {
           [name: string]: unknown;
@@ -1334,7 +1336,7 @@ export interface operations {
   listRecords: {
     parameters: {
       query?: {
-        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
         limit?: components["parameters"]["Limit"];
         /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
         cursor?: components["parameters"]["Cursor"];
@@ -1363,7 +1365,7 @@ export interface operations {
     parameters: {
       query?: never;
       header: {
-        /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
+        /** @description Required on authenticated admin POST routes that change state; at most 256 bytes. Scoped to principal, operation, concrete path and normalized query, so different path parameters cannot share a cached response. */
         "Idempotency-Key": components["parameters"]["IdempotencyKey"];
       };
       path?: never;
@@ -1412,7 +1414,7 @@ export interface operations {
     parameters: {
       query?: never;
       header: {
-        /** @description Required on every side-effecting endpoint — a missing or optional key would let a mutation bypass idempotency protection entirely. Scoped server-side to the authenticated caller's credential identity, the operation, and its full concrete target (path parameters + normalized query), not merely the route template — see api.go's Idempotency middleware. */
+        /** @description Required on authenticated admin POST routes that change state; at most 256 bytes. Scoped to principal, operation, concrete path and normalized query, so different path parameters cannot share a cached response. */
         "Idempotency-Key": components["parameters"]["IdempotencyKey"];
       };
       path: {
@@ -1457,7 +1459,7 @@ export interface operations {
   listPurchases: {
     parameters: {
       query?: {
-        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
         limit?: components["parameters"]["Limit"];
         /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
         cursor?: components["parameters"]["Cursor"];
@@ -1488,7 +1490,7 @@ export interface operations {
         status?: string;
         /** @description Filter to requests whose beneficiary is this wallet. */
         address?: string;
-        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
         limit?: components["parameters"]["Limit"];
         /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
         cursor?: components["parameters"]["Cursor"];
@@ -1540,7 +1542,7 @@ export interface operations {
       query?: {
         /** @description Filter to txs involving this wallet (from/to/beneficiary/buyer). */
         address?: string;
-        /** @description Max items to return. Server-enforced hard maximum applies even if omitted or set higher than the maximum. */
+        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
         limit?: components["parameters"]["Limit"];
         /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
         cursor?: components["parameters"]["Cursor"];

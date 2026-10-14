@@ -6,16 +6,12 @@ import (
 	"fmt"
 )
 
-// unmarshalStrict decodes raw into v rejecting any field not present on v's
-// struct type(s) and any trailing garbage after the JSON value.
+// unmarshalStrict decodes raw into v and rejects fields that v's struct type
+// does not have and any content after the JSON value.
 //
-// profile.go and record.go unmarshal several nested envelope pieces
-// (displayFields[], issuance, proofs[]) into Go structs. A plain
-// json.Unmarshal silently drops fields it doesn't recognize, so a document
-// carrying an extra key inside one of those objects would pass server
-// validation while the offline signer's strict decoder rejects the same
-// document — a parity gap. Every nested envelope decode MUST go through this
-// helper instead of json.Unmarshal so both sides agree.
+// Nested envelope objects (displayFields[], issuance, proofs[]) are decoded
+// through it because json.Unmarshal ignores unknown fields, which would accept a
+// document the offline signer's strict decoder rejects.
 func unmarshalStrict(raw json.RawMessage, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()

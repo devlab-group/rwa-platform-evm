@@ -17,9 +17,8 @@ describe("applySlippageCeil", () => {
   });
 
   it("caps an unreasonably large slippage value at MAX_SLIPPAGE_BPS", () => {
-    // A fat-fingered/malicious value (1_000_000 bps = 10,000%) must not
-    // silently blow up the ERC-20 approve() amount — clamp to the cap
-    // instead of trusting raw input.
+    // An extreme value (1_000_000 bps = 10,000%) must not inflate the ERC-20
+    // approve() amount; it is clamped to the cap
     const uncapped = applySlippageCeil("1000000", 1_000_000);
     const capped = applySlippageCeil("1000000", MAX_SLIPPAGE_BPS);
     expect(uncapped).toBe(capped);

@@ -14,11 +14,11 @@ import {ISupplyController} from "./interfaces/ISupplyController.sol";
 import {IRWAToken} from "./interfaces/IRWAToken.sol";
 
 /// @title SupplyController
-/// @notice Validates EIP-712 auditor attestations and mints/burns supply.
+/// @notice Validates EIP-712 auditor attestations and mints supply to the Vault or burns it
+///         from the Vault.
 /// @dev `AccessControlEnumerable` lets an off-chain verifier enumerate `DEFAULT_ADMIN_ROLE`
-///      holders on-chain (this contract's only AccessControl role — `auditor` is a plain
-///      address, not a role) — see ComplianceRegistry's NatSpec for the full rationale and the
-///      diamond-override pattern reused below.
+///      holders on-chain. That is this contract's only role, because the auditor is a plain
+///      address. ComplianceRegistry explains the inheritance overrides reused below.
 contract SupplyController is ISupplyController, EIP712, AccessControlEnumerable, AccessControlDefaultAdminRules {
     bytes32 public constant MINT_ATTESTATION_TYPEHASH = keccak256(
         "MintAttestation(address auditor,bytes32 profileDigest,bytes32 recordKey,bytes32 metadataDigest,uint256 amount,uint256 nonce,uint64 validUntil,address vault)"
@@ -164,7 +164,7 @@ contract SupplyController is ISupplyController, EIP712, AccessControlEnumerable,
         return _auditor;
     }
 
-    // ---- AccessControl diamond resolution — see ComplianceRegistry.sol for rationale ----
+    // ---- AccessControl overrides, see ComplianceRegistry.sol ----
 
     function _grantRole(bytes32 role, address account)
         internal

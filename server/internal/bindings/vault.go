@@ -111,18 +111,18 @@ func (v Vault) UnpackPurchased(data []byte, topics []common.Hash) (PurchasedEven
 	return ev, nil
 }
 
-// ProceedsWithdrawnEvent mirrors the ProceedsWithdrawn event: the treasury
-// paid (indexed), the quote-token amount withdrawn (non-indexed), and the
-// caller that triggered it (indexed).
+// ProceedsWithdrawnEvent mirrors the ProceedsWithdrawn event: the treasury paid
+// (indexed), the quote-token amount withdrawn (non-indexed) and the caller
+// (indexed)
 type ProceedsWithdrawnEvent struct {
 	Treasury    common.Address
 	QuoteAmount *big.Int
 	Caller      common.Address
 }
 
-// UnpackProceedsWithdrawn decodes a ProceedsWithdrawn log. treasury and
-// caller are indexed (topics 1 and 2, in declaration order); quoteAmount is
-// the only non-indexed field, decoded from log.Data.
+// UnpackProceedsWithdrawn decodes a ProceedsWithdrawn log. treasury and caller
+// are indexed (topics 1 and 2, in declaration order), and quoteAmount, the only
+// non-indexed field, is in log.Data.
 func (v Vault) UnpackProceedsWithdrawn(data []byte, topics []common.Hash) (ProceedsWithdrawnEvent, error) {
 	var partial struct{ QuoteAmount *big.Int }
 	if err := v.ABI.UnpackIntoInterface(&partial, "ProceedsWithdrawn", data); err != nil {
@@ -136,9 +136,9 @@ func (v Vault) UnpackProceedsWithdrawn(data []byte, topics []common.Hash) (Proce
 	return ev, nil
 }
 
-// AddressChangeEvent mirrors the (all-indexed) fields of Vault's
-// StrategyChanged / TreasuryChanged events: the previous and new address plus
-// the caller that made the change.
+// AddressChangeEvent mirrors the fields of Vault's StrategyChanged and
+// TreasuryChanged events, all of them indexed: the previous and new address and
+// the caller
 type AddressChangeEvent struct {
 	Previous common.Address
 	New      common.Address
@@ -146,13 +146,13 @@ type AddressChangeEvent struct {
 }
 
 // UnpackStrategyChanged decodes a StrategyChanged log from its topics
-// (previousStrategy, newStrategy, caller — all indexed).
+// (previousStrategy, newStrategy and caller, all indexed)
 func (v Vault) UnpackStrategyChanged(topics []common.Hash) AddressChangeEvent {
 	return unpackAddressChange(topics)
 }
 
 // UnpackTreasuryChanged decodes a TreasuryChanged log from its topics
-// (previousTreasury, newTreasury, caller — all indexed).
+// (previousTreasury, newTreasury and caller, all indexed)
 func (v Vault) UnpackTreasuryChanged(topics []common.Hash) AddressChangeEvent {
 	return unpackAddressChange(topics)
 }

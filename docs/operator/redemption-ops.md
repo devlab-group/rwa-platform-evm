@@ -1,8 +1,8 @@
 # Redemption operations guide
 
-V1 redemptions pay the configured ERC-20 quote token to the investor. They do not deliver the
-physical underlying asset. The state machine is
-`None → Pending → {Funded → Completed | Rejected | Cancelled}`; see the
+V1 redemptions pay the configured ERC-20 quote token, without delivering the underlying
+physical asset. `Pending` requests can become `Funded`, `Rejected` or `Cancelled`;
+`Funded` requests become `Completed` on claim. See the
 [redemption state machine](../spec/redemption-state-machine.md).
 
 ## Lifecycle

@@ -1,6 +1,7 @@
 # Redemption state machine
 
-Status: `None → Pending → {Funded → Completed | Rejected | Cancelled}`.
+Status flow: `None → Pending`, then from Pending either `→ Funded → Completed`, `→ Rejected` or
+`→ Cancelled`.
 
 | From | Function | Caller | Guards, in order | To | Asset effect |
 | --- | --- | --- | --- | --- | --- |
@@ -27,7 +28,8 @@ Invariants:
 - No partial funding, partial claims or fees. Each contract call handles one request; Safe
   transaction batches can combine calls.
 - Claim does not recheck beneficiary compliance. Fund, reject and cancel require the beneficiary
-  to be Allowed, leaving the RWA escrowed while that condition fails.
+  to be Allowed, so a Pending request whose beneficiary is not Allowed keeps its RWA escrowed
+  until the beneficiary is Allowed again.
 
 Funding and payout check exact quote-token balance deltas (`QuoteDeltaMismatch`), measured at
 the escrow and beneficiary respectively. Request checks the RWA pull (`RwaDeltaMismatch`).
@@ -35,14 +37,15 @@ Returns through the platform token are not delta-checked: reject uses `safeTrans
 and claim use `returnEscrowedRWA`.
 
 `redemptionTimeout` is immutable. The contract has no default; the factory requires
-`1 day <= redemptionTimeout <= 365 days`. `Deploy.s.sol` defaults to 14 days and Setup to seven.
+`1 day <= redemptionTimeout <= 365 days`. `Deploy.s.sol` defaults to 14 days and the admin
+console's Setup form to seven.
 
 ## Footnote: pause semantics
 
 Timeout cancellation remains available while paused, allowing a compliant beneficiary to
 recover never-funded RWA. It uses `RWAToken.returnEscrowedRWA`, which debits only the wired
 escrow's balance and checks compliance at both ends. It cannot mint, burn or move another
-holder's tokens. Cancel also checks the beneficiary first (`BeneficiaryNotAllowed`).
+holder's tokens. Cancel also requires the beneficiary to be Allowed (`BeneficiaryNotAllowed`).
 
 The other four transitions remain blocked. Claim uses the same return path to send RWA to the
 Vault, but checks pause before doing so; its committed quote remains escrowed during the pause.

@@ -1,10 +1,9 @@
-// Runs in both mocked mode (default) and live mode (BASE_URL set) — no
-// seeded state assumptions, just "does every screen render its chrome
-// without crashing." The state-dependent specs alongside this file are
-// mocked-mode only (see mockOnly() in tests/fixtures/fixtures.ts); this is
-// the one file that actually exercises the real Anvil/Mongo/IPFS stack
-// end-to-end.
-import { expect, test } from "../fixtures/fixtures";
+// Runs in mocked mode (default) and live mode (BASE_URL set). It assumes no
+// seeded state and checks that every screen renders its heading. The
+// state-dependent specs are mocked-mode only (mockOnly() in
+// tests/fixtures/fixtures.ts), so this is the spec meant to exercise the full
+// server stack in live mode.
+import { expect, requireAdminSession, test } from "../fixtures/fixtures";
 
 const ADMIN_ROUTES = [
   ["/admin/setup", "Setup"],
@@ -16,9 +15,10 @@ const ADMIN_ROUTES = [
   ["/admin/security", "Security"],
 ] as const;
 
-test.describe("Smoke — every screen renders", () => {
+test.describe("Smoke - every screen renders", () => {
   for (const [path, heading] of ADMIN_ROUTES) {
     test(`admin ${heading} renders`, async ({ page }) => {
+      requireAdminSession();
       await page.goto(path);
       await expect(page.getByRole("heading", { name: heading, level: 1 })).toBeVisible();
     });

@@ -18,46 +18,35 @@ type Project = components["schemas"]["Project"];
 type ValidationResult = components["schemas"]["ValidationResult"];
 type StoredProfile = components["schemas"]["StoredProfile"];
 
-/**
- * The deployment lifecycle as the UI cares about it. "unknown" is the initial
- * pre-first-load value; "not-deployed" folds together a 404 (no project yet)
- * and the server's explicit "Undeployed". The rest mirror Project.status.
- */
+// The deployment lifecycle shown in the UI. "unknown" holds until the first
+// load finishes. "not-deployed" covers both a 404 (no project yet) and the
+// server's "Undeployed" status. The other values are Project.status.
 type DeployStatus =
   "unknown" | "not-deployed" | "Deploying" | "Verifying" | "Active" | "Failed";
 
-/** How often to re-poll GET /project while a deployment is in a non-terminal state. */
+// Interval between GET /project polls while a deployment is Deploying or Verifying
 const DEPLOY_POLL_MS = 3000;
 
 /**
- * Setup: Asset Profile editor + validation preview, chain/role config,
- * prices, redemption timeout, deployment, verification.
+ * Asset Profile creation and validation, role and chain setup, prices, timeout,
+ * deployment and verification. The JSON assetSchema is validated server-side
+ * through POST /api/v1/profile/validate because CreateRecordRequest.asset is untyped.
  *
- * The Asset Profile schema itself is per-project and is not part of the
- * frozen OpenAPI contract (CreateRecordRequest.asset is an untyped object),
- * so the editor below is a JSON editor validated server-side via
- * POST /api/v1/profile/validate rather than a generated form.
- *
- * Setup is an explicit two-step sequence — validate (pure) then create/persist
- * (POST /api/v1/profile, admin-only, create-once) — and Deployment only unlocks
- * once a profile is stored. The deploy form derives projectId, decimals,
- * tokenUnit, and profileDigest from that stored profile instead of letting the
- * browser supply its own, separately-typed copies that could silently disagree
- * with it (the server does not yet derive these itself).
+ * Validation stores nothing; admin-only POST /api/v1/profile creates the profile
+ * once and unlocks deployment. The deploy form derives projectId, decimals,
+ * tokenUnit and profileDigest from that stored profile.
  */
 export function Setup() {
   const project = useAsync<Project>((signal) => api.getProject({ signal }), []);
-  // The profile is create-once and persisted server-side, so load it on mount
-  // (GET /api/v1/profile, 404 → none yet). Repopulating from it means a reload
-  // or navigation lands back on the already-persisted profile with Deployment
-  // unlocked, instead of the empty create form that would force re-creation
-  // (the server 409s on a second create anyway).
+  // The profile is create-once and stored server-side, so load it on mount
+  // (GET /api/v1/profile; 404 means none yet). After a reload the page then
+  // shows the stored profile with Deployment unlocked; the server would answer
+  // a second create with 409.
   const storedProfile = useAsync<StoredProfile | null>(
     (signal) => loadStoredProfile(signal),
     [],
   );
-  // A profile persisted this session (fresh create) overrides the loaded one;
-  // otherwise the loaded profile (if any) is the created/persisted state.
+  // A profile created in this session overrides the loaded one
   const [createdProfile, setCreatedProfile] = useState<CreatedProfile | null>(
     null,
   );
@@ -67,10 +56,10 @@ export function Setup() {
       : null;
   const profile = createdProfile ?? loadedProfile;
 
-  // Sticky deploy status derived from GET /project. Kept in state (updated only
-  // on a resolved load) rather than read straight off `project` so it survives
-  // the brief loading flip each poll's reload causes — otherwise the gate would
-  // flicker and the polling effect below would tear itself down mid-cycle.
+  // Deploy status derived from GET /project. It changes only when a load
+  // resolves, so it stays steady while each poll's reload briefly reports
+  // "loading"; otherwise the deployment gate would flicker and the polling
+  // effect below would restart mid-cycle.
   const [deployStatus, setDeployStatus] = useState<DeployStatus>("unknown");
   const [deployNote, setDeployNote] = useState<string>("");
   useEffect(() => {
@@ -79,17 +68,17 @@ export function Setup() {
       setDeployStatus(!s || s === "Undeployed" ? "not-deployed" : s);
       setDeployNote(project.data.verificationNote ?? "");
     } else if (project.status === "error") {
-      // GET /project 404s before the first deploy — treat as not-yet-deployed.
+      // GET /project returns 404 before the first deployment
       setDeployStatus("not-deployed");
       setDeployNote("");
     }
-    // On "loading" (a poll's in-flight reload) keep the last known status.
+    // While a poll reloads ("loading"), keep the last status
   }, [project.status, project.data]);
 
-  // Poll GET /project while the deployment is mid-flight so the admin always
-  // sees current status, stopping at a terminal state (Active/Failed) and on
-  // unmount. reload's identity changes each render, so read it through a ref to
-  // keep the interval keyed only on the (sticky) status.
+  // Poll GET /project while the deployment is Deploying or Verifying, until it
+  // reaches Active or Failed or the page unmounts. reload changes identity on
+  // every render, so the interval reads it through a ref and restarts only when
+  // the status changes.
   const reloadRef = useRef(project.reload);
   reloadRef.current = project.reload;
   useEffect(() => {
@@ -117,8 +106,8 @@ export function Setup() {
 
       <section className="card">
         <h2>Asset Profile</h2>
-        {/* Wait for the load before rendering the editor so the empty create
-            form never flashes in front of an already-persisted profile. */}
+        {/* Render the editor only after the load, so the empty create form does
+            not flash before a stored profile appears */}
         <AsyncSection state={storedProfile} onRetry={storedProfile.reload}>
           {() => (
             <ProfileEditor
@@ -144,14 +133,13 @@ export function Setup() {
 }
 
 /**
- * Gates the Deployment area on the deploy lifecycle:
- * - not-yet-deployed + a persisted profile → the deploy form;
- * - Deploying/Verifying → an in-progress indicator (form hidden), while the
+ * Shows the Deployment area for the deploy lifecycle:
+ * - not deployed with a stored profile: the deploy form;
+ * - Deploying or Verifying: a progress indicator in place of the form while the
  *   parent polls GET /project;
- * - Active → hidden (the deployed details live in "Current project"), with a
- *   small confirmation and any non-fatal verification note;
- * - Failed → the failure + note, plus the deploy form so the admin can retry
- *   (a 409 from re-deploying an existing record surfaces as the form's error).
+ * - Active: a short confirmation and any verification note; the deployed
+ *   details are under "Current project";
+ * - Failed: the failure and its note, plus the deploy form for a retry.
  */
 function DeploymentSection({
   deployStatus,
@@ -177,7 +165,7 @@ function DeploymentSection({
   if (deployStatus === "Deploying" || deployStatus === "Verifying") {
     return (
       <div className="async-state async-state--loading" role="status">
-        <p>Deployment in progress — {deployStatus}…</p>
+        <p>Deployment in progress - {deployStatus}…</p>
         <p className="field__hint">
           This updates automatically until the deployment completes.
         </p>
@@ -189,7 +177,7 @@ function DeploymentSection({
     return (
       <div role="status">
         <p>
-          Deployed — see <strong>Current project</strong> above for the live
+          Deployed - see <strong>Current project</strong> above for the live
           addresses and configuration.
         </p>
         {deployNote && (
@@ -199,13 +187,12 @@ function DeploymentSection({
     );
   }
 
-  // not-deployed or Failed: (re)deploying needs a persisted profile.
+  // Deploying, or retrying after Failed, needs a stored profile
   if (!profile) {
     return (
       <p className="field__hint">
-        Create and persist an Asset Profile above before deploying — the
-        deployment&apos;s project ID, token decimals, and profile digest are
-        derived from it.
+        Create the Asset Profile above before deploying. It supplies the project
+        ID, token decimals and profile digest.
       </p>
     );
   }
@@ -225,7 +212,7 @@ function DeploymentSection({
   );
 }
 
-/** Fetches the stored profile, mapping the admin-only 404 (none yet) to null rather than an error. */
+// Fetches the stored profile; a 404 (none yet) returns null instead of throwing
 async function loadStoredProfile(
   signal: AbortSignal,
 ): Promise<StoredProfile | null> {
@@ -237,12 +224,9 @@ async function loadStoredProfile(
   }
 }
 
-/**
- * Maps a persisted StoredProfile onto the CreatedProfile the DeployForm needs.
- * Prefers the server-derived identity fields; where those are absent, falls
- * back to reading them off the raw profile document (same fields the editor
- * extracts on create). Carries the raw JSON so the admin can see what's stored.
- */
+// Maps a StoredProfile to the CreatedProfile the DeployForm needs. It prefers
+// the server-derived identity fields and falls back to the raw profile
+// document. The raw JSON is kept so the admin can see what is stored.
 function storedToCreatedProfile(stored: StoredProfile): CreatedProfile {
   const fromRaw = extractProfileFields(stored.profile);
   return {
@@ -260,19 +244,19 @@ function ProjectSummary({ project }: { project: Project }) {
     <dl className="tx-preview__grid">
       <div className="tx-preview__row">
         <dt>Project ID</dt>
-        <dd>{project.projectId ?? "—"}</dd>
+        <dd>{project.projectId ?? "-"}</dd>
       </div>
       <div className="tx-preview__row">
         <dt>Version</dt>
-        <dd>{project.version ?? "—"}</dd>
+        <dd>{project.version ?? "-"}</dd>
       </div>
       <div className="tx-preview__row">
         <dt>Chain ID</dt>
-        <dd>{project.chainId ?? "—"}</dd>
+        <dd>{project.chainId ?? "-"}</dd>
       </div>
       <div className="tx-preview__row">
         <dt>Profile digest</dt>
-        <dd>{project.profileDigest ?? "—"}</dd>
+        <dd>{project.profileDigest ?? "-"}</dd>
       </div>
       <div className="tx-preview__row">
         <dt>Paused</dt>
@@ -297,26 +281,24 @@ function ProjectSummary({ project }: { project: Project }) {
   );
 }
 
-/** What Deployment needs from a persisted profile — sourced from it, never re-typed by hand. */
+// What Deployment takes from a stored profile, so the admin never retypes it
 interface CreatedProfile {
   profileDigest: string;
   cid: string;
   projectId: string;
   tokenDecimals: number;
   tokenUnit: string;
-  /** The raw profile JSON (pretty-printed), shown read-only so the admin can see what's persisted. */
+  /** The stored profile JSON, pretty-printed and shown read-only */
   rawProfileJson?: string;
 }
 
-/** The Asset Profile format is pinned at 1.0 and the projectId is generated, so
- * neither is asked of the operator — they are supplied automatically on create
- * (see ProfileEditor). Only the descriptive fields and the per-asset schema are
- * entered by hand. */
+// The profile format version is fixed at 1.0 and ProfileEditor fills in the
+// projectId from the server config, so the operator enters only the descriptive
+// fields and the per-asset schema
 const PROFILE_VERSION = "1.0";
 
-/** Starter template for the per-asset JSON Schema — a minimal object schema the
- * operator fills in. Kept small on purpose; the schema is validated server-side
- * (closed dialect) when Validate is clicked. */
+// Starter per-asset JSON Schema: an empty object schema the operator fills in.
+// The server validates it against its closed dialect when Validate runs.
 const DEFAULT_ASSET_SCHEMA = JSON.stringify(
   {
     type: "object",
@@ -327,7 +309,7 @@ const DEFAULT_ASSET_SCHEMA = JSON.stringify(
   2,
 );
 
-/** Best-effort client-side read of the fields Deployment needs — the server is the actual source of truth for the stored digest. */
+// Reads the fields Deployment needs from a raw profile; the server owns the stored digest
 function extractProfileFields(parsed: unknown): {
   projectId: string;
   tokenDecimals: number;
@@ -352,12 +334,10 @@ function ProfileEditor({
   createdProfile: CreatedProfile | null;
   onProfileCreated: (profile: CreatedProfile) => void;
 }) {
-  // profileVersion is pinned and projectId comes from the server config (the
-  // operator sets contract.project_id before running the platform) — neither is
-  // asked of the operator here. We read the projectId from GET /api/v1/config so
-  // it matches the value the server gates every profile against. The rest are
-  // entered as discrete, labelled fields rather than as one hand-authored JSON
-  // blob.
+  // The version is fixed, and projectId comes from the server config
+  // (contract.project_id), so the operator enters neither. The page reads
+  // projectId from GET /api/v1/config to match the value the server checks
+  // every profile against. The other values are separate labelled fields.
   const [projectId, setProjectId] = useState<string | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
   const [assetType, setAssetType] = useState("");
@@ -370,9 +350,8 @@ function ProfileEditor({
   const [validating, setValidating] = useState(false);
   const [creating, setCreating] = useState(false);
 
-  // Load the deployment's projectId from the server. An empty value means the
-  // operator has not set contract.project_id yet — profile creation is blocked
-  // until they do, since the server would reject a mismatched (or missing) one.
+  // Load the deployment's projectId from the server. An empty value means
+  // contract.project_id is not set, which blocks profile creation
   useEffect(() => {
     let cancelled = false;
     api
@@ -398,13 +377,12 @@ function ProfileEditor({
     };
   }, []);
 
-  /** Assembles the full profile document from the discrete fields, parsing the
-   * only free-form part (assetSchema). The server is the source of truth for
-   * validity — this just gets a well-formed object onto the wire. */
+  // Assembles the profile document from the form fields and parses the one
+  // free-form part, assetSchema. The server decides validity.
   function buildProfileOrError(): Record<string, unknown> | undefined {
     if (!projectId) {
       setError(
-        "No projectId is configured on the server yet — set contract.project_id in the server config before creating a profile.",
+        "No projectId is configured on the server yet - set contract.project_id in the server config before creating a profile.",
       );
       return undefined;
     }
@@ -461,9 +439,8 @@ function ProfileEditor({
       });
     } catch (err) {
       if (err instanceof ApiError) {
-        // POST /api/v1/profile's 400 body is a ValidationResult (errors[]),
-        // not the generic Error{code,message} every other endpoint uses —
-        // read whichever shape actually came back.
+        // A 400 from POST /api/v1/profile carries a ValidationResult (errors[]),
+        // not the generic Error body, so read whichever shape came back
         const body = err.body as unknown as
           Partial<ValidationResult> | undefined;
         setError(
@@ -485,7 +462,7 @@ function ProfileEditor({
         <dl className="tx-preview__grid" role="status">
           <div className="tx-preview__row">
             <dt>Status</dt>
-            <dd>Persisted — immutable for the life of this deployment</dd>
+            <dd>Persisted - immutable for the life of this deployment</dd>
           </div>
           <div className="tx-preview__row">
             <dt>Project ID</dt>
@@ -522,8 +499,8 @@ function ProfileEditor({
               aria-describedby="stored-profile-json-hint"
             />
             <span className="field__hint" id="stored-profile-json-hint">
-              This profile is persisted and immutable for the life of the
-              deployment — shown read-only.
+              This stored profile is immutable for the deployment&apos;s
+              lifetime and is shown read-only.
             </span>
           </div>
         )}
@@ -541,14 +518,13 @@ function ProfileEditor({
       <dl className="tx-preview__grid">
         <div className="tx-preview__row">
           <dt>Project ID</dt>
-          <dd className="mono">{projectId ?? "— not configured —"}</dd>
+          <dd className="mono">{projectId ?? "- not configured -"}</dd>
         </div>
       </dl>
       <p className="field__hint">
-        The project ID (a UUID) comes from the server configuration
-        (contract.project_id) and the profile version (1.0) is fixed — you
-        don&apos;t enter either. If the project ID shows &quot;not
-        configured&quot;, set it in the server config before creating a profile.
+        The server supplies the project ID (contract.project_id); profile
+        version 1.0 is fixed. If the ID is &quot;not configured&quot;, set it in
+        the server config before creating a profile.
       </p>
 
       <div className="field">
@@ -561,7 +537,7 @@ function ProfileEditor({
         />
         <span className="field__hint" id="assetType-hint">
           The class of real-world asset this token represents (e.g. gold,
-          real-estate, invoice). 1–128 characters.
+          real-estate, invoice). 1-128 characters.
         </span>
       </div>
 
@@ -574,7 +550,7 @@ function ProfileEditor({
           aria-describedby="tokenUnit-hint"
         />
         <span className="field__hint" id="tokenUnit-hint">
-          The unit one whole token stands for (e.g. gram, sqft, USD). 1–64
+          The unit one whole token stands for (e.g. gram, sqft, USD). 1-64
           characters.
         </span>
       </div>
@@ -591,7 +567,7 @@ function ProfileEditor({
           aria-describedby="tokenDecimals-hint"
         />
         <span className="field__hint" id="tokenDecimals-hint">
-          How many fractional digits the token supports (0–36; e.g. 18, like
+          How many fractional digits the token supports (0-36; e.g. 18, like
           most ERC-20s). This is fixed on-chain at deploy.
         </span>
       </div>
@@ -606,7 +582,7 @@ function ProfileEditor({
         />
         <span className="field__hint" id="recordIdLabel-hint">
           What each asset record&apos;s identifier means (e.g. Serial number,
-          Deed number, Invoice ID). Shown in record forms. 1–128 characters.
+          Deed number, Invoice ID). Shown in record forms. 1-128 characters.
         </span>
       </div>
 
@@ -621,10 +597,9 @@ function ProfileEditor({
           aria-describedby="assetSchema-hint"
         />
         <span className="field__hint" id="assetSchema-hint">
-          A JSON Schema describing the metadata each asset record must provide —
-          it&apos;s what the metadata form is generated from and validated
-          against. Enter a JSON Schema object (a restricted dialect is enforced
-          server-side on Validate).{" "}
+          A JSON Schema for each record&apos;s asset metadata, used to generate
+          and validate its form. Enter a schema object; server validation
+          enforces the supported dialect.{" "}
           <a
             href="https://json-schema.org/learn/getting-started-step-by-step"
             target="_blank"
@@ -632,10 +607,9 @@ function ProfileEditor({
           >
             JSON Schema documentation
           </a>
-          . Validate first (pure — no persistence). Creating is admin-only and
-          permanent: once stored, a profile cannot be edited or replaced, and
-          the deployment below derives its project ID, token unit, decimals, and
-          profile digest from it.
+          . Validate without saving first. Profile creation is admin-only and
+          permanent. The stored profile supplies the deployment&apos;s project
+          ID, token unit, decimals and digest.
         </span>
       </div>
 
@@ -698,9 +672,8 @@ function ProfileEditor({
   );
 }
 
-// Every one of these is a hard revert in RWAFactory._validateConfig (a zero
-// address for any of them reverts InvalidConfig), so setup must render and
-// require all of them, not just Admin/Auditor.
+// RWAFactory._validateConfig reverts with InvalidConfig when any of these is the
+// zero address, so the form requires all of them
 const REQUIRED_ADDRESS_FIELDS = [
   "quoteToken",
   "admin",
@@ -712,7 +685,8 @@ const REQUIRED_ADDRESS_FIELDS = [
   "treasury",
 ] as const;
 
-const MIN_REDEMPTION_TIMEOUT = 86_400; // 1 day, contracts/src/RWAFactory.sol
+// Bounds from contracts/src/RWAFactory.sol, in seconds
+const MIN_REDEMPTION_TIMEOUT = 86_400; // 1 day
 const MAX_REDEMPTION_TIMEOUT = 31_536_000; // 365 days
 
 const EMPTY_DEPLOY = {
@@ -744,9 +718,8 @@ function DeployForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
-  // The admin is always wallet-connected after signing in (WalletProvider); the
-  // deploy is broadcast from that wallet, and the quote token's decimals are
-  // read against the deployment chain the wallet must be on.
+  // The admin signs in with a connected wallet; the deploy is broadcast from it,
+  // and the quote token's decimals are read on the deployment chain
   const wallet = useWalletContext();
 
   function set<K extends keyof typeof EMPTY_DEPLOY>(
@@ -770,11 +743,10 @@ function DeployForm({
     setError(null);
     setTxHash(null);
     try {
-      // Deployment is now broadcast from the admin's own wallet
-      // (RWAFactory.deploy is permissionless); the server observes the
-      // ProjectDeployed event. The factory address + deployment chain come from
-      // GET /api/v1/config, not GET /project — the project doesn't exist yet, so
-      // /project still 404s.
+      // The admin's wallet broadcasts the deployment (RWAFactory.deploy is
+      // permissionless) and the server observes the ProjectDeployed event. The
+      // factory address and chain come from GET /api/v1/config, because
+      // GET /project returns 404 before the first deployment.
       let bootstrap: components["schemas"]["BootstrapConfig"];
       try {
         bootstrap = await api.getConfig();
@@ -787,8 +759,7 @@ function DeployForm({
       const factoryAddress = bootstrap.factoryAddress as Address;
       const chainId = bootstrap.chainId;
 
-      // The deploy needs a connected wallet on the deployment chain. The admin
-      // is normally already connected from login; connect on demand if not.
+      // Deploying needs a connected wallet; connect now if login left none
       let from = wallet.address;
       if (!from) {
         try {
@@ -799,13 +770,11 @@ function DeployForm({
         }
       }
 
-      // The two price inputs are entered in WHOLE quote-token units; convert
-      // them to the quote token's minimal integer units for ProjectConfig. The
-      // project doesn't exist yet, so there's no Project.quoteDecimals to lean
-      // on — read the quote token's decimals() directly on-chain against the
-      // deployment chain (this also asserts the wallet is on that chain). A
-      // bad/unreadable quote token or over-precise prices must block the deploy
-      // rather than submit a mis-scaled one.
+      // The prices are entered in whole quote-token units and ProjectConfig
+      // needs minimal units. No Project.quoteDecimals exists before deployment,
+      // so read the quote token's decimals() on the deployment chain, which also
+      // checks that the wallet is on that chain. An unreadable quote token or an
+      // over-precise price blocks the deployment.
       let quoteDecimals: number;
       try {
         quoteDecimals = await readErc20Decimals(
@@ -835,15 +804,14 @@ function DeployForm({
         setError(
           err instanceof AmountFormatError
             ? err.message
-            : "Invalid price — enter a whole-quote-token amount.",
+            : "Invalid price - enter a whole-quote-token amount.",
         );
         return;
       }
 
-      // Assemble ProjectConfig client-side. projectId is the keccak256 of the
-      // profile's UUID string — CRITICAL PARITY with the server, which computes
-      // keccak256(UUID-string-bytes) for the on-chain bytes32 projectId. decimals
-      // and profileDigest come from the persisted, digest-verified Asset Profile.
+      // Assemble ProjectConfig in the browser. projectId is the keccak256 of the
+      // profile's UUID string; the server derives the same bytes32 and must
+      // match it. decimals and profileDigest come from the stored Asset Profile.
       const projectConfig: ProjectConfigInput = {
         name: form.name,
         symbol: form.symbol,
@@ -873,8 +841,8 @@ function DeployForm({
       await waitForTxReceipt(hash);
       setTxHash(hash);
       setConfirming(false);
-      // The server picks up the ProjectDeployed event and advances GET /project
-      // through Verifying → Active; the parent's sticky status polling shows it.
+      // The server observes ProjectDeployed and moves GET /project through
+      // Verifying to Active; the parent's polling shows it
       onDeployed();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Deployment failed.");
@@ -1065,11 +1033,9 @@ function DeployForm({
         <div className="tx-preview">
           <h3 className="tx-preview__title">Confirm deployment</h3>
           <p>
-            This broadcasts RWAFactory.deploy from your connected wallet on the
-            deployment chain; the server then observes the on-chain
-            ProjectDeployed event. Review every field before confirming —
-            deployment parameters cannot be changed after the contracts are
-            live.
+            Broadcasts RWAFactory.deploy from your wallet on the deployment
+            chain. The server adopts the ProjectDeployed event. Review every
+            field: token identity and fixed contract wiring are permanent.
           </p>
           <div className="tx-preview__actions">
             <button
@@ -1102,7 +1068,7 @@ function DeployForm({
         <p role="status">
           Deployment broadcast for project <strong>{profile.projectId}</strong>.
           Transaction <span className="mono">{txHash}</span>. Waiting for the
-          server to observe it — see <strong>Current project</strong> above.
+          server to observe it - see <strong>Current project</strong> above.
         </p>
       )}
     </div>

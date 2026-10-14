@@ -17,7 +17,7 @@ func TestCheckV3KDFStrength_RejectsWeakScrypt(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "weaker than the minimum policy") {
 		t.Errorf("unexpected error: %v", err)
 	} else if !strings.Contains(err.Error(), "signer keystore import") {
-		// create would make a new key, so the hint must name import, which keeps it
+		// create would make a new key, so the hint must name import
 		t.Errorf("error does not point to signer keystore import: %v", err)
 	}
 }
@@ -183,8 +183,8 @@ func TestLoad_RejectsMalformedJSONWithoutPanicking(t *testing.T) {
 	}
 }
 
-// TestLoad_RejectsV3WithPanickyDecryptKeyParams checks that malformed V3 data
-// passed directly to decryptV3Recovered returns an error without escaping as a panic
+// TestDecryptV3Recovered_NeverPanics checks that malformed V3 data passed directly to
+// decryptV3Recovered returns an error instead of panicking
 func TestDecryptV3Recovered_NeverPanics(t *testing.T) {
 	bogus := []byte(`{"crypto":{"kdf":"scrypt","kdfparams":{"n":131072,"r":8,"p":1,"salt":"00","dklen":32},"ciphertext":"","mac":"","cipher":"aes-128-ctr","cipherparams":{"iv":"00"}},"version":3}`)
 	defer func() {

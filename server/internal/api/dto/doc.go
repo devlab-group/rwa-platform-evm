@@ -1,14 +1,13 @@
-// Package dto holds the response view types the HTTP API serialises, plus the
-// pure mappers that build them from internal/dal/models records. It exists so
-// the handlers in internal/api stay HTTP-only: routing, auth, status codes and
-// error mapping there, JSON shape here.
+// Package dto holds the response view types the HTTP API serializes and the
+// pure mappers that build them from internal/dal/models records. Handlers in
+// internal/api own routing, auth, status codes and error mapping; this package
+// owns the JSON shape.
 //
-// The types mirror components.schemas.* in api/openapi.yaml (FROZEN) —
-// field names and json tags are part of that contract, so
-// changing one here is an API change, not a refactor.
+// The types mirror components.schemas.* in api/openapi.yaml, so a field name or
+// json tag change here changes the API.
 //
-// Mappers are deliberately dumb: they read a model (and whatever the caller
-// already computed) and copy fields. Anything that needs a repository, the
-// chain, or server configuration is computed by the handler and passed in as a
-// parameter, so this package never grows a dependency beyond models.
+// Mappers read a model and any values the caller computed, and copy fields.
+// Anything that needs a repository, the chain or server configuration is
+// computed by the handler and passed in, so this package depends only on
+// models.
 package dto

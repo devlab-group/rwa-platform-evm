@@ -15,15 +15,13 @@ import (
 )
 
 // rawKeyProvider holds a plaintext key in memory for the process lifetime.
-// Reload re-parses the same key material it was constructed with — there is
-// nothing to rotate without a process restart, since there's no external source
-// of truth to re-read from.
+// Reload re-parses the bytes it was constructed with, so it cannot pick up a
+// new key.
 //
-// The retained copy is the decoded 32-byte scalar in a []byte, not the hex
-// string it arrived as, precisely so Close can overwrite it: a Go string is
-// immutable and could never be scrubbed. The caller's own copy of the hex
-// string (the parsed Config) is still unscrubbable and outlives Close — one
-// more reason raw mode is refused in production.
+// The provider keeps the decoded scalar in a []byte rather than the hex string
+// so that Close can overwrite it, which an immutable Go string does not allow.
+// The caller's copy of the hex string in Config is not scrubbed and outlives
+// Close.
 type rawKeyProvider struct {
 	mu   sync.RWMutex
 	raw  []byte
@@ -72,8 +70,7 @@ func (p *rawKeyProvider) Reload(context.Context) error {
 	return p.parse()
 }
 
-// Close zeroes the in-memory private key — both the parsed scalar and the raw
-// bytes Reload would re-parse from. See Provider.Close's doc comment.
+// Close zeroes the parsed scalar and the raw bytes Reload would re-parse
 func (p *rawKeyProvider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

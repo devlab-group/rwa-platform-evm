@@ -62,8 +62,8 @@ func (r *RedemptionRequestRepository) DeleteAll(ctx context.Context) error {
 	return nil
 }
 
-// DeleteStaleGeneration is the cleanup half of a generation-swap
-// rebuild — see the interface doc comment.
+// DeleteStaleGeneration is the cleanup step of the generation-swap rebuild, see the
+// interface doc comment
 func (r *RedemptionRequestRepository) DeleteStaleGeneration(ctx context.Context, gen int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -75,9 +75,8 @@ func (r *RedemptionRequestRepository) DeleteStaleGeneration(ctx context.Context,
 	return nil
 }
 
-// ListPage returns one bounded page — see the interface doc
-// comment. Newest-CreatedAt-first, matching redemptionRequestRepo's
-// mongodb sort.
+// ListPage returns one page, newest CreatedAt first, as in
+// mongodb.redemptionRequestRepo
 func (r *RedemptionRequestRepository) ListPage(ctx context.Context, status, address, cursor string, limit int) ([]*models.RedemptionRequest, string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -17,12 +17,11 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// TestRunDLQRetryTypedDecodeReplaysIntoProjector is the core
-// regression: a DLQ entry whose retained log is a real typed contract event is
-// replayed through the SAME address-dispatched decoder the platform uses (via
-// buildIndexer -> serverwiring.StrictDecoder), so it lands as the correct typed
-// event ("Minted") the projectors consume — NOT the generic topic-only event
-// the old nil-decoder opsctl produced.
+// TestRunDLQRetryTypedDecodeReplaysIntoProjector checks that a DLQ entry whose
+// retained log is a typed contract event is replayed through the platform's
+// address-dispatched decoder (buildIndexer, serverwiring.StrictDecoder) and
+// stored as the typed "Minted" event the projectors consume, not as a generic
+// topic-only event
 func TestRunDLQRetryTypedDecodeReplaysIntoProjector(t *testing.T) {
 	repos := newTestRepos()
 	client := blockchain.NewFakeClient()
@@ -59,11 +58,10 @@ func TestRunDLQRetryTypedDecodeReplaysIntoProjector(t *testing.T) {
 	}
 }
 
-// TestRunDLQRetryRefusesGenericDecode is the refusal path: a DLQ
-// entry whose log only decodes generically (an unrecognized topic on the
-// configured contract) must NOT be resolved — the strict decoder errors, so
-// indexer.RetryDeadLetter re-records rather than resolving it, and no
-// meaningless generic event is inserted.
+// TestRunDLQRetryRefusesGenericDecode checks that a DLQ entry whose log only
+// decodes generically (an unrecognized topic on the configured contract) is not
+// resolved. The strict decoder errors, so indexer.RetryDeadLetter re-records
+// the entry and inserts no generic event.
 func TestRunDLQRetryRefusesGenericDecode(t *testing.T) {
 	repos := newTestRepos()
 	client := blockchain.NewFakeClient()
@@ -76,7 +74,7 @@ func TestRunDLQRetryRefusesGenericDecode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A canonical (block-hash-matching) log the typed decoder does not recognize.
+	// A canonical (block-hash-matching) log the typed decoder does not recognize
 	logEntry := types.Log{
 		Address: controllerAddr, BlockNumber: 5, BlockHash: header.Hash(),
 		TxHash: common.HexToHash("0xbeef"), Index: 0,
@@ -86,7 +84,7 @@ func TestRunDLQRetryRefusesGenericDecode(t *testing.T) {
 
 	o := testOpsCtx(repos)
 	// runDLQRetry itself returns nil (the retry ran); the entry simply stays
-	// unresolved because the strict decoder refused it.
+	// unresolved because the strict decoder refused it
 	if err := runDLQRetry(o, buildIndexer(cfg, addrs, repos, client), "dlq-generic"); err != nil {
 		t.Fatalf("runDLQRetry: %v", err)
 	}
@@ -103,14 +101,13 @@ func TestRunDLQRetryRefusesGenericDecode(t *testing.T) {
 	}
 }
 
-// TestDLQRetryRefusedWithoutTypedContract exercises the "only the generic
-// decoder is available" guard through dispatch: with no typed
-// contract configured, `dlq retry` is refused outright before any chain work.
+// TestDLQRetryRefusedWithoutTypedContract checks through dispatch that
+// `dlq retry` is refused before any chain work when no typed contract is
+// configured
 func TestDLQRetryRefusedWithoutTypedContract(t *testing.T) {
 	repos := newTestRepos()
-	// A project record with NO deployed typed-contract addresses -> the
-	// address-derived KnownEventNames is empty, so only the generic decoder is
-	// available and dlq retry must be refused before any chain work.
+	// A project record with no typed contract addresses leaves KnownEventNames
+	// empty, so only the generic decoder is available
 	if err := repos.Projects.Upsert(context.Background(), &models.Project{Status: models.ProjectStatusActive}); err != nil {
 		t.Fatal(err)
 	}

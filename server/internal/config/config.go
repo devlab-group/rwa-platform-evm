@@ -604,9 +604,9 @@ func load(lookup envLookup) (Config, error) {
 	for _, origin := range cfg.CORSAllowedOrigins {
 		switch {
 		case origin == "*":
-			return Config{}, errors.New(`config: http.cors_allowed_origins must not contain "*" — this API accepts an Authorization bearer, and a wildcard origin would let any site drive an authenticated session from a victim's browser; list the exact origins instead`)
+			return Config{}, errors.New(`config: http.cors_allowed_origins must not contain "*" - this API accepts an Authorization bearer, and a wildcard origin would let any site drive an authenticated session from a victim's browser; list the exact origins instead`)
 		case strings.HasSuffix(origin, "/"):
-			return Config{}, fmt.Errorf("config: http.cors_allowed_origins %q must not have a trailing slash — a browser's Origin header is scheme+host+port only, so this would never match", origin)
+			return Config{}, fmt.Errorf("config: http.cors_allowed_origins %q must not have a trailing slash - a browser's Origin header is scheme+host+port only, so this would never match", origin)
 		case !strings.HasPrefix(origin, "http://") && !strings.HasPrefix(origin, "https://"):
 			return Config{}, fmt.Errorf("config: http.cors_allowed_origins %q must be a full origin including the scheme, e.g. %q", origin, "http://localhost:5173")
 		}
@@ -691,7 +691,7 @@ func load(lookup envLookup) (Config, error) {
 		switch cfg.KYCProvider {
 		case "none":
 			if cfg.KYCWebhookHMACSecret == "" {
-				return Config{}, errors.New("config: KYC_WEBHOOK_HMAC_SECRET must be set in production (ENVIRONMENT=production) — an empty secret would permit forged KYC decisions once relayed on-chain")
+				return Config{}, errors.New("config: KYC_WEBHOOK_HMAC_SECRET must be set in production (ENVIRONMENT=production) - an empty secret would permit forged KYC decisions once relayed on-chain")
 			}
 		case "sumsub":
 			if len(cfg.KYCSumsubWebhookSecret) < MinProductionSecretBytes {
@@ -710,7 +710,7 @@ func load(lookup envLookup) (Config, error) {
 		}
 		// Production must pin the project UUID before accepting a profile
 		if cfg.ProjectID == "" {
-			return Config{}, errors.New("config: PROJECT_ID must be set in production — it fixes the deployment's projectId and gates which Asset Profile the server will accept")
+			return Config{}, errors.New("config: PROJECT_ID must be set in production - it fixes the deployment's projectId and gates which Asset Profile the server will accept")
 		}
 		// Reject kms-mock and configured raw keys in production; keyless raw mode remains allowed
 		if cfg.KeyProviderMode == "kms-mock" {
@@ -721,7 +721,7 @@ func load(lookup envLookup) (Config, error) {
 		}
 		// Require the production login wallet and JWT signing secret
 		if cfg.AdminAddress == "" {
-			return Config{}, errors.New("config: ADMIN_ADDRESS must be set in production — admin routes authenticate a wallet-signature JWT against this address")
+			return Config{}, errors.New("config: ADMIN_ADDRESS must be set in production - admin routes authenticate a wallet-signature JWT against this address")
 		}
 		if cfg.JWTSecret == "" {
 			return Config{}, errors.New("config: JWT_SECRET must be set in production so admin JWTs are signed with a real HMAC key")
@@ -737,7 +737,7 @@ func load(lookup envLookup) (Config, error) {
 				backupCount++
 			}
 			if backupCount == 0 {
-				return Config{}, errors.New("config: IPFS_API_URL is set but no backup destination is configured (IPFS_BACKUP_ARCHIVE_DIR or IPFS_BACKUP_KUBO_URL) — production requires at least one independent replication destination")
+				return Config{}, errors.New("config: IPFS_API_URL is set but no backup destination is configured (IPFS_BACKUP_ARCHIVE_DIR or IPFS_BACKUP_KUBO_URL) - production requires at least one independent replication destination")
 			}
 			if cfg.IPFSReplicationThreshold < 1 || cfg.IPFSReplicationThreshold > backupCount {
 				return Config{}, fmt.Errorf("config: IPFS_REPLICATION_THRESHOLD=%d must be between 1 and the configured backup destination count (%d) in production", cfg.IPFSReplicationThreshold, backupCount)
@@ -864,20 +864,20 @@ func validateProductionBounds(lookup envLookup, cfg Config) error {
 		return errors.New("config: HTTP_MAX_HEADER_BYTES must be positive in production")
 	}
 	if cfg.Confirmations == 0 {
-		return errors.New("config: CHAIN_CONFIRMATIONS must be positive in production — 0 treats a transaction as final the instant it is mined")
+		return errors.New("config: CHAIN_CONFIRMATIONS must be positive in production - 0 treats a transaction as final the instant it is mined")
 	}
 
 	if cfg.MaxRequestBodyBytes <= 0 && !getBool(lookup, "PRODUCTION_ALLOW_UNBOUNDED_REQUEST_BODY") {
-		return errors.New("config: MAX_REQUEST_BODY_BYTES must be positive in production (<=0 disables the request body limit) — set PRODUCTION_ALLOW_UNBOUNDED_REQUEST_BODY=true to explicitly override")
+		return errors.New("config: MAX_REQUEST_BODY_BYTES must be positive in production (<=0 disables the request body limit) - set PRODUCTION_ALLOW_UNBOUNDED_REQUEST_BODY=true to explicitly override")
 	}
 	if cfg.RateLimitRPS <= 0 && !getBool(lookup, "PRODUCTION_ALLOW_DISABLED_RATE_LIMIT") {
-		return errors.New("config: RATE_LIMIT_RPS must be positive in production (<=0 disables per-IP rate limiting) — set PRODUCTION_ALLOW_DISABLED_RATE_LIMIT=true to explicitly override")
+		return errors.New("config: RATE_LIMIT_RPS must be positive in production (<=0 disables per-IP rate limiting) - set PRODUCTION_ALLOW_DISABLED_RATE_LIMIT=true to explicitly override")
 	}
 	if cfg.RateLimitRPS > 0 && cfg.RateLimitBurst <= 0 {
 		return errors.New("config: RATE_LIMIT_BURST must be positive in production whenever RATE_LIMIT_RPS is enabled")
 	}
 	if cfg.MaxFeePerGasWei == "" && cfg.MaxTxTotalCostWei == "" && !getBool(lookup, "PRODUCTION_ALLOW_UNBOUNDED_FEES") {
-		return errors.New("config: at least one of TX_MAX_FEE_PER_GAS_WEI or TX_MAX_TOTAL_COST_WEI must be set in production (both absent leaves transaction fees uncontrolled) — set PRODUCTION_ALLOW_UNBOUNDED_FEES=true to explicitly override")
+		return errors.New("config: at least one of TX_MAX_FEE_PER_GAS_WEI or TX_MAX_TOTAL_COST_WEI must be set in production (both absent leaves transaction fees uncontrolled) - set PRODUCTION_ALLOW_UNBOUNDED_FEES=true to explicitly override")
 	}
 	return nil
 }

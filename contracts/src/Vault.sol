@@ -16,11 +16,11 @@ import {IRWAToken} from "./interfaces/IRWAToken.sol";
 import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 
 /// @title Vault
-/// @notice Holds inventory, sells for one quote token (on-chain purchase only), and
-///         withdraws sale proceeds.
-/// @dev `AccessControlEnumerable` lets an off-chain verifier enumerate
-///      `TREASURER_ROLE`/`DEFAULT_ADMIN_ROLE` holders on-chain — see ComplianceRegistry's
-///      NatSpec for the full rationale and the diamond-override pattern reused below.
+/// @notice Holds RWA inventory, sells it for one quote token through `buy`, and withdraws sale
+///         proceeds to the treasury.
+/// @dev `AccessControlEnumerable` lets an off-chain verifier enumerate `TREASURER_ROLE` and
+///      `DEFAULT_ADMIN_ROLE` holders on-chain. ComplianceRegistry explains the inheritance
+///      overrides reused below.
 contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRules, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -87,10 +87,10 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
     function withdrawProceeds(uint256 amount) external nonReentrant onlyRole(TREASURER_ROLE) {
         if (IRWAToken(token).paused()) revert ProjectPaused();
 
-        // quoteToken is an arbitrary configured ERC-20 whose transfer behavior (fee, blacklist,
-        // etc.) can change after deployment. Measure treasury's own delta rather
-        // than trusting `safeTransfer`'s success, so a silently underpaid withdrawal can never
-        // be reported to the caller/event log as the full requested `amount`.
+        // The quote token is an arbitrary configured ERC-20 whose transfer behavior (fee,
+        // blacklist, ...) can change after deployment. Measure the treasury's own balance delta
+        // instead of trusting `safeTransfer`, so an underpaid withdrawal is never reported as
+        // the full `amount`.
         uint256 before = IERC20(quoteToken).balanceOf(treasury);
         IERC20(quoteToken).safeTransfer(treasury, amount);
         uint256 received = IERC20(quoteToken).balanceOf(treasury) - before;
@@ -123,7 +123,7 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
         return IPriceStrategy(strategy).quotePurchase(tokenAmount);
     }
 
-    // ---- AccessControl diamond resolution — see ComplianceRegistry.sol for rationale ----
+    // ---- AccessControl overrides, see ComplianceRegistry.sol ----
 
     function _grantRole(bytes32 role, address account)
         internal

@@ -17,22 +17,12 @@ import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 import {RWAToken} from "./RWAToken.sol";
 
 /// @title RedemptionEscrow
-/// @notice Cash redemption state machine: request -> fund -> permissionless claim.
-/// @dev See docs/spec/redemption-state-machine.md. `cancelRedemption` intentionally omits an
-///      explicit `token.paused()` check (unlike every other transition), matching the frozen
-///      Guard column for that row — it doesn't need one: the RWA-return leg calls
-///      `RWAToken.returnEscrowedRWA`, a narrow escrow-only path that moves this contract's own
-///      escrowed balance to the beneficiary regardless of the token's pause flag (see that
-///      function's NatSpec). A plain `token.safeTransfer` here would — unlike the escrow-only
-///      path — route through RWAToken's normal `_update` override and revert with
-///      `Pausable.EnforcedPause()` during an emergency pause, trapping a timed-out redemption
-///      exactly when users most need an exit. The escrow-only bypass avoids that without
-///      weakening pause anywhere else: it still requires the beneficiary to pass compliance,
-///      and only the wired RedemptionEscrow can ever call it.
-///      `AccessControlEnumerable` lets an off-chain verifier enumerate
-///      `TREASURER_ROLE`/`REDEMPTION_MANAGER_ROLE`/`DEFAULT_ADMIN_ROLE` holders on-chain — see
-///      ComplianceRegistry's NatSpec for the full rationale and the diamond-override pattern
-///      reused below.
+/// @notice Cash redemption: request, fund, then permissionless claim
+/// @dev See docs/spec/redemption-state-machine.md. Timed-out cancellation skips pause
+///      and calls RWAToken.returnEscrowedRWA to return this escrow's balance to an Allowed
+///      beneficiary. Only the wired escrow can use that path; other transitions check pause.
+///      AccessControlEnumerable exposes treasurer, redemption-manager and admin holders
+///      for post-deployment verification; see ComplianceRegistry for inheritance overrides.
 contract RedemptionEscrow is
     IRedemptionEscrow,
     AccessControlEnumerable,
@@ -153,7 +143,7 @@ contract RedemptionEscrow is
         }
 
         request.status = RedemptionStatus.Cancelled;
-        // Escrow-only pause bypass — see NatSpec above and on RWAToken.
+        // Escrow-only pause bypass; see the contract NatSpec and RWAToken.returnEscrowedRWA
         RWAToken(token).returnEscrowedRWA(request.beneficiary, request.rwaAmount);
         emit RedemptionCancelled(id, request.beneficiary);
     }
@@ -164,16 +154,15 @@ contract RedemptionEscrow is
         if (IRWAToken(token).paused()) revert ProjectPaused();
 
         request.status = RedemptionStatus.Completed;
-        // The RWA leg goes through the escrow-only pause bypass instead of a plain
-        // `safeTransfer` — see its NatSpec on RWAToken for why. It is our own trusted token
-        // with no fee/blacklist behavior, so (unlike the quote-token leg below) no separate
-        // delta check is needed here.
+        // The RWA leg goes through RWAToken.returnEscrowedRWA. It is the platform's own token
+        // with no fee or blacklist behavior, so unlike the quote leg below it needs no delta
+        // check.
         RWAToken(token).returnEscrowedRWA(vault, request.rwaAmount);
 
-        // quoteToken is an arbitrary configured ERC-20 whose transfer behavior (fee, blacklist,
-        // etc.) can change after `fundRedemption` pulled in the exact amount. Measure
-        // the beneficiary's own delta rather than trusting `safeTransfer`'s success, so the
-        // request cannot be marked `Completed` while underpaying them.
+        // The quote token is an arbitrary configured ERC-20 whose transfer behavior (fee,
+        // blacklist, ...) can change after `fundRedemption` pulled in the exact amount. Measure
+        // the beneficiary's own balance delta instead of trusting `safeTransfer`, so a shortfall
+        // reverts the claim instead of completing it.
         uint256 before = IERC20(quoteToken).balanceOf(request.beneficiary);
         IERC20(quoteToken).safeTransfer(request.beneficiary, request.quoteAmount);
         uint256 received = IERC20(quoteToken).balanceOf(request.beneficiary) - before;
@@ -190,7 +179,7 @@ contract RedemptionEscrow is
         return IPriceStrategy(strategy).quoteRedemption(rwaAmount);
     }
 
-    // ---- AccessControl diamond resolution — see ComplianceRegistry.sol for rationale ----
+    // ---- AccessControl overrides, see ComplianceRegistry.sol ----
 
     function _grantRole(bytes32 role, address account)
         internal

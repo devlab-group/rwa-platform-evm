@@ -7,11 +7,11 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// The refresh tick asks the repository for the work rather than for the
-// whole collection, so these narrowing queries have to agree with what
-// txManager.isFinal/reconcileReplacements would have kept when they
-// filtered in Go. Both adapters must answer identically; this pins the
-// semantics on the one that can be tested without a live Mongo.
+// The refresh tick asks the repository for its work and not for the whole
+// collection, so these narrowing queries must agree with what
+// txManager.isFinal and reconcileReplacements would keep when filtering in Go.
+// Both adapters must answer the same, and this tests the one that needs no live
+// MongoDB.
 func TestTransactionRepositoryNarrowingQueries(t *testing.T) {
 	ctx := context.Background()
 	repo := NewTransactionRepository()
@@ -41,9 +41,8 @@ func TestTransactionRepositoryNarrowingQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := ids(unfinalized)
-	// Terminal statuses and a Confirmed record that has sat out its
-	// reorg-recheck window must not come back; a Confirmed one still
-	// inside the window must.
+	// terminal statuses and a Confirmed record past its reorg recheck window must not
+	// come back, and a Confirmed record still inside the window must
 	for _, want := range []string{"pending", "reorged", "confirmed-in-window", "replacement"} {
 		if !got[want] {
 			t.Errorf("ListUnfinalized dropped %s", want)

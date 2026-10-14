@@ -92,8 +92,8 @@ func TestCanonicalize_StringEscaping(t *testing.T) {
 	}
 }
 
-// TestFormatNumber checks the ECMAScript Number::toString algorithm against
-// well-established JavaScript Number.prototype.toString() outputs.
+// TestFormatNumber checks the ECMAScript Number::toString algorithm against known
+// JavaScript Number.prototype.toString() outputs
 func TestFormatNumber(t *testing.T) {
 	cases := []struct {
 		in   float64

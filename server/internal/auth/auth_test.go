@@ -21,11 +21,9 @@ import (
 
 func init() { gin.SetMode(gin.TestMode) }
 
-// TestContentSecurityPolicyMatchesWebEngValidatedString pins the exact CSP
-// string web-eng validated against the real production build (wallet flows
-// exercised, no unsafe-inline/unsafe-eval needed — see web/CSP-AUDIT.md) so
-// an edit here can't silently drift from what was actually tested against
-// the SPA.
+// TestContentSecurityPolicyMatchesWebEngValidatedString pins the exact policy
+// string, which the admin SPA production build is checked against (see
+// web/CSP-AUDIT.md), so an edit here cannot drift from it unnoticed
 func TestContentSecurityPolicyMatchesWebEngValidatedString(t *testing.T) {
 	want := "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
 	if ContentSecurityPolicy != want {
@@ -56,7 +54,7 @@ func TestSetSecurityHeadersAppliesFullBaseline(t *testing.T) {
 	}
 }
 
-// testJWTSecret is a >=32-byte HMAC key for the auth-middleware tests.
+// testJWTSecret is an HMAC key of at least 32 bytes for the middleware tests
 var testJWTSecret = []byte("auth-package-test-jwt-secret-32bytes!!")
 
 func TestAuthenticateAndRequireRole(t *testing.T) {
@@ -71,7 +69,7 @@ func TestAuthenticateAndRequireRole(t *testing.T) {
 	r.POST("/admin-only", RequireRole(RoleAdmin), func(c *gin.Context) { c.Status(http.StatusOK) })
 	r.GET("/public", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	// No token: forbidden on admin route.
+	// No token: forbidden on an admin route
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/admin-only", nil)
 	r.ServeHTTP(w, req)
@@ -79,7 +77,7 @@ func TestAuthenticateAndRequireRole(t *testing.T) {
 		t.Errorf("no token: status = %d, want 403", w.Code)
 	}
 
-	// Invalid bearer: still forbidden (falls through to readonly).
+	// Invalid bearer: forbidden, the request falls through to read-only
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/admin-only", nil)
 	req.Header.Set("Authorization", "Bearer not-a-jwt")
@@ -88,7 +86,7 @@ func TestAuthenticateAndRequireRole(t *testing.T) {
 		t.Errorf("invalid bearer: status = %d, want 403", w.Code)
 	}
 
-	// Valid admin JWT: allowed, and the principal is the admin address.
+	// Valid admin JWT: allowed, and the principal is the admin address
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/admin-only", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -97,7 +95,7 @@ func TestAuthenticateAndRequireRole(t *testing.T) {
 		t.Errorf("with JWT: status = %d, want 200", w.Code)
 	}
 
-	// Public route works without any token.
+	// A public route works without a token
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/public", nil)
 	r.ServeHTTP(w, req)
@@ -139,12 +137,10 @@ func TestIdempotencyReplaysIdenticalResponse(t *testing.T) {
 	}
 }
 
-// TestIdempotencyConcurrentIdenticalRequestsExecuteHandlerOnce is the S3
-// regression test: N goroutines fire the exact same request (same key,
-// same body) at once. Reserve's atomicity must ensure exactly one of them
-// runs the handler; every other goroutine either replays that one's
-// response or (if it raced in before Complete) gets a 409 "in progress" —
-// it must NEVER independently execute the handler's side effect.
+// TestIdempotencyConcurrentIdenticalRequestsExecuteHandlerOnce fires N
+// identical requests (same key, same body) at once. Reserve's atomicity must
+// let exactly one run the handler. Each other request replays that response or,
+// if it arrives before Complete, gets 409 "in progress".
 func TestIdempotencyConcurrentIdenticalRequestsExecuteHandlerOnce(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	var calls int32
@@ -152,10 +148,8 @@ func TestIdempotencyConcurrentIdenticalRequestsExecuteHandlerOnce(t *testing.T) 
 	r.Use(Idempotency(store, time.Hour))
 	r.POST("/deploy", func(c *gin.Context) {
 		atomic.AddInt32(&calls, 1)
-		// Give other goroutines a real chance to race in while this
-		// handler is still running, so the test would actually catch a
-		// regression back to the old Get-then-Save race instead of passing
-		// by luck on scheduling alone.
+		// Hold the handler open so other goroutines race in, which exposes a
+		// Get-then-Save implementation
 		time.Sleep(10 * time.Millisecond)
 		c.JSON(http.StatusAccepted, gin.H{"ok": true})
 	})
@@ -189,7 +183,7 @@ func TestIdempotencyConcurrentIdenticalRequestsExecuteHandlerOnce(t *testing.T) 
 		}
 	}
 	if accepted == 0 {
-		t.Error("no request observed a 202 — every goroutine lost the race, which shouldn't be possible")
+		t.Error("no request observed a 202: every goroutine lost the race, which should not be possible")
 	}
 }
 
@@ -236,11 +230,8 @@ func TestIdempotencyDoesNotStoreErrorResponses(t *testing.T) {
 	}
 }
 
-// TestIdempotencyRequiresHeader pins that the Idempotency-Key header is
-// mandatory: if it were optional, every mutation could bypass protection.
-// Every route this middleware wires onto is side-effecting, so a missing
-// header is rejected outright — the handler must never run at all — with a
-// stable machine-readable code, not silently treated as "no dedup requested."
+// TestIdempotencyRequiresHeader checks that a missing Idempotency-Key is
+// rejected with a stable code and the handler never runs
 func TestIdempotencyRequiresHeader(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	calls := 0
@@ -271,11 +262,8 @@ func TestIdempotencyRequiresHeader(t *testing.T) {
 	}
 }
 
-// TestIdempotencyScopedByRoute guards against cross-route collisions: if
-// records stored method+path but replay checked only the body hash, two
-// different routes could collide. Two different routes receiving an identical
-// Idempotency-Key and body must each execute independently, not share a
-// cached response.
+// TestIdempotencyScopedByRoute checks that two routes receiving the same
+// Idempotency-Key and body each execute and do not share a cached response
 func TestIdempotencyScopedByRoute(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	var calls1, calls2 int
@@ -304,12 +292,10 @@ func TestIdempotencyScopedByRoute(t *testing.T) {
 	}
 }
 
-// TestIdempotencyScopedByPathParams guards against cross-record collisions:
-// if POST /assets/records/A/reissue and .../B/reissue both scoped only to the
-// /assets/records/:recordId template, the second would replay the first
-// record's response and never reissue B. Two requests to the SAME route
-// template but different concrete path parameter values, with the same
-// Idempotency-Key and (empty) body, must execute independently.
+// TestIdempotencyScopedByPathParams checks that requests to one route template
+// with different path parameter values, the same Idempotency-Key and an empty
+// body each execute. Otherwise reissuing record B would replay record A's
+// response.
 func TestIdempotencyScopedByPathParams(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	var calls int
@@ -339,19 +325,15 @@ func TestIdempotencyScopedByPathParams(t *testing.T) {
 	}
 }
 
-// TestIdempotencyScopedByPrincipal guards principal isolation: the key must
-// be scoped to the authenticated principal.
-// Two different principals hitting the same route with the same key and body
-// must not share a cached response — each principal's replay protection is
-// independent. The principal is set directly here (a tiny middleware) so the
-// guarantee is exercised at the Idempotency layer regardless of which auth
-// mechanism populated the principal.
+// TestIdempotencyScopedByPrincipal checks that two principals sending the same
+// key and body to the same route do not share a cached response. A small
+// middleware sets the principal directly, so the test exercises Idempotency
+// alone.
 func TestIdempotencyScopedByPrincipal(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	var calls int
 	r := gin.New()
-	// Read a per-request principal from a test header and stash it exactly
-	// where Authenticate would.
+	// Read the principal from a test header and store it where Authenticate would
 	r.Use(func(c *gin.Context) {
 		c.Set(contextPrincipalKey, c.GetHeader("X-Test-Principal"))
 		c.Next()
@@ -377,12 +359,10 @@ func TestIdempotencyScopedByPrincipal(t *testing.T) {
 	}
 }
 
-// TestIdempotencyRequireRoleBeforeMiddlewareBlocksUnauthorizedReplay pins
-// the middleware ordering: internal/api/api.go runs
-// auth.RequireRole BEFORE auth.Idempotency on every idempotent route, so an
-// unauthorized caller who guesses/observes a valid Idempotency-Key can
-// never reach the cache lookup at all — they are rejected by RequireRole
-// first, every time, regardless of what a prior authorized caller cached.
+// TestIdempotencyRequireRoleBeforeMiddlewareBlocksUnauthorizedReplay checks the
+// ordering used in internal/api/api.go, RequireRole before Idempotency. An
+// unauthorized caller with a valid Idempotency-Key is rejected by RequireRole
+// and never reaches the cache.
 func TestIdempotencyRequireRoleBeforeMiddlewareBlocksUnauthorizedReplay(t *testing.T) {
 	const adminAddr = "0x2222222222222222222222222222222222222222"
 	token, _, err := IssueAdminJWT(testJWTSecret, adminAddr, time.Hour)
@@ -393,13 +373,13 @@ func TestIdempotencyRequireRoleBeforeMiddlewareBlocksUnauthorizedReplay(t *testi
 	store := memory.NewIdempotencyRepository()
 	r := gin.New()
 	r.Use(Authenticate(testJWTSecret))
-	// Ordering matches internal/api/api.go: RequireRole, then idem.
+	// Same order as internal/api/api.go: RequireRole, then Idempotency
 	r.POST("/x", RequireRole(RoleAdmin), Idempotency(store, time.Hour), func(c *gin.Context) {
 		c.JSON(http.StatusAccepted, gin.H{"ok": true})
 	})
 
 	body := []byte(`{"a":1}`)
-	// Admin executes and caches successfully.
+	// The admin request executes and is cached
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/x", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "k")
@@ -409,8 +389,8 @@ func TestIdempotencyRequireRoleBeforeMiddlewareBlocksUnauthorizedReplay(t *testi
 		t.Fatalf("admin call: status = %d, want 202", w.Code)
 	}
 
-	// An unauthenticated replay with the identical key+body must be
-	// rejected by RequireRole, never served the admin's cached 202.
+	// An unauthenticated replay with the same key and body is rejected by
+	// RequireRole and never served the admin's cached 202
 	w2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "/x", bytes.NewReader(body))
 	req2.Header.Set("Idempotency-Key", "k")
@@ -420,7 +400,7 @@ func TestIdempotencyRequireRoleBeforeMiddlewareBlocksUnauthorizedReplay(t *testi
 	}
 }
 
-// TestIdempotencyRejectsOversizedKey pins that oversized keys are bounded.
+// TestIdempotencyRejectsOversizedKey checks that an oversized key is rejected
 func TestIdempotencyRejectsOversizedKey(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	r := gin.New()
@@ -437,11 +417,9 @@ func TestIdempotencyRejectsOversizedKey(t *testing.T) {
 	}
 }
 
-// TestIdempotencyExpiredReservationIsTakenOver pins that ExpiresAt is
-// actually enforced, not just written. A cached (completed) response
-// older than ttl must no longer be replayed — the next identical request
-// re-executes the handler instead of being stuck or serving a stale cache
-// forever.
+// TestIdempotencyExpiredReservationIsTakenOver checks that ExpiresAt is
+// enforced. A completed response older than ttl is not replayed, and the next
+// identical request runs the handler again.
 func TestIdempotencyExpiredReservationIsTakenOver(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	var calls int32
@@ -472,13 +450,10 @@ func TestIdempotencyExpiredReservationIsTakenOver(t *testing.T) {
 	}
 }
 
-// TestIdempotencyOversizedResponseIsNotReexecuted covers the oversized-
-// success case: the ORIGINAL caller still gets the full real response, but a
-// REPLAY must never re-execute the handler's side effect just because the
-// response was too large to cache verbatim. Deleting the reservation after
-// the side effect already occurred would let a retry execute it again — that
-// is the bug this test guards against. The replay instead gets a terminal
-// placeholder response at the original status code, never a fresh execution.
+// TestIdempotencyOversizedResponseIsNotReexecuted covers a success response too
+// large to cache. The original caller gets the full response, and a replay gets
+// a placeholder at the original status code without running the handler
+// again.
 func TestIdempotencyOversizedResponseIsNotReexecuted(t *testing.T) {
 	old := maxCachedResponseBytes
 	maxCachedResponseBytes = 16
@@ -514,26 +489,23 @@ func TestIdempotencyOversizedResponseIsNotReexecuted(t *testing.T) {
 	}
 }
 
-// TestIdempotencyRepositoryFencingTokenBlocksSlowOwner exercises fencing at
-// the repository level, directly against
-// memory.IdempotencyRepository (not through the HTTP middleware, since the
-// scenario requires two DISTINCT Reserve calls racing across an expiry —
-// something a single gin round trip can't set up): a caller that Reserves
-// key, is slow enough for ttl to elapse, and only THEN tries to Complete
-// must not be able to overwrite what a second caller (who Reserved after
-// takeover) already completed.
+// TestIdempotencyRepositoryFencingTokenBlocksSlowOwner exercises fencing
+// directly on memory.IdempotencyRepository, because it needs two Reserve calls
+// across an expiry. A caller that reserves a key, outlives ttl and then calls
+// Complete must not overwrite what a second caller completed after taking the
+// key over.
 func TestIdempotencyRepositoryFencingTokenBlocksSlowOwner(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	ctx := context.Background()
 
-	// Owner 1 reserves, then is slow — ttl elapses before it ever calls Complete.
+	// Owner 1 reserves, then ttl elapses before it calls Complete
 	_, reserved1, token1, err := store.Reserve(ctx, "key-1", "POST", "/x", "hash-1", 10*time.Millisecond)
 	if err != nil || !reserved1 {
 		t.Fatalf("first Reserve: reserved=%v err=%v", reserved1, err)
 	}
 	time.Sleep(20 * time.Millisecond) // past ttl
 
-	// Owner 2 takes over the now-expired reservation and completes it.
+	// Owner 2 takes over the expired reservation and completes it
 	existing2, reserved2, token2, err := store.Reserve(ctx, "key-1", "POST", "/x", "hash-1", time.Hour)
 	if err != nil || !reserved2 {
 		t.Fatalf("takeover Reserve: reserved=%v existing=%v err=%v", reserved2, existing2, err)
@@ -545,8 +517,8 @@ func TestIdempotencyRepositoryFencingTokenBlocksSlowOwner(t *testing.T) {
 		t.Fatalf("owner 2 Complete: %v", err)
 	}
 
-	// Owner 1, waking up late, tries to Complete with its now-stale token.
-	// This MUST be rejected and must NOT clobber owner 2's completed record.
+	// Owner 1 completes late with a stale token, which must be rejected and
+	// must not overwrite owner 2's record
 	err = store.Complete(ctx, "key-1", token1, http.StatusAccepted, []byte(`{"owner":1}`))
 	if !errors.Is(err, repository.ErrFencingTokenMismatch) {
 		t.Fatalf("stale owner Complete: err = %v, want ErrFencingTokenMismatch", err)
@@ -557,11 +529,10 @@ func TestIdempotencyRepositoryFencingTokenBlocksSlowOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(rec.ResponseBody) != `{"owner":2}` {
-		t.Errorf("stored response = %s, want owner 2's — the stale owner must not have overwritten it", rec.ResponseBody)
+		t.Errorf("stored response = %s, want owner 2's, the stale owner must not have overwritten it", rec.ResponseBody)
 	}
 
-	// Owner 1's stale token must not be able to Release owner 2's live
-	// reservation out from under it either.
+	// Owner 1's stale token must not release owner 2's reservation either
 	if err := store.Release(ctx, "key-1", token1); !errors.Is(err, repository.ErrFencingTokenMismatch) {
 		t.Errorf("stale owner Release: err = %v, want ErrFencingTokenMismatch", err)
 	}
@@ -570,11 +541,8 @@ func TestIdempotencyRepositoryFencingTokenBlocksSlowOwner(t *testing.T) {
 	}
 }
 
-// TestIdempotencyRepositoryCompleteRejectsUnknownToken pins the
-// completion-failure case that sits alongside fencing:
-// Complete/Release against a key that was never Reserved (or
-// whose token is simply wrong) must fail explicitly, not silently succeed
-// or silently no-op.
+// TestIdempotencyRepositoryCompleteRejectsUnknownToken checks that Complete and
+// Release fail for a key that was never reserved or a wrong token
 func TestIdempotencyRepositoryCompleteRejectsUnknownToken(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	ctx := context.Background()

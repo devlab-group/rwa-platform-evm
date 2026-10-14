@@ -1,6 +1,6 @@
-// Test-only helper (never in the app bundle), so react-refresh's
-// "only export components" constraint — which exists purely for dev HMR —
-// doesn't apply here; it intentionally exports render/install helpers too.
+// Test-only helper, never in the app bundle. react-refresh's "only export
+// components" rule exists for dev HMR and does not apply, so this file also
+// exports render and install helpers.
 /* eslint-disable react-refresh/only-export-components */
 import { render, type RenderResult } from "@testing-library/react";
 import { useEffect, type ReactElement } from "react";
@@ -12,15 +12,14 @@ import type { InjectedProvider } from "../lib/wallet";
 export interface FakeWalletOptions {
   account?: string;
   chainId?: number;
-  /** Fixed signature returned by personal_sign; defaults to a valid-length 65-byte hex. */
+  /** Signature personal_sign returns; defaults to a 65-byte hex string */
   signature?: string;
-  /** When set, personal_sign rejects with this (e.g. a user-rejection error). */
+  /** When set, personal_sign rejects with this, for example a user-rejection error */
   signRejection?: unknown;
   /**
-   * Chains the wallet doesn't know yet: wallet_switchEthereumChain to one of
-   * these rejects with code 4902 until it's added via wallet_addEthereumChain
-   * (mirrors MetaMask not having a local anvil chain). Exercises the add-chain
-   * fallback in lib/wallet.ts.
+   * Chains the wallet does not know yet. wallet_switchEthereumChain to one of
+   * them rejects with code 4902 until wallet_addEthereumChain adds it, which
+   * exercises the add-chain fallback in lib/wallet.ts.
    */
   notAddedChains?: number[];
 }
@@ -29,11 +28,11 @@ const DEFAULT_ACCOUNT = "0x1111111111111111111111111111111111111111";
 const DEFAULT_SIGNATURE = `0x${"ab".repeat(65)}`;
 
 /**
- * Installs a fake EIP-1193 injected provider on `window.ethereum` that a real
- * viem client (lib/wallet.ts) can drive: it answers eth_accounts/
- * eth_requestAccounts/eth_chainId and personal_sign. Returned handle exposes
- * the request spy and lets a test flip the connected account (accountsChanged)
- * so WalletProvider's listeners can be exercised.
+ * Installs a fake EIP-1193 provider on `window.ethereum` that a viem client
+ * (lib/wallet.ts) can drive. It answers eth_accounts, eth_requestAccounts,
+ * eth_chainId and personal_sign. The returned handle exposes the request spy
+ * and lets a test change the account or chain to exercise WalletProvider's
+ * listeners.
  */
 export function installFakeWallet(opts: FakeWalletOptions = {}) {
   const account = opts.account ?? DEFAULT_ACCOUNT;
@@ -107,11 +106,11 @@ export function installFakeWallet(opts: FakeWalletOptions = {}) {
     chainId: initialChainId,
     signature,
     request,
-    /** Fire an accountsChanged event to every registered handler. */
+    /** Fires accountsChanged to every registered handler */
     emitAccountsChanged(accounts: string[]) {
       emit("accountsChanged", accounts);
     },
-    /** Simulate the wallet switching networks on its own (e.g. the user picks it in MetaMask). */
+    /** Simulates the wallet switching networks without the app, as when the user picks a network in the wallet */
     emitChainChanged(chainId: number) {
       currentChainId = chainId;
       emit("chainChanged", `0x${chainId.toString(16)}`);
@@ -122,11 +121,7 @@ export function installFakeWallet(opts: FakeWalletOptions = {}) {
   };
 }
 
-/**
- * Fires the context's connect() once on mount so a test starts with a
- * connected wallet — mirroring the real app, where the admin connects during
- * login before reaching a screen like Setup. Renders nothing.
- */
+/** Calls the context's connect() once on mount so a test starts with a connected wallet. Renders nothing */
 function ConnectOnMount() {
   const { connect } = useWalletContext();
   useEffect(() => {
@@ -136,9 +131,8 @@ function ConnectOnMount() {
 }
 
 /**
- * Renders `ui` inside a real <WalletProvider> so context-reading components
- * work. Pass `{ connected: true }` to auto-connect the (fake) wallet on mount;
- * requires installFakeWallet() to have been called first.
+ * Renders `ui` inside a WalletProvider. Pass `{ connected: true }` to connect
+ * the fake wallet on mount; call installFakeWallet() first.
  */
 export function renderWithWallet(
   ui: ReactElement,

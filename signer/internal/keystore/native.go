@@ -14,8 +14,8 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// NativeFormat identifies the Argon2id/AES-256-GCM keystore written by this signer.
-// Load detects its format field; --keystore also accepts Ethereum V3 files.
+// NativeFormat identifies the Argon2id and AES-256-GCM keystore this signer writes.
+// Load recognizes it by the "format" field; --keystore also accepts Ethereum V3 files.
 const NativeFormat = "rwa-argon2id-v1"
 
 // Minimum Argon2id work factors, enforced at creation and on every load.
@@ -28,16 +28,18 @@ const (
 	argon2SaltLen             = 16
 )
 
-// Maximum Argon2id work factors limit pre-authentication resource use.
-// Creation uses MinArgon2*; imports may use stronger settings within these bounds.
+// Maximum Argon2id work factors limit resource use before the password is checked.
+// Creation uses the MinArgon2 values; a loaded file may use stronger ones within these
+// bounds.
 const (
 	MaxArgon2Time      uint32 = 100
 	MaxArgon2MemoryKiB uint32 = 2 * 1024 * 1024 // 2 GiB
 	MaxArgon2Threads   uint8  = 64
 )
 
-// Native files use a 16-byte salt, 12-byte GCM nonce and 32-byte key plus a 16-byte tag.
-// Check lengths before derivation and decryption: GCM.Open panics on a wrong-sized nonce.
+// Native files use a 16-byte salt, a 12-byte GCM nonce, and a 32-byte private key plus a
+// 16-byte tag as ciphertext. Check the lengths before derivation and decryption, because
+// GCM.Open panics on a wrong-sized nonce.
 const (
 	gcmStandardNonceSize  = 12
 	gcmStandardTagSize    = 16
@@ -66,7 +68,7 @@ type nativeKDFParams struct {
 	Salt    string `json:"salt"`
 }
 
-// isNativeFormat selects native loading from the format field
+// isNativeFormat selects native loading from the "format" field
 func isNativeFormat(keyJSON []byte) bool {
 	var hdr struct {
 		Format string `json:"format"`
@@ -77,7 +79,7 @@ func isNativeFormat(keyJSON []byte) bool {
 	return hdr.Format == NativeFormat
 }
 
-// CreateNative validates password strength and encrypts priv with Argon2id and AES-256-GCM
+// CreateNative validates the password and encrypts priv with Argon2id and AES-256-GCM,
 // returning the bytes to write to disk
 func CreateNative(priv *ecdsa.PrivateKey, password string) ([]byte, error) {
 	if err := ValidatePassword(password); err != nil {
@@ -146,7 +148,7 @@ func loadNative(keyJSON []byte, password string) (*ecdsa.PrivateKey, common.Addr
 	}
 	p := f.Crypto.KDFParams
 	if p.Time < MinArgon2Time || p.Memory < MinArgon2MemoryKiB || p.Threads < MinArgon2Threads {
-		return nil, common.Address{}, fmt.Errorf("keystore: argon2id parameters (time=%d memory=%dKiB threads=%d) are weaker than the minimum policy (time>=%d memory>=%dKiB threads>=%d); refusing to unlock a keystore with downgraded KDF parameters -- restore it from a backup or re-encrypt its key with \"signer keystore import\"", p.Time, p.Memory, p.Threads, MinArgon2Time, MinArgon2MemoryKiB, MinArgon2Threads)
+		return nil, common.Address{}, fmt.Errorf("keystore: argon2id parameters (time=%d memory=%dKiB threads=%d) are weaker than the minimum policy (time>=%d memory>=%dKiB threads>=%d); refusing to unlock a keystore with downgraded KDF parameters; restore it from a backup or re-encrypt its key with \"signer keystore import\"", p.Time, p.Memory, p.Threads, MinArgon2Time, MinArgon2MemoryKiB, MinArgon2Threads)
 	}
 	// Cap resource use before argon2.IDKey
 	if p.Time > MaxArgon2Time || p.Memory > MaxArgon2MemoryKiB || p.Threads > MaxArgon2Threads {

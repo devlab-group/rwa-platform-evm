@@ -228,11 +228,11 @@ function BuyQuotePreview({
 
   async function handlePreview() {
     if (rwaDecimals === undefined) {
-      setError("Token decimals not available yet — project still loading.");
+      setError("Token decimals not available yet - project still loading.");
       return;
     }
     if (!vault) {
-      setError("Missing vault address — project not deployed?");
+      setError("Missing vault address - project not deployed?");
       return;
     }
     setLoading(true);
@@ -346,7 +346,7 @@ function WithdrawForm({
     }
     const vault = project?.addresses?.vault;
     if (!vault) {
-      setError("Missing vault address — project not deployed?");
+      setError("Missing vault address - project not deployed?");
       return;
     }
     // Resolve quote-token decimals before scaling the withdrawal amount
@@ -417,7 +417,7 @@ function WithdrawForm({
           Available in vault:{" "}
           {availableQuote !== undefined
             ? formatTokenAmount(availableQuote, quoteDecimals)
-            : "—"}
+            : "-"}
           . Cannot exceed this.
         </span>
         {overBalance && (

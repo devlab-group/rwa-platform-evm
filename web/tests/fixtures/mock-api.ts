@@ -1,8 +1,8 @@
-// Stateful mock of the api/openapi.yaml surface via Playwright route
-// interception. Each spec gets a fresh in-memory store (installMockApi
-// returns it) so it can both drive the UI and assert/mutate server-side
-// state directly (e.g. simulate an admin funding a redemption that the
-// investor then sees as Claimable after a reload).
+// Stateful mock of the api/openapi.yaml surface, built on Playwright route
+// interception. Each spec gets a fresh in-memory store from installMockApi, so
+// it can drive the UI and also assert or change server-side state directly,
+// for example to simulate a funded redemption that shows as Claimable after a
+// reload.
 import type { Page, Route } from "@playwright/test";
 import type { components } from "../../src/lib/api-types";
 import { MOCK_WALLET_ADDRESS } from "./mock-wallet";
@@ -33,11 +33,10 @@ export const ADDRESSES = {
 
 export const CHAIN_ID = 31337;
 
-/** RWAFactory address returned by GET /api/v1/config — where the admin wallet broadcasts deploy(). */
+/** RWAFactory address returned by GET /api/v1/config, where the admin wallet broadcasts deploy() */
 export const FACTORY_ADDRESS = addr("f0");
 
-/** projectId returned by GET /api/v1/config — the operator sets this in the server
- * config; the admin console builds the Asset Profile with it instead of generating one. */
+/** projectId returned by GET /api/v1/config; the console builds the Asset Profile with it */
 export const PROJECT_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
 
 export interface MockState {
@@ -51,20 +50,14 @@ export interface MockState {
   auditLogs: AuditLog[];
   purchases: Purchase[];
   challenges: Record<string, Challenge>;
-  /**
-   * projectId -> the persisted profile's derived digest/decimals; create-once.
-   * Mirrors the real server: POST /api/v1/project/deploy does
-   * NOT accept decimals/profileDigest from the caller (see
-   * server/internal/api/project.go), it derives both from whatever was
-   * already stored here by POST /api/v1/profile.
-   */
+  /** Stored profiles keyed by projectId, with the digest and decimals derived at creation; each can be created once */
   createdProfiles: Map<
     string,
     {
       profileDigest: string;
       tokenDecimals: number;
-      // Raw document + derived fields, so GET /api/v1/profile can return a
-      // StoredProfile for the admin UI to repopulate after a reload.
+      // Raw document and derived fields, so GET /api/v1/profile can return a
+      // StoredProfile
       profile?: Record<string, unknown>;
       tokenUnit?: string;
       cid?: string;
@@ -80,23 +73,21 @@ export function defaultState(): MockState {
       chainId: CHAIN_ID,
       decimals: 18,
       tokenUnit: "gram",
-      // Valid 32-byte hex: it is now encoded on-chain as bytes32 in the
-      // MintAttestation the admin broadcasts, so it must be real hex.
+      // Real 32-byte hex, because the mint attestation encodes it as bytes32
       profileDigest: `0x${"de".repeat(32)}`,
       addresses: { ...ADDRESSES },
       paused: false,
       auditor: addr("99"),
       treasury: addr("aa"),
       redemptionManager: addr("bb"),
-      // No two-step admin transfer in flight by default; set to an address to
-      // exercise the Security-page "Accept admin role" flow in e2e.
+      // No admin transfer is pending by default; set an address to exercise the
+      // Security page's "Accept admin role" flow
       pendingAdmin: "",
       finalityConfirmations: 12,
       bytecodeVerified: true,
-      // The connected admin wallet holds every privileged role — the
-      // single-admin (deployer-holds-all) model — so role-gated admin actions
-      // (treasury withdrawal, redemption fund/reject, and the Security-page
-      // actions) render for it. COMPLIANCE_ROLE stays a distinct holder.
+      // The connected admin wallet holds every privileged role except
+      // COMPLIANCE_ROLE, so role-gated actions (treasury withdrawal, redemption
+      // fund and reject, Security actions) render for it
       roles: {
         DEFAULT_ADMIN_ROLE: [MOCK_WALLET_ADDRESS],
         PAUSER_ROLE: [MOCK_WALLET_ADDRESS],
@@ -137,7 +128,7 @@ function nextId(prefix: string): string {
   return `${prefix}-${idCounter}`;
 }
 
-/** Installs route interception for every `/api/v1/**` call and returns the mutable backing store. */
+/** Intercepts every `/api/v1/**` call and returns the mutable backing store */
 export async function installMockApi(
   page: Page,
   overrides: Partial<MockState> = {},
@@ -166,10 +157,8 @@ export async function installMockApi(
     // --- project -----------------------------------------------------
     if (path === "/api/v1/project" && method === "GET")
       return json(state.project);
-    // Non-sensitive bootstrap for the admin console: the chain id + RWAFactory
-    // address the admin needs to assemble ProjectConfig and broadcast
-    // RWAFactory.deploy from their own wallet (the server no longer relays the
-    // deploy — POST /api/v1/project/deploy was removed).
+    // Bootstrap values the admin needs to broadcast RWAFactory.deploy from their
+    // own wallet: the chain ID, factory address and projectId
     if (path === "/api/v1/config" && method === "GET")
       return json({
         chainId: CHAIN_ID,
@@ -184,8 +173,7 @@ export async function installMockApi(
         cid: "bafymockcid",
       });
     }
-    // GET returns the single stored profile so Setup can repopulate after a
-    // reload; 404 while none has been created (the create-once flow's start).
+    // Returns the stored profile, or 404 while none has been created
     if (path === "/api/v1/profile" && method === "GET") {
       const [entry] = [...state.createdProfiles.values()];
       if (!entry) {
@@ -221,7 +209,7 @@ export async function installMockApi(
           409,
         );
       }
-      // Valid 32-byte hex: the deploy encodes it on-chain as bytes32.
+      // Real 32-byte hex, because the deploy encodes it as bytes32
       const profileDigest = `0x${"ce".repeat(32)}`;
       const tokenDecimals =
         typeof body.tokenDecimals === "number" ? body.tokenDecimals : 18;
@@ -280,10 +268,9 @@ export async function installMockApi(
       return json(state.records);
     if (path === "/api/v1/assets/records" && method === "POST") {
       const body = req.postDataJSON() as { recordId: string; amount: string };
-      // recordKey/nonce/validUntil are now exposed so the admin can assemble
-      // the SupplyController.MintAttestation and broadcast the mint from their
-      // own wallet (the server no longer relays it — POST .../signature was
-      // removed; the mint is observed on-chain by the indexer).
+      // recordKey, nonce and validUntil let the admin assemble the
+      // SupplyController.MintAttestation and broadcast the mint from their own
+      // wallet
       const record: AssetRecord = {
         recordId: body.recordId,
         status: "Pending",
@@ -312,19 +299,17 @@ export async function installMockApi(
     // --- sales -------------------------------------------------------------
     if (path === "/api/v1/sales/inventory" && method === "GET")
       return json(state.inventory);
-    // Purchase quotes are not a server endpoint either — the console reads
-    // Vault.previewBuy through the connected wallet (see mock-wallet).
-    // Treasury withdrawal is not a server calldata endpoint — the console
-    // encodes Vault.withdrawProceeds itself and broadcasts it from the
-    // connected wallet, asserted via the mock wallet's __getSentTransactions.
+    // The server has no quote or withdrawal endpoint. The console reads
+    // Vault.previewBuy through the connected wallet (see mock-wallet), and
+    // encodes and broadcasts Vault.withdrawProceeds itself; specs assert it
+    // through the mock wallet's __getSentTransactions.
     if (path === "/api/v1/sales/purchases" && method === "GET")
       return json(state.purchases);
 
     // --- redemptions ---------------------------------------------------
     if (path === "/api/v1/redemptions" && method === "GET") {
       const status = url.searchParams.get("status");
-      // Public list: filter by status and/or by beneficiary address (the
-      // investor page passes its connected wallet), case-insensitive.
+      // Public list; filters by status and by beneficiary address, ignoring case
       const address = url.searchParams.get("address")?.toLowerCase();
       const list = state.redemptions.filter(
         (r) =>
@@ -333,10 +318,10 @@ export async function installMockApi(
       );
       return json(list);
     }
-    // No redemption call is a server calldata endpoint — request, claim,
-    // cancel, fund and reject are all encoded in the browser and broadcast
-    // from the connected wallet (approve→fund for funding), asserted via the
-    // mock wallet's __getSentTransactions.
+    // The server has no redemption write endpoints. The console encodes fund,
+    // reject and the preceding approve in the browser and broadcasts them from
+    // the connected wallet; specs assert them through the mock wallet's
+    // __getSentTransactions.
     const idMatch = path.match(/^\/api\/v1\/redemptions\/([^/]+)$/);
     if (idMatch && method === "GET") {
       const redemption = state.redemptions.find(
@@ -361,7 +346,7 @@ export async function installMockApi(
       return json(list);
     }
 
-    // Fail loudly rather than let an un-mocked route silently pass a spec.
+    // Fail loudly so an unmocked route cannot pass a spec silently
     return route.fulfill({
       status: 501,
       contentType: "application/json",
@@ -373,14 +358,12 @@ export async function installMockApi(
   });
 
   // --- auth (wallet-signature admin login) ------------------------------
-  // Lives outside `/api/v1/**` (see api/openapi.yaml) so it needs its own
-  // route registration. Two steps: POST /auth/challenge returns a message to
-  // sign; POST /auth/session takes {address, signature} and returns an admin
-  // JWT. There is no DELETE — logout is client-side. Most specs never hit
-  // these directly — tests/fixtures/fixtures.ts seeds an already-authenticated
-  // session via `window.__RWA_E2E_SESSION__`; tests/specs/auth-session.spec.ts
-  // exercises the real connect → sign → verify flow with that bootstrap
-  // disabled.
+  // These routes sit outside `/api/v1/**` (see api/openapi.yaml), so they need
+  // their own registration. POST /auth/challenge returns a message to sign, and
+  // POST /auth/session takes {address, signature} and returns an admin JWT.
+  // Most specs never call them, because tests/fixtures/fixtures.ts seeds a
+  // session through `window.__RWA_E2E_SESSION__`; tests/specs/auth-session.spec.ts
+  // disables that seed to run the real flow.
   await page.route("**/auth/challenge", async (route: Route) => {
     const req = route.request();
     if (req.method() !== "POST") return route.fallback();
@@ -416,8 +399,8 @@ export async function installMockApi(
           401,
         );
       }
-      // The mock treats any well-formed request as the admin (a wrong-wallet
-      // case is simulated per-spec by overriding this route with a 401).
+      // The mock treats any well-formed request as the admin; a spec simulates
+      // a wrong wallet by overriding this route with a 401
       return json({
         token: `mock-jwt:${body.address}`,
         expiresAt: Math.floor(Date.now() / 1000) + 3600,

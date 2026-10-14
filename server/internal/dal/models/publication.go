@@ -2,11 +2,9 @@ package models
 
 import "time"
 
-// PublicationState is the durable-replication lifecycle of one published
-// IPFS content item, kept SEPARATE from mere local upload/pin success.
-// Publication and durable replication are distinct states: a CIDv1 gives
-// content addressing and integrity, but says nothing about whether the
-// content is actually available anywhere.
+// PublicationState is the replication state of one published IPFS item. It is
+// separate from local upload and pin success: a CID gives content addressing and
+// integrity but says nothing about whether the content is available anywhere.
 type PublicationState string
 
 const (
@@ -17,28 +15,26 @@ const (
 	PublicationReplicationFailed  PublicationState = "ReplicationFailed"
 )
 
-// DestinationStatus is one configured replication destination's last known
-// state for a PublicationRecord.
+// DestinationStatus is the last known state of one replication destination for a
+// PublicationRecord
 type DestinationStatus struct {
 	Name string `json:"name" bson:"name"`
-	// Pinned means the destination accepted an AddRaw/Pin call for this
-	// CID — an API-level success only, NOT proof the content is actually
-	// retrievable — a successful HTTP/API response from a pinning provider
-	// is not sufficient proof on its own. See Verified.
+	// Pinned means the destination accepted an AddRaw or Pin call for the CID. That
+	// is an API-level success and not proof that the content can be retrieved, which
+	// Verified records.
 	Pinned bool `json:"pinned" bson:"pinned"`
-	// Verified means a retrieval verification (fetch + digest match — see
-	// ipfs.ReplicationManager.Verify) succeeded against this destination at
-	// LastVerifiedAt. False until the first successful verification.
+	// Verified means fetching the content from this destination and checking its
+	// digest succeeded (see ipfs.ReplicationManager) at LastVerifiedAt. It is false
+	// until a verification succeeds.
 	Verified       bool      `json:"verified" bson:"verified"`
 	LastVerifiedAt time.Time `json:"lastVerifiedAt,omitempty" bson:"lastVerifiedAt,omitempty"`
 	LastError      string    `json:"lastError,omitempty" bson:"lastError,omitempty"`
 }
 
-// PublicationRecord tracks one published content item's replication status
-// across a local node and configured backup destinations (collection:
-// ipfs_publications). ID is caller-chosen
-// (e.g. an AssetRecord's RecordID) so a caller can look up "is this
-// package durably published" without needing to know its CID first.
+// PublicationRecord tracks the replication of one published item across the local
+// node and the backup destinations (collection: ipfs_publications). The caller
+// chooses ID, for example an AssetRecord's RecordID, so it can look up publication
+// status without knowing the CID.
 type PublicationRecord struct {
 	ID                   string              `json:"id" bson:"_id"`
 	CID                  string              `json:"cid" bson:"cid"`

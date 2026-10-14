@@ -1,9 +1,8 @@
 # Operator and administrator guide: self-hosted RWA platform V1
 
-This guide covers running and administering an issuer's deployment for one asset class:
-provisioning, deployment, routine operations, privileged roles and recovery. The configured
-admin wallet deploys the stack; the issuer can then transfer on-chain administration to a
-multisig (§4a).
+Run and administer one issuer's asset-class deployment: provision the services, deploy
+the stack, manage roles and routine operations, and recover from failures. The configured
+admin wallet deploys; administration can then move to a multisig (§4a).
 
 Companion guides cover [redemption operations](redemption-ops.md),
 [auditor signing](../auditor/auditor-guide.md),
@@ -13,8 +12,8 @@ Companion guides cover [redemption operations](redemption-ops.md),
 
 ## 1. Architecture recap
 
-Each deployment has one RWA token, one Asset Profile, one quote token, one auditor and one
-server with MongoDB and an IPFS node.
+Each deployment serves one RWA token, Asset Profile, quote token and auditor, backed by
+the server, MongoDB and an IPFS node.
 
 - Contracts (Foundry): `ComplianceRegistry`, `RWAToken`, `SupplyController`, `Vault`,
   `FixedPriceStrategy` and `RedemptionEscrow`. `RWAFactory` deploys and connects them through
@@ -227,16 +226,15 @@ and the escrow cannot be a seizure source. Before enforcing:
 4. Unpause when the intervention is complete.
 
 Once effective, the pause stops ordinary transfers and new redemption requests while freeze
-and seizure remain available. If a pause would be too disruptive, use a private relay such as
-`eth_sendPrivateTransaction` instead of the public mempool.
+and seizure remain available. If a pause would be too disruptive, use a private transaction
+relay instead of the public mempool.
 
-Use `RWAToken.setFrozenTokens(account, amount)` with `DEFAULT_ADMIN_ROLE` to freeze a balance.
-The amount is absolute, in token minimal units: it replaces the previous amount, and zero
-releases the hold. It may exceed the current balance to withhold future receipts. Tokens remain
-in the holder's wallet. The frozen-balance check rejects otherwise affordable transfers that
-spend frozen tokens with `ERC7943InsufficientUnfrozenBalance`. Nonzero freezes on the Vault or
-escrow are refused to
-protect purchases, claims and cancellations. The Security screen provides this action.
+On the Security screen, use `RWAToken.setFrozenTokens(account, amount)` with
+`DEFAULT_ADMIN_ROLE`. The absolute amount in minimal units replaces the previous hold;
+zero releases it. A hold can exceed the balance to withhold future receipts. Tokens stay
+in the wallet, but otherwise affordable transfers that spend frozen tokens revert with
+`ERC7943InsufficientUnfrozenBalance`. Nonzero freezes on the Vault and escrow are refused
+to preserve purchases, claims and cancellations.
 
 Use `RWAToken.forcedTransfer(from, to, amount)` with `DEFAULT_ADMIN_ROLE` for a seizure or
 recovery without the holder's signature. It works while paused and can take tokens from a
@@ -376,7 +374,7 @@ audit-log write. Repeated findings are counted on each check rather than dedupli
 | Kind                     | Condition                                                                                                                       | Check interval                 |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
 | `pending_redemption_sla` | Pending age reaches `alerts.pending_redemption_sla` (default 48h)                                                               | 5 minutes                      |
-| `funded_claim_failure`   | Funded, unclaimed age reaches `alerts.funded_claim_failure_sla` (default 24h), measured from the read model's last state update | 5 minutes                      |
+| `funded_claim_failure`   | Funded, unclaimed age reaches `alerts.funded_claim_failure_sla` (default 24h), measured from when the server indexed the funding event | 5 minutes                      |
 | `config_drift`           | contract wiring differs from the expected project state (§7a)                                                                   | 5 minutes                      |
 | `storage_degraded`       | MongoDB ping fails                                                                                                              | 30 seconds, when using MongoDB |
 | `kyc_monitoring_hit`     | an accepted Sumsub monitoring decision concerns a projected Allowed wallet, or an Onfido monitor reports changed matches (§4c) | accepted Sumsub decisions; each Onfido signal delivery |

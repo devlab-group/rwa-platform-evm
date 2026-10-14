@@ -25,8 +25,8 @@ var (
 
 var evSeq int
 
-// seedEvent creates one chain event. Distinct txHashes get distinct IndexedAt
-// so SubmittedAt ordering is deterministic.
+// seedEvent creates one chain event. Each call gets a distinct IndexedAt so
+// SubmittedAt ordering is deterministic.
 func seedEvent(t *testing.T, repos *repository.Repositories, addr, txHash, name string, block uint64, logIndex uint, removed bool, data map[string]any) {
 	t.Helper()
 	evSeq++
@@ -101,9 +101,9 @@ func TestProjectsRoleGrantedFromSender(t *testing.T) {
 	}
 }
 
-// TestMultiEventTxPicksPrimary: a buy tx emits Purchased (Vault) plus an
-// undecodable ERC20 Transfer ("unknown") and a low-priority RoleGranted; ONE
-// record results, keyed by the highest-priority business event (Purchased).
+// TestMultiEventTxPicksPrimary: a buy tx emits Purchased (Vault), an
+// undecodable ERC20 Transfer ("unknown") and a low-priority RoleGranted. It
+// yields one record, keyed by the highest-priority event (Purchased).
 func TestMultiEventTxPicksPrimary(t *testing.T) {
 	repos := memory.New()
 	txHash := "0xbuy"
@@ -133,8 +133,8 @@ func TestMultiEventTxPicksPrimary(t *testing.T) {
 	}
 }
 
-// TestDedupSkipsManagerTx: a tx-manager record already owns the txHash, so the
-// projector must NOT synthesize a duplicate event-derived record.
+// TestDedupSkipsManagerTx: a transaction-manager record already owns the
+// txHash, so the projector does not synthesize a duplicate event-derived record
 func TestDedupSkipsManagerTx(t *testing.T) {
 	repos := memory.New()
 	ctx := context.Background()
@@ -162,8 +162,8 @@ func TestDedupSkipsManagerTx(t *testing.T) {
 }
 
 // TestReorgFlipsToReorged: an event-derived record whose events are all
-// soft-removed becomes TxReorged (not deleted); the same for events that
-// vanish entirely on deep rollback.
+// soft-removed becomes TxReorged rather than being deleted, and so does one
+// whose events vanish in a deep rollback
 func TestReorgFlipsToReorged(t *testing.T) {
 	repos := memory.New()
 	ctx := context.Background()
@@ -174,7 +174,7 @@ func TestReorgFlipsToReorged(t *testing.T) {
 		t.Fatal("expected confirmed before reorg")
 	}
 
-	// Simulate a deep rollback deleting the backing event.
+	// simulate a deep rollback that deletes the backing event
 	if _, err := repos.ChainEvents.DeleteFromBlock(ctx, txChainID, vaultAddr, 40); err != nil {
 		t.Fatal(err)
 	}
@@ -183,11 +183,11 @@ func TestReorgFlipsToReorged(t *testing.T) {
 		t.Fatalf("Status after rollback = %q, want reorged", got)
 	}
 
-	// Also cover the soft-Removed path on a different tx.
+	// also cover the soft-removed path on a different tx
 	seedEvent(t, repos, vaultAddr, "0xw3", "ProceedsWithdrawn", 41, 0, false,
 		map[string]any{"treasury": tokenAddr, "quoteAmount": "8", "caller": callerAddr})
 	run(t, repos)
-	seedEvent(t, repos, vaultAddr, "0xw3", "ProceedsWithdrawn", 41, 0, true, // same key, now Removed
+	seedEvent(t, repos, vaultAddr, "0xw3", "ProceedsWithdrawn", 41, 0, true, // same key, now removed
 		map[string]any{"treasury": tokenAddr, "quoteAmount": "8", "caller": callerAddr})
 	run(t, repos)
 	if got := getEvtTx(t, repos, "0xw3").Status; got != models.TxReorged {
@@ -218,7 +218,7 @@ func TestIdempotentAcrossRuns(t *testing.T) {
 }
 
 // TestFreezesWhileReconciliationRequired: while the indexer is frozen
-// mid-reorg, the projector returns nil without writing anything.
+// mid-reorg, the projector returns nil without writing anything
 func TestFreezesWhileReconciliationRequired(t *testing.T) {
 	repos := memory.New()
 	ctx := context.Background()
