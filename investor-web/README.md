@@ -13,6 +13,9 @@ they reach their vendor's hosts only when an investor starts a verification (see
 
 For one deployed project, investors can:
 
+- Read the issuer's optional legal descriptor from the project API under
+  "What this token represents". Document references show their SHA-256 and link
+  only to `https:` URLs; other values remain text. Preserve this rule in forks.
 - Connect a wallet and prove ownership of the address: request a challenge,
   `personal_sign` it, and submit the signature. The server returns a
   wallet-scoped session token.
@@ -66,11 +69,11 @@ server is configured for and returns what that provider's web SDK needs. The
 server takes the wallet from the session, so the browser never names an address.
 The `provider` field of the response selects the SDK:
 
-| `provider` | What the page does                                                                                                |
-| ---------- | ----------------------------------------------------------------------------------------------------------------- |
-| `sumsub`   | Mounts `@sumsub/websdk-react` with `token`; calls `/kyc/start` again when Sumsub reports the token expired.       |
-| `onfido`   | Mounts `onfido-sdk-ui` in Studio workflow mode with `token`, using `ref` as the `workflowRunId`.                  |
-| `generic`  | Shows that verification is arranged directly with the issuer. A `501` (no provider configured) shows the same.    |
+| `provider` | What the page does                                                                                             |
+| ---------- | -------------------------------------------------------------------------------------------------------------- |
+| `sumsub`   | Mounts `@sumsub/websdk-react` with `token`; calls `/kyc/start` again when Sumsub reports the token expired.    |
+| `onfido`   | Mounts `onfido-sdk-ui` in Studio workflow mode with `token`, using `ref` as the `workflowRunId`.               |
+| `generic`  | Shows that verification is arranged directly with the issuer. A `501` (no provider configured) shows the same. |
 
 The browser does not decide the outcome. Documents go to the provider, the
 provider calls the server's signed webhook, and the server sets the wallet to
@@ -96,10 +99,10 @@ Before enabling a provider in production:
 
 ## Configuration
 
-| Variable            | Default            | Meaning                                                                                                                                                                                                                                            |
-| ------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `VITE_API_BASE_URL` | `""` (same origin) | Base URL of the platform API. Set it when the SPA is served from a different origin than the server, e.g. `https://rwa.example.com`. The server must then list the SPA's origin in `http.cors_allowed_origins`.                                    |
-| `VITE_KYC_PROVIDER` | unset              | `sumsub` or `onfido`. Build-time only, and it affects only the CSP: it widens the injected policy for that provider's SDK. Leave it unset when the deployment has no KYC provider. An unrecognized value fails the build.                          |
+| Variable            | Default            | Meaning                                                                                                                                                                                                                   |
+| ------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VITE_API_BASE_URL` | `""` (same origin) | Base URL of the platform API. Set it when the SPA is served from a different origin than the server, e.g. `https://rwa.example.com`. The server must then list the SPA's origin in `http.cors_allowed_origins`.           |
+| `VITE_KYC_PROVIDER` | unset              | `sumsub` or `onfido`. Build-time only, and it affects only the CSP: it widens the injected policy for that provider's SDK. Leave it unset when the deployment has no KYC provider. An unrecognized value fails the build. |
 
 The chain, contract addresses, token decimals and finality threshold are not
 configured here. They come from `GET /api/v1/project` at runtime. The wallet

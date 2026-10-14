@@ -24,6 +24,43 @@
         }
       }
     },
+    "legal": {
+      "description": "Optional instrument description. Server and signer validation also require printable text (Go unicode.IsPrint, no C0/DEL/C1 controls), ISO 7064 MOD 97-10 check digits for issuerLei and a real calendar date for maturityDate.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wrapper"],
+      "properties": {
+        "wrapper": { "type": "string", "enum": ["share", "entitlement", "certificate", "claim"] },
+        "issuerLei": { "type": "string", "pattern": "^[A-Z0-9]{18}[0-9]{2}$" },
+        "holderRights": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "redemptionTerms": { "$ref": "#/$defs/documentReference" },
+        "maturityDate": { "type": "string", "format": "date" },
+        "rating": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "uri", "sha256"],
+          "properties": {
+            "provider": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "grade": { "type": "string", "minLength": 1, "maxLength": 32 },
+            "uri": { "$ref": "#/$defs/uri" },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      }
+    },
     "assetSchema": { "type": "object" }
+  },
+  "$defs": {
+    "uri": { "type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^\\S+$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "documentReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "sha256"],
+      "properties": {
+        "uri": { "$ref": "#/$defs/uri" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
   }
 }

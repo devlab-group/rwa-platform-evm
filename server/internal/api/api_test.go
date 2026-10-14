@@ -444,6 +444,35 @@ func TestGetProject(t *testing.T) {
 	}
 }
 
+func TestGetProjectLegal(t *testing.T) {
+	env := setupTestApp(t)
+	get := func() map[string]any {
+		w := doJSON(t, env.router, http.MethodGet, "/api/v1/project", nil, nil)
+		var m map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	if _, ok := get()["legal"]; ok {
+		t.Fatal("legal must be omitted when the profile has none")
+	}
+
+	ctx := context.Background()
+	stored, err := env.app.Repos.AssetProfiles.Get(ctx, "4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.ProfileRaw = []byte(strings.Replace(goldGramProfile, `"assetSchema"`, `"legal": {"wrapper":"share","issuerLei":"506700GE1G29325QX363"}, "assetSchema"`, 1))
+	if err := env.app.Repos.AssetProfiles.Upsert(ctx, stored); err != nil {
+		t.Fatal(err)
+	}
+	legal, ok := get()["legal"].(map[string]any)
+	if !ok || legal["wrapper"] != "share" || legal["issuerLei"] != "506700GE1G29325QX363" {
+		t.Fatalf("legal = %v", legal)
+	}
+}
+
 func TestComplianceChallengeFlow(t *testing.T) {
 	env := setupTestApp(t)
 	priv, _ := crypto.GenerateKey()

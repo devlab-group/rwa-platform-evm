@@ -5,6 +5,14 @@ import { useAsync } from "../../hooks/useAsync";
 import { api, ApiError } from "../../lib/client";
 import type { components } from "../../lib/api-types";
 import { AmountFormatError, toMinimalUnits } from "../../lib/format";
+import {
+  buildLegal,
+  EMPTY_LEGAL_FORM,
+  legalFromProfileJson,
+  safeHttpsHref,
+  type LegalDescriptor,
+  type LegalForm,
+} from "../../lib/legal";
 import { useWalletContext } from "../../context/walletContextValue";
 import {
   connectWallet,
@@ -327,6 +335,91 @@ function extractProfileFields(parsed: unknown): {
   };
 }
 
+const SHA_HINT = "Document SHA-256: 64 lowercase hex characters.";
+
+// Legal inputs for a selected wrapper: key, label, hint, input type
+const LEGAL_TEXT_FIELDS: [keyof LegalForm, string, string, string?][] = [
+  [
+    "issuerLei",
+    "Issuer LEI",
+    "20-character ISO 17442 Legal Entity Identifier.",
+  ],
+  [
+    "holderRights",
+    "Holder rights",
+    "The holder's rights, in one line of up to 2,048 characters.",
+  ],
+  [
+    "redemptionUri",
+    "Redemption terms URI",
+    "Published terms. Enter both URI and SHA-256, or neither.",
+  ],
+  ["redemptionSha256", "Redemption terms SHA-256", SHA_HINT],
+  [
+    "maturityDate",
+    "Maturity date",
+    "Informational only; the platform takes no action on this date.",
+    "date",
+  ],
+  [
+    "ratingProvider",
+    "Rating provider",
+    "Required when any rating field is set.",
+  ],
+  ["ratingGrade", "Rating grade", "Optional, for example A."],
+  ["ratingUri", "Rating URI", "Where the rating is published."],
+  ["ratingSha256", "Rating SHA-256", SHA_HINT],
+];
+
+// Link only https: URLs; show other references as text
+function DocRef({ uri, sha256 }: { uri: string; sha256: string }) {
+  const href = safeHttpsHref(uri);
+  return (
+    <>
+      {href ? (
+        <a href={href} target="_blank" rel="noopener noreferrer">
+          {uri}
+        </a>
+      ) : (
+        <span>{uri}</span>
+      )}{" "}
+      <span className="mono">sha256: {sha256}</span>
+    </>
+  );
+}
+
+function LegalView({ legal }: { legal: LegalDescriptor | null }) {
+  if (!legal) return null;
+  const row = (label: string, value: React.ReactNode) => (
+    <div className="tx-preview__row">
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
+  );
+  return (
+    <div className="u-mt-4">
+      <h4>Legal descriptor</h4>
+      <dl className="tx-preview__grid">
+        {row("Wrapper", legal.wrapper)}
+        {legal.issuerLei && row("Issuer LEI", legal.issuerLei)}
+        {legal.holderRights && row("Holder rights", legal.holderRights)}
+        {legal.redemptionTerms &&
+          row("Redemption terms", <DocRef {...legal.redemptionTerms} />)}
+        {legal.maturityDate && row("Maturity date", legal.maturityDate)}
+        {legal.rating &&
+          row(
+            "Rating",
+            <>
+              {legal.rating.provider}
+              {legal.rating.grade ? ` ${legal.rating.grade}` : ""}{" "}
+              <DocRef uri={legal.rating.uri} sha256={legal.rating.sha256} />
+            </>,
+          )}
+      </dl>
+    </div>
+  );
+}
+
 function ProfileEditor({
   createdProfile,
   onProfileCreated,
@@ -345,6 +438,7 @@ function ProfileEditor({
   const [tokenDecimals, setTokenDecimals] = useState(18);
   const [recordIdLabel, setRecordIdLabel] = useState("");
   const [assetSchemaJson, setAssetSchemaJson] = useState(DEFAULT_ASSET_SCHEMA);
+  const [legalForm, setLegalForm] = useState<LegalForm>(EMPTY_LEGAL_FORM);
   const [result, setResult] = useState<ValidationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
@@ -393,6 +487,11 @@ function ProfileEditor({
       setError("Asset schema must be valid JSON.");
       return undefined;
     }
+    const { legal, error: legalError } = buildLegal(legalForm);
+    if (legalError) {
+      setError(legalError);
+      return undefined;
+    }
     return {
       profileVersion: PROFILE_VERSION,
       projectId,
@@ -400,8 +499,13 @@ function ProfileEditor({
       tokenUnit,
       tokenDecimals: Number(tokenDecimals),
       recordIdLabel,
+      ...(legal ? { legal } : {}),
       assetSchema,
     };
+  }
+
+  function setLegal(key: keyof LegalForm, value: string) {
+    setLegalForm((f) => ({ ...f, [key]: value }));
   }
 
   async function handleValidate() {
@@ -504,6 +608,9 @@ function ProfileEditor({
             </span>
           </div>
         )}
+        <LegalView
+          legal={legalFromProfileJson(createdProfile.rawProfileJson)}
+        />
       </div>
     );
   }
@@ -585,6 +692,49 @@ function ProfileEditor({
           Deed number, Invoice ID). Shown in record forms. 1-128 characters.
         </span>
       </div>
+
+      <fieldset className="field">
+        <legend>Legal descriptor (optional)</legend>
+        <span className="field__hint" id="legal-hint">
+          Describe the instrument this token represents. This information is
+          fixed with the profile and recorded without verification. Select None
+          to omit it.
+        </span>
+        <div className="field">
+          <label htmlFor="legal-wrapper">Wrapper</label>
+          <select
+            id="legal-wrapper"
+            value={legalForm.wrapper}
+            onChange={(e) => setLegal("wrapper", e.target.value)}
+            aria-describedby="legal-hint"
+          >
+            <option value="">None</option>
+            <option value="share">Share</option>
+            <option value="entitlement">Entitlement</option>
+            <option value="certificate">Certificate</option>
+            <option value="claim">Claim</option>
+          </select>
+        </div>
+        {legalForm.wrapper && (
+          <>
+            {LEGAL_TEXT_FIELDS.map(([key, label, hint, type]) => (
+              <div className="field" key={key}>
+                <label htmlFor={`legal-${key}`}>{label}</label>
+                <input
+                  id={`legal-${key}`}
+                  type={type ?? "text"}
+                  value={legalForm[key]}
+                  onChange={(e) => setLegal(key, e.target.value)}
+                  aria-describedby={`legal-${key}-hint`}
+                />
+                <span className="field__hint" id={`legal-${key}-hint`}>
+                  {hint}
+                </span>
+              </div>
+            ))}
+          </>
+        )}
+      </fieldset>
 
       <div className="field">
         <label htmlFor="assetSchema">Asset schema</label>

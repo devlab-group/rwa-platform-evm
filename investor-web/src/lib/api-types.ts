@@ -524,6 +524,7 @@ export interface components {
       redemptionPricePerWholeToken?: string;
       tokenUnit?: string;
       profileDigest?: string;
+      legal?: components["schemas"]["LegalDescriptor"];
       addresses?: components["schemas"]["Addresses"];
       paused?: boolean;
       auditor?: string;
@@ -545,6 +546,28 @@ export interface components {
       securityAsOfTime?: string;
       /** @description True when indexed authority fields may lag the chain: no projection, missing or unreadable checkpoint, reconciliation paused, or a projection older than 60 seconds. Clients must not show these values as current. */
       securityStale?: boolean;
+    };
+    /** @description The issuer's instrument description from the stored Asset Profile (docs/spec/asset-profile.md), omitted when absent from the profile. The platform records these declarations without verifying them. */
+    LegalDescriptor: {
+      /** @enum {string} */
+      wrapper: "share" | "entitlement" | "certificate" | "claim";
+      /** @description ISO 17442 Legal Entity Identifier. */
+      issuerLei?: string;
+      holderRights?: string;
+      redemptionTerms?: components["schemas"]["DocumentReference"];
+      /** Format: date */
+      maturityDate?: string;
+      rating?: {
+        provider: string;
+        grade?: string;
+        uri: string;
+        sha256: string;
+      };
+    };
+    /** @description An issuer-referenced document pinned by its SHA-256 in lowercase hex. Clients must link uri only when it parses as an https: URL; otherwise, show it as text. The admin console and investor app follow this rule. */
+    DocumentReference: {
+      uri: string;
+      sha256: string;
     };
     Addresses: {
       token?: string;

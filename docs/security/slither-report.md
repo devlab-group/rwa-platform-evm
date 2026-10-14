@@ -8,18 +8,18 @@ The initial run reported 24 findings. After the three `TestToken` fixes, a rerun
 21, all Low or Informational, meeting CI's High-severity threshold. The table includes the
 fixed findings; the remaining findings are accepted for the reasons below.
 
-| Detector | Severity | Results | Outcome |
-| --- | --- | --- | --- |
-| `shadowing-local` | Low | 2 | fixed (`TestToken`) |
-| `reentrancy-events` | Low | 3 | accepted |
-| `timestamp` | Low | 6 | accepted |
-| `assembly` | Informational | 1 | accepted |
-| `pragma` | Informational | 1 | accepted |
-| `cyclomatic-complexity` | Informational | 1 | accepted |
-| `dead-code` | Informational | 6 | false positive |
-| `low-level-calls` | Informational | 1 | accepted |
-| `naming-convention` | Informational | 2 | accepted |
-| `immutable-states` | Optimization | 1 | fixed (`TestToken`) |
+| Detector                | Severity      | Results | Outcome             |
+| ----------------------- | ------------- | ------- | ------------------- |
+| `shadowing-local`       | Low           | 2       | fixed (`TestToken`) |
+| `reentrancy-events`     | Low           | 3       | accepted            |
+| `timestamp`             | Low           | 6       | accepted            |
+| `assembly`              | Informational | 1       | accepted            |
+| `pragma`                | Informational | 1       | accepted            |
+| `cyclomatic-complexity` | Informational | 1       | accepted            |
+| `dead-code`             | Informational | 6       | false positive      |
+| `low-level-calls`       | Informational | 1       | accepted            |
+| `naming-convention`     | Informational | 2       | accepted            |
+| `immutable-states`      | Optimization  | 1       | fixed (`TestToken`) |
 
 Severities follow Slither's detector classifications. The source suppresses
 `controlled-delegatecall` (High); its rationale is below.

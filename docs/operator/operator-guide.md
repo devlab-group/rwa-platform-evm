@@ -77,6 +77,9 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
 1. Create the Asset Profile on the Setup screen. The server validates and canonicalizes it,
    then computes `profileDigest = SHA-256(JCS(profile))`. Deployment fixes that digest on-chain
    for the life of the project.
+   An optional `legal` descriptor records the issuer's declarations without verifying them.
+   It is fixed with the profile, returned by the public `GET /api/v1/project` and shown in the
+   example investor app. See [Legal descriptor](../spec/asset-profile.md#legal-descriptor).
 2. Choose the token name, symbol and decimals; quote token; purchase and redemption prices;
    redemption timeout; role holders; treasury; and admin-transfer delay. The factory accepts a
    redemption timeout from 1 to 365 days. Setup prefills 7 days; `Deploy.s.sol` defaults to 14
@@ -371,13 +374,13 @@ an 18-decimal RWA token; account for that scale if your token uses different dec
 Each alert finding writes a log line, increments `rwa_alerts_fired_total` and attempts an
 audit-log write. Repeated findings are counted on each check rather than deduplicated.
 
-| Kind                     | Condition                                                                                                                       | Check interval                 |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `pending_redemption_sla` | Pending age reaches `alerts.pending_redemption_sla` (default 48h)                                                               | 5 minutes                      |
-| `funded_claim_failure`   | Funded, unclaimed age reaches `alerts.funded_claim_failure_sla` (default 24h), measured from when the server indexed the funding event | 5 minutes                      |
-| `config_drift`           | contract wiring differs from the expected project state (§7a)                                                                   | 5 minutes                      |
-| `storage_degraded`       | MongoDB ping fails                                                                                                              | 30 seconds, when using MongoDB |
-| `kyc_monitoring_hit`     | an accepted Sumsub monitoring decision concerns a projected Allowed wallet, or an Onfido monitor reports changed matches (§4c) | accepted Sumsub decisions; each Onfido signal delivery |
+| Kind                     | Condition                                                                                                                              | Check interval                                         |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `pending_redemption_sla` | Pending age reaches `alerts.pending_redemption_sla` (default 48h)                                                                      | 5 minutes                                              |
+| `funded_claim_failure`   | Funded, unclaimed age reaches `alerts.funded_claim_failure_sla` (default 24h), measured from when the server indexed the funding event | 5 minutes                                              |
+| `config_drift`           | contract wiring differs from the expected project state (§7a)                                                                          | 5 minutes                                              |
+| `storage_degraded`       | MongoDB ping fails                                                                                                                     | 30 seconds, when using MongoDB                         |
+| `kyc_monitoring_hit`     | an accepted Sumsub monitoring decision concerns a projected Allowed wallet, or an Onfido monitor reports changed matches (§4c)         | accepted Sumsub decisions; each Onfido signal delivery |
 
 The platform has no dedicated metrics for indexer lag, RPC errors or stuck nonces. Check the
 Security screen's stale-data warning (`securityStale` on `GET /api/v1/project`) and the

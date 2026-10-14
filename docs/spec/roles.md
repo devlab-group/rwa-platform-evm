@@ -3,14 +3,14 @@
 Each governance contract maintains its own roles through `AccessControlEnumerable` and
 `AccessControlDefaultAdminRules`. Role IDs are frozen.
 
-| Role | ID | Hosted on | Powers |
-| --- | --- | --- | --- |
-| `DEFAULT_ADMIN_ROLE` | `0x00` (OpenZeppelin default) | all six contracts | grant and revoke the contract's roles; `SupplyController.setAuditor`; `Vault.setTreasury` and `setStrategy`; `RWAToken.setFrozenTokens` and `forcedTransfer` |
-| `PAUSER_ROLE` | `keccak256("PAUSER_ROLE")` | RWAToken | `pause` / `unpause`, the project-wide emergency flag |
-| `COMPLIANCE_ROLE` | `keccak256("COMPLIANCE_ROLE")` | ComplianceRegistry | `setStatus` / `setStatuses` (wallet status and expiry) |
-| `PRICER_ROLE` | `keccak256("PRICER_ROLE")` | FixedPriceStrategy | `setPurchasePrice` / `setRedemptionPrice` |
-| `TREASURER_ROLE` | `keccak256("TREASURER_ROLE")` | Vault, RedemptionEscrow | `Vault.withdrawProceeds`, `RedemptionEscrow.fundRedemption` |
-| `REDEMPTION_MANAGER_ROLE` | `keccak256("REDEMPTION_MANAGER_ROLE")` | RedemptionEscrow | `rejectRedemption` |
+| Role                      | ID                                     | Hosted on               | Powers                                                                                                                                                       |
+| ------------------------- | -------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DEFAULT_ADMIN_ROLE`      | `0x00` (OpenZeppelin default)          | all six contracts       | grant and revoke the contract's roles; `SupplyController.setAuditor`; `Vault.setTreasury` and `setStrategy`; `RWAToken.setFrozenTokens` and `forcedTransfer` |
+| `PAUSER_ROLE`             | `keccak256("PAUSER_ROLE")`             | RWAToken                | `pause` / `unpause`, the project-wide emergency flag                                                                                                         |
+| `COMPLIANCE_ROLE`         | `keccak256("COMPLIANCE_ROLE")`         | ComplianceRegistry      | `setStatus` / `setStatuses` (wallet status and expiry)                                                                                                       |
+| `PRICER_ROLE`             | `keccak256("PRICER_ROLE")`             | FixedPriceStrategy      | `setPurchasePrice` / `setRedemptionPrice`                                                                                                                    |
+| `TREASURER_ROLE`          | `keccak256("TREASURER_ROLE")`          | Vault, RedemptionEscrow | `Vault.withdrawProceeds`, `RedemptionEscrow.fundRedemption`                                                                                                  |
+| `REDEMPTION_MANAGER_ROLE` | `keccak256("REDEMPTION_MANAGER_ROLE")` | RedemptionEscrow        | `rejectRedemption`                                                                                                                                           |
 
 At deployment, `config.admin` holds `DEFAULT_ADMIN_ROLE` on each governance contract and
 `PAUSER_ROLE` on the token. Other roles go to their configured holders. Per-contract admin

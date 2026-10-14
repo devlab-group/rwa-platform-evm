@@ -40,14 +40,15 @@ type DisplayField struct {
 
 // Profile is the parsed, validated Asset Profile
 type Profile struct {
-	ProfileVersion string          `json:"profileVersion"`
-	ProjectID      string          `json:"projectId"`
-	AssetType      string          `json:"assetType"`
-	TokenUnit      string          `json:"tokenUnit"`
-	TokenDecimals  uint8           `json:"tokenDecimals"`
-	RecordIDLabel  string          `json:"recordIdLabel"`
-	DisplayFields  []DisplayField  `json:"displayFields,omitempty"`
-	AssetSchema    json.RawMessage `json:"assetSchema"`
+	ProfileVersion string           `json:"profileVersion"`
+	ProjectID      string           `json:"projectId"`
+	AssetType      string           `json:"assetType"`
+	TokenUnit      string           `json:"tokenUnit"`
+	TokenDecimals  uint8            `json:"tokenDecimals"`
+	RecordIDLabel  string           `json:"recordIdLabel"`
+	DisplayFields  []DisplayField   `json:"displayFields,omitempty"`
+	Legal          *LegalDescriptor `json:"legal,omitempty"`
+	AssetSchema    json.RawMessage  `json:"assetSchema"`
 
 	Canonical []byte   `json:"-"`
 	Digest    [32]byte `json:"-"`
@@ -60,7 +61,7 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]
 
 var profileAllowedTopLevelKeys = map[string]bool{
 	"profileVersion": true, "projectId": true, "assetType": true, "tokenUnit": true,
-	"tokenDecimals": true, "recordIdLabel": true, "displayFields": true, "assetSchema": true,
+	"tokenDecimals": true, "recordIdLabel": true, "displayFields": true, "legal": true, "assetSchema": true,
 }
 
 // lengthInRange counts Unicode code points, as JSON Schema's minLength and maxLength do and as the
@@ -141,6 +142,12 @@ func ValidateProfile(raw []byte) (ValidationResult, *Profile) {
 			}
 			p.DisplayFields = fields
 		}
+	}
+
+	if raw, ok := top["legal"]; ok {
+		legal, legalErrs := parseLegal(raw)
+		errs = append(errs, legalErrs...)
+		p.Legal = legal
 	}
 
 	p.AssetSchema = top["assetSchema"]

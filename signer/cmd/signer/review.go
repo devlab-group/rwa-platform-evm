@@ -129,6 +129,35 @@ func buildDisplayFields(p *profile.Profile, asset canonical.Value) []ui.Field {
 	return fields
 }
 
+// legalFields shows each legal descriptor member bound by profileDigest on the review
+// screen. Document references remain text and are never fetched.
+func legalFields(l *profile.Legal) []ui.Field {
+	if l == nil {
+		return nil
+	}
+	fields := []ui.Field{{Label: "legal wrapper", Value: l.Wrapper}}
+	if l.IssuerLEI != "" {
+		fields = append(fields, ui.Field{Label: "legal issuerLei", Value: l.IssuerLEI})
+	}
+	if l.HolderRights != "" {
+		fields = append(fields, ui.Field{Label: "legal holderRights", Value: l.HolderRights})
+	}
+	if r := l.RedemptionTerms; r != nil {
+		fields = append(fields, ui.Field{Label: "legal redemptionTerms", Value: fmt.Sprintf("uri:%s sha256:%s", r.URI, r.SHA256)})
+	}
+	if l.MaturityDate != "" {
+		fields = append(fields, ui.Field{Label: "legal maturityDate", Value: l.MaturityDate})
+	}
+	if r := l.Rating; r != nil {
+		v := "provider:" + r.Provider
+		if r.Grade != "" {
+			v += " grade:" + r.Grade
+		}
+		fields = append(fields, ui.Field{Label: "legal rating", Value: fmt.Sprintf("%s uri:%s sha256:%s", v, r.Ref.URI, r.Ref.SHA256)})
+	}
+	return fields
+}
+
 // proofFields builds one review-screen line per metadata proof and flags a proof whose
 // hash matches no attached file, so the auditor can tell when only the hash is present
 func proofFields(meta *metadata.Metadata, files map[string][]byte) []ui.Field {

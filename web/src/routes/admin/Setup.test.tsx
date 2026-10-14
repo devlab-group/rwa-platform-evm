@@ -398,3 +398,89 @@ describe("Setup deployment status gating", () => {
     }
   });
 });
+
+describe("Setup legal descriptor", () => {
+  async function openForm() {
+    vi.mocked(api.getProfile).mockRejectedValue(
+      new ApiError(404, { code: "not_found", message: "none" }),
+    );
+    vi.mocked(api.getConfig).mockResolvedValue({
+      projectId: FIXED_UUID,
+    } as never);
+    vi.mocked(api.validateProfile).mockResolvedValue({
+      valid: true,
+      errors: [],
+    } as never);
+    renderWithWallet(<Setup />, { connected: true });
+    const btn = await screen.findByRole("button", { name: "Validate profile" });
+    await waitFor(() => expect(btn).toBeEnabled());
+    return btn;
+  }
+
+  it("omits legal when the wrapper is None", async () => {
+    const btn = await openForm();
+    fireEvent.click(btn);
+    await waitFor(() => expect(api.validateProfile).toHaveBeenCalled());
+    const sent = vi.mocked(api.validateProfile).mock.calls.at(-1)![0];
+    expect("legal" in sent).toBe(false);
+  });
+
+  it("sends only the filled legal members", async () => {
+    const btn = await openForm();
+    fireEvent.change(screen.getByLabelText("Wrapper"), {
+      target: { value: "share" },
+    });
+    fireEvent.change(screen.getByLabelText("Holder rights"), {
+      target: { value: "Pro-rata claim" },
+    });
+    fireEvent.change(screen.getByLabelText("Maturity date"), {
+      target: { value: "2030-12-31" },
+    });
+    fireEvent.click(btn);
+    await waitFor(() => expect(api.validateProfile).toHaveBeenCalled());
+    const sent = vi
+      .mocked(api.validateProfile)
+      .mock.calls.at(-1)![0] as unknown as {
+      legal: unknown;
+    };
+    expect(sent.legal).toEqual({
+      wrapper: "share",
+      holderRights: "Pro-rata claim",
+      maturityDate: "2030-12-31",
+    });
+  });
+
+  it("shows a stored descriptor and links only https references", async () => {
+    vi.mocked(api.getConfig).mockResolvedValue({
+      projectId: FIXED_UUID,
+    } as never);
+    vi.mocked(api.getProfile).mockResolvedValue({
+      profileDigest: "0xabc",
+      cid: "bafy",
+      profile: {
+        projectId: FIXED_UUID,
+        tokenDecimals: 18,
+        tokenUnit: "T",
+        legal: {
+          wrapper: "claim",
+          redemptionTerms: {
+            uri: "https://a.example/t",
+            sha256: "ab".repeat(32),
+          },
+          rating: {
+            provider: "R",
+            uri: "javascript:alert(1)",
+            sha256: "cd".repeat(32),
+          },
+        },
+      },
+    } as never);
+    renderWithWallet(<Setup />, { connected: true });
+    const link = await screen.findByRole("link", {
+      name: "https://a.example/t",
+    });
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByText("javascript:alert(1)").closest("a")).toBeNull();
+    expect(screen.getByText(`sha256: ${"cd".repeat(32)}`)).toBeInTheDocument();
+  });
+});

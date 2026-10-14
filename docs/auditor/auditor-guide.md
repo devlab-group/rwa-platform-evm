@@ -104,6 +104,11 @@ underlying evidence:
 
 - Compare displayed asset values with your audit report, custodian statement or other
   evidence for this `recordId`. Inspect `metadata.json`'s `asset` for fields the screen omits.
+- Review the optional [legal descriptor](../spec/asset-profile.md#legal-descriptor), shown before
+  the asset display fields. `profileDigest` binds it to your signature, so you attest to it.
+  The signer checks its format and LEI check digits, not the issuer's claims. Confirm those
+  claims against the issuer's documents. The signer shows document references as text without
+  fetching them; obtain each document yourself and compare its SHA-256 with `sha256`.
 - Review every proof. Attached documents are matched by hash; missing ones show
   `NO ATTACHED FILE MATCHES THIS HASH`. For a hash-only proof, obtain and verify the document
   through another channel before relying on it.

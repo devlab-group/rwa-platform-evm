@@ -30,7 +30,7 @@ All routes live under `/admin/*` in `src/routes/admin/`, inside the shared shell
 
 | Route | Screen |
 | --- | --- |
-| `setup` | Asset Profile editor and validation, project summary, deployment |
+| `setup` | Asset Profile editor and validation, optional legal descriptor, project summary, deployment |
 | `assets` | Asset records, signer policy download, `.rwa` package download, signed-result upload and mint |
 | `compliance` | Wallet statuses, manual allow and block, ownership challenge, webhook history, audit log |
 | `inventory-sales` | Vault inventory, purchase quote preview, treasury withdrawal, purchase history |

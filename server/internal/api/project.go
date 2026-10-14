@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -19,21 +20,27 @@ func (app *App) getConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.NewBootstrapConfigResponse(app.ChainID, app.FactoryAddress, app.ProjectID))
 }
 
-// toProjectResponse gathers the values dto.ToProjectResponse cannot read off
-// the project record and delegates the field mapping to it.
+// toProjectResponse gathers values outside the project record for dto.ToProjectResponse.
 //
-// FinalityConfirmations comes from the running server's configuration, not the
-// project record, because it is an operational setting rather than an on-chain
-// value. TokenUnit comes from the stored AssetProfile (see createProfile) and
-// falls back to the project record's value when no profile is found.
+// FinalityConfirmations is an operational setting from the server configuration.
+// TokenUnit and legal come from the stored AssetProfile; if lookup fails, TokenUnit
+// falls back to the project record and legal is omitted.
 func (app *App) toProjectResponse(ctx context.Context, p *models.Project) dto.ProjectResponse {
 	tokenUnit := p.TokenUnit
+	var legal *models.LegalDescriptor
 	if profile, err := app.Repos.AssetProfiles.Get(ctx, p.ProjectID); err == nil {
 		tokenUnit = profile.TokenUnit
+		// Read legal from the validated profile without a separate storage field or migration
+		var doc struct {
+			Legal *models.LegalDescriptor `json:"legal"`
+		}
+		if json.Unmarshal(profile.ProfileRaw, &doc) == nil {
+			legal = doc.Legal
+		}
 	}
 	cp, cpErr := app.Repos.IndexerCheckpoints.Get(ctx, p.ChainID, indexer.CheckpointAddress)
 	stale := securityStale(p.Security, cp, cpErr, time.Now().UTC())
-	return dto.ToProjectResponse(p, tokenUnit, app.FinalityConfirmations, stale)
+	return dto.ToProjectResponse(p, tokenUnit, legal, app.FinalityConfirmations, stale)
 }
 
 // getEnforcement implements GET /api/v1/project/enforcement (operationId

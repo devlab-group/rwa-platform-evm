@@ -107,12 +107,12 @@ to Allowed recipients.
 
 Revoke the compromised key's roles on every hosting contract and grant them to trusted replacements.
 
-| Role | What a compromised holder can do | Response |
-| --- | --- | --- |
-| `PAUSER_ROLE` | pause indefinitely or unpause during containment | revoke; the admin initially holds the role |
-| `PRICER_ROLE` | sell inventory cheaply through a low purchase price, or commit inflated quotes through a high redemption price | pause and reset both prices; prepare rejection of inflated Pending requests, then unpause to reject (`REDEMPTION_MANAGER_ROLE`); completed purchases remain final |
-| `TREASURER_ROLE` (Vault and RedemptionEscrow) | withdraw proceeds to configured `treasury`; fund Pending requests from its own quote balance | revoke on both contracts |
-| `REDEMPTION_MANAGER_ROLE` | reject Pending requests and return their RWA | replace the role holder; affected investors can request again |
+| Role                                          | What a compromised holder can do                                                                               | Response                                                                                                                                                          |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PAUSER_ROLE`                                 | pause indefinitely or unpause during containment                                                               | revoke; the admin initially holds the role                                                                                                                        |
+| `PRICER_ROLE`                                 | sell inventory cheaply through a low purchase price, or commit inflated quotes through a high redemption price | pause and reset both prices; prepare rejection of inflated Pending requests, then unpause to reject (`REDEMPTION_MANAGER_ROLE`); completed purchases remain final |
+| `TREASURER_ROLE` (Vault and RedemptionEscrow) | withdraw proceeds to configured `treasury`; fund Pending requests from its own quote balance                   | revoke on both contracts                                                                                                                                          |
+| `REDEMPTION_MANAGER_ROLE`                     | reject Pending requests and return their RWA                                                                   | replace the role holder; affected investors can request again                                                                                                     |
 
 ## 5. Compromised server or server secrets
 
@@ -185,17 +185,17 @@ and the [redemption guide](../operator/redemption-ops.md).
 
 ## 10. Escalation matrix
 
-| Incident | First responder | Admin multisig action |
-| --- | --- | --- |
-| Compromised auditor key | security on-call | yes: rotate the auditor |
-| Compromised compliance key | security on-call | yes: rotate the role |
-| Compromised admin owner | all remaining multisig owners | yes: replace the owner |
-| Compromised operational role | security on-call | yes: rotate the role |
-| Compromised server or secrets | platform engineering and security on-call | only to rotate the compliance key |
-| Redemption funding SLA breach | treasury and operations | no |
-| Smart-contract bug, funds at risk | security on-call and engineering lead | yes: pause |
-| Indexer or database divergence | platform engineering | no |
-| Quote-token anomaly | treasury and operations | no |
+| Incident                          | First responder                           | Admin multisig action             |
+| --------------------------------- | ----------------------------------------- | --------------------------------- |
+| Compromised auditor key           | security on-call                          | yes: rotate the auditor           |
+| Compromised compliance key        | security on-call                          | yes: rotate the role              |
+| Compromised admin owner           | all remaining multisig owners             | yes: replace the owner            |
+| Compromised operational role      | security on-call                          | yes: rotate the role              |
+| Compromised server or secrets     | platform engineering and security on-call | only to rotate the compliance key |
+| Redemption funding SLA breach     | treasury and operations                   | no                                |
+| Smart-contract bug, funds at risk | security on-call and engineering lead     | yes: pause                        |
+| Indexer or database divergence    | platform engineering                      | no                                |
+| Quote-token anomaly               | treasury and operations                   | no                                |
 
 Write a postmortem with the timeline, cause, transactions, recovery limits and required updates
 to this guide, the operator guide or auditor guide.

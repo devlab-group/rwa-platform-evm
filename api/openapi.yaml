@@ -577,6 +577,8 @@ components:
             See purchasePricePerWholeToken.
         tokenUnit: { type: string }
         profileDigest: { type: string }
+        legal:
+          $ref: "#/components/schemas/LegalDescriptor"
         addresses: { $ref: "#/components/schemas/Addresses" }
         paused: { type: boolean }
         auditor: { type: string }
@@ -618,6 +620,37 @@ components:
             True when indexed authority fields may lag the chain: no projection, missing or unreadable
             checkpoint, reconciliation paused, or a projection older than 60 seconds. Clients must not
             show these values as current.
+    LegalDescriptor:
+      type: object
+      description: >
+        The issuer's instrument description from the stored Asset Profile
+        (docs/spec/asset-profile.md), omitted when absent from the profile.
+        The platform records these declarations without verifying them.
+      required: [wrapper]
+      properties:
+        wrapper: { type: string, enum: [share, entitlement, certificate, claim] }
+        issuerLei: { type: string, description: "ISO 17442 Legal Entity Identifier." }
+        holderRights: { type: string }
+        redemptionTerms: { $ref: "#/components/schemas/DocumentReference" }
+        maturityDate: { type: string, format: date }
+        rating:
+          type: object
+          required: [provider, uri, sha256]
+          properties:
+            provider: { type: string }
+            grade: { type: string }
+            uri: { type: string }
+            sha256: { type: string }
+    DocumentReference:
+      type: object
+      description: >
+        An issuer-referenced document pinned by its SHA-256 in lowercase hex.
+        Clients must link uri only when it parses as an https: URL; otherwise,
+        show it as text. The admin console and investor app follow this rule.
+      required: [uri, sha256]
+      properties:
+        uri: { type: string }
+        sha256: { type: string }
     Addresses:
       type: object
       properties:

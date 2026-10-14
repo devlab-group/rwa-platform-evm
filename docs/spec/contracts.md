@@ -13,10 +13,10 @@ enumerable role holders and two-step admin transfer with an on-chain delay. See 
 `RWAToken.paused()` is the project emergency flag, controlled by `PAUSER_ROLE` through
 `pause()` / `unpause()`.
 
-| While paused | Functions |
-| --- | --- |
-| Revert | every RWA transfer (OpenZeppelin `EnforcedPause`), `SupplyController.mint`/`burn`, `Vault.buy`, `withdrawProceeds`, `setStrategy`, `setTreasury`, `RedemptionEscrow.requestRedemption`, `fundRedemption`, `rejectRedemption`, `claimRedemption` (all `ProjectPaused` except the transfers) |
-| Keep working | `RedemptionEscrow.cancelRedemption` (through `RWAToken.returnEscrowedRWA`), `RWAToken.setFrozenTokens`, `forcedTransfer`, `SupplyController.setAuditor`, `FixedPriceStrategy` price setters, `ComplianceRegistry.setStatus`/`setStatuses`, role grants and revocations, admin transfers |
+| While paused | Functions                                                                                                                                                                                                                                                                                  |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Revert       | every RWA transfer (OpenZeppelin `EnforcedPause`), `SupplyController.mint`/`burn`, `Vault.buy`, `withdrawProceeds`, `setStrategy`, `setTreasury`, `RedemptionEscrow.requestRedemption`, `fundRedemption`, `rejectRedemption`, `claimRedemption` (all `ProjectPaused` except the transfers) |
+| Keep working | `RedemptionEscrow.cancelRedemption` (through `RWAToken.returnEscrowedRWA`), `RWAToken.setFrozenTokens`, `forcedTransfer`, `SupplyController.setAuditor`, `FixedPriceStrategy` price setters, `ComplianceRegistry.setStatus`/`setStatuses`, role grants and revocations, admin transfers    |
 
 The two token transfer paths available during pause are `returnEscrowedRWA` and `forcedTransfer`,
 described below. In an ordinary transfer the compliance and frozen-balance checks run before the

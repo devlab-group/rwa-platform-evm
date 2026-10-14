@@ -136,3 +136,80 @@ func TestValidate_RejectsControlCharInDisplayFieldLabel(t *testing.T) {
 		t.Fatal("expected error for a display-field label containing an ANSI escape")
 	}
 }
+
+func TestValidLEI(t *testing.T) {
+	for lei, want := range map[string]bool{
+		"5493000EXAMPLE0LEI67": true,
+		"506700GE1G29325QX363": true,
+		"5493000EXAMPLE0LEI68": false,
+		"5493000example0lei67": false,
+		"5493000EXAMPLE0LEIAB": false,
+		"5493000EXAMPLE0LEI6":  false,
+	} {
+		if got := validLEI(lei); got != want {
+			t.Errorf("validLEI(%q) = %v, want %v", lei, got, want)
+		}
+	}
+}
+
+func withLegal(legal string) []byte {
+	s := goldBarProfile
+	i := len(`{`)
+	return []byte(s[:i] + `"legal":` + legal + `,` + s[i:])
+}
+
+const sum = `"sha256":"a4244f1bab68afd39467ad8bfa7904024342d9758de5e7b0af41819a02347cbe"`
+
+func TestValidate_Legal(t *testing.T) {
+	ok := []string{
+		`{"wrapper":"claim"}`,
+		`{"wrapper":"share","issuerLei":"506700GE1G29325QX363","holderRights":"x","maturityDate":"2028-02-29",` +
+			`"redemptionTerms":{"uri":"https://a/b",` + sum + `},"rating":{"provider":"P","grade":"AA","uri":"https://a/r",` + sum + `}}`,
+	}
+	for _, l := range ok {
+		p, err := Validate(withLegal(l))
+		if err != nil || p.Legal == nil {
+			t.Errorf("%s: err=%v legal=%v", l, err, p != nil && p.Legal != nil)
+		}
+	}
+	bad := map[string]string{
+		"unknown member":    `{"wrapper":"share","x":1}`,
+		"missing wrapper":   `{"holderRights":"x"}`,
+		"unknown wrapper":   `{"wrapper":"bond"}`,
+		"bad LEI checksum":  `{"wrapper":"share","issuerLei":"5493000EXAMPLE0LEI68"}`,
+		"empty rights":      `{"wrapper":"share","holderRights":""}`,
+		"newline in rights": `{"wrapper":"share","holderRights":"a\nb"}`,
+		"bidi in rights":    `{"wrapper":"share","holderRights":"a‮b"}`,
+		"long rights":       `{"wrapper":"share","holderRights":"` + repeat("a", 2049) + `"}`,
+		"feb 30":            `{"wrapper":"share","maturityDate":"2030-02-30"}`,
+		"short date":        `{"wrapper":"share","maturityDate":"2030-2-3"}`,
+		"uri space":         `{"wrapper":"share","redemptionTerms":{"uri":"https://a/b c",` + sum + `}}`,
+		"ref no sha":        `{"wrapper":"share","redemptionTerms":{"uri":"https://a/b"}}`,
+		"upper sha":         `{"wrapper":"share","redemptionTerms":{"uri":"https://a/b","sha256":"A4244F1BAB68AFD39467AD8BFA7904024342D9758DE5E7B0AF41819A02347CBE"}}`,
+		"ref extra":         `{"wrapper":"share","redemptionTerms":{"uri":"https://a/b",` + sum + `,"x":1}}`,
+		"rating no uri":     `{"wrapper":"share","rating":{"provider":"P",` + sum + `}}`,
+		"rating no prov":    `{"wrapper":"share","rating":{"uri":"https://a",` + sum + `}}`,
+		"empty grade":       `{"wrapper":"share","rating":{"provider":"P","grade":"","uri":"https://a",` + sum + `}}`,
+		"legal not object":  `[]`,
+	}
+	for name, l := range bad {
+		if _, err := Validate(withLegal(l)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func repeat(s string, n int) string {
+	out := ""
+	for i := 0; i < n; i++ {
+		out += s
+	}
+	return out
+}
+
+func TestValidate_LegalAbsentUnchanged(t *testing.T) {
+	p, err := Validate([]byte(goldBarProfile))
+	if err != nil || p.Legal != nil {
+		t.Fatalf("err=%v legal=%v", err, p.Legal)
+	}
+}

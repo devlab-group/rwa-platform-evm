@@ -13,6 +13,7 @@ import { useAsync } from "../../hooks/useAsync";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { useWallet } from "../../hooks/useWallet";
 import { KycVerificationSection } from "./KycVerification";
+import { LegalDisclosure } from "./LegalDisclosure";
 import { api, ApiError } from "../../lib/client";
 import type { components } from "../../lib/api-types";
 import { resolveQuoteDecimals, resolveRwaDecimals } from "../../lib/decimals";
@@ -128,6 +129,10 @@ export function Investor() {
           used.
         </p>
       </header>
+
+      <LegalDisclosure
+        legal={project.status === "success" ? project.data.legal : undefined}
+      />
 
       <WalletSection
         wallet={wallet}

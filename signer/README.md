@@ -30,9 +30,11 @@ deployment fields are `chainId`, `controller`, `vault`, `auditor`, `projectId` a
    file paths must be unique, and other payloads must live under `proofs/`. Verify every listed
    file's size and SHA-256 and reject undeclared payloads; the manifest itself is not a payload
    entry in its own inventory.
-3. Validate the profile envelope in `internal/profile`: fixed `profileVersion`, UUID
-   `projectId`, string bounds, `displayFields` shape and no unknown fields, including in nested
-   display-field objects. Compile `assetSchema` with `internal/jsonschema` using the pinned
+3. Validate the profile envelope in `internal/profile`: fixed `profileVersion`, UUID `projectId`,
+   string bounds, `displayFields` shape and no unknown fields, including in nested display-field
+   objects. Validate an optional `legal` descriptor against the
+   [Legal descriptor rules](../docs/spec/asset-profile.md#legal-descriptor).
+   Compile `assetSchema` with `internal/jsonschema` using the pinned
    `rwa-profile-assetSchema/1` dialect (`docs/spec/profile-schema-dialect.md`). Its keywords are:
 
    - validation: `type`, `properties`, `required`, `additionalProperties`, `items`, `$ref`, `enum`,
@@ -76,14 +78,16 @@ deployment fields are `chainId`, `controller`, `vault`, `auditor`, `projectId` a
    project IDs, unit, decimals, chain, controller, auditor, Vault, digests, raw and normalized
    amounts, nonce, deadline and policy window, EIP-712 digest, and policy path. Mint review also
    shows `recordId` and `recordKey`; burn review shows `operationId`. Safe mode adds its auditor
-   type, threshold, owners and message hash. Resolve each `displayFields` JSON pointer (RFC 6901) against
-   the metadata's `asset`, using "(not present)" when it cannot resolve. Rendering happens after
-   digest computation; the `displayFields` definitions themselves are validated and included in
-   the profile digest. List each proof with a matching attached file or
-   `NO ATTACHED FILE MATCHES THIS HASH`. Sanitize screen titles, labels and values with
-   `textsafe.SanitizeForTerminal` to neutralize control, ANSI and bidi characters. Parsing
-   already rejects non-printable text in `assetType`, `tokenUnit`, `recordIdLabel`,
-   display-field labels, `issuance.unit` and proof types.
+   type, threshold, owners and message hash. Resolve each `displayFields` JSON pointer (RFC 6901)
+   against the metadata's `asset`, using "(not present)" when it cannot resolve. Rendering happens
+   after digest computation; the `displayFields` definitions themselves are validated and included
+   in the profile digest. Show an optional `legal` descriptor before the asset display fields,
+   with document references as text; the signer never fetches them. List each proof with a
+   matching attached file or `NO ATTACHED FILE MATCHES THIS HASH`. Sanitize screen titles,
+   labels and values with
+   `textsafe.SanitizeForTerminal` to neutralize control, ANSI and bidi characters. Parsing already
+   rejects non-printable text in `assetType`, `tokenUnit`, `recordIdLabel`, display-field labels,
+   `issuance.unit` and proof types.
 9. Read confirmation from stdin with `ui.Confirm`. Only `y` or `yes`, ignoring case and surrounding
    whitespace, proceeds. Blank or other responses decline; EOF with no response declines too.
    `--yes` skips confirmation only with `--unsafe-test-mode`. Both flags are for tests and CI;

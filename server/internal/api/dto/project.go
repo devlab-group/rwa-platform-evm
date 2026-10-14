@@ -33,6 +33,8 @@ type ProjectResponse struct {
 	QuoteDecimals uint8  `json:"quoteDecimals,omitempty"`
 	TokenUnit     string `json:"tokenUnit"`
 	ProfileDigest string `json:"profileDigest"`
+	// Legal comes from the stored Asset Profile and is omitted when absent
+	Legal *models.LegalDescriptor `json:"legal,omitempty"`
 	// Status is the deployment lifecycle state (Undeployed, Deploying, Verifying,
 	// Active or Failed). VerificationNote carries the reason a deployment Failed
 	// or a non-fatal verification gap on an Active project (see
@@ -140,19 +142,16 @@ type Addresses struct {
 // RoleHolders mirrors components.schemas.RoleHolders
 type RoleHolders map[string][]string
 
-// ToProjectResponse maps the stored project record onto the API view, using the
-// deploy-time values as the baseline and overlaying the governance projection
-// (models.Project.Security) where it exists.
+// ToProjectResponse maps deploy-time project values to the API view and overlays
+// the governance projection (models.Project.Security) when present.
 //
-// The caller supplies three values that are not read from the record: tokenUnit
-// from the stored AssetProfile, finalityConfirmations from the server
-// configuration (it overrides any persisted value), and securityStale, derived
-// from the indexer checkpoint.
-func ToProjectResponse(p *models.Project, tokenUnit string, finalityConfirmations uint64, securityStale bool) ProjectResponse {
+// The caller supplies tokenUnit, legal, finalityConfirmations (overriding the stored
+// value) and checkpoint-derived securityStale.
+func ToProjectResponse(p *models.Project, tokenUnit string, legal *models.LegalDescriptor, finalityConfirmations uint64, securityStale bool) ProjectResponse {
 	resp := ProjectResponse{
 		ProjectID: p.ProjectID, Version: p.Version, ChainID: p.ChainID, ProfileDigest: p.ProfileDigest,
 		Status: string(p.Status), VerificationNote: p.VerificationNote,
-		Decimals: p.TokenDecimals, QuoteDecimals: p.QuoteDecimals, TokenUnit: tokenUnit,
+		Decimals: p.TokenDecimals, QuoteDecimals: p.QuoteDecimals, TokenUnit: tokenUnit, Legal: legal,
 		Addresses: Addresses{
 			Token: p.Addresses.Token, Compliance: p.Addresses.Compliance, SupplyController: p.Addresses.SupplyController,
 			Vault: p.Addresses.Vault, RedemptionEscrow: p.Addresses.RedemptionEscrow, Strategy: p.Addresses.Strategy,

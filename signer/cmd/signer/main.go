@@ -368,7 +368,7 @@ func runSign(args []string) error {
 
 	critical = append(critical, proofFields(meta, filesExceptManifest)...)
 
-	displayFields := buildDisplayFields(prof, meta.Asset)
+	displayFields := append(legalFields(prof.Legal), buildDisplayFields(prof, meta.Asset)...)
 
 	// Establish the mint or burn action before showing individual fields
 	ui.RenderActionBanner(os.Stdout, td.PrimaryType)
