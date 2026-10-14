@@ -31,6 +31,7 @@ import {
   sendRejectRedemption,
   waitForTxReceipt,
 } from "../../lib/wallet";
+import { TableWrap } from "../../components/TableWrap";
 
 type Redemption = components["schemas"]["Redemption"];
 type Project = components["schemas"]["Project"];
@@ -119,7 +120,7 @@ export function Redemptions() {
         >
           {(data) => (
             <>
-              <div className="table-wrap">
+              <TableWrap label="Redemption requests">
                 <table>
                   <thead>
                     <tr>
@@ -178,7 +179,7 @@ export function Redemptions() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableWrap>
               <PaginationFooter
                 loadedCount={data.length}
                 totalCount={redemptions.totalCount}

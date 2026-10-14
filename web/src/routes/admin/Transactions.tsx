@@ -5,6 +5,7 @@ import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { api } from "../../lib/client";
 import type { components } from "../../lib/api-types";
 import { needsAttention, transactionStatusLabel } from "../../lib/status";
+import { TableWrap } from "../../components/TableWrap";
 
 type Transaction = components["schemas"]["Transaction"];
 
@@ -117,7 +118,7 @@ export function Transactions() {
                     </ul>
                   </div>
                 )}
-                <div className="table-wrap">
+                <TableWrap label="Transactions">
                   <table>
                     <thead>
                       <tr>
@@ -154,7 +155,7 @@ export function Transactions() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </TableWrap>
                 <PaginationFooter
                   loadedCount={data.length}
                   totalCount={transactions.totalCount}

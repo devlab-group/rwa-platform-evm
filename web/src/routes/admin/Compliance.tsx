@@ -11,6 +11,7 @@ import {
   complianceDisplayStatus,
   type ComplianceDisplayStatus,
 } from "../../lib/status";
+import { TableWrap } from "../../components/TableWrap";
 
 type WalletStatus = components["schemas"]["WalletStatus"];
 type Challenge = components["schemas"]["Challenge"];
@@ -75,7 +76,7 @@ export function Compliance() {
         >
           {(data) => (
             <>
-              <div className="table-wrap">
+              <TableWrap label="Wallets">
                 <table>
                   <thead>
                     <tr>
@@ -105,7 +106,7 @@ export function Compliance() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableWrap>
               <PaginationFooter
                 loadedCount={data.length}
                 totalCount={wallets.totalCount}
@@ -139,7 +140,7 @@ export function Compliance() {
         >
           {(data) => (
             <>
-              <div className="table-wrap">
+              <TableWrap label="Webhook history">
                 <table>
                   <thead>
                     <tr>
@@ -172,7 +173,7 @@ export function Compliance() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableWrap>
               <PaginationFooter
                 loadedCount={data.length}
                 totalCount={webhooks.totalCount}
@@ -196,7 +197,7 @@ export function Compliance() {
         >
           {(data) => (
             <>
-              <div className="table-wrap">
+              <TableWrap label="Audit log">
                 <table>
                   <thead>
                     <tr>
@@ -223,7 +224,7 @@ export function Compliance() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableWrap>
               <PaginationFooter
                 loadedCount={data.length}
                 totalCount={auditLogs.totalCount}

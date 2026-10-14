@@ -20,6 +20,7 @@ import {
   waitForTxReceipt,
   type MintAttestationInput,
 } from "../../lib/wallet";
+import { TableWrap } from "../../components/TableWrap";
 
 type AssetRecord = components["schemas"]["AssetRecord"];
 type SignedResult = components["schemas"]["SignedResult"];
@@ -124,7 +125,7 @@ export function Assets() {
         >
           {(data) => (
             <>
-              <div className="table-wrap">
+              <TableWrap label="Records">
                 <table>
                   <thead>
                     <tr>
@@ -147,7 +148,7 @@ export function Assets() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableWrap>
               <PaginationFooter
                 loadedCount={data.length}
                 totalCount={records.totalCount}
@@ -696,24 +697,26 @@ function SignatureUploadForm({
       </div>
 
       {signed && (
-        <dl className="tx-preview__grid" role="status">
-          <div className="tx-preview__row">
-            <dt>File</dt>
-            <dd>{fileName}</dd>
-          </div>
-          <div className="tx-preview__row">
-            <dt>Auditor</dt>
-            <dd className="mono">{signed.auditor}</dd>
-          </div>
-          <div className="tx-preview__row">
-            <dt>Attestation</dt>
-            <dd>{signed.primaryType}</dd>
-          </div>
-          <div className="tx-preview__row">
-            <dt>Signed at</dt>
-            <dd>{signed.signedAt}</dd>
-          </div>
-        </dl>
+        <div role="status">
+          <dl className="tx-preview__grid">
+            <div className="tx-preview__row">
+              <dt>File</dt>
+              <dd>{fileName}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Auditor</dt>
+              <dd className="mono">{signed.auditor}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Attestation</dt>
+              <dd>{signed.primaryType}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Signed at</dt>
+              <dd>{signed.signedAt}</dd>
+            </div>
+          </dl>
+        </div>
       )}
 
       <button

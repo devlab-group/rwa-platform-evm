@@ -22,7 +22,7 @@ test.describe("Setup - profile then deploy", () => {
 
     // Deployment is locked until a profile is stored
     await expect(
-      page.getByText(/Create and persist an Asset Profile above/),
+      page.getByText(/Create the Asset Profile above/),
     ).toBeVisible();
 
     await setup.createProfileFor({

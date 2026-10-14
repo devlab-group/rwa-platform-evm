@@ -23,6 +23,7 @@ import {
   withdrawProceedsCall,
   waitForTxReceipt,
 } from "../../lib/wallet";
+import { TableWrap } from "../../components/TableWrap";
 
 type Inventory = components["schemas"]["Inventory"];
 type Project = components["schemas"]["Project"];
@@ -157,7 +158,7 @@ export function InventorySales() {
         >
           {(data) => (
             <>
-              <div className="table-wrap">
+              <TableWrap label="Purchase history">
                 <table>
                   <thead>
                     <tr>
@@ -193,7 +194,7 @@ export function InventorySales() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableWrap>
               <PaginationFooter
                 loadedCount={data.length}
                 totalCount={purchases.totalCount}

@@ -40,6 +40,7 @@ import {
   sendSetStrategyPrice,
   waitForTxReceipt,
 } from "../../lib/wallet";
+import { TableWrap } from "../../components/TableWrap";
 
 type Addresses = components["schemas"]["Addresses"];
 
@@ -297,7 +298,7 @@ export function Security() {
           emptyLabel="No role holders reported."
         >
           {(data) => (
-            <div className="table-wrap">
+            <TableWrap label="Role holders">
               <table>
                 <thead>
                   <tr>
@@ -321,7 +322,7 @@ export function Security() {
                     ))}
                 </tbody>
               </table>
-            </div>
+            </TableWrap>
           )}
         </AsyncSection>
       </section>
@@ -352,7 +353,7 @@ export function Security() {
           {(data) => (
             <>
               <SecurityStalenessNotice data={data} />
-              <div className="table-wrap">
+              <TableWrap label="Frozen balances">
                 <table>
                   <thead>
                     <tr>
@@ -375,7 +376,7 @@ export function Security() {
                     )}
                   </tbody>
                 </table>
-              </div>
+              </TableWrap>
               <p className="field__hint">
                 A frozen amount can exceed the holder&apos;s balance, which
                 withholds tokens they have not received yet.

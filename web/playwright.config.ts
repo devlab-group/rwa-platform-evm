@@ -1,17 +1,17 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// BASE_URL selects Playwright mode:
-//   - Unset: vite preview serves the production build with mocked API and wallet.
-//     No backend is needed.
-//   - Set: target a running server's embedded SPA without mocks. Set
-//     E2E_ADMIN_PRIVATE_KEY to its admin_address key (Anvil account 0 locally)
-//     for real /auth/challenge and /auth/session login before each test.
-//     Without the key, tests requiring an admin session are skipped.
+// BASE_URL selects the run mode:
+//   - Unset: vite preview serves the production build with API and wallet mocks;
+//     no backend is needed.
+//   - Set: use a running server without mocks. Global setup logs in once with
+//     E2E_ADMIN_PRIVATE_KEY, the key for security.admin_address (Anvil account 0
+//     locally). Admin-dependent tests skip when the key is unset.
 const liveBaseUrl = process.env.BASE_URL;
 const PREVIEW_PORT = 4173;
 
 export default defineConfig({
   testDir: "./tests",
+  globalSetup: "./tests/global-setup.ts",
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,

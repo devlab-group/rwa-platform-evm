@@ -458,8 +458,8 @@ function ProfileEditor({
 
   if (createdProfile) {
     return (
-      <div>
-        <dl className="tx-preview__grid" role="status">
+      <div role="status">
+        <dl className="tx-preview__grid">
           <div className="tx-preview__row">
             <dt>Status</dt>
             <dd>Persisted - immutable for the life of this deployment</dd>
@@ -637,36 +637,38 @@ function ProfileEditor({
       )}
 
       {result && (
-        <dl className="tx-preview__grid u-mt-4" role="status">
-          <div className="tx-preview__row">
-            <dt>Valid</dt>
-            <dd>{result.valid ? "Yes" : "No"}</dd>
-          </div>
-          {result.profileDigest && (
+        <div role="status">
+          <dl className="tx-preview__grid u-mt-4">
             <div className="tx-preview__row">
-              <dt>Profile digest</dt>
-              <dd>{result.profileDigest}</dd>
+              <dt>Valid</dt>
+              <dd>{result.valid ? "Yes" : "No"}</dd>
             </div>
-          )}
-          {result.cid && (
-            <div className="tx-preview__row">
-              <dt>IPFS CID</dt>
-              <dd>{result.cid}</dd>
-            </div>
-          )}
-          {result.errors && result.errors.length > 0 && (
-            <div className="tx-preview__row">
-              <dt>Errors</dt>
-              <dd>
-                <ul>
-                  {result.errors.map((e, i) => (
-                    <li key={i}>{e}</li>
-                  ))}
-                </ul>
-              </dd>
-            </div>
-          )}
-        </dl>
+            {result.profileDigest && (
+              <div className="tx-preview__row">
+                <dt>Profile digest</dt>
+                <dd>{result.profileDigest}</dd>
+              </div>
+            )}
+            {result.cid && (
+              <div className="tx-preview__row">
+                <dt>IPFS CID</dt>
+                <dd>{result.cid}</dd>
+              </div>
+            )}
+            {result.errors && result.errors.length > 0 && (
+              <div className="tx-preview__row">
+                <dt>Errors</dt>
+                <dd>
+                  <ul>
+                    {result.errors.map((e, i) => (
+                      <li key={i}>{e}</li>
+                    ))}
+                  </ul>
+                </dd>
+              </div>
+            )}
+          </dl>
+        </div>
       )}
     </div>
   );
