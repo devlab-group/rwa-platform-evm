@@ -16,6 +16,7 @@ import (
 	"io"
 	"regexp"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rwa-platform/server/internal/auditpkg"
 	"github.com/santhosh-tekuri/jsonschema/v5"
@@ -60,6 +61,13 @@ var profileAllowedTopLevelKeys = map[string]bool{
 	"tokenDecimals": true, "recordIdLabel": true, "displayFields": true, "assetSchema": true,
 }
 
+// lengthInRange counts Unicode code points, as JSON Schema's minLength/maxLength do and as the
+// signer does, so a multi-byte name is not rejected for its UTF-8 byte length
+func lengthInRange(s string, min, max int) bool {
+	n := utf8.RuneCountInString(s)
+	return n >= min && n <= max
+}
+
 // ValidateProfile parses and validates a raw Asset Profile document against
 // shared/schemas/asset-profile.schema.json. It always returns a non-nil
 // ValidationResult; a nil *Profile means the document was invalid (see
@@ -101,10 +109,10 @@ func ValidateProfile(raw []byte) (ValidationResult, *Profile) {
 	if err := json.Unmarshal(top["projectId"], &p.ProjectID); err != nil || !uuidPattern.MatchString(p.ProjectID) {
 		errs = append(errs, "projectId must be a UUID string")
 	}
-	if err := json.Unmarshal(top["assetType"], &p.AssetType); err != nil || len(p.AssetType) < 1 || len(p.AssetType) > 128 {
+	if err := json.Unmarshal(top["assetType"], &p.AssetType); err != nil || !lengthInRange(p.AssetType, 1, 128) {
 		errs = append(errs, "assetType must be a string of length 1..128")
 	}
-	if err := json.Unmarshal(top["tokenUnit"], &p.TokenUnit); err != nil || len(p.TokenUnit) < 1 || len(p.TokenUnit) > 64 {
+	if err := json.Unmarshal(top["tokenUnit"], &p.TokenUnit); err != nil || !lengthInRange(p.TokenUnit, 1, 64) {
 		errs = append(errs, "tokenUnit must be a string of length 1..64")
 	}
 	var decimals float64
@@ -113,7 +121,7 @@ func ValidateProfile(raw []byte) (ValidationResult, *Profile) {
 	} else {
 		p.TokenDecimals = uint8(decimals)
 	}
-	if err := json.Unmarshal(top["recordIdLabel"], &p.RecordIDLabel); err != nil || len(p.RecordIDLabel) < 1 || len(p.RecordIDLabel) > 128 {
+	if err := json.Unmarshal(top["recordIdLabel"], &p.RecordIDLabel); err != nil || !lengthInRange(p.RecordIDLabel, 1, 128) {
 		errs = append(errs, "recordIdLabel must be a string of length 1..128")
 	}
 	if raw, ok := top["displayFields"]; ok {

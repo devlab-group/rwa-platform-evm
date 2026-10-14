@@ -3,6 +3,8 @@ package assets
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -22,6 +24,25 @@ func TestDialectLimitsMatchFrozenConstants(t *testing.T) {
 	want := [5]int{v.Limits.MaxUncompressedBytes, v.Limits.MaxDepth, v.Limits.MaxStringLength, v.Limits.MaxArrayItems, v.Limits.MaxObjectProperties}
 	if got != want {
 		t.Fatalf("server auditpkg limits %v do not match frozen shared/schemas/structural-limits.json %v", got, want)
+	}
+}
+
+// TestDialectLimitsCopyMatchesStructuralLimits keeps the vectors file's "limits" copy equal to
+// shared/schemas/structural-limits.json. Both binaries assert their constants against the copy,
+// so a drifted copy would let the frozen file change without failing either side.
+func TestDialectLimitsCopyMatchesStructuralLimits(t *testing.T) {
+	v := loadConformanceVectors(t)
+	p := filepath.Join("..", "..", "..", "shared", "schemas", "structural-limits.json")
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("reading %s: %v", p, err)
+	}
+	var frozen conformanceVectors
+	if err := json.Unmarshal(raw, &frozen.Limits); err != nil {
+		t.Fatalf("parsing %s: %v", p, err)
+	}
+	if frozen.Limits != v.Limits {
+		t.Fatalf("vectors limits %+v do not match %s %+v", v.Limits, p, frozen.Limits)
 	}
 }
 

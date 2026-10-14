@@ -11,7 +11,9 @@ TypeScript implementations MUST reproduce the shared vectors.
 Profile fields: `profileVersion` (`"1.0"`), UUID `projectId` (the server requires its configured
 `contract.project_id`), `assetType` (1 to 128 characters), `tokenUnit` (1 to 64), integer
 `tokenDecimals` (0 to 36), `recordIdLabel` (1 to 128), optional `displayFields[]` (`label` and
-`pointer` starting with `/`), and `assetSchema`.
+`pointer` starting with `/`), and `assetSchema`. The `assetType`, `tokenUnit` and
+`recordIdLabel` lengths count Unicode code points, as JSON Schema `maxLength` does; the byte-based
+string bound under "Structural limits" applies on top.
 
 Metadata fields: `platformVersion` (`"1.0"`), UUID `projectId`, `recordId`
 (`^[A-Za-z0-9._:-]{1,128}$`), `asset` validated against `assetSchema`, `issuance` (`amount`, a

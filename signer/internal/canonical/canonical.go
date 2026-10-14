@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -77,6 +78,10 @@ type Limits struct {
 	MaxStringLen  int
 	MaxArrayLen   int // maximum number of elements in any array; 0 means unbounded
 	MaxObjectKeys int // maximum number of properties in any object; 0 means unbounded
+	// SafeIntegers rejects an integer literal (no fraction or exponent) outside
+	// [-(2^53-1), 2^53-1], the range Go, TypeScript and JSON agree on. The server
+	// applies the same rule to every profile and metadata document.
+	SafeIntegers bool
 }
 
 // DefaultLimits returns the structural limits for operator-supplied
@@ -95,6 +100,7 @@ func DefaultLimits() Limits {
 		MaxStringLen:  32768,
 		MaxArrayLen:   4096,
 		MaxObjectKeys: 4096,
+		SafeIntegers:  true,
 	}
 }
 
@@ -167,6 +173,11 @@ func (p *parser) parseTokenValue(tok json.Token, depth int) (Value, error) {
 	case bool:
 		return t, nil
 	case json.Number:
+		if p.limit.SafeIntegers {
+			if err := checkSafeInteger(t); err != nil {
+				return nil, err
+			}
+		}
 		return t, nil
 	case string:
 		// Byte length, not rune count -- must match the server's Go
@@ -232,6 +243,26 @@ func (p *parser) parseArray(depth int) ([]Value, error) {
 		return nil, fmt.Errorf("canonical: %w", err)
 	}
 	return arr, nil
+}
+
+// maxSafeInteger is 2^53-1, the largest integer every JSON implementation represents exactly
+var maxSafeInteger = big.NewInt(1<<53 - 1)
+
+// checkSafeInteger mirrors the server's check: literals with a fraction or exponent are not
+// integers and pass through
+func checkSafeInteger(n json.Number) error {
+	s := string(n)
+	if strings.ContainsAny(s, ".eE") {
+		return nil
+	}
+	i, ok := new(big.Int).SetString(s, 10)
+	if !ok {
+		return fmt.Errorf("canonical: invalid number literal %q", s)
+	}
+	if i.CmpAbs(maxSafeInteger) > 0 {
+		return fmt.Errorf("canonical: integer %s is outside the safe range [-(2^53-1), 2^53-1]; use a string instead", s)
+	}
+	return nil
 }
 
 // Canonicalize parses input as JSON and re-serializes it as RFC 8785
