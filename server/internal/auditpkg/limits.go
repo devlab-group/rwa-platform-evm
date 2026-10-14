@@ -8,9 +8,8 @@ import (
 	"strings"
 )
 
-// safeIntegerBound is the cross-language safe integer range boundary,
-// 2^53-1, per docs/spec/asset-profile.md ("JSON integers that DO appear
-// MUST stay within [-(2^53-1), 2^53-1] so Go/TS/JSON agree").
+// safeIntegerBound is 2^53-1, the edge of the cross-language safe integer range in
+// docs/spec/asset-profile.md "Numeric rules"
 var safeIntegerBound = new(big.Int).SetInt64(9007199254740991) // 2^53 - 1
 
 // container tracks one open JSON object or array while walking tokens, so

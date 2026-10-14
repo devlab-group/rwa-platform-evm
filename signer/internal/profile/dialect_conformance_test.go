@@ -28,16 +28,13 @@ type envelopeConformanceFile struct {
 // shared/vectors/schema-dialect-conformance.json's "envelopeCases" for
 // target "profile": strict document-envelope decoding (including nested
 // displayFields[] objects) must reject any unknown field, staying in step
-// with the server. The signer and server have to agree here -- if the
-// server decodes nested envelope objects loosely and accepts a field the
-// signer rejects, the two disagree on what a valid document is.
+// with the server. If the server accepted a field the signer rejects, the
+// two would disagree on what a valid document is.
 //
-// NOTE: this lives in internal/profile, not internal/jsonschema, because
+// It lives in internal/profile, not internal/jsonschema, because
 // profile.Validate cannot be reached from internal/jsonschema without an
 // import cycle (profile already imports jsonschema for assetSchema
-// compilation). Watch out: the `make dialect-check` target only runs
-// `cd signer && go test ./internal/jsonschema/... -run Dialect`, so it does
-// NOT pick this test up.
+// compilation). `make dialect-check` runs both packages.
 func TestDialectEnvelopeConformance(t *testing.T) {
 	path, err := filepath.Abs(filepath.Join("..", "..", "..", "shared", "vectors", "schema-dialect-conformance.json"))
 	if err != nil {

@@ -23,14 +23,11 @@ const accessControlABIJSON = `[
 
 // AccessControl encodes calldata / decodes reads for OZ AccessControl's
 // standard surface (hasRole/getRoleAdmin) plus the AccessControlEnumerable
-// extension (getRoleMemberCount/getRoleMember), shared verbatim by every
-// project contract that grants roles (docs/spec/roles.md: "Each contract may
-// host its own AccessControl instance ... implementer choice"). One binding
-// works against any of them since the function signatures are identical. The
-// enumerable calls let deployment verification enumerate the COMPLETE holder
-// set of every role and reject an unexpected holder, which a candidate-only
-// hasRole check cannot detect; every child contract inherits
-// AccessControlEnumerable, so these calls are always present.
+// extension (getRoleMemberCount/getRoleMember). Every governance contract
+// hosts its own roles through AccessControlEnumerable (docs/spec/roles.md), so
+// one binding works against any of them. The enumerable calls let deployment
+// verification enumerate the complete holder set of every role and reject an
+// unexpected holder, which a candidate-only hasRole check cannot detect.
 type AccessControl struct{ ABI abi.ABI }
 
 // NewAccessControl parses the shared AccessControl ABI once.

@@ -23,11 +23,8 @@ func hexToBytes32(s string) ([32]byte, error) {
 	return out, nil
 }
 
-// projectIDToBytes32 derives ProjectConfig.projectId from the platform's
-// UUID-string project identifier via keccak256(bytes(projectId)), the same
-// convention as recordKey = keccak256(bytes(recordId)) (shared/eip712/types.md).
-// This derivation is NOT explicitly specified in docs/spec/contracts.md /
-// IRWAFactory.sol beyond "bytes32 projectId"; flagged for lead confirmation.
+// projectIDToBytes32 derives ProjectConfig.projectId as keccak256(utf8(projectId)) from the
+// profile's UUID string, per docs/spec/asset-profile.md "Derivation conventions"
 func projectIDToBytes32(projectID string) ([32]byte, error) {
 	if projectID == "" {
 		return [32]byte{}, fmt.Errorf("projectId must not be empty")

@@ -55,10 +55,9 @@ exceeds 32,768 bytes. The byte bound limits parsing resources. Its implementatio
 - JSON integers MUST remain within [-(2^53-1), 2^53-1] = [-9007199254740991, 9007199254740991].
   Values outside this cross-language safe range MUST be strings.
 
-The range requirement is not fully enforced: the server rejects out-of-range plain integer
-literals, but skips literals containing a fraction or exponent; the signer's canonical parser
-does not apply the range check. Package producers must follow the rule regardless of which
-validator accepts their input.
+The server and the signer both reject an out-of-range plain integer literal anywhere in a
+profile or metadata document. Neither checks a literal written with a fraction or exponent (such
+as `1e20`), so package producers must follow the rule for those themselves.
 
 ## Derivation conventions
 
