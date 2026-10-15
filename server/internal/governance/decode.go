@@ -1,12 +1,8 @@
-// Package governance decodes the generic OpenZeppelin events that project
-// contracts share: Pausable's Paused/Unpaused (emitted only by RWAToken),
-// AccessControl's RoleGranted/RoleRevoked, and
-// AccessControlDefaultAdminRules's DefaultAdminTransferScheduled/
-// DefaultAdminTransferCanceled. The signatures are identical on every contract,
-// so serverwiring passes any log that a contract-specific decoder reports as
-// "unknown" to this decoder. The project security projector folds the resulting
-// ChainEvents into the live paused flag, the role holder sets and the pending
-// admin.
+// Package governance decodes shared OpenZeppelin Paused/Unpaused,
+// RoleGranted/RoleRevoked, DefaultAdminTransferScheduled and
+// DefaultAdminTransferCanceled events. serverwiring uses it after contract-specific
+// decoders return unknown. The security projector derives pause, role holders and
+// pending admin; only RWAToken emits Paused/Unpaused.
 package governance
 
 import (
@@ -22,11 +18,9 @@ var EventNames = []string{
 	"DefaultAdminTransferScheduled", "DefaultAdminTransferCanceled",
 }
 
-// DecodeLog is an indexer.EventDecoder for the shared OZ governance events.
-// Paused/Unpaused carry only the non-indexed account that paused or unpaused;
-// RoleGranted/RoleRevoked carry role, account and sender, all indexed. role is
-// returned as its raw bytes32 hex, which the projector maps to a role name with
-// bindings.RoleName.
+// DecodeLog maps shared governance events: Paused/Unpaused decode account from data;
+// RoleGranted/RoleRevoked decode indexed role, account and sender. The role remains
+// bytes32 hex for projection through bindings.RoleName.
 func DecodeLog(log types.Log) (string, map[string]any, error) {
 	g := bindings.NewGovernance()
 	if len(log.Topics) == 0 {

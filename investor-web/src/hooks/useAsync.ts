@@ -6,11 +6,7 @@ export type AsyncState<T> =
   | { status: "error"; data?: undefined; error: string }
   | { status: "success"; data: T; error?: undefined };
 
-/**
- * Runs `fetcher` on mount and whenever `deps` change, tracking loading, error
- * and success so every section renders the same states. A failed request, such
- * as a refused connection, becomes an error state instead of a crash.
- */
+/** Runs fetcher on mount, deps changes or reload; rejected requests become error state */
 export function useAsync<T>(
   fetcher: (signal: AbortSignal) => Promise<T>,
   deps: unknown[],

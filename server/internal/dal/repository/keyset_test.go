@@ -14,8 +14,7 @@ func (i keysetItem) SortValue() int64 { return i.sortValue }
 func (i keysetItem) ID() string       { return i.id }
 
 func sortedDescItems(n int) []keysetItem {
-	// sortValue descending, with ties broken by id descending, the order every ListPage
-	// caller sorts by before calling KeysetPage
+	// This fixture sorts by sortValue descending, breaking ties by ID descending
 	items := make([]keysetItem, n)
 	for i := 0; i < n; i++ {
 		items[i] = keysetItem{sortValue: int64(n - i), id: fmt.Sprintf("id-%04d", n-i)}
@@ -34,9 +33,8 @@ func TestKeysetPageFirstPage(t *testing.T) {
 	}
 }
 
-// TestKeysetPageWalksEveryItemExactlyOnceOver200Records checks paging through more
-// than 200 records: following the returned cursor page by page visits every item
-// exactly once, in sorted order, with no gaps or duplicates
+// TestKeysetPageWalksEveryItemExactlyOnceOver200Records checks a sorted walk through
+// more than 200 items without gaps or duplicate visits
 func TestKeysetPageWalksEveryItemExactlyOnceOver200Records(t *testing.T) {
 	const total = 237
 	const pageSize = 25
@@ -74,11 +72,9 @@ func TestKeysetPageWalksEveryItemExactlyOnceOver200Records(t *testing.T) {
 	}
 }
 
-// TestKeysetPageStableUnderConcurrentPrepend checks the advantage of keyset over
-// offset cursors: items inserted ahead of the walk, as new purchases and
-// redemptions are in a newest-first list, do not shift, skip or duplicate anything
-// in a page the caller already has a cursor into, where an offset such as "row 50"
-// would name a different record
+// TestKeysetPageStableUnderConcurrentPrepend requires newest-first inserts ahead of the
+// cursor to leave existing pages unchanged, without skipped or duplicated records.
+// Offset cursors would shift.
 func TestKeysetPageStableUnderConcurrentPrepend(t *testing.T) {
 	items := sortedDescItems(20) // sortValue 20..1, ids id-0020..id-0001
 	firstPage, cursor := KeysetPage(items, keysetItem.SortValue, keysetItem.ID, "", 5, true)
@@ -98,9 +94,8 @@ func TestKeysetPageStableUnderConcurrentPrepend(t *testing.T) {
 	if len(secondPage) != 5 {
 		t.Fatalf("second page len = %d, want 5", len(secondPage))
 	}
-	// the cursor means strictly after id-0016, and the new items 21 to 25 sort above
-	// it, so they do not appear in this page and the second page resumes where the
-	// first ended
+	// After id-0016, resume the existing walk; newly inserted items 21..25 sort ahead of
+	// the cursor
 	want := []string{"id-0015", "id-0014", "id-0013", "id-0012", "id-0011"}
 	for i, it := range secondPage {
 		if it.id != want[i] {

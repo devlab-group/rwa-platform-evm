@@ -1,9 +1,6 @@
-# The built web SPA bundle is produced at release time (make platform) or by
-# server/e2e/run_e2e.sh, which copy web/dist (index.html + hashed assets) over
-# internal/webui/dist. That output is generated, not source; keep all of it
-# out of git so a build never dirties a tracked file. Only the tracked
-# placeholder internal/webui/dist/.gitkeep is kept, so `go:embed all:dist`
-# (the `all:` prefix embeds dotfiles) always resolves on a bare checkout.
+# make platform and server/e2e/run_e2e.sh copy web/dist into internal/webui/dist before
+# compilation. Ignore generated index.html and hashed assets; retain .gitkeep so
+# go:embed all:dist resolves in bare checkouts (all: includes dotfiles).
 internal/webui/dist/*
 !internal/webui/dist/.gitkeep
 

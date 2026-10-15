@@ -1,5 +1,6 @@
-// Command platform loads configuration, connects storage and chain RPC, and serves the API.
-// Production requires working MongoDB and RPC; development may fall back to memory storage.
+// Command platform loads configuration, connects MongoDB and chain RPC, and serves the
+// API. Production requires working MongoDB and a correct-chain RPC; development can
+// fall back to memory storage.
 package main
 
 import (
@@ -181,9 +182,9 @@ func (r *providerRegistry) closeAll() {
 	}
 }
 
-// watchProject rebuilds services, router and loops when active project addresses change.
-// Activation supplies the initial stack; later strategy swaps require new watched addresses
-// and decoders. wired is the address set already used by the running loops.
+// watchProject rebuilds services, router and loops when an Active project's addresses
+// change, including activation and strategy swaps. wired holds the running loops'
+// address set.
 func watchProject(ctx context.Context, cfg config.Config, repos *repository.Repositories, chainClient blockchain.Client, mongoClient *mongodriver.Client, handler *routerHandler, providers *providerRegistry, bgLoops *atomic.Pointer[context.CancelFunc], wired models.Addresses) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -238,20 +239,20 @@ func loadProjectAddresses(ctx context.Context, repos *repository.Repositories) (
 	return addressesFromProject(p)
 }
 
-// addressesFromProject uses stored stack addresses and auditor; buildApp and
-// background reconciliation refresh the auditor from chain state
+// addressesFromProject reads stored addresses/auditor and projected strategy; buildApp
+// and reconciliation refresh the auditor from chain state
 func addressesFromProject(p *models.Project) (models.Addresses, string) {
 	addrs := p.Addresses
-	// Prefer the projected live strategy over the immutable deployment baseline
-	// when choosing watched addresses
+	// Watch the projected live strategy instead of the deploy-time address
 	if p.Security != nil && p.Security.Strategy != "" {
 		addrs.Strategy = p.Security.Strategy
 	}
 	return addrs, p.Auditor
 }
 
-// connectRepositories uses the configured backend. Mongo connection or index failures
-// are fatal in production; development logs a fallback to memory repositories.
+// connectRepositories selects the backend. Production Mongo connect, ping or index
+// failures are fatal; development falls back on connect/ping failures but only logs
+// index failures.
 func connectRepositories(ctx context.Context, cfg config.Config) (*repository.Repositories, *mongodriver.Client) {
 	if cfg.PersistenceMode == "memory" {
 		log.Printf("platform: PERSISTENCE_MODE=memory - using in-memory repositories (not durable; refused in production)")
@@ -301,8 +302,8 @@ func connectChain(ctx context.Context, cfg config.Config) *blockchain.RPCClient 
 	return client
 }
 
-// loadSigner loads the selected key provider, using rawHex only in raw mode.
-// An absent or invalid optional key returns nil; callers must handle an unavailable signer.
+// loadSigner uses the selected provider (rawHex only in raw mode); missing or invalid
+// optional keys return nil for callers to handle
 func loadSigner(role, rawHex string, cfg config.Config) keys.Provider {
 	provider, err := keys.Load(role, keys.Config{
 		Mode: keys.Mode(cfg.KeyProviderMode), RawHexKey: rawHex,
@@ -325,8 +326,8 @@ func collectSigner(providers *[]keys.Provider, signer keys.Provider) keys.Provid
 	return signer
 }
 
-// newIPFSReplicationManager adds configured backups to the local pinner.
-// With no backups it returns nil, leaving development publication on local Kubo.
+// newIPFSReplicationManager adds configured backups; none returns nil, leaving
+// development publication on local Kubo
 func newIPFSReplicationManager(cfg config.Config, local ipfs.Client, repos *repository.Repositories) *ipfs.ReplicationManager {
 	var backups []ipfs.Destination
 	if cfg.IPFSBackupArchiveDir != "" {
@@ -345,8 +346,8 @@ func newIPFSReplicationManager(cfg config.Config, local ipfs.Client, repos *repo
 	return ipfs.NewReplicationManager(local, backups, cfg.IPFSReplicationThreshold, repos.Publications)
 }
 
-// newTxManager shares serverwiring's in-process or mongo-lease nonce coordination
-// with request, background and opsctl submission paths
+// newTxManager uses serverwiring's nonce coordination for request, background and
+// opsctl submissions
 func newTxManager(cfg config.Config, chainClient blockchain.Client, repos *repository.Repositories) blockchain.TxManager {
 	// Use the same lease and fee configuration as opsctl
 	return serverwiring.NewTxManager(cfg, chainClient, repos)
@@ -380,8 +381,8 @@ func buildApp(cfg config.Config, addrs models.Addresses, auditor string, repos *
 	txs := newTxManager(cfg, chainClient, repos)
 
 	if cfg.FactoryAddress != "" {
-		// Observe wallet deployments bound to the configured admin and stored profile;
-		// the project service does not sign deployments
+		// Observe profile-matching wallet deployments; project.Service enforces
+		// configured-admin binding and never signs deployments
 		app.Project = project.New(chainClient, common.HexToAddress(cfg.FactoryAddress), repos.Projects, cfg.ChainID,
 			common.HexToAddress(cfg.AdminAddress))
 	}
@@ -421,9 +422,8 @@ func buildApp(cfg config.Config, addrs models.Addresses, auditor string, repos *
 	app.Sessions = auth.NewSessionManager(repos.WalletSessions, cfg.WalletSessionTTL)
 	// Share admin login challenges across replicas, using WalletChallengeTTL
 	app.AdminChallenges = auth.NewAdminChallengeService(repos.AdminChallenges, cfg.WalletChallengeTTL, "RWA Platform")
-	// Wire KYC only when the selected provider is configured
-	// Provider adapters authenticate deliveries; WebhookService owns replay, freshness,
-	// ownership and decision persistence
+	// Configured KYC adapters authenticate deliveries; WebhookService handles replay,
+	// freshness, ownership and decision persistence
 	kycProvider, kerr := kyc.New(kyc.Config{
 		Mode:              kyc.Mode(cfg.KYCProvider),
 		GenericHMACSecret: cfg.KYCWebhookHMACSecret,
@@ -496,8 +496,8 @@ func buildApp(cfg config.Config, addrs models.Addresses, auditor string, repos *
 // startBackgroundLoops runs indexing, transaction refresh and read-model reconciliation
 // until its context is cancelled
 func startBackgroundLoops(ctx context.Context, cfg config.Config, addrs models.Addresses, repos *repository.Repositories, chainClient blockchain.Client, app *api.App, mongoClient *mongodriver.Client) {
-	// Reconcile deployment immediately at startup and on later ticks;
-	// adopt verified events or demote projects whose deployment was reorged out
+	// Reconcile deployment now and on ticks, adopting verified events or demoting projects
+	// without authorized backing events
 	if app.Project != nil {
 		reconcileDeploy := func() {
 			if err := app.Project.ReconcileDeployment(ctx, repos.ChainEvents, repos.AssetProfiles); err != nil {
@@ -514,7 +514,7 @@ func startBackgroundLoops(ctx context.Context, cfg config.Config, addrs models.A
 		// Use stored hashes to walk back to a common ancestor during reorg recovery
 		idx := indexer.New(chainClient, repos.IndexerCheckpoints, repos.ChainEvents, cfg.ChainID, addresses, cfg.StartBlock, serverwiring.BuildDecoder(addrs, cfg.FactoryAddress),
 			indexer.WithBlockHashRepository(repos.IndexerBlockHashes),
-			// Commit events, hashes, pruning and checkpoint in one version-checked Mongo transaction
+			// Atomically commit events, hashes, pruning and the versioned checkpoint
 			indexer.WithChunkCommitter(repos.IndexerChunks),
 			// Persist undecodable logs for operator inspection and retry
 			indexer.WithDeadLetterQueue(repos.IndexerDeadLetters))
@@ -601,8 +601,7 @@ func startBackgroundLoops(ctx context.Context, cfg config.Config, addrs models.A
 		})
 	}
 
-	// Reconcile queued webhook decisions immediately and on ticks.
-	// Without app.Status, Accepted decisions cannot be relayed.
+	// Relay queued webhook decisions now and on ticks; Accepted decisions need app.Status
 	if app.Webhooks != nil {
 		webhookReconciler := compliance.NewWebhookReconciler(repos.KYCEvents, repos.Transactions, app.Status)
 		if err := webhookReconciler.Reconcile(ctx); err != nil {
@@ -702,8 +701,8 @@ func evaluateAlerts(ctx context.Context, cfg config.Config, repos *repository.Re
 	}
 }
 
-// checkConfigDrift reports wiring differences through logs, metrics and audit attempts.
-// A successful check updates the gauge, including clearing resolved drift.
+// checkConfigDrift logs and counts wiring differences, attempts audit writes and
+// updates the gauge; read failures retain its value
 func checkConfigDrift(ctx context.Context, repos *repository.Repositories, chainClient blockchain.Client, app *api.App) {
 	ok, reason, err := project.CheckConfigDrift(ctx, chainClient, repos.Projects)
 	if err != nil {
@@ -723,7 +722,8 @@ func checkConfigDrift(ctx context.Context, repos *repository.Repositories, chain
 	}
 }
 
-// redemptionTimeoutSeconds uses the deployed timeout or a 14-day fallback before deployment
+// redemptionTimeoutSeconds uses the deployed timeout, falling back to 14 days if
+// missing or zero
 func redemptionTimeoutSeconds(ctx context.Context, repos *repository.Repositories) int64 {
 	const defaultTimeout = 14 * 24 * 60 * 60
 	p, err := repos.Projects.Get(ctx)
@@ -758,8 +758,8 @@ func indexerUnsafe(ctx context.Context, repos *repository.Repositories, chainID 
 	return cp.ReconciliationRequired, nil
 }
 
-// runIndexDependentTicker skips dependent work while the indexer requires reconciliation
-// and records callback failures in logs and reconciliation metrics
+// runIndexDependentTicker gates work on indexer safety and logs/counts callback
+// failures
 func runIndexDependentTicker(ctx context.Context, repos *repository.Repositories, cfg config.Config, interval time.Duration, name string, fn func() error) {
 	runTicker(ctx, interval, func() {
 		switch unsafe, err := indexerUnsafe(ctx, repos, cfg.ChainID); {
@@ -784,8 +784,8 @@ var reconcilerHolderID = uuid.NewString()
 // reconcilerLeaseTTL controls takeover when a leader stops releasing its lease
 const reconcilerLeaseTTL = 60 * time.Second
 
-// runAsReconcilerLeader runs fn after acquiring the shared name/chain lease.
-// The lease is not renewed during fn; work must finish before expiry to avoid overlap.
+// runAsReconcilerLeader acquires a name/chain lease before fn; it must finish before
+// expiry because the lease is not renewed
 func runAsReconcilerLeader(ctx context.Context, repos *repository.Repositories, cfg config.Config, name string, fn func()) {
 	key := fmt.Sprintf("reconciler:%s:%d", name, cfg.ChainID)
 	token, ok, err := repos.NonceLeases.Acquire(ctx, key, reconcilerHolderID, reconcilerLeaseTTL)

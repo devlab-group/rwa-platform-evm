@@ -38,7 +38,7 @@ const vaultABIJSON = `[
 // Vault encodes calldata / decodes events for IVault.
 type Vault struct{ ABI abi.ABI }
 
-// NewVault parses the Vault ABI once.
+// NewVault parses the Vault ABI
 func NewVault() Vault { return Vault{ABI: mustABI(vaultABIJSON)} }
 
 // PackBuy builds calldata for buy(uint256,uint256,address,uint64).
@@ -120,9 +120,8 @@ type ProceedsWithdrawnEvent struct {
 	Caller      common.Address
 }
 
-// UnpackProceedsWithdrawn decodes a ProceedsWithdrawn log. treasury and caller
-// are indexed (topics 1 and 2, in declaration order), and quoteAmount, the only
-// non-indexed field, is in log.Data.
+// UnpackProceedsWithdrawn reads treasury and caller from topics 1 and 2, and
+// quoteAmount from log.Data
 func (v Vault) UnpackProceedsWithdrawn(data []byte, topics []common.Hash) (ProceedsWithdrawnEvent, error) {
 	var partial struct{ QuoteAmount *big.Int }
 	if err := v.ABI.UnpackIntoInterface(&partial, "ProceedsWithdrawn", data); err != nil {
@@ -136,9 +135,8 @@ func (v Vault) UnpackProceedsWithdrawn(data []byte, topics []common.Hash) (Proce
 	return ev, nil
 }
 
-// AddressChangeEvent mirrors the fields of Vault's StrategyChanged and
-// TreasuryChanged events, all of them indexed: the previous and new address and
-// the caller
+// AddressChangeEvent mirrors StrategyChanged and TreasuryChanged: previous address, new
+// address and caller, all indexed
 type AddressChangeEvent struct {
 	Previous common.Address
 	New      common.Address

@@ -44,8 +44,8 @@ export interface paths {
       cookie?: never;
     };
     /**
-     * Public project/market data.
-     * @description Public project data for investor clients. Per-wallet freeze amounts and the latest seizure are admin-only at GET /api/v1/project/enforcement. Holders read their own frozen amount at GET /api/v1/me/wallet-status.
+     * Public project and market data
+     * @description Public project data. Freeze amounts and latest seizure are admin-only at GET /api/v1/project/enforcement; holders read their own frozen amount at GET /api/v1/me/wallet-status.
      */
     get: operations["getProject"];
     put?: never;
@@ -64,8 +64,8 @@ export interface paths {
       cookie?: never;
     };
     /**
-     * ERC-7943 enforcement state (admin only).
-     * @description Admin-only freeze amounts and latest forced transfer, projected from RWAToken's Frozen and ForcedTransfer events. These identify wallets subject to enforcement and are treated as operational compliance data, like GET /api/v1/compliance/wallets, although the events are public on-chain. See securityStale before using indexed state.
+     * Admin-only ERC-7943 enforcement state
+     * @description Admin-only freeze amounts and latest seizure from RWAToken Frozen/ForcedTransfer events. Like GET /api/v1/compliance/wallets, this is operational compliance data despite the public chain events. Check securityStale before relying on indexed state.
      */
     get: operations["getEnforcement"];
     put?: never;
@@ -84,8 +84,8 @@ export interface paths {
       cookie?: never;
     };
     /**
-     * Bootstrap chain configuration (public).
-     * @description Public chain ID, RWAFactory address and configured projectId for assembling RWAFactory.deploy(ProjectConfig) in the admin wallet. Available before deployment, when GET /api/v1/project returns 404. The server does not relay deployment.
+     * Public bootstrap chain configuration
+     * @description Chain ID, RWAFactory address and configured projectId for wallet-side RWAFactory.deploy(ProjectConfig). Available before deployment, when GET /api/v1/project returns 404; the server does not relay deployment.
      */
     get: operations["getConfig"];
     put?: never;
@@ -104,14 +104,14 @@ export interface paths {
       cookie?: never;
     };
     /**
-     * Fetch the deployment's stored asset profile, if one exists (admin-only).
-     * @description Returns this deployment's stored Asset Profile, including its raw document, so the admin UI can restore the editor after navigation or reload. Returns 404 before a profile exists. Each deployment has one profile.
+     * Fetch the stored asset profile (admin-only)
+     * @description Returns the stored Asset Profile and raw document to restore the admin editor after navigation/reload; 404 if absent. Profiles are immutable per projectId.
      */
     get: operations["getProfile"];
     put?: never;
     /**
-     * Create the deployment's asset profile (admin-only, create-once).
-     * @description Admin-only, create-once storage of the deployment's Asset Profile, using a compare-and-set on projectId. The profile is immutable; POST /api/v1/profile/validate only validates. Storage failure returns 500. Record, package and signature paths check the stored digest against the project's persisted profileDigest.
+     * Create an immutable asset profile (admin-only)
+     * @description Admin-only Asset Profile creation, enforced once per projectId by compare-and-set; POST /api/v1/profile/validate only validates. Storage failure returns 500. Record, package and signature paths compare the stored digest with the persisted project profileDigest.
      */
     post: operations["createProfile"];
     delete?: never;
@@ -130,8 +130,8 @@ export interface paths {
     get?: never;
     put?: never;
     /**
-     * Validate an asset profile (pure, no persistence).
-     * @description Admin-only validation against the platform schema and operator assetSchema dialect. Returns digest and cid without storing the profile; use POST /api/v1/profile to persist it.
+     * Validate an asset profile without storing it
+     * @description Admin-only validation against the platform schema and operator assetSchema dialect. Returns digest/cid without storage; POST /api/v1/profile persists it.
      */
     post: operations["validateProfile"];
     delete?: never;
@@ -181,7 +181,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** @description Verifies a wallet signature over its issued challenge and returns a short-lived session scoped to address. The session lets investors read their own status without an admin credential. */
+    /** @description Verifies the issued wallet challenge signature and returns a short-lived address-scoped session for own-status reads and KYC start, without admin authority. */
     post: operations["verifyChallenge"];
     delete?: never;
     options?: never;
@@ -197,8 +197,8 @@ export interface paths {
       cookie?: never;
     };
     /**
-     * This session's own wallet status (subject-scoped).
-     * @description Returns WalletStatus for the address in the X-Wallet-Session token issued by challenge verification. Admin JWTs do not authorize this route.
+     * Session wallet's own status
+     * @description Returns WalletStatus for the challenge-issued X-Wallet-Session address; an admin JWT alone does not authorize this route.
      */
     get: operations["getMyWalletStatus"];
     put?: never;
@@ -217,8 +217,8 @@ export interface paths {
       cookie?: never;
     };
     /**
-     * Public transfer-preflight eligibility.
-     * @description Public transfer-recipient preflight returning only the registry's Allowed eligibility for address. It omits exact status, validUntil and ownership details. This does not check token pause, frozen amounts or sender eligibility.
+     * Public transfer-recipient eligibility preflight
+     * @description Returns only address's registry Allowed eligibility, including expiry; omits status, validUntil and ownership. Does not check pause, frozen amounts or sender eligibility.
      */
     get: operations["isAddressAllowed"];
     put?: never;
@@ -236,7 +236,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** @description KYC webhook history for the compliance screen. */
+    /** @description KYC webhook history for the compliance screen */
     get: operations["listWebhookEvents"];
     put?: never;
     post?: never;
@@ -271,7 +271,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** @description Admin-only. Submits ComplianceRegistry.setStatus with the server's compliance key and returns the tracked transaction. */
+    /** @description Admin-only ComplianceRegistry.setStatus submission using the server compliance key; returns the tracked transaction. */
     post: operations["setComplianceStatus"];
     delete?: never;
     options?: never;
@@ -288,7 +288,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** @description Accepts signed KYC decisions without BearerJwt. With kyc.provider: none (default), X-Webhook- Signature is lowercase hex HMAC-SHA256(rawBody, sharedSecret), compared in constant time. A configured Sumsub or Onfido adapter instead verifies X-Payload-Digest or X-SHA2-Signature with its provider secret and maps the payload to the same decision format. Decisions require provider, eventId and occurredAt. The server deduplicates (provider, eventId) and the raw-body hash, accepts timestamps from 24 hours ago through 5 minutes ahead, and rejects decisions older than the latest applied decision for the wallet. It normalizes addresses to EIP-55 and rejects negative validUntil or values more than about 100 years ahead. The raw-body signature also covers occurredAt. */
+    /** @description Authenticates raw-body KYC decisions without BearerJwt. With default kyc.provider: none, X-Webhook-Signature carries hex HMAC-SHA256(rawBody, sharedSecret), optionally 0x-prefixed, compared in constant time. Sumsub uses X-Payload-Digest; Onfido uses X-SHA2-Signature, each verified with its provider secret before mapping to a common decision. Normalized decisions require provider, eventId and occurredAt. Deduplicates (provider, eventId) and raw-body hashes; accepts occurredAt from 24 hours ago through 5 minutes ahead and rejects decisions older than the wallet's latest decision claim. Normalizes addresses to EIP-55; rejects negative validUntil or expiry more than about 100 years ahead. The raw-body signature covers occurredAt. */
     post: operations["kycWebhook"];
     delete?: never;
     options?: never;
@@ -306,8 +306,8 @@ export interface paths {
     get?: never;
     put?: never;
     /**
-     * Begin a KYC verification for this session's own wallet.
-     * @description Starts verification for the wallet in X-Wallet-Session with the configured provider and returns its SDK token or hosted URL. The wallet cannot be selected by a request parameter. This call changes no on-chain state; approval is applied asynchronously after the provider's signed webhook. Returns 501 for providers without a server-initiated flow, including the default none provider.
+     * Start KYC for the session wallet
+     * @description Starts the configured provider's flow for the X-Wallet-Session address, returning an SDK token or hosted URL. Request parameters cannot select another wallet. No on-chain change occurs here; authenticated webhook decisions are applied asynchronously. Returns 501 when server-initiated verification is unsupported, including provider none.
      */
     post: operations["startKYC"];
     delete?: never;
@@ -358,8 +358,8 @@ export interface paths {
     get?: never;
     put?: never;
     /**
-     * Reissue an expired record with a fresh nonce and expiry.
-     * @description Admin-only audited recovery for a Pending record whose attestation window expired before signing. Replaces nonce and validUntil while keeping recordId, metadata and digests, allowing another attestation without a duplicate record ID.
+     * Reissue an expired record with fresh nonce and expiry
+     * @description Admin-only, audited recovery for a Pending record whose attestation expired before signing. Refreshes nonce/validUntil while preserving recordId, metadata and digests for another attestation.
      */
     post: operations["reissueRecord"];
     delete?: never;
@@ -407,7 +407,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** @description Public, paginated redemption requests derived from RedemptionEscrow events for issuer-built investor UIs. Filter by beneficiary address, status or both. */
+    /** @description Public, paginated RedemptionEscrow event projections for investor UIs; filter by beneficiary address, status or both. */
     get: operations["listRedemptions"];
     put?: never;
     post?: never;
@@ -440,7 +440,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** @description Public, paginated server-tracked transactions for issuer-built investor UIs. Filter by address to match from, to, beneficiary or buyer. */
+    /** @description Public, paginated server-tracked transactions for investor UIs; address matches from, to, beneficiary or buyer. */
     get: operations["listTransactions"];
     put?: never;
     post?: never;
@@ -460,8 +460,8 @@ export interface paths {
     get?: never;
     put?: never;
     /**
-     * Request a wallet-signature challenge for admin login (step 1).
-     * @description Public admin login entry point. Send the connected wallet address to receive a single-use, time-limited challenge for personal_sign.
+     * Request an admin-login wallet challenge (step 1)
+     * @description Public admin-login entry: send the wallet address for a single-use, expiring personal_sign challenge.
      */
     post: operations["createAuthChallenge"];
     delete?: never;
@@ -480,8 +480,8 @@ export interface paths {
     get?: never;
     put?: never;
     /**
-     * Verify a signed challenge and issue an admin JWT (step 2).
-     * @description Public exchange of the wallet address and signed POST /auth/challenge message for an admin JWT. The recovered signer must equal the configured admin. Send Authorization: Bearer <token> on subsequent requests. The JWT is stateless; logout removes it client-side.
+     * Exchange a signed challenge for an admin JWT (step 2)
+     * @description Public exchange of address and signed POST /auth/challenge message for an admin JWT; the signer must match the configured admin. Use Authorization: Bearer <token> afterwards. JWTs are stateless; logout discards them client-side.
      */
     post: operations["createSession"];
     delete?: never;
@@ -509,18 +509,18 @@ export interface components {
       version?: string;
       chainId?: number;
       /**
-       * @description Deployment lifecycle state. Active and Failed are the terminal states.
+       * @description Deployment lifecycle state; an orphaned deployment event can demote Active to Undeployed.
        * @enum {string}
        */
       status?: "Undeployed" | "Deploying" | "Verifying" | "Active" | "Failed";
-      /** @description Deployment verification or reorg-demotion detail. May explain a Failed deployment or a non- fatal verification gap on an Active project; empty when no note is needed. */
+      /** @description Verification or reorg-demotion detail; may explain Failed or a nonfatal gap on Active. Empty when no note is needed. */
       verificationNote?: string;
       decimals?: number;
-      /** @description Quote-token decimals, read on-chain at setup and stored for scaling quote amounts without a client-side read. Omitted until resolved. */
+      /** @description Cached on-chain quote-token decimals for display scaling; omitted when unresolved or zero */
       quoteDecimals?: number;
-      /** @description Purchase price per whole token, in quote-token minimal units (scale by quoteDecimals for display). It starts at the deploy-time price and follows FixedPriceStrategy PurchasePriceUpdated events. Omitted if not yet projected. */
+      /** @description Purchase price per whole RWA token in quote-token minimal units (display using quoteDecimals). Starts at the deployment price and follows FixedPriceStrategy PurchasePriceUpdated events; omitted when unavailable. */
       purchasePricePerWholeToken?: string;
-      /** @description Live on-chain redemption price per whole token, in quote-token minimal units. See purchasePricePerWholeToken. */
+      /** @description Projected redemption price per whole RWA token in quote-token minimal units; see purchasePricePerWholeToken. */
       redemptionPricePerWholeToken?: string;
       tokenUnit?: string;
       profileDigest?: string;
@@ -530,24 +530,24 @@ export interface components {
       auditor?: string;
       treasury?: string;
       redemptionManager?: string;
-      /** @description Incoming DEFAULT_ADMIN address for the first governance contract with a pending two-step transfer. Projected from scheduling, cancellation and role events; see securityStale. Remains set while any contract awaits acceptance. The admin console offers acceptance to the matching wallet or a Safe batch for a pending Safe. */
+      /** @description Incoming DEFAULT_ADMIN for the first governance contract with a pending two-step transfer, projected from scheduling, cancellation and role events; see securityStale. Set while any contract awaits acceptance. The console offers wallet acceptance or a Safe batch for a pending Safe. */
       pendingAdmin?: string;
       finalityConfirmations?: number;
-      /** @description True when non-empty code exists at every deployed address. This is a presence check; it does not compare the code with released artifacts. */
+      /** @description Non-empty code exists at all six project contract addresses; checks presence, not identity against released artifacts. */
       bytecodeVerified?: boolean;
-      /** @description Holders of every role on every deployed contract, enumerated through AccessControlEnumerable. Deployment verification compares them with the deploy allowlist to detect an unexpected holder. Once the governance projection exists, the sets follow role events; see securityStale. */
+      /** @description Platform-defined role holders enumerated on each project contract through AccessControlEnumerable and checked against deployment allowlists. After governance projection, follows role events; see securityStale. */
       roles?: components["schemas"]["RoleHolders"];
-      /** @description Last indexed block the security-authority fields (paused, auditor, treasury, roles) reflect. Omitted before the first projection. */
+      /** @description Last indexed block reflected by authority fields (paused, auditor, treasury, roles); omitted before projection. */
       securityAsOfBlock?: number;
       /**
        * Format: date-time
-       * @description Timestamp of securityAsOfBlock (RFC3339). Omitted when no checkpoint exists.
+       * @description securityAsOfBlock timestamp (RFC3339); omitted without an as-of time
        */
       securityAsOfTime?: string;
-      /** @description True when indexed authority fields may lag the chain: no projection, missing or unreadable checkpoint, reconciliation paused, or a projection older than 60 seconds. Clients must not show these values as current. */
+      /** @description Authority projection may lag the chain: missing projection/as-of time, missing or unreadable checkpoint, reconciliation paused, or projection age over 60 seconds. Clients must not show these values as current. */
       securityStale?: boolean;
     };
-    /** @description The issuer's instrument description from the stored Asset Profile (docs/spec/asset-profile.md), omitted when absent from the profile. The platform records these declarations without verifying them. */
+    /** @description Issuer declarations from the stored Asset Profile (docs/spec/asset-profile.md); omitted if absent. The platform records them without verification. */
     LegalDescriptor: {
       /** @enum {string} */
       wrapper: "share" | "entitlement" | "certificate" | "claim";
@@ -564,7 +564,7 @@ export interface components {
         sha256: string;
       };
     };
-    /** @description An issuer-referenced document pinned by its SHA-256 in lowercase hex. Clients must link uri only when it parses as an https: URL; otherwise, show it as text. The admin console and investor app follow this rule. */
+    /** @description Issuer document reference with lowercase-hex SHA-256. Link uri only if it parses as https:; otherwise show text. Both admin and investor apps follow this rule. */
     DocumentReference: {
       uri: string;
       sha256: string;
@@ -578,51 +578,51 @@ export interface components {
       strategy?: string;
       quoteToken?: string;
     };
-    /** @description ERC-7943 (uRWA) enforcement state for the deployed project. Admin-only; returned by GET /api/v1/project/enforcement. */
+    /** @description Admin-only ERC-7943 state from GET /api/v1/project/enforcement */
     Enforcement: {
-      /** @description Holder address to frozen amount in token minimal units, encoded as a base-10 string to preserve uint256 values. Frozen events replace absolute amounts; zero removes the hold. A hold may exceed the balance and withhold future receipts. Omitted when no holder has a frozen amount. */
+      /** @description Holder-to-frozen-amount map in RWA minimal units as base-10 uint256 strings. Frozen events replace absolute amounts; zero releases a hold. Holds may exceed balances and withhold future receipts. Omitted when no holds exist. */
       frozenBalances?: {
         [key: string]: string;
       };
-      /** @description Latest admin seizure with chain coordinates. For history, use indexed chain events and the transaction list. Omitted when none has occurred. */
+      /** @description Latest admin seizure and chain coordinates; omitted if none. Use indexed events/transactions for history. */
       lastForcedTransfer?: components["schemas"]["ForcedTransfer"];
-      /** @description Last indexed block this projection reflects. Omitted with no checkpoint. */
+      /** @description Last indexed block reflected; omitted without a checkpoint */
       securityAsOfBlock?: number;
       /**
        * Format: date-time
        * @description Timestamp of securityAsOfBlock (RFC3339).
        */
       securityAsOfTime?: string;
-      /** @description True when the projection may lag the chain. Computed as for the field of the same name on Project. */
+      /** @description Projection may lag the chain; same freshness rules as Project.securityStale */
       securityStale?: boolean;
     };
-    /** @description One ERC-7943 forced transfer, identified by its canonical log position. */
+    /** @description ERC-7943 forced transfer at its canonical log position */
     ForcedTransfer: {
-      /** @description Holder the tokens were seized from. */
+      /** @description Holder the tokens were seized from */
       from?: string;
-      /** @description Recipient, which had to be compliance-Allowed on-chain. */
+      /** @description Recipient, required to be Allowed on-chain */
       to?: string;
-      /** @description Amount moved, in token minimal units (base-10 string). */
+      /** @description Token minimal units as a base-10 string */
       amount?: string;
       txHash?: string;
       /** Format: int64 */
       blockNumber?: number;
       logIndex?: number;
     };
-    /** @description Map of role name (DEFAULT_ADMIN_ROLE, PAUSER_ROLE, ...) to holder addresses. */
+    /** @description Role name (DEFAULT_ADMIN_ROLE, PAUSER_ROLE, ...) to holder-address map */
     RoleHolders: {
       [key: string]: string[];
     };
-    /** @description Public bootstrap values for the admin console. It builds ProjectConfig from the configured projectId and stored profile digest and decimals, then broadcasts RWAFactory.deploy through the admin wallet. The server observes ProjectDeployed without signing or relaying deployment. */
+    /** @description Public bootstrap values. The console combines projectId with stored profile digest/decimals, then broadcasts RWAFactory.deploy through the admin wallet. The server observes ProjectDeployed without signing or relaying deployment. */
     BootstrapConfig: {
       /**
        * Format: int64
-       * @description EVM chain id the factory is deployed on.
+       * @description Factory's EVM chain ID
        */
       chainId: number;
-      /** @description RWAFactory address the admin calls deploy(ProjectConfig) on. */
+      /** @description RWAFactory address for wallet-side deploy(ProjectConfig) */
       factoryAddress: string;
-      /** @description The projectId (UUID) this deployment is pinned to by `contract.project_id` in the server config. The admin console uses it in the Asset Profile, and the server rejects a profile whose projectId differs. Empty when the operator has not set it; the console then blocks profile creation. */
+      /** @description Configured contract.project_id UUID; the console uses it in the Asset Profile and the server rejects mismatches. If unset, returns empty and the console blocks profile creation. */
       projectId: string;
     };
     ValidationResult: {
@@ -637,26 +637,26 @@ export interface components {
       status?: "Unknown" | "Allowed" | "Blocked";
       validUntil?: number;
       ownershipVerified?: boolean;
-      /** @description This wallet's ERC-7943 frozen amount in minimal units as a base-10 string. Frozen tokens remain in the wallet but cannot be sent. Omitted when no hold exists. Reported only for the caller's address at GET /me/wallet-status; the aggregate map is admin-only. */
+      /** @description Own frozen amount in RWA minimal units as a base-10 string; omitted without a hold. Tokens remain in the wallet but cannot be spent through ordinary transfers. Only the caller's amount is exposed at GET /me/wallet-status; the aggregate map is admin-only. */
       frozenTokens?: string;
     };
-    /** @description WalletStatus for the verified address plus a short-lived subject-scoped session. */
+    /** @description Verified wallet status and short-lived address-scoped session */
     VerifyChallengeResult: {
       address?: string;
       /** @enum {string} */
       status?: "Unknown" | "Allowed" | "Blocked";
       validUntil?: number;
       ownershipVerified?: boolean;
-      /** @description Opaque bearer for X-Wallet-Session; scoped to this address only. */
+      /** @description Address-scoped opaque bearer for X-Wallet-Session */
       sessionToken?: string;
       /**
        * Format: date-time
-       * @description Session expiry (15 minutes after issue by default).
+       * @description Session expiry; default 15 minutes after issue
        */
       sessionExpiresAt?: string;
     };
     AllowedResult: {
-      /** @description Registry Allowed eligibility for the address, including expiry. Does not check token pause, frozen amounts or sender eligibility; reveals no other state. */
+      /** @description Registry Allowed eligibility including expiry; no pause, freeze or sender checks, and no other wallet state. */
       allowed: boolean;
     };
     Challenge: {
@@ -671,7 +671,7 @@ export interface components {
       status: "Unknown" | "Allowed" | "Blocked";
       validUntil?: number;
     };
-    /** @description recordKey, nonce and validUntil let the admin assemble the SupplyController.MintAttestation and broadcast SupplyController.mint(attestation, signature) from their wallet. The server does not relay the mint; it observes the on-chain Minted event and advances the record. */
+    /** @description recordKey, nonce and validUntil supply wallet-side SupplyController.MintAttestation/mint. The server does not relay mint; it advances the record after observing Minted. */
     AssetRecord: {
       recordId?: string;
       /** @enum {string} */
@@ -680,13 +680,13 @@ export interface components {
       cid?: string;
       amount?: string;
       createdAt?: string;
-      /** @description bytes32 recordKey bound into the MintAttestation (consumed once on-chain). */
+      /** @description MintAttestation bytes32 recordKey; consumed once on-chain */
       recordKey?: string;
-      /** @description uint256 attestation nonce (consumed once on-chain). */
+      /** @description uint256 attestation nonce; consumed once on-chain */
       nonce?: string;
       /**
        * Format: int64
-       * @description Attestation expiry (unix seconds); block.timestamp must be <= this at mint.
+       * @description Attestation expiry in Unix seconds; mint requires block.timestamp <= validUntil
        */
       validUntil?: number;
     };
@@ -710,7 +710,7 @@ export interface components {
       purchasePrice?: string;
       redemptionPrice?: string;
     };
-    /** @description `status` is the on-chain enum. `claimable` is derived by the server: true when status is Funded and confirmations is at least finalityConfirmations. There is no on-chain Claimable status. A Pending redemption is not a payment guarantee. */
+    /** @description On-chain status, plus server-derived claimable: Funded with confirmations >= finalityConfirmations. Claimable is not an on-chain enum member; Pending does not guarantee payment. */
     Redemption: {
       id?: string;
       beneficiary?: string;
@@ -731,16 +731,16 @@ export interface components {
       signature: string;
     };
     WebhookPayload: {
-      /** @description KYC provider id; part of the (provider,eventId) uniqueness key. */
+      /** @description KYC provider ID; part of the (provider,eventId) uniqueness key */
       provider: string;
-      /** @description Provider-assigned unique event id; part of the uniqueness key. */
+      /** @description Provider event ID; part of the uniqueness key */
       eventId: string;
       /**
        * Format: int64
-       * @description Provider decision time, unix seconds. Rejected if more than 24 hours in the past or 5 minutes in the future, or older than the latest applied decision for this address.
+       * @description Provider decision time in Unix seconds; rejects age over 24 hours, future skew over 5 minutes, or a decision older than the wallet's latest decision claim.
        */
       occurredAt: number;
-      /** @description Subject wallet; normalized to EIP-55 checksum server-side. */
+      /** @description Subject wallet, normalized to EIP-55 server-side */
       address: string;
       /**
        * @description Compliance decision.
@@ -749,26 +749,26 @@ export interface components {
       status: "Allowed" | "Blocked" | "Pending";
       /**
        * Format: int64
-       * @description Expiry (unix seconds) for an Allowed decision; 0 = no expiry. A negative value, or one more than about 100 years ahead, is rejected.
+       * @description Allowed expiry in Unix seconds; 0 disables expiry. Negative values and expiry more than about 100 years ahead are rejected.
        */
       validUntil?: number;
     };
-    /** @description A verification session issued by the configured KYC provider for the session's own wallet. Exactly one of `token` (consumed by the provider's embedded web SDK) or `url` (hosted redirect flow) is set, depending on the provider. */
+    /** @description Verification credentials for the session wallet: exactly one of token (embedded SDK) or url (hosted flow), selected by provider. */
     KYCSession: {
       /**
-       * @description Which provider issued this session; tells the SPA which SDK to launch.
+       * @description Provider ID selecting the SPA SDK
        * @enum {string}
        */
       provider: "sumsub" | "onfido" | "generic";
-      /** @description Provider SDK/init token. */
+      /** @description Provider SDK token */
       token?: string;
-      /** @description Hosted-flow URL to redirect the investor to. */
+      /** @description Hosted verification URL */
       url?: string;
-      /** @description Provider-side reference for this verification (Onfido: workflowRunId). Bound server-side to the subject wallet so the provider's webhook can be resolved back to it. */
+      /** @description Provider reference (Onfido workflowRunId), stored against the wallet to resolve webhook subjects. */
       ref?: string;
       /**
        * Format: date-time
-       * @description When the token/URL stops being usable.
+       * @description Token/URL expiry
        */
       expiresAt?: string;
     };
@@ -783,7 +783,7 @@ export interface components {
       occurredAt?: string;
       receivedAt?: string;
       /**
-       * @description Durable inbox/outbox state. Applied only after the on-chain setStatus tx confirms.
+       * @description Durable inbox/outbox state; Applied after setStatus confirms on-chain
        * @enum {string}
        */
       applyStatus?:
@@ -793,7 +793,7 @@ export interface components {
         | "Superseded"
         | "Failed"
         | "Recorded";
-      /** @description Derived convenience flag: applyStatus == Applied. */
+      /** @description Derived from applyStatus == Applied */
       applied?: boolean;
     };
     AuditLog: {
@@ -836,35 +836,35 @@ export interface components {
         | "needs_intervention";
       blockNumber?: number;
       explorerUrl?: string;
-      /** @description Signing account (from address). */
+      /** @description Signing account (from) */
       sender?: string;
-      /** @description Account nonce this attempt used. */
+      /** @description Account nonce used by this attempt */
       nonce?: number;
-      /** @description txHash of the replacement, if this attempt was replaced. */
+      /** @description Replacement txHash, if replaced */
       replacedBy?: string;
-      /** @description How many times this nonce has been fee-bumped or replaced. */
+      /** @description Fee-bump/replacement count for this nonce */
       replacementCount?: number;
     };
-    /** @description The deployment's single persisted Asset Profile (GET /api/v1/profile): the raw document plus the server-derived identity fields. */
+    /** @description Stored Asset Profile from GET /api/v1/profile: raw document and server-derived identity */
     StoredProfile: {
-      /** @description The raw Asset Profile JSON document as stored. */
+      /** @description Stored raw Asset Profile JSON */
       profile: Record<string, never>;
       projectId: string;
       profileDigest: string;
       cid?: string;
-      /** @description Token decimals derived from the profile. */
+      /** @description Profile-derived token decimals */
       decimals?: number;
       tokenUnit?: string;
     };
-    /** @description Response of POST /auth/session, the admin JWT and its metadata. */
+    /** @description Admin JWT and metadata from POST /auth/session */
     AuthSession: {
-      /** @description Signed JWT; attach as `Authorization: Bearer <token>`. */
+      /** @description JWT for Authorization: Bearer <token> */
       token: string;
-      /** @description Unix seconds; JWT expiry. */
+      /** @description JWT expiry in Unix seconds */
       expiresAt: number;
-      /** @description Always 'admin' in V1 (single-admin model). */
+      /** @description V1 uses the single-admin role 'admin' */
       role: string;
-      /** @description The authenticated admin wallet address (checksummed). */
+      /** @description Authenticated admin address, checksummed */
       address: string;
     };
   };
@@ -880,20 +880,20 @@ export interface components {
     };
   };
   parameters: {
-    /** @description Required on authenticated admin POST routes that change state; at most 256 bytes. Scoped to principal, operation, concrete path and normalized query, so different path parameters cannot share a cached response. */
+    /** @description Required on state-changing admin POSTs; maximum 256 bytes. Scoped to principal, operation, concrete path and normalized query to isolate cached responses across path parameters. */
     IdempotencyKey: string;
-    /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
+    /** @description Item limit, capped at the server maximum even when omitted or exceeded */
     Limit: number;
-    /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+    /** @description Opaque X-Next-Cursor from a previous response; omit for the first page */
     Cursor: string;
   };
   requestBodies: never;
   headers: {
-    /** @description Total items available, when cheaply known. */
+    /** @description Total available items, when cheaply known */
     XTotalCount: number;
-    /** @description Items actually returned in this response. */
+    /** @description Items returned in this response */
     XPageSize: number;
-    /** @description Pass as `cursor` to fetch the next page; absent once this was the last page. */
+    /** @description Pass as cursor for the next page; absent on the last page */
     XNextCursor: string;
   };
   pathItems: never;
@@ -1034,7 +1034,7 @@ export interface operations {
     parameters: {
       query?: never;
       header: {
-        /** @description Required on authenticated admin POST routes that change state; at most 256 bytes. Scoped to principal, operation, concrete path and normalized query, so different path parameters cannot share a cached response. */
+        /** @description Required on state-changing admin POSTs; maximum 256 bytes. Scoped to principal, operation, concrete path and normalized query to isolate cached responses across path parameters. */
         "Idempotency-Key": components["parameters"]["IdempotencyKey"];
       };
       path?: never;
@@ -1055,7 +1055,7 @@ export interface operations {
           "application/json": components["schemas"]["ValidationResult"];
         };
       };
-      /** @description Invalid profile; body is a ValidationResult with valid=false and an errors array. */
+      /** @description Invalid profile: ValidationResult with valid=false and errors array */
       400: {
         headers: {
           [name: string]: unknown;
@@ -1096,9 +1096,9 @@ export interface operations {
   listWallets: {
     parameters: {
       query?: {
-        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
+        /** @description Item limit, capped at the server maximum even when omitted or exceeded */
         limit?: components["parameters"]["Limit"];
-        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        /** @description Opaque X-Next-Cursor from a previous response; omit for the first page */
         cursor?: components["parameters"]["Cursor"];
       };
       header?: never;
@@ -1218,9 +1218,9 @@ export interface operations {
   listWebhookEvents: {
     parameters: {
       query?: {
-        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
+        /** @description Item limit, capped at the server maximum even when omitted or exceeded */
         limit?: components["parameters"]["Limit"];
-        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        /** @description Opaque X-Next-Cursor from a previous response; omit for the first page */
         cursor?: components["parameters"]["Cursor"];
       };
       header?: never;
@@ -1247,9 +1247,9 @@ export interface operations {
     parameters: {
       query?: {
         category?: string;
-        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
+        /** @description Item limit, capped at the server maximum even when omitted or exceeded */
         limit?: components["parameters"]["Limit"];
-        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        /** @description Opaque X-Next-Cursor from a previous response; omit for the first page */
         cursor?: components["parameters"]["Cursor"];
       };
       header?: never;
@@ -1258,7 +1258,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description Audit log entries (bounded/paginated; the underlying store is a most-recent-N query so X-Total-Count is omitted; only X-Page-Size and X-Next-Cursor are sent). */
+      /** @description Bounded, paginated audit logs from a most-recent-N query. Sends X-Page-Size and X-Next-Cursor, omitting X-Total-Count. */
       200: {
         headers: {
           "X-Page-Size": components["headers"]["XPageSize"];
@@ -1275,7 +1275,7 @@ export interface operations {
     parameters: {
       query?: never;
       header: {
-        /** @description Required on authenticated admin POST routes that change state; at most 256 bytes. Scoped to principal, operation, concrete path and normalized query, so different path parameters cannot share a cached response. */
+        /** @description Required on state-changing admin POSTs; maximum 256 bytes. Scoped to principal, operation, concrete path and normalized query to isolate cached responses across path parameters. */
         "Idempotency-Key": components["parameters"]["IdempotencyKey"];
       };
       path?: never;
@@ -1302,7 +1302,7 @@ export interface operations {
     parameters: {
       query?: never;
       header?: {
-        /** @description Required for the generic shape; a configured provider sends its own header instead (X-Payload-Digest / X-SHA2-Signature). Exactly one signature header must verify. */
+        /** @description Required in none mode; configured Sumsub/Onfido adapters verify X-Payload-Digest or X-SHA2-Signature instead. */
         "X-Webhook-Signature"?: string;
       };
       path?: never;
@@ -1314,7 +1314,7 @@ export interface operations {
       };
     };
     responses: {
-      /** @description Valid decisions are durably queued for asynchronous on-chain application; poll webhook events for applyStatus. Acknowledgement does not mean applied. Irrelevant signed provider events, monitoring-only signals and provider decisions without a usable timestamp are also acknowledged but are not queued as decisions. */
+      /** @description Decisions are stored durably; Allowed/Blocked are queued for asynchronous on-chain application, while Pending is recorded without relay. Poll webhook events for applyStatus; 202 does not mean applied. Signed irrelevant events, monitoring-only signals and decisions without usable timestamps are acknowledged without queuing a decision. */
       202: {
         headers: {
           [name: string]: unknown;
@@ -1323,7 +1323,7 @@ export interface operations {
       };
       400: components["responses"]["Error"];
       401: components["responses"]["Error"];
-      /** @description Replay/stale/out-of-order decision (same code family as replay). */
+      /** @description Replay, stale or out-of-order decision conflict */
       409: {
         headers: {
           [name: string]: unknown;
@@ -1359,9 +1359,9 @@ export interface operations {
   listRecords: {
     parameters: {
       query?: {
-        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
+        /** @description Item limit, capped at the server maximum even when omitted or exceeded */
         limit?: components["parameters"]["Limit"];
-        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        /** @description Opaque X-Next-Cursor from a previous response; omit for the first page */
         cursor?: components["parameters"]["Cursor"];
       };
       header?: never;
@@ -1388,7 +1388,7 @@ export interface operations {
     parameters: {
       query?: never;
       header: {
-        /** @description Required on authenticated admin POST routes that change state; at most 256 bytes. Scoped to principal, operation, concrete path and normalized query, so different path parameters cannot share a cached response. */
+        /** @description Required on state-changing admin POSTs; maximum 256 bytes. Scoped to principal, operation, concrete path and normalized query to isolate cached responses across path parameters. */
         "Idempotency-Key": components["parameters"]["IdempotencyKey"];
       };
       path?: never;
@@ -1437,7 +1437,7 @@ export interface operations {
     parameters: {
       query?: never;
       header: {
-        /** @description Required on authenticated admin POST routes that change state; at most 256 bytes. Scoped to principal, operation, concrete path and normalized query, so different path parameters cannot share a cached response. */
+        /** @description Required on state-changing admin POSTs; maximum 256 bytes. Scoped to principal, operation, concrete path and normalized query to isolate cached responses across path parameters. */
         "Idempotency-Key": components["parameters"]["IdempotencyKey"];
       };
       path: {
@@ -1482,9 +1482,9 @@ export interface operations {
   listPurchases: {
     parameters: {
       query?: {
-        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
+        /** @description Item limit, capped at the server maximum even when omitted or exceeded */
         limit?: components["parameters"]["Limit"];
-        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        /** @description Opaque X-Next-Cursor from a previous response; omit for the first page */
         cursor?: components["parameters"]["Cursor"];
       };
       header?: never;
@@ -1511,11 +1511,11 @@ export interface operations {
     parameters: {
       query?: {
         status?: string;
-        /** @description Filter to requests whose beneficiary is this wallet. */
+        /** @description Filter by beneficiary wallet */
         address?: string;
-        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
+        /** @description Item limit, capped at the server maximum even when omitted or exceeded */
         limit?: components["parameters"]["Limit"];
-        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        /** @description Opaque X-Next-Cursor from a previous response; omit for the first page */
         cursor?: components["parameters"]["Cursor"];
       };
       header?: never;
@@ -1563,11 +1563,11 @@ export interface operations {
   listTransactions: {
     parameters: {
       query?: {
-        /** @description Filter to txs involving this wallet (from/to/beneficiary/buyer). */
+        /** @description Filter by wallet involvement (from/to/beneficiary/buyer) */
         address?: string;
-        /** @description Maximum items to return. The server caps the value at the maximum, including when the parameter is omitted or set higher. */
+        /** @description Item limit, capped at the server maximum even when omitted or exceeded */
         limit?: components["parameters"]["Limit"];
-        /** @description Opaque pagination cursor from a previous response's X-Next-Cursor header. Omit to fetch the first page. */
+        /** @description Opaque X-Next-Cursor from a previous response; omit for the first page */
         cursor?: components["parameters"]["Cursor"];
       };
       header?: never;
@@ -1600,7 +1600,7 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": {
-          /** @description Connected wallet address (EIP-55 checksummed or lowercase). */
+          /** @description Wallet address, EIP-55 or lowercase */
           address: string;
         };
       };
@@ -1613,9 +1613,9 @@ export interface operations {
         };
         content: {
           "application/json": {
-            /** @description The exact message the wallet must personal_sign. */
+            /** @description Exact message the wallet must personal_sign */
             message: string;
-            /** @description Unix seconds; the challenge is single-use and expires. */
+            /** @description Single-use challenge expiry in Unix seconds */
             expiresAt: number;
           };
         };
@@ -1633,9 +1633,9 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": {
-          /** @description Wallet address that signed the challenge. */
+          /** @description Challenge-signing wallet address */
           address: string;
-          /** @description personal_sign signature over the challenge message ('0x'-hex, 65 bytes). */
+          /** @description personal_sign signature (0x-hex, 65 bytes) */
           signature: string;
         };
       };

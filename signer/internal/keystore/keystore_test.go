@@ -14,8 +14,8 @@ type keyAndAddr struct {
 	addr common.Address
 }
 
-// newTestKeystoreFile creates a V3 keystore file on disk with go-ethereum's
-// KeyStore.ImportECDSA and returns its path and the imported key and address
+// newTestKeystoreFile imports a V3 file through go-ethereum KeyStore.ImportECDSA,
+// returning path, key and address
 func newTestKeystoreFile(t *testing.T, passphrase string) (path string, want *keyAndAddr) {
 	t.Helper()
 	key, err := crypto.GenerateKey()
@@ -23,8 +23,8 @@ func newTestKeystoreFile(t *testing.T, passphrase string) (path string, want *ke
 		t.Fatalf("GenerateKey: %v", err)
 	}
 	dir := t.TempDir()
-	// Load enforces a KDF floor on V3 files (kdf.go), so go-ethereum's light parameters
-	// would be rejected before the password is tried
+	// Use the V3 KDF floor; go-ethereum's light parameters fail before password
+	// verification
 	ks := gokeystore.NewKeyStore(dir, MinScryptN, MinScryptP)
 	account, err := ks.ImportECDSA(key, passphrase)
 	if err != nil {
@@ -87,17 +87,14 @@ func TestZeroBytes_NilAndEmptySafe(t *testing.T) {
 	ZeroBytes([]byte{}) // must not panic
 }
 
-// TestZero_OverwritesBackingWords pins why Zero does more than SetInt64(0): the
-// scalar's backing words must be overwritten. SetInt64(0) alone only reslices them
-// away, leaving the key readable in the heap, where a core dump or swapped page taken
-// after signing would still yield it.
+// Overwrite scalar backing storage; SetInt64(0) alone leaves its old words in memory
 func TestZero_OverwritesBackingWords(t *testing.T) {
 	key, err := crypto.GenerateKey()
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	// Bits() aliases the big.Int's storage, so this keeps a view of that
-	// memory after D itself has been resliced to zero length.
+	// Bits aliases D's backing storage, retaining a view after D is resliced to zero
+	// length
 	words := key.D.Bits()
 	if len(words) == 0 {
 		t.Fatal("generated key has no scalar words")
@@ -124,8 +121,7 @@ func TestZero_OverwritesBackingWords(t *testing.T) {
 	}
 }
 
-// TestZero_NoScalarIsSafe covers a key struct whose D was never set, which Zero must
-// skip instead of dereferencing
+// Zero must tolerate an unset D
 func TestZero_NoScalarIsSafe(t *testing.T) {
 	Zero(&ecdsa.PrivateKey{})
 }

@@ -11,15 +11,15 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// BuildStates replays RedemptionEscrow chain events in (blockNumber, logIndex)
-// order and derives the current models.RedemptionRequest for each id, following
-// the transition table in docs/spec/redemption-state-machine.md:
+// BuildStates derives each models.RedemptionRequest from chain events sorted by
+// (blockNumber, logIndex). Requested resets a request to Pending; other events follow
+// docs/spec/redemption-state-machine.md:
 //
-//	None -> Pending -> {Funded -> Completed | Rejected | Cancelled}
+// - Pending -> Funded -> Completed
+// - Pending -> Rejected or Cancelled
 //
-// Chain events are the only source of a request's status. An event without an
-// id, or one that does not fit the request's current status (for example
-// Funded before Requested), is ignored.
+// Events without an id are ignored; events other than Requested must match the current
+// status.
 func BuildStates(events []*models.ChainEvent, redemptionTimeout int64) map[string]*models.RedemptionRequest {
 	sorted := make([]*models.ChainEvent, len(events))
 	copy(sorted, events)
@@ -87,9 +87,8 @@ func toString(v any) string {
 	return s
 }
 
-// toInt64 converts the shapes an integer in ChainEvent.Data can take: the
-// indexer's original Go type, int32 or int64 after a MongoDB round trip,
-// float64 after JSON decoding, and decimal strings
+// toInt64 handles ChainEvent.Data integers from the indexer, MongoDB int32/int64, JSON
+// float64 and decimal strings
 func toInt64(v any) int64 {
 	switch t := v.(type) {
 	case int64:
@@ -110,16 +109,12 @@ func toInt64(v any) int64 {
 	}
 }
 
-// Reconcile rebuilds the redemption_requests read model from every persisted
-// RedemptionEscrow chain event for (chainID, escrowAddr). Rebuilding from the
-// events, not patching individual fields, lets the model recover when database
-// records diverge. It is safe to call at any time, including after an indexer
-// rollback that deleted events.
+// Reconcile rebuilds redemption_requests from persisted events for (chainID,
+// escrowAddr), repairing divergent records and reflecting indexer rollbacks.
 //
-// It swaps generations as sales.Service.Reconcile does: each derived state is
-// upserted under a fresh generation, and only then are records from older
-// generations, such as requests whose events a reorg removed, deleted. A
-// concurrent API reader never sees an empty or partial model.
+// Like sales.Service.Reconcile, it upserts all derived states with a fresh generation
+// before deleting older rows. This avoids a delete-first gap for surviving requests,
+// but readers may see mixed generations during rebuilds.
 func (s *Service) Reconcile(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, redemptionTimeout int64) error {
 	var all []*models.ChainEvent
 	for _, name := range EventNames {

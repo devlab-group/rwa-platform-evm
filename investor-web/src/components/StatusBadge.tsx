@@ -33,10 +33,10 @@ const TRANSACTION_TONE: Record<TransactionChainStatus, string> = {
   needs_intervention: "badge--danger",
 };
 
-/** Tone for an unrecognized status: a visible warning rather than neutral */
+// Warn on unrecognized statuses
 const TRANSACTION_UNKNOWN_TONE = "badge--warning";
 
-/** Redemption status badge, showing the display status derived by redemptionDisplayStatus. */
+/** Displays the status derived by redemptionDisplayStatus */
 export function RedemptionStatusBadge({
   status,
   claimable,
@@ -61,10 +61,8 @@ export function RedemptionStatusBadge({
 }
 
 /**
- * Shown next to the status badge when a Pending redemption's beneficiary is not
- * currently Allowed, so funding would revert. Renders nothing for any other
- * status (compliance no longer blocks it) or when `beneficiaryAllowed` is
- * absent from the response.
+ * Warns when a Pending beneficiary is explicitly ineligible, which blocks funding;
+ * hidden for other statuses or absent beneficiaryAllowed
  */
 export function RedemptionComplianceBadge({
   status,
@@ -78,7 +76,7 @@ export function RedemptionComplianceBadge({
     <span
       className="badge badge--danger"
       data-status="compliance-blocked"
-      title="The recorded beneficiary is not currently Allowed. Funding will revert until compliance status is restored."
+      title="The beneficiary is not Allowed. Restore compliance before funding."
     >
       Blocked by compliance
     </span>
@@ -86,11 +84,8 @@ export function RedemptionComplianceBadge({
 }
 
 /**
- * Transaction lifecycle badge for every status in the OpenAPI
- * Transaction.status enum. It takes a plain `string`, so a status outside the
- * generated union, such as one a newer server sends, renders an "Unknown"
- * badge with a warning tone and an attention marker instead of an empty label
- * or an undefined CSS class.
+ * Displays known transaction statuses; unknown strings get a warning-toned Unknown badge
+ * and attention marker, including statuses introduced by newer servers
  */
 export function TransactionStatusBadge({ status }: { status: string }) {
   const known = isKnownTransactionStatus(status);
@@ -103,7 +98,7 @@ export function TransactionStatusBadge({ status }: { status: string }) {
       title={
         known
           ? undefined
-          : `Unrecognized transaction status "${status}". This client build may be older than the server; treat it as needing operator review.`
+          : `Unrecognized transaction status "${status}". This build may predate the server; ask an operator to review it.`
       }
     >
       {transactionStatusLabel(status)}

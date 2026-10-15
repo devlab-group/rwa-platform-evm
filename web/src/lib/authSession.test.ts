@@ -94,8 +94,7 @@ describe("authSession (wallet-JWT)", () => {
   });
 
   it("hydrates a persisted, unexpired session from IndexedDB into the mirror", async () => {
-    // Model a reload: write the token straight to IndexedDB, bypassing the
-    // in-memory mirror that a fresh page load starts empty, then hydrate
+    // Seed IndexedDB directly, then hydrate to simulate a fresh page without the in-memory session
     const session = makeSession({ token: "rehydrated" });
     await idbSet(STORAGE_KEY, session);
     expect(getSession()).toBeUndefined();
@@ -113,8 +112,7 @@ describe("authSession (wallet-JWT)", () => {
 
     await hydrateSession();
     expect(getSession()).toBeUndefined();
-    await flush(); // hydrateSession deletes the stale token in the background
-    // The stale token is deleted from storage, not just ignored
+    await flush(); // hydrateSession deletes expired storage entries in the background
     expect(await idbGet<AuthSession>(STORAGE_KEY)).toBeUndefined();
   });
 });

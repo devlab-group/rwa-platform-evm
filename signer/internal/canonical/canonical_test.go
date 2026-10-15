@@ -56,15 +56,11 @@ func TestCanonicalize_TrailingDataRejected(t *testing.T) {
 	}
 }
 
-// TestCanonicalize_UTF16SurrogateOrdering asserts the well-known RFC 8785
-// quirk: object keys are sorted by UTF-16 *code unit* value, so a
-// supplementary-plane character (encoded as a surrogate pair starting at
-// 0xD800-0xDBFF) sorts before a BMP character in 0xE000-0xFFFF, even though
-// its Unicode code point is numerically larger.
+// Require UTF-16 ordering: leading surrogates 0xD800-0xDBFF precede BMP 0xE000-0xFFFF
+// despite larger code points
 func TestCanonicalize_UTF16SurrogateOrdering(t *testing.T) {
-	// "\U0001F600" (😀) encodes as UTF-16 surrogate pair starting 0xD83D.
-	// "￿" is a plain BMP code unit 0xFFFF. 0xD83D < 0xFFFF, so the
-	// emoji key must sort first even though U+1F600 > U+FFFF as a code point.
+	// U+1F600 starts with surrogate 0xD83D, before BMP U+FFFF's 0xFFFF; the emoji key
+	// sorts first despite its larger code point
 	in := []byte("{\"￿\":1,\"\U0001F600\":2}")
 	want := "{\"\U0001F600\":2,\"￿\":1}"
 	got, err := Canonicalize(in)
@@ -77,10 +73,8 @@ func TestCanonicalize_UTF16SurrogateOrdering(t *testing.T) {
 }
 
 func TestCanonicalize_StringEscaping(t *testing.T) {
-	// Only '"', '\\', and control characters are escaped; '/' and non-ASCII
-	// characters are emitted raw.
-	// The JSON source escapes the control character (a raw control byte
-	// inside a JSON string is invalid per RFC 8259).
+	// Escape quotes, backslashes and controls; emit '/' and non-ASCII raw. The JSON source
+	// must escape controls because raw control bytes are invalid (RFC 8259).
 	in := []byte("{\"s\":\"a/b\\\"c\\\\d\\u0007e€\"}")
 	want := "{\"s\":\"a/b\\\"c\\\\d\\u0007e€\"}"
 	got, err := Canonicalize(in)
@@ -92,8 +86,7 @@ func TestCanonicalize_StringEscaping(t *testing.T) {
 	}
 }
 
-// TestFormatNumber checks the ECMAScript Number::toString algorithm against known
-// JavaScript Number.prototype.toString() outputs
+// Compare ECMAScript number formatting with known Number.prototype.toString() outputs
 func TestFormatNumber(t *testing.T) {
 	cases := []struct {
 		in   float64

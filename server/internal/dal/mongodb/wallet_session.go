@@ -11,16 +11,9 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// walletSessionRepo persists wallet_sessions in a store shared by server replicas,
-// so a token issued by one replica validates on every replica and a logout on any
-// replica revokes it everywhere (see repository.WalletSessionRepository). The TTL
-// index on expiresAt is background cleanup. Get checks ExpiresAt itself, so an
-// expired token stops validating at once and not up to about 60 seconds later when
-// the MongoDB TTL monitor deletes it.
-//
-// The stored _id is the SHA-256 digest of the bearer token, which
-// auth.SessionManager derives on issue and lookup, so a dump of the collection
-// contains no usable credentials.
+// walletSessionRepo shares sessions across server replicas using MongoDB. Get enforces
+// expiry before TTL cleanup. auth.SessionManager supplies SHA-256 token IDs, so
+// collection dumps contain no raw bearer credentials.
 type walletSessionRepo struct{ coll *mongo.Collection }
 
 func (r *walletSessionRepo) Create(ctx context.Context, s *models.WalletSession) error {

@@ -3,10 +3,8 @@ import { useWalletContext } from "../context/walletContextValue";
 import { ALLOWED_NETWORKS, findNetwork } from "../lib/networks";
 
 /**
- * Shows the connected wallet's network and the allowlist in lib/networks.ts.
- * switchChain adds an unknown chain through wallet_addEthereumChain before
- * switching; chainChanged keeps the displayed network synchronized. Hidden
- * when disconnected.
+ * Shows the connected network and lib/networks.ts choices; hidden when disconnected.
+ * switchChain adds unknown allowlisted networks, and chainChanged updates the display.
  */
 export function NetworkSwitcher() {
   const { address, chainId, switchChain } = useWalletContext();
@@ -29,8 +27,7 @@ export function NetworkSwitcher() {
         value={isSupported ? String(chainId) : "unsupported"}
         onChange={handleChange}
       >
-        {/* A wallet chain outside the allow-list shows as a disabled, selected
-            "Unsupported network" entry */}
+        {/* Show an unlisted current chain as selected, disabled "Unsupported network" */}
         {!isSupported && (
           <option value="unsupported" disabled>
             Unsupported network

@@ -1,10 +1,9 @@
 package main
 
-// Command implementations for checkpoint reset, DLQ inspect, retry and dismiss,
-// replication retry, local restore and tx replace. Each takes constructed
-// dependencies and writes progress to an io.Writer instead of reading flags or
-// using os.Stdout, so tests can run them against in-memory repositories and
-// fakes. main.go owns config, connections and flag parsing.
+// Recovery commands take dependencies and an io.Writer for testing with memory stores
+// and fakes. main.go owns configuration, connections and flags. Commands handle
+// transaction replacement, checkpoint reset, DLQ list/inspect/retry/dismiss and IPFS
+// retry/restore.
 
 import (
 	"context"
@@ -23,21 +22,18 @@ import (
 // blockNumberBig converts a block number to the *big.Int HeaderByNumber takes
 func blockNumberBig(n uint64) *big.Int { return new(big.Int).SetUint64(n) }
 
-// opsCtx bundles what a command needs to run and to write its audit entries
+// opsCtx holds command dependencies and audit context
 type opsCtx struct {
 	ctx   context.Context
 	repos *repository.Repositories
 	audit *auditlog.Logger
-	// actor labels audit entries, as set by auditActor, and does not authorize anything
+	// actor attributes audit entries without authorizing actions (auditActor)
 	actor string
 	out   io.Writer
 }
 
-// audited runs op between a durable audit intent and a result entry. If the
-// intent cannot be persisted, op does not run, because a privileged mutation
-// with no durable record of who invoked it is worse than not running it. A
-// failure to write the result entry is only a warning, since the intent already
-// records the invocation.
+// audited requires a durable intent before op, then attempts a linked result write. A
+// failed result write warns and preserves op's outcome.
 func (o opsCtx) audited(action, target string, metadata map[string]any, op func() error) error {
 	intentID, err := o.audit.RecordIntent(o.ctx, "opsctl", o.actor, action, target, metadata)
 	if err != nil {
@@ -57,7 +53,7 @@ func (o opsCtx) audited(action, target string, metadata map[string]any, op func(
 	return opErr
 }
 
-// --- tx replace ---
+// Transaction replacement
 
 func runTxReplace(o opsCtx, txs blockchain.TxManager, signer blockchain.Signer, id string, bumpPercent int64) error {
 	return o.audited("tx.replace", id, map[string]any{"bumpPercent": bumpPercent}, func() error {
@@ -70,14 +66,12 @@ func runTxReplace(o opsCtx, txs blockchain.TxManager, signer blockchain.Signer, 
 	})
 }
 
-// --- indexer checkpoint reset ---
+// Indexer checkpoint reset
 
-// errTrustedHashMismatch means the hash the operator supplied differs from the
-// chain source's header hash at trustedBlock, and the checkpoint is left
-// untouched. Indexer.ResetToTrustedCheckpoint reads the hash from the source
-// itself, so this check against a hash the operator verified elsewhere, such as
-// on a block explorer or another node, stops the reset from trusting the
-// configured RPC endpoint alone.
+// errTrustedHashMismatch rejects a reset before changing the checkpoint when the RPC
+// header differs from the operator's trusted hash. Verify that hash independently
+// (another node or explorer), since ResetToTrustedCheckpoint fetches its hash from the
+// configured RPC.
 var errTrustedHashMismatch = errors.New("opsctl: trusted hash does not match the chain source's header at that block")
 
 func runIndexerResetCheckpoint(o opsCtx, idx *indexer.Indexer, source indexer.ChainSource, trustedBlock uint64, trustedHashHex string) error {
@@ -98,7 +92,7 @@ func runIndexerResetCheckpoint(o opsCtx, idx *indexer.Indexer, source indexer.Ch
 		})
 }
 
-// --- dead letter queue ---
+// Dead-letter queue
 
 func runDLQList(o opsCtx) error {
 	entries, err := o.repos.IndexerDeadLetters.List(o.ctx)
@@ -153,7 +147,7 @@ func runDLQDismiss(o opsCtx, id string) error {
 	})
 }
 
-// --- ipfs replication ---
+// IPFS replication
 
 func runIPFSRetry(o opsCtx, rm *ipfs.ReplicationManager, id string, data []byte) error {
 	return o.audited("ipfs.retry", id, map[string]any{"bytes": len(data)}, func() error {

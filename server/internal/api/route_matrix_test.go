@@ -6,13 +6,10 @@ import (
 	"testing"
 )
 
-// TestRouteAuthorizationMatrix asserts an authorization outcome for every route
-// NewRouter registers. Each route is called without an Authorization header (a
-// missing or invalid admin JWT reads as RoleReadOnly; see auth.Authenticate). A
-// gated route must return 403 before the handler runs, whatever the body or path
-// parameters, because RequireRole is upstream middleware. A public route must not
-// return 403, though it may fail for other reasons (bad params, 404, 501
-// not_configured) that are not authorization decisions.
+// TestRouteAuthorizationMatrix calls every NewRouter route without Authorization,
+// yielding RoleReadOnly. RequireRole must reject gated routes with 403 before their
+// handlers run, regardless of body or path. Public routes may return parameter, 404 or
+// 501 errors, but never an authorization 403.
 func TestRouteAuthorizationMatrix(t *testing.T) {
 	env := setupTestApp(t)
 

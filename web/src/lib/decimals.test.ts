@@ -5,10 +5,7 @@ import type { components } from "./api-types";
 
 type Project = components["schemas"]["Project"];
 
-// When Project.quoteDecimals is present, quote amounts scale from it with no
-// on-chain read; the ERC-20 read runs only when it is absent. readErc20Decimals
-// is the on-chain path, so asserting it was not called proves the project value
-// was used.
+// Prefer Project.quoteDecimals without an on-chain read; use ERC-20 decimals() only when absent
 vi.mock("./wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./wallet")>();
   return { ...actual, readErc20Decimals: vi.fn().mockResolvedValue(18) };

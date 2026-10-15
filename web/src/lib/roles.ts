@@ -7,13 +7,8 @@ type RoleHolders = components["schemas"]["RoleHolders"];
 type Addresses = components["schemas"]["Addresses"];
 
 /**
- * On-chain AccessControl role names, as the server projects them into
- * Project.roles. The UI uses them to gate admin actions by the connected
- * wallet's role.
- *
- * The gate is a convenience, not a security boundary: the contract's `onlyRole`
- * check authorizes every call. Hiding an action the wallet cannot perform only
- * avoids submitting a call that would revert.
+ * Projected role names for UI routing; stale/union holder data is advisory, and contracts enforce
+ * authorization
  */
 export const ROLES = {
   admin: "DEFAULT_ADMIN_ROLE",
@@ -27,20 +22,15 @@ export const ROLES = {
 /** DEFAULT_ADMIN_ROLE is the zero hash, not keccak256("DEFAULT_ADMIN_ROLE") */
 export const DEFAULT_ADMIN_ROLE_HASH = `0x${"0".repeat(64)}` as Hex;
 
-/**
- * The on-chain bytes32 role id for grantRole and revokeRole calls: the keccak256
- * of the role name's UTF-8 bytes, except DEFAULT_ADMIN_ROLE, which is the zero hash.
- */
+/** Role ID is keccak256 of the UTF-8 name, except DEFAULT_ADMIN_ROLE's zero hash */
 export function roleHash(role: string): Hex {
   if (role === ROLES.admin) return DEFAULT_ADMIN_ROLE_HASH;
   return keccak256(toBytes(role));
 }
 
 /**
- * The deployed contracts that hold each role, matching how the server projects
- * holders (server/internal/project/security.go). Grant or revoke a role on
- * every contract in its list so the holders stay consistent. DEFAULT_ADMIN_ROLE
- * is excluded: it changes through the two-step admin transfer, not grantRole.
+ * Role-change targets matching the server's projection model; grant/revoke each listed
+ * contract for consistent holders. DEFAULT_ADMIN_ROLE uses two-step transfer instead.
  */
 export const ROLE_TARGET_FIELDS: Record<string, (keyof Addresses)[]> = {
   [ROLES.pauser]: ["token"],
@@ -59,7 +49,7 @@ export const GRANTABLE_ROLES = [
   ROLES.compliance,
 ] as const;
 
-/** Every governance contract holds DEFAULT_ADMIN_ROLE, so an admin transfer begins on each */
+/** Begin two-step admin transfer on each governance contract */
 export const ADMIN_CONTRACT_FIELDS: (keyof Addresses)[] = [
   "token",
   "compliance",
@@ -111,11 +101,7 @@ export function hasRole(
   return holders.some((h) => h.toLowerCase() === target);
 }
 
-/**
- * Whether the connected wallet holds `role` in the project role map. Returns
- * false while the wallet is disconnected, the roles are unloaded, or the hook
- * runs outside a WalletProvider.
- */
+/** Checks the connected wallet against projected holders; false without roles, wallet or provider */
 export function useHasRole(
   roles: RoleHolders | undefined,
   role: string,

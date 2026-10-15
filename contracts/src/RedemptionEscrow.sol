@@ -18,11 +18,9 @@ import {RWAToken} from "./RWAToken.sol";
 
 /// @title RedemptionEscrow
 /// @notice Cash redemption: request, fund, then permissionless claim
-/// @dev See docs/spec/redemption-state-machine.md. Timed-out cancellation skips pause
-///      and calls RWAToken.returnEscrowedRWA to return this escrow's balance to an Allowed
-///      beneficiary. Only the wired escrow can use that path; other transitions check pause.
-///      AccessControlEnumerable exposes treasurer, redemption-manager and admin holders
-///      for post-deployment verification; see ComplianceRegistry for inheritance overrides.
+/// @dev Timed-out cancellation uses RWAToken.returnEscrowedRWA to repay an Allowed beneficiary
+///      while paused; other transitions check pause. See docs/spec/redemption-state-machine.md.
+///      Enumerable treasurer, redemption-manager and admin roles; see ComplianceRegistry for overrides.
 contract RedemptionEscrow is
     IRedemptionEscrow,
     AccessControlEnumerable,
@@ -154,15 +152,12 @@ contract RedemptionEscrow is
         if (IRWAToken(token).paused()) revert ProjectPaused();
 
         request.status = RedemptionStatus.Completed;
-        // The RWA leg goes through RWAToken.returnEscrowedRWA. It is the platform's own token
-        // with no fee or blacklist behavior, so unlike the quote leg below it needs no delta
-        // check.
+        // RWAToken.returnEscrowedRWA transfers the exact RWA amount without fees;
+        // only the arbitrary quote-token leg below needs a delta check
         RWAToken(token).returnEscrowedRWA(vault, request.rwaAmount);
 
-        // The quote token is an arbitrary configured ERC-20 whose transfer behavior (fee,
-        // blacklist, ...) can change after `fundRedemption` pulled in the exact amount. Measure
-        // the beneficiary's own balance delta instead of trusting `safeTransfer`, so a shortfall
-        // reverts the claim instead of completing it.
+        // Quote-token behavior can change after funding. Check the beneficiary's balance delta
+        // so a short payment reverts the claim even if safeTransfer succeeds.
         uint256 before = IERC20(quoteToken).balanceOf(request.beneficiary);
         IERC20(quoteToken).safeTransfer(request.beneficiary, request.quoteAmount);
         uint256 received = IERC20(quoteToken).balanceOf(request.beneficiary) - before;

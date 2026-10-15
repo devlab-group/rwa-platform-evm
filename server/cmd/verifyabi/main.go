@@ -1,11 +1,7 @@
-// Command verifyabi compares the function selectors and event topic0 hashes in
-// internal/bindings with compiled artifacts under contracts/out.
-//
-// If contracts/out is absent, it prints a notice and exits 0, allowing Go builds
-// and tests without Foundry output. When the directory exists, each checked
-// artifact is required; a missing or unreadable file fails the check.
-//
-// Generated abigen bindings could replace the hand-written literals and this check.
+// Command verifyabi compares internal/bindings selectors and event topic0 hashes with
+// contracts/out artifacts. A missing contracts/out prints a notice and exits 0 so Go
+// needs no Foundry build. Once present, missing or unreadable checked artifacts fail
+// verification.
 package main
 
 import (
@@ -57,10 +53,9 @@ func main() {
 		{"FixedPriceStrategy", filepath.Join(root, "FixedPriceStrategy.sol", "FixedPriceStrategy.json"), func() abi.ABI { return bindings.NewFixedPriceStrategy().ABI }},
 		{"RWAFactory", filepath.Join(root, "RWAFactory.sol", "RWAFactory.json"), func() abi.ABI { return bindings.NewFactory().ABI }},
 		{"RWAToken", filepath.Join(root, "RWAToken.sol", "RWAToken.json"), func() abi.ABI { return bindings.NewRWAToken().ABI }},
-		// The ERC-20 binding is also used for the quote token, but each entry in it
-		// (the ERC-20 views plus the compliance(), supplyController(),
-		// redemptionEscrow() and paused() getters) is declared by RWAToken, so
-		// the RWAToken artifact is the one to check it against
+		// The ERC-20 binding is also used for the quote token, but each entry in it (the ERC-20 views
+		// plus the compliance(), supplyController(), redemptionEscrow() and paused() getters) is declared
+		// by RWAToken, so the RWAToken artifact is the one to check it against
 		{"RWAToken (ERC-20 views)", filepath.Join(root, "RWAToken.sol", "RWAToken.json"), func() abi.ABI { return bindings.NewERC20().ABI }},
 	}
 

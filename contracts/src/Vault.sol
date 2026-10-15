@@ -16,11 +16,8 @@ import {IRWAToken} from "./interfaces/IRWAToken.sol";
 import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 
 /// @title Vault
-/// @notice Holds RWA inventory, sells it for one quote token through `buy`, and withdraws sale
-///         proceeds to the treasury.
-/// @dev `AccessControlEnumerable` lets an off-chain verifier enumerate `TREASURER_ROLE` and
-///      `DEFAULT_ADMIN_ROLE` holders on-chain. ComplianceRegistry explains the inheritance
-///      overrides reused below.
+/// @notice Sells RWA inventory for a quote token through buy; withdraws proceeds to treasury
+/// @dev Enumerable TREASURER_ROLE and DEFAULT_ADMIN_ROLE; see ComplianceRegistry for inheritance overrides
 contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRules, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -87,10 +84,8 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
     function withdrawProceeds(uint256 amount) external nonReentrant onlyRole(TREASURER_ROLE) {
         if (IRWAToken(token).paused()) revert ProjectPaused();
 
-        // The quote token is an arbitrary configured ERC-20 whose transfer behavior (fee,
-        // blacklist, ...) can change after deployment. Measure the treasury's own balance delta
-        // instead of trusting `safeTransfer`, so an underpaid withdrawal is never reported as
-        // the full `amount`.
+        // Quote-token behavior can change after deployment. Check the treasury's balance delta
+        // so a short payment reverts even if safeTransfer succeeds.
         uint256 before = IERC20(quoteToken).balanceOf(treasury);
         IERC20(quoteToken).safeTransfer(treasury, amount);
         uint256 received = IERC20(quoteToken).balanceOf(treasury) - before;

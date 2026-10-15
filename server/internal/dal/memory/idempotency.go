@@ -11,8 +11,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// newFencingToken returns a random 128-bit token that identifies one reservation.
-// It is only ever compared for equality.
+// newFencingToken creates a random 128-bit reservation ID, compared only for equality
 func newFencingToken() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -43,16 +42,9 @@ func (r *IdempotencyRepository) Get(ctx context.Context, key string) (*models.Id
 	return &cp, nil
 }
 
-// Reserve runs under r.mu, so exactly one caller gets (nil, true, token, nil) for a
-// key at a time. A record whose ExpiresAt has passed is treated as free, so a
-// reservation that nobody completed or released within ttl blocks the key for ttl
-// at most. Because the check and the overwrite happen under one lock, a second
-// caller arriving right after sees the new pending record and gets (existing,
-// false, "", nil).
-//
-// Each winning Reserve stores a new random token on the record. Complete and
-// Release act only with that token, so a caller whose reservation was taken over
-// cannot finish or cancel the new owner's reservation.
+// Reserve checks expiry and claims under r.mu, returning a fresh token to the winner.
+// TTL permits abandoned-claim takeover; token checks reject superseded Complete/Release
+// calls. See repository.IdempotencyRepository.
 func (r *IdempotencyRepository) Reserve(ctx context.Context, key, method, path, requestHash string, ttl time.Duration) (*models.IdempotencyRecord, bool, string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -73,10 +65,8 @@ func (r *IdempotencyRepository) Reserve(ctx context.Context, key, method, path, 
 	return nil, true, token, nil
 }
 
-// Complete requires the record's current token to equal token. A caller so slow
-// that ttl elapsed and another caller reserved, and possibly completed, the same
-// key gets ErrFencingTokenMismatch and does not overwrite the new owner's
-// response.
+// Complete returns ErrFencingTokenMismatch if takeover changed the stored token,
+// preventing a slow caller from overwriting the new owner's response
 func (r *IdempotencyRepository) Complete(ctx context.Context, key, token string, status int, body []byte) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -89,8 +79,7 @@ func (r *IdempotencyRepository) Complete(ctx context.Context, key, token string,
 	return nil
 }
 
-// Release deletes the reservation for key only if token matches the current one,
-// so a superseded owner cannot delete a later owner's reservation
+// Release deletes only a matching-token reservation, protecting later owners from stale callers
 func (r *IdempotencyRepository) Release(ctx context.Context, key, token string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

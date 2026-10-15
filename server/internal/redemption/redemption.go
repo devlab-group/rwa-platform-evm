@@ -1,10 +1,7 @@
-// Package redemption implements redemption reads. The client builds the
-// investor's request, claim and cancel transactions against RedemptionEscrow
-// and reads the per-amount quote from RedemptionEscrow.previewRedeem. The
-// treasurer's and redemption manager's wallets submit funding and rejection,
-// and RedemptionEscrow's role checks authorize them. This package builds and
-// submits none of these. A request's status is derived only from indexed chain
-// events (see projector.go).
+// Package redemption reads request state derived only from indexed events
+// (projector.go). Clients quote via RedemptionEscrow.previewRedeem; investor wallets
+// submit request/claim/cancel, treasurers fund and redemption managers reject, subject
+// to contract role checks. This package builds or submits none of these transactions.
 package redemption
 
 import (
@@ -19,8 +16,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// Service reads the redemption request model and the live compliance and
-// preview state backing it.
+// Service reads redemption requests and live compliance/preview state
 type Service struct {
 	client         blockchain.Client
 	escrow         bindings.RedemptionEscrow
@@ -30,9 +26,8 @@ type Service struct {
 	complianceAddr common.Address
 }
 
-// New constructs a redemption Service. complianceAddr may be the zero address
-// when compliance is not configured, in which case IsBeneficiaryAllowed returns
-// false without making a call.
+// New constructs a Service; zero complianceAddr makes IsBeneficiaryAllowed return false
+// without a chain call
 func New(client blockchain.Client, escrowAddr common.Address, repo repository.RedemptionRequestRepository, complianceAddr common.Address) *Service {
 	return &Service{
 		client: client, escrow: bindings.NewRedemptionEscrow(), escrowAddr: escrowAddr, repo: repo,
@@ -40,10 +35,9 @@ func New(client blockchain.Client, escrowAddr common.Address, repo repository.Re
 	}
 }
 
-// IsBeneficiaryAllowed calls ComplianceRegistry.isAllowed(address) live and
-// backs api Schemas.Redemption.beneficiaryAllowed. It reports the current
-// status, not the status when the request was made. Funding checks the status
-// again when it executes.
+// IsBeneficiaryAllowed reads live ComplianceRegistry.isAllowed(address) for api
+// Schemas.Redemption.beneficiaryAllowed, not eligibility at request time. Funding
+// independently rechecks eligibility on execution.
 func (s *Service) IsBeneficiaryAllowed(ctx context.Context, address common.Address) (bool, error) {
 	if s.complianceAddr == (common.Address{}) {
 		return false, nil
@@ -59,28 +53,28 @@ func (s *Service) IsBeneficiaryAllowed(ctx context.Context, address common.Addre
 	return s.registry.UnpackIsAllowed(out)
 }
 
-// List returns every redemption request, optionally filtered by status (empty
-// means all), without pagination. API responses use ListPage.
+// List returns all requests matching status (empty means all); API pagination uses
+// ListPage
 func (s *Service) List(ctx context.Context, status string) ([]*models.RedemptionRequest, error) {
 	return s.repo.List(ctx, status)
 }
 
-// ListPage returns one page of requests, newest CreatedAt first, using keyset
-// pagination (see repository.RedemptionRequestRepository.ListPage). cursor is
-// "" for the first page. address optionally filters to one beneficiary (empty
-// means no filter) and is matched case-insensitively by the repository.
+// ListPage uses keyset pagination by newest CreatedAt, with optional status and
+// case-insensitive beneficiary address filters. Empty cursor starts the first page;
+// empty address disables that filter (see
+// repository.RedemptionRequestRepository.ListPage).
 func (s *Service) ListPage(ctx context.Context, status, address, cursor string, limit int) ([]*models.RedemptionRequest, string, error) {
 	return s.repo.ListPage(ctx, status, address, cursor, limit)
 }
 
-// Get returns one redemption request by ID.
+// Get returns one redemption request by ID
 func (s *Service) Get(ctx context.Context, id string) (*models.RedemptionRequest, error) {
 	return s.repo.Get(ctx, id)
 }
 
-// Confirmations returns how many blocks have passed since r's RedemptionFunded
-// event, given currentBlock (typically the indexer's last scanned block). It is
-// zero unless r is Funded.
+// Confirmations returns currentBlock - FundedAtBlock for Funded requests with a nonzero
+// funding block no later than currentBlock, otherwise 0. currentBlock usually comes
+// from the indexer checkpoint.
 func Confirmations(r *models.RedemptionRequest, currentBlock uint64) uint64 {
 	if r.Status != models.RedemptionFunded || r.FundedAtBlock == 0 || currentBlock < r.FundedAtBlock {
 		return 0

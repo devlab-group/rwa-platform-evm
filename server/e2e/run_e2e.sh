@@ -1,28 +1,16 @@
 #!/usr/bin/env bash
-# Black-box API E2E: the platform server against anvil.
-#
-# Starts anvil, MongoDB (a single-node replica set) and IPFS. Deploys only the
+# API E2E against Anvil, single-node MongoDB replica set and IPFS. Bootstrap only
 # RWAFactory (contracts/script/DeployFactory.s.sol) and a quote token
-# (DeployTestToken.s.sol), and starts the platform server with the factory address
-# as its bootstrap config. e2e/harness then drives the lifecycle over the HTTP API
-# (api/openapi.yaml) and acts as the admin's wallet. It broadcasts
-# RWAFactory.deploy(config) and polls GET /api/v1/project until the server's
-# deployment projector has observed ProjectDeployed, verified the stack and marked
-# it Active. It then runs a wallet-ownership challenge, a compliance allow, an asset
-# record, the .rwa package download, an offline signature from the signer CLI, a
-# broadcast of SupplyController.mint(attestation, signature), and a poll until the
-# record is Minted. It continues with a buy, a redemption request, funding and a
-# claim, a second request that times out and is cancelled, and the ERC-7943
-# enforcement checks. It checks the server's read models at each step, not only
-# transaction receipts.
+# (DeployTestToken.s.sol).
 #
-# The harness is a Go program (see e2e/harness/main.go), so waiting for the server
-# and the API calls need no curl or wget.
+# The Go e2e/harness/main.go acts as the admin wallet: deploy and verify the stack,
+# prove ownership, allow compliance, create/sign/mint an asset, buy, redeem/fund/claim,
+# time out/cancel, and check ERC-7943 enforcement. Assertions poll server read models,
+# not just receipts; HTTP calls and readiness need no curl or wget.
 #
 # Usage: bash e2e/run_e2e.sh
-# On exit, pass or fail, it stops anvil and the platform server and removes the
-# mongo and ipfs containers, as contracts/script/e2e.sh does. The exception is
-# E2E_KEEP_UP, below.
+# Stops Anvil/platform and removes Mongo/IPFS containers on exit, except successful
+# E2E_KEEP_UP runs (see below).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,9 +44,8 @@ IPFS_IMAGE="${E2E_IPFS_IMAGE:-ipfs/kubo:latest}"
 IPFS_API_PORT="${E2E_IPFS_API_PORT:-5001}"
 IPFS_CONTAINER="rwa-e2e-ipfs-$$"
 
-# RWAFactory requires redemptionTimeout of at least 1 day. The harness advances
-# anvil's time with evm_increaseTime, so the timeout and cancel step does not wait
-# however long the timeout is.
+# RWAFactory requires at least a 1-day redemptionTimeout; evm_increaseTime lets the
+# harness test timeout/cancel without waiting
 REDEMPTION_TIMEOUT="${REDEMPTION_TIMEOUT:-86400}"
 
 # Anvil's default accounts 0 and 1. Account 0 holds every role in the ProjectConfig
@@ -70,19 +57,16 @@ INVESTOR_PK="${INVESTOR_PK:-59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4
 DEPLOYER_PK="${DEPLOYER_PK#0x}"
 INVESTOR_PK="${INVESTOR_PK#0x}"
 
-# The off-chain project identity: a UUID that the Asset Profile and, hashed with
-# keccak256, the on-chain ProjectConfig.projectId share. The server binds the
-# ProjectDeployed event to the profile through it, so any UUID works as long as the
-# profile and the harness use the same one.
+# The profile and harness share this UUID; its keccak256 is on-chain
+# ProjectConfig.projectId. The server uses it to bind ProjectDeployed to the profile.
 PROJECT_ID_UUID="${E2E_PROJECT_ID:-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee}"
 
 ANVIL_PID=""
 PLATFORM_PID=""
 
-# E2E_KEEP_UP, when set and not 0, skips the teardown after a successful run and
-# prints the stack's addresses. A failed run is always torn down. Other suites, such
-# as web's Playwright live-smoke.spec.ts, can then use the running server as their
-# BASE_URL.
+# Nonzero, nonempty E2E_KEEP_UP preserves a successful stack and prints its addresses
+# for other suites' BASE_URL, such as web's live-smoke.spec.ts. Failed runs always tear
+# down.
 keep_up_requested() {
     [[ -n "${E2E_KEEP_UP:-}" && "${E2E_KEEP_UP}" != "0" ]]
 }
@@ -177,10 +161,9 @@ if [[ "${mongo_ready}" != "true" ]]; then
     exit 1
 fi
 
-# the indexer's atomic CommitChunk uses multi-document transactions, which need a
-# replica set. Run a single-node rs0 as docker/docker-compose.yml does and not a
-# standalone mongod, initiate it, and wait for the node to be elected writable
-# primary before the server connects.
+# Atomic CommitChunk needs MongoDB transactions. Start single-node rs0 as
+# docker/docker-compose.yml does, initiate it and wait for a writable primary before
+# connecting the server.
 docker exec "${MONGO_CONTAINER}" mongosh --quiet --eval \
     "rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27017'}]})" >/dev/null 2>&1 || true
 mongo_primary=false
@@ -309,22 +292,18 @@ fi
 echo "quoteToken=${QUOTE_TOKEN}"
 
 echo "=== [7/9] (no project seeding: the harness deploys the project through the factory) ==="
-# The project stack (token, compliance, supplyController, vault, escrow, strategy)
-# is not deployed or seeded here. The harness broadcasts RWAFactory.deploy(config),
-# and the server's deployment projector (project.Service.ReconcileDeployment)
-# observes the ProjectDeployed event, verifies the stack and creates the Active
-# Project record, as it does in production.
+# The harness deploys the full stack through RWAFactory.deploy(config);
+# ReconcileDeployment observes ProjectDeployed, verifies it and stores the Active
+# project, matching production
 
 echo "=== [8/9] starting the platform server (API + embedded web SPA) on ${BASE_URL} ==="
-# Admin auth is a wallet signature exchanged for a JWT, with a single admin. The
-# admin wallet is the deployer (anvil account 0), and the harness signs the login
-# challenge with DEPLOYER_PK. Only the JWT signing secret is a config secret.
+# The single admin/deployer is Anvil account 0. The harness signs its login challenge
+# with DEPLOYER_PK; the server issues the JWT using security.jwt_secret.
 JWT_SECRET="e2e-jwt-secret-000000000000000000-$$"
 
-# The platform reads one YAML config file passed with --config, including its
-# secrets (see internal/config.LoadFile). It is written to WORKDIR, so it is removed
-# with the rest of the run. The environment stays "development" (the default), so
-# the production checks do not apply to this local run.
+# Write the --config YAML, including secrets, under WORKDIR for automatic cleanup
+# (internal/config.LoadFile). The default development environment skips production
+# checks.
 PLATFORM_CONFIG="${WORKDIR}/platform-config.yaml"
 cat >"${PLATFORM_CONFIG}" <<EOF
 http:
@@ -343,11 +322,10 @@ mongo:
   db: "${MONGO_DB}"
 ipfs:
   api_url: "http://127.0.0.1:${IPFS_API_PORT}"
-# Config holds only the factory address and the block the indexer starts scanning
-# from. The deployed addresses and the auditor come from the Project record in the
-# database, which the server's deployment projector creates once it observes the
-# ProjectDeployed event. compliance_key is the server's only hot key, since the
-# deployment and the auditor-signed mint are broadcast from the admin's wallet.
+# Bootstrap contract settings hold the factory address and scan start. The deployment
+# projector stores stack addresses and auditor in the DB Project after ProjectDeployed.
+# compliance_key is the only server hot key; the admin wallet broadcasts deployment and
+# auditor-signed mint.
 contract:
   factory_address: "${FACTORY}"
   start_block: ${START_BLOCK}
@@ -363,10 +341,9 @@ PLATFORM_PID=$!
 
 echo "=== [9/9] running the HTTP-driven lifecycle harness ==="
 set +e
-# The harness deploys the project itself with RWAFactory.deploy and reads the
-# deployed addresses from GET /api/v1/project. It needs only the quote token, for
-# the ProjectConfig, and the project UUID, whose keccak256 must equal the on-chain
-# projectId. The prices and timeout are the ones it puts in the ProjectConfig.
+# The harness deploys through RWAFactory.deploy and reads addresses from GET
+# /api/v1/project. Supply the quote token and profile UUID (keccak256 becomes
+# projectId); the harness sets prices and timeout in ProjectConfig.
 (cd "${SERVER_DIR}" && \
     E2E_BASE_URL="${BASE_URL}" CHAIN_RPC_URL="${RPC_URL}" CHAIN_ID=31337 \
     DEPLOYER_PK="${DEPLOYER_PK}" INVESTOR_PK="${INVESTOR_PK}" \

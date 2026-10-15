@@ -5,11 +5,9 @@ import (
 	"testing"
 )
 
-// TestBuildPackageIsDeterministic checks that identical inputs produce
-// byte-identical packages, with no timestamp or other varying state.
-// RecordService.BuildPackage in internal/assets rebuilds a package from the
-// record's stored fields on every download and does not keep the package
-// bytes, so the rebuilt bytes must equal what was built before.
+// TestBuildPackageIsDeterministic checks identical inputs produce identical bytes
+// without variable timestamps, since RecordService rebuilds downloads from stored
+// fields
 func TestBuildPackageIsDeterministic(t *testing.T) {
 	td := TypedDataDoc{}
 	b1, h1, err := BuildPackage("MintAttestation", [32]byte{1}, [32]byte{2}, []byte(`{"a":1}`), []byte(`{"b":2}`), td, nil)

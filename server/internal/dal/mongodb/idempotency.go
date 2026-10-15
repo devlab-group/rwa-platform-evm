@@ -15,8 +15,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// newFencingToken returns a random 128-bit token that identifies one reservation.
-// It is duplicated in internal/dal/memory so each backend stays self-contained.
+// newFencingToken creates a random 128-bit reservation token independently of the
+// memory backend
 func newFencingToken() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -31,13 +31,9 @@ func (r *idempotencyRepo) Get(ctx context.Context, key string) (*models.Idempote
 	return getByID[models.IdempotencyRecord](ctx, r.coll, key)
 }
 
-// Reserve atomically replaces an expired _id or inserts an absent one using
-// FindOneAndReplace with upsert and a filter on _id and expiresAt < now.
-// The new record gets a fresh fencing token, CreatedAt and ExpiresAt.
-//
-// A live record does not match the filter, so insertion collides with its unique
-// _id; a losing concurrent takeover gets the same duplicate-key error.
-// Get then returns the existing reservation or response without its token.
+// Reserve uses FindOneAndReplace with upsert on _id and expiresAt < now. New or expired
+// records get fresh tokens and timestamps. A live row or lost takeover collides on _id;
+// return the existing reservation/response with its token cleared.
 func (r *idempotencyRepo) Reserve(ctx context.Context, key, method, path, requestHash string, ttl time.Duration) (*models.IdempotencyRecord, bool, string, error) {
 	now := time.Now().UTC()
 	token, err := newFencingToken()
@@ -52,8 +48,7 @@ func (r *idempotencyRepo) Reserve(ctx context.Context, key, method, path, reques
 	opts := options.FindOneAndReplace().SetUpsert(true)
 	err = r.coll.FindOneAndReplace(ctx, filter, rec, opts).Err()
 	if err == nil || errors.Is(err, mongo.ErrNoDocuments) {
-		// no document matched, so there was no earlier document to return, and the upsert
-		// inserted rec; that is not a failure
+		// ErrNoDocuments means upsert inserted rec without an earlier document to return
 		return nil, true, token, nil
 	}
 	if mongo.IsDuplicateKeyError(err) {
@@ -67,10 +62,8 @@ func (r *idempotencyRepo) Reserve(ctx context.Context, key, method, path, reques
 	return nil, false, "", err
 }
 
-// Complete stores the response on the document with this key and token. If none
-// exists, because Reserve was never called for key or this caller's reservation
-// expired and was taken over, MatchedCount is 0 and it returns
-// ErrFencingTokenMismatch, so it never overwrites another owner's record.
+// Complete matches key and token, returning ErrFencingTokenMismatch when absent or
+// superseded so an old owner cannot overwrite a later reservation
 func (r *idempotencyRepo) Complete(ctx context.Context, key, token string, status int, body []byte) error {
 	res, err := r.coll.UpdateOne(ctx, bson.M{"_id": key, "token": token}, bson.M{"$set": bson.M{"responseStatus": status, "responseBody": body}})
 	if err != nil {
@@ -82,9 +75,8 @@ func (r *idempotencyRepo) Complete(ctx context.Context, key, token string, statu
 	return nil
 }
 
-// Release deletes a reservation that will not be completed, because the response
-// was not cacheable (see the interface doc comment). It matches by key and token,
-// as Complete does.
+// Release deletes a non-cacheable reservation only when key and token match; see
+// IdempotencyRepository.Release
 func (r *idempotencyRepo) Release(ctx context.Context, key, token string) error {
 	res, err := r.coll.DeleteOne(ctx, bson.M{"_id": key, "token": token})
 	if err != nil {

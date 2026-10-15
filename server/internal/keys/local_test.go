@@ -11,9 +11,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// writeTestKeystore writes a go-ethereum keystore file for a fresh key to
-// dir/role.json, encrypted with password, and the password to
-// dir/<passwordFileName>. It returns dir.
+// writeTestKeystore creates a fresh encrypted dir/role.json and dir/<passwordFileName>,
+// returning dir
 func writeTestKeystore(t *testing.T, role, password string, passwordFileName string) string {
 	t.Helper()
 	dir := t.TempDir()

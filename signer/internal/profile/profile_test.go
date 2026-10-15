@@ -102,18 +102,14 @@ func TestValidate_AssetSchemaRejectsForbiddenKeyword(t *testing.T) {
 	}
 }
 
-// jsonUnicodeEscape builds a JSON \u-escape for a code point, e.g. "001b" for
-// ESC. Written this way so no test file in this repo has to carry a raw
-// control character in its source.
+// jsonUnicodeEscape emits a JSON \u escape, e.g. "001b" for ESC, without raw controls
+// in source
 func jsonUnicodeEscape(code string) string {
 	return "\\" + "u" + code
 }
 
-// TestValidate_RejectsControlCharInTokenUnit rejects a control character in a
-// rendered string field at parse time. tokenUnit is the sharp case: the review
-// screen prints it on the same line as the normalized amount, and it is not
-// pinned by the --policy trust root, so a carriage return there could repaint
-// the amount the auditor is confirming.
+// Reject tokenUnit controls before review; profileDigest binding cannot prevent cursor
+// manipulation beside normalized amounts
 func TestValidate_RejectsControlCharInTokenUnit(t *testing.T) {
 	for _, unit := range []string{
 		`USD\r  amount (normalized)  : 1.500000 USD`, // carriage return

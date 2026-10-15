@@ -1,8 +1,5 @@
-// Package dal is the data-access layer. It groups the persistence-agnostic models
-// (internal/dal/models), the storage interfaces (internal/dal/repository), and
-// their MongoDB and in-memory implementations (internal/dal/mongodb,
-// internal/dal/memory). db.go holds the Mongo connection that every entrypoint
-// uses.
+// Package dal groups persistence models, repository interfaces, and MongoDB/in-memory
+// adapters under internal/dal. Connect supplies the shared MongoDB client constructor.
 package dal
 
 import (

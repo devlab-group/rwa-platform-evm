@@ -9,19 +9,15 @@ export interface WalletState {
   switching: boolean;
   error: string | null;
   connect: () => Promise<void>;
-  /** true once both the wallet and the project's chain are known and they differ. */
+  // True when wallet and project chain IDs are known and differ
   chainMismatch: boolean;
-  /** Requests the wallet switch to `expectedChainId` (wallet_switchEthereumChain). */
+  // Requests wallet_switchEthereumChain for expectedChainId
   switchChain: () => Promise<void>;
 }
 
 /**
- * Per-page binding over the app-wide WalletProvider. The connection itself
- * (address, chainId, connect, events) lives in the context; this hook adds the
- * chain-mismatch check against the caller's `expectedChainId` (undefined until
- * the project has loaded) and binds `switchChain` to that chain. lib/wallet.ts
- * checks the chain again right before each read and send, because this state
- * can be stale between a wallet event and a click.
+ * Adds project-chain mismatch and bound switching to WalletProvider state; expectedChainId
+ * is undefined until loaded. lib/wallet.ts rechecks live chain before reads/sends.
  */
 export function useWallet(expectedChainId: number | undefined): WalletState {
   const wallet = useWalletContext();

@@ -11,9 +11,8 @@ import (
 	"github.com/multiformats/go-multihash"
 )
 
-// ComputeCIDv1Raw returns the CIDv1 (raw codec, sha2-256) string for data.
-// ReplicationManager uses it to re-derive the CID from retrieved bytes instead
-// of trusting a destination's report of what it stored.
+// ComputeCIDv1Raw derives CIDv1/raw/sha2-256 from bytes so ReplicationManager can
+// verify retrieved content independently of a destination's report
 func ComputeCIDv1Raw(data []byte) (string, error) {
 	mh, err := multihash.Sum(data, multihash.SHA2_256, -1)
 	if err != nil {
@@ -22,12 +21,9 @@ func ComputeCIDv1Raw(data []byte) (string, error) {
 	return gocid.NewCidV1(gocid.Raw, mh).String(), nil
 }
 
-// FileArchiveClient is a Client that stores each block as one file named by its
-// URL-escaped CID in a local directory. It writes plain files, not a CAR
-// archive. Restoring a lost IPFS repository means re-adding each file's bytes
-// through AddRaw (see ReplicationManager.RestoreLocal), and the directory can be
-// copied like any other storage. Because it needs no Kubo node, integration
-// tests use it to simulate losing the local repository and restoring it.
+// FileArchiveClient stores plain files named by URL-escaped CIDs in a directory, not a
+// CAR archive. Copy the directory for backup; RestoreLocal re-adds file bytes through
+// AddRaw after repository loss. Tests need no Kubo node.
 type FileArchiveClient struct {
 	dir string
 }
@@ -58,11 +54,9 @@ func (c *FileArchiveClient) AddRaw(ctx context.Context, data []byte) (string, er
 	return cid, nil
 }
 
-// writeBlockDurably writes data so a crash cannot leave a truncated block at the
-// CID path. It writes a temp file in the same directory, fsyncs it, renames it
-// to the CID path (atomic on one filesystem), fsyncs the directory so the rename
-// is durable, then reads the file back and checks its digest. A crash before
-// the rename leaves only a stray temp file.
+// writeBlockDurably writes and fsyncs a same-directory temp file, atomically renames
+// it, fsyncs the directory, then verifies read-back content against its CID. A
+// pre-rename crash may leave a temp file but no truncated CID file.
 func (c *FileArchiveClient) writeBlockDurably(cid string, data []byte) error {
 	final := c.blockPath(cid)
 	tmp, err := os.CreateTemp(c.dir, ".tmp-"+url.PathEscape(cid)+"-*")
@@ -70,7 +64,7 @@ func (c *FileArchiveClient) writeBlockDurably(cid string, data []byte) error {
 		return fmt.Errorf("ipfs: archive create temp file: %w", err)
 	}
 	tmpPath := tmp.Name()
-	// removes the temp file on a failure path; after the rename it is a no-op
+	// Clean up failed temp files; after rename the temp path no longer exists
 	defer os.Remove(tmpPath)
 
 	if _, err := tmp.Write(data); err != nil {
@@ -106,7 +100,7 @@ func (c *FileArchiveClient) writeBlockDurably(cid string, data []byte) error {
 	return nil
 }
 
-// syncDir fsyncs a directory, which a rename needs to survive a crash on POSIX
+// syncDir fsyncs the directory to persist a POSIX rename across crashes
 func syncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {

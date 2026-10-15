@@ -16,8 +16,8 @@ func TestDecodeProceedsWithdrawn(t *testing.T) {
 	caller := common.HexToAddress("0x0000000000000000000000000000000000000055")
 	amount := big.NewInt(123456)
 
-	// treasury + caller are indexed (topics 1,2, declaration order); quoteAmount
-	// is the only non-indexed field, so it lives in log.Data.
+	// treasury/caller use topics 1/2 in declaration order; non-indexed quoteAmount uses
+	// log.Data
 	data, err := v.ABI.Events["ProceedsWithdrawn"].Inputs.NonIndexed().Pack(amount)
 	if err != nil {
 		t.Fatal(err)

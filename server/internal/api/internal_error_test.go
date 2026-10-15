@@ -15,9 +15,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// leakyErr stands in for what the Mongo driver, the chain RPC client and the IPFS
-// client put in an error (hosts, ports, endpoint URLs, collection names). None of
-// it may reach an HTTP response.
+// leakyErr models Mongo, RPC and IPFS errors containing hosts, ports, endpoint URLs or
+// collection names. None may appear in HTTP responses.
 var leakyErr = errors.New(
 	`server selection error: connection() error occurred during connection handshake: ` +
 		`dial tcp 10.4.2.17:27017: connect: connection refused, rs: rwa-rs0, db: rwa_platform, collection: transactions`)

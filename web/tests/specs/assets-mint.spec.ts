@@ -74,9 +74,8 @@ test.describe("Assets - create record and mint via auditor signature", () => {
   });
 
   test("prefills the Metadata editor from the profile's assetSchema", async ({ page, api }) => {
-    // Seed a stored profile whose assetSchema declares two fields; the
-    // Create-record metadata editor should open with a skeleton built from that
-    // schema instead of an empty object
+    // Seed two assetSchema fields; the Create-record editor must initialize metadata
+    // from that schema's skeleton
     api.createdProfiles.set("proj-schema", {
       profileDigest: "0xdig",
       tokenDecimals: 18,

@@ -1,6 +1,5 @@
-// Package config loads the YAML file selected by --config and validates resolved values.
-// The file contains secrets; the operator must protect its permissions.
-// LoadFile and LoadFromMap share defaults and validation through the same engine.
+// Package config loads --config YAML with shared LoadFile/LoadFromMap defaults and
+// validation. Operators must protect the file's secrets with appropriate permissions.
 package config
 
 import (
@@ -18,8 +17,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Environment selects production checks or development defaults;
-// application startup separately checks repository and RPC availability
+// Environment selects validation rules; startup separately checks repository and RPC
+// availability
 type Environment string
 
 const (
@@ -46,8 +45,8 @@ type Config struct {
 	// ExplorerURL supplies the base for transaction links; empty disables them
 	ExplorerURL string
 
-	// FactoryAddress is the bootstrap deployment entry point, optionally empty.
-	// Deployed addresses and auditor come from the indexed DB Project record.
+	// FactoryAddress optionally selects the deployment entry point. Indexed Project
+	// records supply deployed addresses and auditor.
 	FactoryAddress string
 	// StartBlock is used before a checkpoint exists; 0 scans from genesis
 	StartBlock uint64
@@ -67,9 +66,8 @@ type Config struct {
 	// IPFS (Kubo HTTP API)
 	IPFSAPIURL string
 
-	// Backup destinations add publication replication beyond the primary Kubo node.
-	// Without backups, development uses the primary pinner alone.
-	// IPFSBackupArchiveDir adds a filesystem content archive as a backup destination
+	// IPFSBackupArchiveDir adds filesystem replication beyond the primary Kubo node.
+	// Without backups, development uses only the primary pinner.
 	IPFSBackupArchiveDir string
 	// IPFSBackupKuboURL adds a second Kubo destination
 	IPFSBackupKuboURL string
@@ -116,7 +114,7 @@ type Config struct {
 	KYCOnfidoWorkflowID   string
 	KYCOnfidoReferrer     string
 
-	// MaxRequestBodyBytes bounds request bodies; 0 disables the limit
+	// MaxRequestBodyBytes caps bodies; non-positive values disable it
 	MaxRequestBodyBytes int64
 
 	// RateLimitRPS and RateLimitBurst set the global per-IP bucket;
@@ -124,9 +122,9 @@ type Config struct {
 	RateLimitRPS   float64
 	RateLimitBurst int
 
-	// TrustedProxies lists forwarding proxies as IPs/CIDRs. Empty trusts none,
-	// so client-IP limits use RemoteAddr rather than caller-supplied forwarding headers.
-	// Configure actual reverse-proxy addresses when deployed behind one.
+	// TrustedProxies lists trusted forwarding IPs/CIDRs. Empty uses RemoteAddr for rate
+	// limits, ignoring caller-supplied forwarding headers. Behind a reverse proxy,
+	// configure its actual addresses.
 	TrustedProxies []string
 
 	// CORSAllowedOrigins lists permitted scheme/host/port origins, such as the investor SPA.
@@ -192,9 +190,8 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	return load(func(key string) (string, bool) { v, ok := env[key]; return v, ok })
 }
 
-// fileSchema is the YAML representation flattened for shared validation.
-// Pointers distinguish omitted numeric/boolean settings from explicit zero/false;
-// empty strings use defaults.
+// fileSchema maps YAML to shared validation. Pointers preserve explicit numeric/boolean
+// zeroes; empty strings use defaults.
 type fileSchema struct {
 	Environment string `yaml:"environment"`
 
@@ -301,8 +298,8 @@ type fileSchema struct {
 	} `yaml:"production_overrides"`
 }
 
-// toEnvMap preserves supplied values, including explicit numeric/boolean zeroes,
-// while omitted settings fall through to defaults
+// toEnvMap preserves explicit numeric/boolean zeroes and supplied values; omitted
+// settings use defaults
 func (f fileSchema) toEnvMap() map[string]string {
 	m := map[string]string{}
 	setStr := func(key, v string) {
@@ -781,8 +778,8 @@ var weakProductionSecrets = map[string]bool{
 	"00000000000000000000000000000000": true,
 }
 
-// validateProductionSecrets checks JWT and active generic-webhook secret length and placeholders.
-// The blocklist also rejects weak values that meet the length floor.
+// validateProductionSecrets enforces JWT and active generic-webhook minimum lengths,
+// rejecting blocklisted placeholders even above the floor
 func validateProductionSecrets(cfg Config) error {
 	if len(cfg.JWTSecret) < MinProductionSecretBytes {
 		return fmt.Errorf("config: JWT_SECRET must be at least %d bytes in production, got %d", MinProductionSecretBytes, len(cfg.JWTSecret))

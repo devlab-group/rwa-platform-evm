@@ -1,8 +1,7 @@
-// Package compliance implements wallet-ownership challenges, the KYC webhook
-// and compliance status transaction submission. It does not decide KYC
-// outcomes. It proves that a wallet is controlled by whoever claims it before a
-// webhook may update that wallet, and it relays an already-decided status to
-// ComplianceRegistry with the compliance hot key.
+// Package compliance proves wallet ownership, processes KYC webhooks and relays
+// provider-decided status to ComplianceRegistry with the compliance hot key. Webhooks
+// require ownership proof unless allowManualOverride is set; the package does not
+// decide KYC outcomes.
 package compliance
 
 import (
@@ -22,26 +21,25 @@ import (
 	"github.com/rwa-platform/server/internal/eip712"
 )
 
-// ErrChallengeUsed is returned by VerifyChallenge for a replayed challenge
+// ErrChallengeUsed is returned by Verify for a replayed challenge
 var ErrChallengeUsed = errors.New("compliance: challenge already used")
 
-// ErrChallengeExpired is returned by VerifyChallenge for an expired challenge
+// ErrChallengeExpired is returned by Verify for an expired challenge
 var ErrChallengeExpired = errors.New("compliance: challenge expired")
 
 // ErrAddressMismatch is returned when the recovered signer does not match
 // the address the challenge was issued for
 var ErrAddressMismatch = errors.New("compliance: recovered signer does not match challenge address")
 
-// ErrTooManyActiveChallenges is returned by Create when address already has
-// MaxActiveChallengesPerAddress challenges that are neither used nor expired.
-// The caller should wait for one to be used or to expire.
+// ErrTooManyActiveChallenges means Create counted at least
+// MaxActiveChallengesPerAddress unused, unexpired challenges. Wait for one to be used
+// or expire.
 var ErrTooManyActiveChallenges = errors.New("compliance: too many active challenges for this address")
 
-// DefaultMaxActiveChallengesPerAddress is the default for
-// ChallengeService.MaxActiveChallengesPerAddress. Anyone can request a
-// challenge for any valid address, and each request stores a document. The cap
-// bounds that storage immediately, while the TTL index on wallet_challenges
-// (internal/dal/mongodb) only reclaims it after expiry.
+// DefaultMaxActiveChallengesPerAddress sets Create's active-count threshold for public
+// challenge requests. The check precedes insertion without an atomic reservation, so
+// concurrent requests may exceed it. MongoDB's wallet_challenges TTL index later
+// removes expired documents.
 const DefaultMaxActiveChallengesPerAddress = 20
 
 // ChallengeService issues and verifies single-use wallet-ownership challenges
@@ -50,17 +48,15 @@ type ChallengeService struct {
 	investors repository.InvestorRepository
 	ttl       time.Duration
 	domain    string
-	// MaxActiveChallengesPerAddress caps how many unused, unexpired challenges
-	// an address may hold. Create returns ErrTooManyActiveChallenges beyond it,
-	// and a value <= 0 removes the cap. NewChallengeService sets it to
-	// DefaultMaxActiveChallengesPerAddress.
+	// MaxActiveChallengesPerAddress is Create's pre-insert count limit for unused,
+	// unexpired challenges. At the limit it returns ErrTooManyActiveChallenges; <= 0
+	// disables checking. The constructor uses DefaultMaxActiveChallengesPerAddress.
 	MaxActiveChallengesPerAddress int
 }
 
-// NewChallengeService constructs a ChallengeService. domainName opens the
-// human-readable challenge message and is typically the issuer's site name.
-// investors is used only by VerifyOwnership to record the ownership flag, so it
-// may be nil if VerifyOwnership is never called.
+// NewChallengeService uses domainName, typically the issuer site, to open challenge
+// messages. Only VerifyOwnership uses investors, so that repository may be nil when
+// VerifyOwnership is unused.
 func NewChallengeService(repo repository.WalletChallengeRepository, investors repository.InvestorRepository, ttl time.Duration, domainName string) *ChallengeService {
 	return &ChallengeService{
 		repo: repo, investors: investors, ttl: ttl, domain: domainName,
@@ -68,9 +64,8 @@ func NewChallengeService(repo repository.WalletChallengeRepository, investors re
 	}
 }
 
-// Create issues a new challenge for address. The challenge is stored under its
-// nonce, so a client only needs the nonce from the response to complete
-// verification.
+// Create stores a new wallet challenge under its nonce, which Verify uses to retrieve
+// the message for signature verification
 func (s *ChallengeService) Create(ctx context.Context, address string) (*models.WalletChallenge, error) {
 	if !common.IsHexAddress(address) {
 		return nil, fmt.Errorf("compliance: invalid address %q", address)
@@ -110,10 +105,8 @@ func (s *ChallengeService) Create(ctx context.Context, address string) (*models.
 	return c, nil
 }
 
-// Verify checks a personal_sign signature over the challenge identified by
-// nonce, enforcing expiry and single use, and returns the recovered signer. It
-// does not touch the investors repository. VerifyOwnership also records the
-// ownership flag.
+// Verify recovers a personal_sign signer after checking the nonce's challenge, expiry
+// and single use. VerifyOwnership additionally records ownership in investors.
 func (s *ChallengeService) Verify(ctx context.Context, nonce string, signature []byte) (common.Address, error) {
 	c, err := s.repo.Get(ctx, nonce)
 	if err != nil {
@@ -137,8 +130,8 @@ func (s *ChallengeService) Verify(ctx context.Context, nonce string, signature [
 		return common.Address{}, ErrAddressMismatch
 	}
 
-	// MarkUsed is a compare-and-set, so when two requests replay the same
-	// signature only one succeeds and the other gets ErrAlreadyExists
+	// MarkUsed atomically consumes the challenge; concurrent replay losers map
+	// ErrAlreadyExists to ErrChallengeUsed
 	if err := s.repo.MarkUsed(ctx, c.ID); err != nil {
 		if errors.Is(err, repository.ErrAlreadyExists) {
 			return common.Address{}, ErrChallengeUsed
@@ -148,10 +141,9 @@ func (s *ChallengeService) Verify(ctx context.Context, nonce string, signature [
 	return recovered, nil
 }
 
-// VerifyOwnership backs POST /api/v1/compliance/challenge/verify. It verifies
-// the signature with Verify, checks that the claimed address equals the
-// recovered signer, and sets the investor's OwnershipVerified flag, which the
-// KYC webhook requires before accepting a status change for that wallet.
+// VerifyOwnership backs POST /api/v1/compliance/challenge/verify: Verify recovers the
+// signer, the claimed address must match, and OwnershipVerified is stored. Webhooks
+// require this flag unless allowManualOverride is set.
 func (s *ChallengeService) VerifyOwnership(ctx context.Context, address, nonce string, signature []byte) (*models.Investor, error) {
 	recovered, err := s.Verify(ctx, nonce, signature)
 	if err != nil {

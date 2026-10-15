@@ -1,13 +1,10 @@
-// Package auth provides role, idempotency, rate-limit, CORS and security-header
-// middleware for the Gin API.
-//
-// Admin auth is a wallet signature exchanged for a JWT (the BearerJwt scheme in
-// api/openapi.yaml). The admin SPA proves control of the configured admin
-// wallet through POST /auth/challenge and POST /auth/session and receives an
-// HS256 JWT, which it sends as "Authorization: Bearer <jwt>". Authenticate
-// verifies the token and sets the request role, and RequireRole gates the admin
-// routes. Investor routes use a separate, narrower wallet session
-// (SessionManager, X-Wallet-Session header).
+// Package auth provides Gin middleware for roles, idempotency, rate limits, CORS and
+// security headers.
+// The admin SPA exchanges wallet proof through POST /auth/challenge and POST
+// /auth/session for an HS256 JWT, sent as Authorization: Bearer <jwt>
+// (api/openapi.yaml's BearerJwt). Authenticate verifies it; RequireRole gates admin
+// routes. Investors use separate address-bound sessions through SessionManager and
+// X-Wallet-Session.
 package auth
 
 import (
@@ -16,11 +13,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Role is a coarse server-side permission bucket. A request either carries a
-// valid admin JWT (RoleAdmin) or it does not (RoleReadOnly). The finer
-// authorities (auditor, compliance, pricer, treasurer, redemption manager) are
-// enforced by the contracts' own role checks, so the server only gates which
-// HTTP routes a caller may reach.
+// Role gates HTTP access: valid admin JWTs get RoleAdmin; other requests get
+// RoleReadOnly. Contracts separately enforce auditor, compliance, pricer, treasurer and
+// redemption-manager authorities.
 type Role string
 
 const (
@@ -36,20 +31,15 @@ const contextRoleKey = "auth.role"
 // anonymousPrincipal otherwise.
 const contextPrincipalKey = "auth.principal"
 
-// anonymousPrincipal is PrincipalFromContext's value for a request without a
-// valid admin JWT. All anonymous callers share it, which is harmless for
-// idempotency scoping because the routes using Idempotency require RoleAdmin
-// first. Authorization stays with RequireRole.
+// anonymousPrincipal groups requests without valid admin JWTs. Idempotency routes
+// require RoleAdmin first, preventing anonymous cache access; RequireRole owns
+// authorization.
 const anonymousPrincipal = "anonymous"
 
-// Authenticate resolves the caller's role from an "Authorization: Bearer <jwt>"
-// token verified against jwtSecret. A valid admin JWT sets RoleAdmin and
-// records the admin wallet address as the principal. A missing or invalid token
-// falls through to RoleReadOnly, so public routes work without one. RequireRole
-// enforces the per-route gate.
-//
-// An empty jwtSecret means no token can verify, so every request is
-// RoleReadOnly.
+// Authenticate verifies Authorization: Bearer <jwt> against jwtSecret. Valid tokens set
+// RoleAdmin and the wallet principal; missing or invalid tokens retain RoleReadOnly for
+// public access. RequireRole gates protected routes. An empty secret leaves every
+// request RoleReadOnly.
 func Authenticate(jwtSecret []byte) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role := RoleReadOnly

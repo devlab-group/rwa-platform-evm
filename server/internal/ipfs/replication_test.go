@@ -9,8 +9,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// failingClient returns an error from every call, simulating an unavailable
-// backup
+// failingClient returns an error from every call, simulating an unavailable backup
 type failingClient struct{ err error }
 
 func (f *failingClient) AddRaw(ctx context.Context, data []byte) (string, error) { return "", f.err }
@@ -19,9 +18,8 @@ func (f *failingClient) Get(ctx context.Context, cid string) ([]byte, error)    
 
 var _ Client = (*failingClient)(nil)
 
-// wrongCIDClient stores the data but returns a CID other than the one the
-// caller expects from AddRaw, simulating a destination that stores something
-// else. It embeds *FakeClient by pointer so its mutex is never copied.
+// wrongCIDClient stores bytes but reports another CID, testing mismatch handling.
+// Embedding *FakeClient avoids copying its mutex.
 type wrongCIDClient struct{ *FakeClient }
 
 func (w *wrongCIDClient) AddRaw(ctx context.Context, data []byte) (string, error) {
@@ -31,18 +29,16 @@ func (w *wrongCIDClient) AddRaw(ctx context.Context, data []byte) (string, error
 	return "bafkreiWRONGCIDbafkreiWRONGCIDbafkreiWRONGCID", nil
 }
 
-// pinOKRetrieveFailsClient accepts AddRaw and Pin but fails every Get,
-// simulating a destination that reports success without being able to serve the
-// content
+// pinOKRetrieveFailsClient accepts AddRaw/Pin but fails Get, simulating pinned content
+// that cannot be served
 type pinOKRetrieveFailsClient struct{ *FakeClient }
 
 func (p *pinOKRetrieveFailsClient) Get(ctx context.Context, cid string) ([]byte, error) {
 	return nil, errors.New("simulated: content not actually retrievable")
 }
 
-// TestReplicationManagerPublishRejectsWrongReturnedCID checks that a backup
-// whose AddRaw returns a different CID is not counted toward the threshold and
-// that Publish reports it, rather than leaving it for the periodic Verify
+// TestReplicationManagerPublishRejectsWrongReturnedCID requires Publish to report a
+// backup's mismatched AddRaw CID immediately and exclude it from the replication threshold
 func TestReplicationManagerPublishRejectsWrongReturnedCID(t *testing.T) {
 	local := NewFakeClient()
 	backup := &wrongCIDClient{FakeClient: NewFakeClient()}
@@ -68,8 +64,7 @@ func TestReplicationManagerPublishRejectsWrongReturnedCID(t *testing.T) {
 }
 
 // TestReplicationManagerPublishDetectsPinOKRetrieveFailSynchronously checks that
-// a destination that accepts AddRaw and Pin but cannot serve the content is
-// caught at publish time, not only by the periodic Verify
+// publication catches unreadable pinned backups immediately, before periodic Verify
 func TestReplicationManagerPublishDetectsPinOKRetrieveFailSynchronously(t *testing.T) {
 	local := NewFakeClient()
 	backup := &pinOKRetrieveFailsClient{FakeClient: NewFakeClient()}
@@ -152,11 +147,9 @@ func TestReplicationManagerReplicatesToSecondDestination(t *testing.T) {
 	}
 }
 
-// TestReplicationManagerFailureVisibleAndRetryable checks that a backup failure
-// shows in the record (ReplicationFailed or ReplicationPending, LastError set)
-// and in Publish's returned error, and that a later Retry with the same content
-// recovers it. The content is still pinned and verified locally, so the error
-// does not mean the publish was rejected.
+// TestReplicationManagerFailureVisibleAndRetryable checks Publish's error and
+// Failed/Pending LastError, retained local pin/verification, and successful Retry after
+// backup recovery
 func TestReplicationManagerFailureVisibleAndRetryable(t *testing.T) {
 	local := NewFakeClient()
 	flaky := &failingClient{err: errors.New("simulated backup outage")}
@@ -203,9 +196,8 @@ func TestReplicationManagerFailureVisibleAndRetryable(t *testing.T) {
 	}
 }
 
-// TestReplicationManagerPublishRejectsCIDRebind checks that publishing
-// different bytes under an id already bound to a CID is a conflict, not an
-// overwrite
+// TestReplicationManagerPublishRejectsCIDRebind checks that an existing publication ID
+// rejects changed content rather than overwriting its CID
 func TestReplicationManagerPublishRejectsCIDRebind(t *testing.T) {
 	local := NewFakeClient()
 	backup := NewFakeClient()
@@ -231,8 +223,8 @@ func TestReplicationManagerPublishRejectsCIDRebind(t *testing.T) {
 	}
 }
 
-// TestIsDurablyPublishedRejectsWrongExpectedCID checks that a replicated record
-// does not report durable for a CID other than the one it is bound to
+// TestIsDurablyPublishedRejectsWrongExpectedCID checks that replicated status applies
+// only to the record's bound CID
 func TestIsDurablyPublishedRejectsWrongExpectedCID(t *testing.T) {
 	local := NewFakeClient()
 	backup := NewFakeClient()
@@ -251,9 +243,8 @@ func TestIsDurablyPublishedRejectsWrongExpectedCID(t *testing.T) {
 	}
 }
 
-// TestReplicationManagerRetryDoesNotPromoteUnverified checks that Retry re-adds
-// and re-verifies a backup that is Pinned but not Verified, and counts only
-// verified backups toward the threshold
+// TestReplicationManagerRetryDoesNotPromoteUnverified checks that Pinned-but-unverified
+// backups are retried and excluded from the threshold until verification succeeds
 func TestReplicationManagerRetryDoesNotPromoteUnverified(t *testing.T) {
 	local := NewFakeClient()
 	backup := &pinOKRetrieveFailsClient{FakeClient: NewFakeClient()}

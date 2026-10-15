@@ -34,7 +34,7 @@ const complianceRegistryABIJSON = `[
 // ComplianceRegistry encodes calldata / decodes events for IComplianceRegistry.
 type ComplianceRegistry struct{ ABI abi.ABI }
 
-// NewComplianceRegistry parses the ComplianceRegistry ABI once.
+// NewComplianceRegistry parses the ComplianceRegistry ABI
 func NewComplianceRegistry() ComplianceRegistry {
 	return ComplianceRegistry{ABI: mustABI(complianceRegistryABIJSON)}
 }

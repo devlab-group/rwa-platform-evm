@@ -13,14 +13,9 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// perContractClient routes eth_call responses by (contract, calldata) so a
-// test can give the SAME role-enumeration calldata (getRoleMemberCount and
-// getRoleMember are keyed only by role, not by contract) different answers
-// per deployed contract, which the shared FakeClient, keyed only by calldata,
-// cannot. Unstubbed calls fall through to the embedded FakeClient,
-// whose DefaultCallResponse newPerContractClient sets to 32 zero bytes so an
-// un-stubbed getRoleMemberCount reports zero holders (and an un-stubbed
-// hasRole reads false).
+// perContractClient keys eth_call stubs by (contract, calldata), unlike FakeClient's
+// calldata-only keys, and falls back to FakeClient. newPerContractClient defaults to 32
+// zero bytes: no holders and hasRole=false.
 type perContractClient struct {
 	*blockchain.FakeClient
 	byContract map[common.Address]map[string][]byte
@@ -75,10 +70,8 @@ func stubRoleHolders(t *testing.T, c *perContractClient, contract common.Address
 	}
 }
 
-// stubExpectedRoleHolders wires the canonical, all-correct holder set for p
-// (admin as DEFAULT_ADMIN on every contract + PAUSER on token; each
-// operational role on its host contract) so a test can then add ONE
-// unexpected/missing holder and confirm it (and only it) is detected.
+// stubExpectedRoleHolders seeds DEFAULT_ADMIN on every child, PAUSER on token and
+// operational roles on their hosts; tests alter individual holders
 func stubExpectedRoleHolders(t *testing.T, c *perContractClient, p *models.Project) {
 	t.Helper()
 	admin := common.HexToAddress(p.Admin)
@@ -145,8 +138,7 @@ func TestVerifyBytecodeAllPresent(t *testing.T) {
 func TestVerifyBytecodeFalseWhenOneAddressEmpty(t *testing.T) {
 	client := blockchain.NewFakeClient()
 	addrs := sampleAddresses()
-	// Seed all but Strategy, simulating a factory event that points at an
-	// address with nothing actually deployed there.
+	// Omit Strategy to simulate a factory event naming an undeployed address
 	for _, a := range []string{addrs.Token, addrs.Compliance, addrs.SupplyController, addrs.Vault, addrs.RedemptionEscrow} {
 		client.Code[common.HexToAddress(a)] = []byte{0x60, 0x60}
 	}
@@ -181,17 +173,14 @@ func TestVerifyRolesEnumeratesExpectedHolders(t *testing.T) {
 	}
 }
 
-// TestVerifyRolesDetectsUnexpectedHolder checks that a role held by an address
-// not on the allowlist (an attacker granted admin, or a bootstrap holder that
-// never renounced) is reported as unexpected even though every required
-// holder is also present. A candidate-only hasRole check would be structurally
-// blind to this.
+// Enumeration must detect extra holders even when required holders exist;
+// candidate-only hasRole checks miss unauthorized grants and bootstrap roles
 func TestVerifyRolesDetectsUnexpectedHolder(t *testing.T) {
 	c := newPerContractClient()
 	p := sampleRoleProject()
 	stubExpectedRoleHolders(t, c, p)
 	attacker := common.HexToAddress("0x000000000000000000000000000000000000DEAD")
-	// An extra, unauthorized DEFAULT_ADMIN on the token alongside the real admin.
+	// Extra unauthorized DEFAULT_ADMIN alongside the token's real admin
 	stubRoleHolders(t, c, common.HexToAddress(p.Addresses.Token), bindings.DefaultAdminRole, common.HexToAddress(p.Admin), attacker)
 	_, missing, unexpected, err := verifyRoles(context.Background(), c, p)
 	if err != nil {
@@ -205,13 +194,12 @@ func TestVerifyRolesDetectsUnexpectedHolder(t *testing.T) {
 	}
 }
 
-// TestVerifyRolesDetectsMissingHolder: a required holder absent from a
-// contract is reported.
+// Report a required holder missing from a contract
 func TestVerifyRolesDetectsMissingHolder(t *testing.T) {
 	c := newPerContractClient()
 	p := sampleRoleProject()
 	stubExpectedRoleHolders(t, c, p)
-	// Wipe DEFAULT_ADMIN on the vault (no holders enumerated there).
+	// Remove all DEFAULT_ADMIN holders on the Vault
 	stubRoleHolders(t, c, common.HexToAddress(p.Addresses.Vault), bindings.DefaultAdminRole)
 	_, missing, unexpected, err := verifyRoles(context.Background(), c, p)
 	if err != nil {
@@ -243,8 +231,7 @@ func TestVerifyRolesDedupesHolderAcrossMultipleContracts(t *testing.T) {
 	}
 }
 
-// TestVerifyNoFactoryRolesNamesRetainedRole checks that the result names exactly
-// the role and contract the factory still holds
+// Report the exact factory-held role and contract
 func TestVerifyNoFactoryRolesNamesRetainedRole(t *testing.T) {
 	c := newPerContractClient()
 	factory := common.HexToAddress("0xf0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0")

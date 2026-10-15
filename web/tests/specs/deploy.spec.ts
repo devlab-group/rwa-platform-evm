@@ -147,9 +147,8 @@ test.describe("Setup - profile then deploy", () => {
     await expect(setup.createdProfileStatus()).toContainText("Persisted");
     const projectId = await setup.generatedProjectId();
 
-    // A fresh page load shows the stored profile from GET /api/v1/profile
-    // instead of the empty create form, so the profile cannot be created again
-    // from the UI and Deployment stays unlocked
+    // Reload must restore GET /api/v1/profile, prevent a second profile creation and
+    // keep Deployment unlocked
     await setup.goto();
     await expect(setup.createdProfileStatus()).toContainText("Persisted");
     await expect(page.getByLabel("Stored Asset Profile JSON")).toHaveValue(

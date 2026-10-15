@@ -11,9 +11,8 @@ import (
 	"time"
 )
 
-// AuditEvent is one hash-chained line in the tamper-evident keystore audit log. Fields
-// holds non-sensitive metadata only; callers must never pass a password or private key
-// material.
+// AuditEvent is a hash-chained audit-log line. Callers must keep Fields metadata free
+// of passwords and private keys.
 type AuditEvent struct {
 	Seq      int               `json:"seq"`
 	Time     string            `json:"time"` // RFC3339, UTC
@@ -23,9 +22,8 @@ type AuditEvent struct {
 	Hash     string            `json:"hash"`
 }
 
-// AnchorEntry is one line of a keystore's anchor log, a separate record of the sequence
-// number and hash of each AuditEvent, written when the event is durably appended. See
-// DefaultAnchorPath and VerifyAuditLogAnchored.
+// AnchorEntry records an AuditEvent's sequence/hash after its main-log append is
+// synced; see DefaultAnchorPath and VerifyAuditLogAnchored
 type AnchorEntry struct {
 	Seq  int    `json:"seq"`
 	Hash string `json:"hash"`
@@ -34,10 +32,9 @@ type AnchorEntry struct {
 
 func auditLogPath(keystorePath string) string { return keystorePath + ".auditlog.jsonl" }
 
-// DefaultAnchorPath places the anchor beside the keystore. It detects main-log
-// edits or truncation only while the anchor remains intact. Use signer sign
-// --audit-anchor on independently protected media against an attacker who can
-// rewrite both files; see docs/auditor/auditor-guide.md §5.
+// DefaultAnchorPath places the watermark beside the keystore. To detect main-log
+// edits/truncation, protect the anchor independently via signer sign --audit-anchor;
+// another writable copy is insufficient (docs/auditor/auditor-guide.md §5).
 func DefaultAnchorPath(keystorePath string) string { return keystorePath + ".auditlog.anchor.jsonl" }
 
 func auditLockPath(keystorePath string) string { return keystorePath + ".auditlog.lock" }
@@ -45,17 +42,15 @@ func auditLockPath(keystorePath string) string { return keystorePath + ".auditlo
 const (
 	auditLockTimeout      = 30 * time.Second
 	auditLockPollInterval = 50 * time.Millisecond
-	// auditLockStaleAfter is the age at which a lock file is assumed abandoned by a
-	// crashed process and broken. The lock uses only the os package, with no flock or
-	// cgo, which suits a single-operator CLI where concurrent means two signer runs
-	// close together. The lock is held only while one entry is verified and appended.
+	// auditLockStaleAfter permits age-based lock takeover, assuming abandonment without
+	// checking process liveness. The os-only lock needs no flock/cgo and covers one
+	// verify/append, not an entire signing run.
 	auditLockStaleAfter = 2 * time.Minute
 )
 
-// acquireAuditLock exclusively locks the keystore's audit and anchor logs across
-// verification and append, preventing concurrent signer processes from forking
-// the hash chain. The caller must release it. Locks older than auditLockStaleAfter
-// are removed; waiting times out after auditLockTimeout.
+// acquireAuditLock uses exclusive creation to serialize audit/anchor verification and
+// appends. Callers must release it; locks older than auditLockStaleAfter may be
+// removed, and waiting ends at auditLockTimeout.
 func acquireAuditLock(keystorePath string) (release func(), err error) {
 	path := auditLockPath(keystorePath)
 	deadline := time.Now().Add(auditLockTimeout)
@@ -70,7 +65,7 @@ func acquireAuditLock(keystorePath string) (release func(), err error) {
 			return nil, fmt.Errorf("keystore: creating audit log lock %s: %w", path, err)
 		}
 		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > auditLockStaleAfter {
-			os.Remove(path) // break a lock abandoned by a crashed process
+			os.Remove(path) // Assume this old lock was abandoned
 			continue
 		}
 		if time.Now().After(deadline) {
@@ -80,9 +75,8 @@ func acquireAuditLock(keystorePath string) (release func(), err error) {
 	}
 }
 
-// hashEvent computes the chain hash of e over every field except Hash, including
-// PrevHash, so altering any field of an entry, or splicing in a different PrevHash,
-// changes its Hash and breaks the chain from that point on
+// hashEvent hashes every e field except Hash, including PrevHash, so edited contents or
+// links invalidate the stored hash
 func hashEvent(e AuditEvent) (string, error) {
 	e.Hash = ""
 	b, err := json.Marshal(e)
@@ -112,9 +106,8 @@ func readAuditLines(keystorePath string) ([][]byte, error) {
 	return readLines(auditLogPath(keystorePath))
 }
 
-// verifyChain recomputes every entry's hash and checks the hash chain and sequence
-// numbers in lines. It returns the last entry's seq and hash, or (0, "") for an empty
-// log, or an error describing the first broken link.
+// verifyChain checks hashes, links and contiguous sequence numbers, returning the final
+// seq/hash, (0, "") for an empty log, or the first error
 func verifyChain(lines [][]byte) (lastSeq int, lastHash string, err error) {
 	prevHash, prevSeq := "", 0
 	for i, line := range lines {
@@ -140,9 +133,8 @@ func verifyChain(lines [][]byte) (lastSeq int, lastHash string, err error) {
 	return prevSeq, prevHash, nil
 }
 
-// appendDurable appends line (already newline-terminated) to path, creating it if
-// needed, and fsyncs before returning, so the append survives a crash right after the
-// call and does not live only in the OS page cache
+// appendDurable appends a newline-terminated line, creating path if needed, and syncs
+// file contents before returning nil
 func appendDurable(path string, line []byte) error {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -164,10 +156,10 @@ func AppendAuditEvent(keystorePath, event string, fields map[string]string) erro
 	return AppendAuditEventTo(keystorePath, DefaultAnchorPath(keystorePath), event, fields)
 }
 
-// AppendAuditEventTo locks, verifies the full existing chain and appends one
-// hash-chained entry, recording its sequence and hash in anchorPath. Both logs
-// are fsynced before return. The lock covers read, verification and append;
-// the anchor lets VerifyAuditLogAnchored detect deletion of recent main-log entries.
+// AppendAuditEventTo locks, verifies the existing main chain and appends an event plus
+// its sequence/hash anchor. Success syncs both files; anchor failure may leave the main
+// entry persisted. The lock covers read/verify/append; VerifyAuditLogAnchored uses the
+// anchor to detect tail deletion.
 func AppendAuditEventTo(keystorePath, anchorPath, event string, fields map[string]string) error {
 	release, err := acquireAuditLock(keystorePath)
 	if err != nil {
@@ -210,10 +202,9 @@ func AppendAuditEventTo(keystorePath, anchorPath, event string, fields map[strin
 	return nil
 }
 
-// VerifyAuditLog checks every entry's hash, sequence and chain link, returning
-// the first failure. A valid chain detects alterations or reordering relative
-// to neighboring entries but cannot detect removed final lines. Use
-// VerifyAuditLogAnchored to compare the retained length with an anchor.
+// VerifyAuditLog checks hashes, sequences and links, returning the first error.
+// Internal consistency alone cannot detect tail deletion or recomputed history;
+// VerifyAuditLogAnchored compares an intact watermark.
 func VerifyAuditLog(keystorePath string) error {
 	lines, err := readAuditLines(keystorePath)
 	if err != nil {
@@ -226,10 +217,10 @@ func VerifyAuditLog(keystorePath string) error {
 	return nil
 }
 
-// VerifyAuditLogAnchored verifies the chain and compares it with the latest
-// anchor entry to detect truncation before unlock or signing. An absent or
-// empty anchor passes for a new keystore. Protection requires an independently
-// protected anchor; two equally writable files do not establish a security boundary.
+// VerifyAuditLogAnchored checks the main chain against the latest anchor to detect
+// truncation or rewritten history. A missing/empty anchor supplies no watermark and
+// passes. Protect it independently; two equally writable files provide no tamper
+// boundary.
 func VerifyAuditLogAnchored(keystorePath, anchorPath string) error {
 	if err := VerifyAuditLog(keystorePath); err != nil {
 		return err
@@ -254,8 +245,7 @@ func VerifyAuditLogAnchored(keystorePath, anchorPath string) error {
 	if len(mainLines) < lastAnchor.Seq {
 		return fmt.Errorf("keystore: audit log has only %d entries but the anchor log recorded seq=%d; the audit log appears to have been truncated", len(mainLines), lastAnchor.Seq)
 	}
-	// VerifyAuditLog checked that sequence numbers run contiguously from 1, so entry N
-	// is at index N-1
+	// Verified sequences start at 1, so entry N is at N-1
 	var atAnchorSeq AuditEvent
 	if err := json.Unmarshal(mainLines[lastAnchor.Seq-1], &atAnchorSeq); err != nil {
 		return fmt.Errorf("keystore: audit log line %d: %w", lastAnchor.Seq, err)

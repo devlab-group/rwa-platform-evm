@@ -10,10 +10,8 @@ import (
 	"github.com/rwa-platform/signer/internal/ui"
 )
 
-// TestNormalizedAmount_MisleadingDecimals guards the misleading-decimals case: the same
-// raw smallest-unit amount means very different quantities depending on tokenDecimals,
-// so the confirmation screen shows the normalized value instead of leaving the auditor
-// to do that arithmetic
+// Show normalized amounts: identical raw units represent different quantities at
+// different tokenDecimals
 func TestNormalizedAmount_MisleadingDecimals(t *testing.T) {
 	amount := big.NewInt(1000000000000000000) // 1e18 raw units
 

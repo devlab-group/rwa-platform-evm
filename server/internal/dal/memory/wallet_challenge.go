@@ -56,10 +56,8 @@ func (r *WalletChallengeRepository) MarkUsed(ctx context.Context, id string) err
 	return nil
 }
 
-// CountActive counts the unused, unexpired challenges for address with a linear
-// scan. That is fine for tests and local runs, and the MongoDB
-// implementation uses an indexed CountDocuments (see
-// mongodb.walletChallengeRepo.CountActive).
+// CountActive scans unused, unexpired challenges for address. MongoDB uses indexed
+// CountDocuments; see walletChallengeRepo.CountActive.
 func (r *WalletChallengeRepository) CountActive(ctx context.Context, address string, now time.Time) (int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

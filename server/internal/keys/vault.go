@@ -18,25 +18,14 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// vaultProvider signs through the HashiCorp Vault Transit HTTP API, or any
-// Transit-compatible mount, so this server never holds the private key.
-//
-//  1. Stock Vault Transit has no secp256k1 key type (its ECDSA types are
-//     ecdsa-p256, ecdsa-p384 and ecdsa-p521), and Ethereum needs secp256k1.
-//     VaultAddr must point at a backend that implements the Transit wire
-//     protocol for secp256k1, such as a plugin. The provider also expects the
-//     key read response to carry a base64 uncompressed public key, which a
-//     stock Transit ECDSA key does not return.
-//  2. Transit returns a bare (r,s) signature without a recovery id, and
-//     Ethereum also needs v. The provider recovers the public key for both
-//     candidate values of v and keeps the one that matches the key's public
-//     key.
-//
-// Signing requests the latest key version, but the address and public key are
-// fetched at construction and on Reload. After a Transit key rotation, which
-// creates a new keypair, signatures stop matching the cached public key and
-// SignTx fails until Reload or a restart. The on-chain role granted to the old
-// address must also move to the new one.
+// vaultProvider signs remotely through a Transit-compatible secp256k1 backend, such as
+// a plugin, without holding private keys. Stock Transit's ecdsa-p256, ecdsa-p384 and
+// ecdsa-p521 types cannot supply Ethereum's curve. The key response must also provide a
+// base64 uncompressed public key in this provider's required format.
+// The provider derives v from the returned (r,s) by matching the cached public key.
+// Signing uses the latest key version, while construction/Reload caches its address.
+// Rotation makes signatures fail until Reload/restart; migrate on-chain roles from the
+// old address too.
 type vaultProvider struct {
 	http    *http.Client
 	addr    string // Vault server base URL, e.g. https://vault.internal:8200
@@ -65,9 +54,8 @@ func newVaultProvider(role, addr, token, keyPrefix string) (*vaultProvider, erro
 	return p, nil
 }
 
-// transitKeyResponse holds the fields used from GET /v1/transit/keys/:name.
-// PublicKey must be a base64-encoded 65-byte uncompressed secp256k1 point, a
-// backend-specific format described on vaultProvider.
+// transitKeyResponse reads GET /v1/transit/keys/:name; PublicKey must encode a 65-byte
+// uncompressed secp256k1 point as base64, per vaultProvider
 type transitKeyResponse struct {
 	Data struct {
 		LatestVersion int `json:"latest_version"`
@@ -128,8 +116,7 @@ func (p *vaultProvider) Reload(ctx context.Context) error {
 	return p.fetchPublicKey(ctx)
 }
 
-// Close does nothing because the provider never holds private key material,
-// only the public key and signatures
+// Close is a no-op: Vault retains only public keys and signatures in this process
 func (p *vaultProvider) Close() error { return nil }
 
 // transitSignRequest and transitSignResponse model POST /v1/transit/sign/:name
@@ -211,14 +198,9 @@ func (p *vaultProvider) pubKeyBytesSnapshot() []byte {
 // secp256k1HalfN is half the secp256k1 group order, used to canonicalize s
 var secp256k1HalfN = new(big.Int).Rsh(crypto.S256().Params().N, 1)
 
-// recoverableSignature builds the 65-byte R||S||V Ethereum signature from a bare
-// (r,s) pair. It tries both recovery ids and keeps the one that recovers to
-// expectedPubKey.
-//
-// It also lowers s to the lower half of the curve order, as EIP-2 requires for
-// transaction signatures: if s is in the upper half, (r, N-s) is an equally
-// valid signature for the same message and key. A generic ECDSA signer may
-// return a high s, and Ethereum nodes reject it.
+// recoverableSignature converts (r,s) to 65-byte R||S||V, trying both recovery IDs
+// against expectedPubKey. It replaces high s with N-s for EIP-2 low-s transaction
+// signatures, which generic ECDSA signers may not supply.
 func recoverableSignature(digest []byte, r, s *big.Int, expectedPubKey []byte) ([]byte, error) {
 	if s.Cmp(secp256k1HalfN) > 0 {
 		s = new(big.Int).Sub(crypto.S256().Params().N, s)

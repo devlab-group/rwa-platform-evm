@@ -9,10 +9,9 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// bucketTTL is how long a per-IP bucket is kept after its last use. Eviction
-// keeps clients rotating through many source addresses, such as IPv6, from
-// growing the map without bound. The TTL is long enough that an ordinary
-// client does not lose its burst credit between requests.
+// bucketTTL controls retention of idle per-IP buckets, including rotating IPv6
+// addresses. It preserves ordinary clients' burst credit between requests but does not
+// cap the number of active IPs.
 const bucketTTL = 10 * time.Minute
 
 // sweepInterval is the minimum time between eviction passes over all buckets
@@ -23,14 +22,11 @@ type limiterEntry struct {
 	lastUsed time.Time
 }
 
-// RateLimit applies a token bucket per client IP (c.ClientIP) with the given
-// refill rate and burst, and answers 429 once a bucket is empty. Buckets are
-// created on first use and evicted after bucketTTL without traffic.
-//
-// Buckets live in process memory. With several server replicas each replica
-// keeps its own bucket, so the effective limit across the deployment is the
-// configured rate times the replica count. Sharing the state would cost a
-// database round trip on every request to stay atomic.
+// RateLimit uses a per-c.ClientIP token bucket with the configured refill rate and
+// burst, returning 429 when empty. Buckets are created on first use; request-triggered
+// sweeps evict those idle longer than bucketTTL.
+// State is process-local. Across replicas, aggregate permitted traffic can reach the
+// configured rate times the replica count.
 func RateLimit(ratePerSecond float64, burst int) gin.HandlerFunc {
 	handler, _ := newRateLimit(ratePerSecond, burst, bucketTTL, sweepInterval, time.Now)
 	return handler

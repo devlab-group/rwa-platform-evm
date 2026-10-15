@@ -1,11 +1,9 @@
-// Package metrics defines the platform's Prometheus metrics: an HTTP request
-// counter and latency histogram, and gauges for sales inventory, pending
-// redemptions and funded-but-unclaimed redemptions. The redemption gauges
-// cover the conditions that internal/alerts.EvaluatePendingRedemptionSLA and
-// EvaluateFundedClaimFailure alert on, so they can also be graphed over time.
+// Package metrics defines Prometheus HTTP, inventory, redemption, storage, drift and
+// error metrics. Redemption gauges track conditions checked by
+// internal/alerts.EvaluatePendingRedemptionSLA and EvaluateFundedClaimFailure.
 //
-// Handler is served on its own listener (cmd/platform, METRICS_ADDR) and not on
-// the public API port, because /metrics is unauthenticated.
+// cmd/platform serves the unauthenticated /metrics handler on a separate METRICS_ADDR
+// listener.
 package metrics
 
 import (
@@ -29,9 +27,8 @@ var (
 		Buckets: prometheus.DefBuckets,
 	}, []string{"method", "path"})
 
-	// SalesInventoryTokens is the Vault's RWA token inventory available for
-	// sale in whole tokens, as a float, so it can lose precision. It is for
-	// dashboards only.
+	// SalesInventoryTokens is the Vault's sale inventory in whole tokens; its float
+	// representation can lose precision and is for dashboards only
 	SalesInventoryTokens = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "rwa_sales_inventory_tokens", Help: "Vault RWA token inventory available for sale (whole tokens).",
 	})
@@ -50,35 +47,28 @@ var (
 		Name: "rwa_alerts_fired_total", Help: "Alerts raised, by kind. A condition that persists is counted again on every check.",
 	}, []string{"kind"})
 
-	// StorageUp is 1 when the last periodic MongoDB ping succeeded and 0
-	// otherwise, so operators can alert on database degradation. The ping
-	// ticker in cmd/platform starts only with MongoDB persistence, so the gauge
-	// reads 0 until the first ping and stays 0 in memory mode.
+	// StorageUp is 1 if the last periodic MongoDB ping succeeded, otherwise 0. It starts
+	// at 0 and stays there in memory mode, where cmd/platform runs no ping ticker.
 	StorageUp = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "rwa_storage_up", Help: "1 if the last periodic MongoDB ping succeeded, 0 otherwise.",
 	})
 
-	// ConfigDrift is 1 when the last config-drift check found on-chain wiring
-	// that differs from the project record (see project.CheckConfigDrift) and 0
-	// when it matched. It is a gauge because drift is a standing condition that
-	// stays 1 until the wiring or the record is corrected. It reads 0 until the
-	// first check, and a check that fails to read the chain leaves it unchanged.
+	// ConfigDrift is 1 when project.CheckConfigDrift last found wiring differences,
+	// otherwise 0. It starts at 0, stays set until a successful check finds no drift, and
+	// is unchanged on read errors.
 	ConfigDrift = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "rwa_config_drift", Help: "1 if the last config-drift check found on-chain wiring that no longer matches the project record, 0 otherwise.",
 	})
 
-	// IdempotencyOutboxErrorsTotal counts IdempotencyRepository.Complete and
-	// Release calls that failed after the handler had run and responded. A
-	// nonzero rate means some Idempotency-Key reservations are stuck pending, and
-	// retries get 409 until the TTL expires although the side effect already
-	// ran.
+	// IdempotencyOutboxErrorsTotal counts failed IdempotencyRepository.Complete and
+	// Release calls after the handler responds. Failures may leave Idempotency-Key
+	// reservations pending, causing 409 retries until TTL expiry.
 	IdempotencyOutboxErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "rwa_idempotency_outbox_errors_total", Help: "Idempotency store Complete/Release calls that failed after the handler already ran, by phase.",
 	}, []string{"phase"})
 
-	// ReadModelReconcileErrorsTotal counts reconciler ticks that returned an
-	// error, by reconciler name. A sustained nonzero rate means a read model is
-	// not converging, for example because a database error stalls its rebuild.
+	// ReadModelReconcileErrorsTotal counts failed reconciler ticks by name; repeated
+	// errors, such as database failures, may stall convergence
 	ReadModelReconcileErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "rwa_read_model_reconcile_errors_total", Help: "Read-model reconciler ticks that returned an error, by reconciler name.",
 	}, []string{"reconciler"})
@@ -89,11 +79,9 @@ func Handler() http.Handler {
 	return promhttp.Handler()
 }
 
-// GinMiddleware records rwa_http_requests_total and
-// rwa_http_request_duration_seconds for every request on the API router. The
-// path label is the registered route template from c.FullPath(), such as
-// "/api/v1/redemptions/:id", so per-request values like an id do not multiply
-// the label values.
+// GinMiddleware records rwa_http_requests_total and rwa_http_request_duration_seconds
+// for requests reaching it. Path labels use c.FullPath() route templates or "unmatched"
+// to avoid per-ID label growth.
 func GinMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -101,7 +89,7 @@ func GinMiddleware() gin.HandlerFunc {
 
 		path := c.FullPath()
 		if path == "" {
-			path = "unmatched" // no registered template, as on the SPA fallback or a 404
+			path = "unmatched" // SPA fallback or 404 without a route template
 		}
 		status := strconv.Itoa(c.Writer.Status())
 		httpRequestsTotal.WithLabelValues(c.Request.Method, path, status).Inc()

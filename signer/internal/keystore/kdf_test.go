@@ -51,8 +51,7 @@ func TestCheckV3KDFStrength_AcceptsPolicyStrengthPBKDF2(t *testing.T) {
 	}
 }
 
-// TestLoad_RejectsLightScryptKeystore checks that a real V3 file with light scrypt
-// parameters is refused before key derivation
+// Reject a real light-scrypt V3 file before deriving its key
 func TestLoad_RejectsLightScryptKeystore(t *testing.T) {
 	key, err := crypto.GenerateKey()
 	if err != nil {
@@ -100,7 +99,7 @@ func TestLoad_RejectsMissingFile(t *testing.T) {
 	}
 }
 
-// --- maximum KDF parameters, shape validation, size caps ---
+// KDF ceilings, shape validation and size caps
 
 func TestCheckV3KDFStrength_RejectsExtremeScryptN(t *testing.T) {
 	extreme := `{"crypto":{"kdf":"scrypt","kdfparams":{"n":1073741824,"r":8,"p":1}}}` // 2^30
@@ -112,7 +111,7 @@ func TestCheckV3KDFStrength_RejectsExtremeScryptN(t *testing.T) {
 }
 
 func TestCheckV3KDFStrength_RejectsExtremeScryptRProduct(t *testing.T) {
-	// N and r meet their individual bounds, but their product exceeds the memory cap
+	// Individual N/r bounds pass, but combined memory exceeds the cap
 	extreme := `{"crypto":{"kdf":"scrypt","kdfparams":{"n":4194304,"r":64,"p":1}}}` // N=2^22, r=64
 	if err := checkV3KDFStrength([]byte(extreme)); err == nil {
 		t.Fatal("expected rejection of a scrypt N*r product exceeding the memory ceiling")
@@ -183,8 +182,7 @@ func TestLoad_RejectsMalformedJSONWithoutPanicking(t *testing.T) {
 	}
 }
 
-// TestDecryptV3Recovered_NeverPanics checks that malformed V3 data passed directly to
-// decryptV3Recovered returns an error instead of panicking
+// Malformed V3 input must return an error from decryptV3Recovered instead of panicking
 func TestDecryptV3Recovered_NeverPanics(t *testing.T) {
 	bogus := []byte(`{"crypto":{"kdf":"scrypt","kdfparams":{"n":131072,"r":8,"p":1,"salt":"00","dklen":32},"ciphertext":"","mac":"","cipher":"aes-128-ctr","cipherparams":{"iv":"00"}},"version":3}`)
 	defer func() {

@@ -14,10 +14,9 @@ import (
 
 type kycEventRepo struct {
 	coll *mongo.Collection
-	// claims is the kyc_claims collection that ClaimLatestForAddress updates, one
-	// document per address with _id=address. It is separate from coll, the append-only
-	// history, so the claim is a single mutable record per address and finding it
-	// needs no query or sort over the history.
+	// claims stores one mutable (occurredAt, eventKey) per address in kyc_claims, keyed by
+	// _id. Keeping it separate from delivery history avoids scanning or sorting history to
+	// find the claim.
 	claims *mongo.Collection
 }
 
@@ -45,16 +44,14 @@ func (r *kycEventRepo) List(ctx context.Context) ([]*models.KYCEvent, error) {
 	return findMany[models.KYCEvent](ctx, r.coll, bson.M{}, options.Find().SetSort(bson.D{{Key: "receivedAt", Value: 1}}))
 }
 
-// ListAppliedWithTx backs the deep-reorg reopen scan and uses the applyStatus
-// index
+// ListAppliedWithTx backs the deep-reorg reopen scan and uses the applyStatus index
 func (r *kycEventRepo) ListAppliedWithTx(ctx context.Context) ([]*models.KYCEvent, error) {
 	filter := bson.M{"applyStatus": models.KYCApplyApplied, "txId": bson.M{"$gt": ""}}
 	return findMany[models.KYCEvent](ctx, r.coll, filter, options.Find().SetSort(bson.D{{Key: "occurredAt", Value: 1}}))
 }
 
 func (r *kycEventRepo) ListPending(ctx context.Context) ([]*models.KYCEvent, error) {
-	// Claiming is included so the reconciler picks up an event whose claim was never
-	// resolved because Process stopped at the claim and finalize step
+	// Include Claiming so the reconciler can finish interrupted claim finalization
 	filter := bson.M{"applyStatus": bson.M{"$in": bson.A{models.KYCApplyClaiming, models.KYCApplyAccepted, models.KYCApplyApplying}}}
 	return findMany[models.KYCEvent](ctx, r.coll, filter, options.Find().SetSort(bson.D{{Key: "occurredAt", Value: 1}}))
 }
@@ -67,13 +64,9 @@ type kycClaim struct {
 	EventKey   string    `bson:"eventKey"`
 }
 
-// ClaimLatestForAddress is the MongoDB implementation of the compare-and-set in
-// KYCEventRepository. The filter matches a claim whose stored (occurredAt,
-// eventKey) is strictly less than the caller's, using the order claimIsNewer
-// defines in the memory implementation: a later occurredAt wins, and on an exact
-// tie the greater eventKey wins. If no claim exists, the upsert inserts one. A
-// duplicate key error means a concurrent claim for a new address inserted first.
-// That claim is at least as new as ours under this order, so we lost.
+// ClaimLatestForAddress conditionally upserts by address, accepting a greater
+// occurredAt or, on a tie, greater eventKey, as claimIsNewer does. Absent claims are
+// inserted; duplicate-key conflicts return false rather than advancing the claim.
 func (r *kycEventRepo) ClaimLatestForAddress(ctx context.Context, address string, occurredAt time.Time, eventKey string) (bool, error) {
 	filter := bson.M{
 		"_id": address,

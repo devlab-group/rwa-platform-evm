@@ -13,14 +13,10 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// kmsMockProvider is a stand-in for a real KMS, for CI and local development.
-// It is not for production, and newKMSMockProvider logs a warning each time it
-// is constructed.
-//
-// With a non-empty seed, the per-role key is keccak256(seed || role), so the
-// address is the same across restarts. An empty seed generates a random key
-// and logs its address; that address changes on every restart, so on-chain role
-// grants made to it go stale.
+// kmsMockProvider is a CI/local KMS stand-in, warning at construction and prohibited by
+// production configuration. A non-empty seed deterministically derives keccak256(seed
+// string || role); empty seeds generate/log a new address, invalidating old role grants
+// after restart.
 type kmsMockProvider struct {
 	role string
 	seed string
@@ -76,8 +72,8 @@ func (p *kmsMockProvider) SignTx(_ context.Context, tx *types.Transaction, chain
 	return types.SignTx(tx, types.LatestSignerForChainID(chainID), p.key)
 }
 
-// Reload re-derives the key from the seed. With an empty seed it generates a
-// new random key and logs the new address
+// Reload re-derives the seeded key or, without a seed, generates and logs a new random
+// address
 func (p *kmsMockProvider) Reload(context.Context) error {
 	return p.derive()
 }

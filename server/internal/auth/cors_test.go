@@ -14,9 +14,8 @@ const (
 	fxOtherOrigin   = "http://evil.example"
 )
 
-// corsRouter builds a router with the CORS middleware in front of a handler
-// that records whether it ran, since several tests check whether the chain
-// continued
+// corsRouter records handler execution behind CORS so tests can check whether
+// middleware continued the chain
 func corsRouter(t *testing.T, origins []string, reached *bool) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)

@@ -14,10 +14,9 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// verifyBytecode reports whether every deployed address has non-empty on-chain
-// code, which catches an empty or wrong address in the factory event. It does
-// not compare the code with a known-good hash, because the server does not
-// bundle the contract build artifacts from contracts/out.
+// verifyBytecode checks for non-empty code at all six deployed child addresses,
+// catching missing deployments. It checks presence, not identity or a known hash; the
+// server does not bundle contracts/out artifacts.
 func verifyBytecode(ctx context.Context, client blockchain.Client, addrs models.Addresses) (bool, error) {
 	for _, a := range []string{addrs.Token, addrs.Compliance, addrs.SupplyController, addrs.Vault, addrs.RedemptionEscrow, addrs.Strategy} {
 		if a == "" {
@@ -34,10 +33,8 @@ func verifyBytecode(ctx context.Context, client blockchain.Client, addrs models.
 	return true, nil
 }
 
-// knownRoles is every role the platform defines. Deployment verification
-// enumerates all of them on every deployed contract, so an unexpected holder of
-// any role on any contract is detected, not only the roles a contract normally
-// uses.
+// knownRoles lists all platform-defined roles; verification checks each on every child
+// contract, including roles that contract normally leaves unused
 var knownRoles = []struct {
 	name string
 	id   [32]byte
@@ -50,14 +47,13 @@ var knownRoles = []struct {
 	{"REDEMPTION_MANAGER_ROLE", bindings.RedemptionManagerRole},
 }
 
-// verifyRoles enumerates each deployed contract's role holders through
-// getRoleMemberCount/getRoleMember and compares them with the signed
-// ProjectConfig allowlist. Enumeration detects unexpected grants and leftover
-// bootstrap holders that hasRole checks on expected addresses would miss.
-// All project contracts expose AccessControlEnumerable.
+// verifyRoles compares each child's getRoleMemberCount/getRoleMember enumeration with
+// the signed ProjectConfig allowlist. All children expose AccessControlEnumerable;
+// enumeration catches unexpected grants and bootstrap holders that expected-address
+// hasRole checks miss.
 //
-// Returns deduplicated holders by role for display, missing expected holders
-// and unexpected actual holders. Either mismatch fails VerifyDeployment.
+// Returns deduplicated holders by role, missing holders and unexpected holders; either
+// mismatch fails VerifyDeployment.
 func verifyRoles(ctx context.Context, client blockchain.Client, p *models.Project) (roles map[string][]string, missing, unexpected []string, err error) {
 	ac := bindings.NewAccessControl()
 	contracts := []struct {
@@ -76,7 +72,7 @@ func verifyRoles(ctx context.Context, client blockchain.Client, p *models.Projec
 	expected := map[string]map[string]map[string]bool{}
 	addExpected := func(cLabel, roleName string, holder common.Address) {
 		if holder == (common.Address{}) {
-			return // an unconfigured optional role holder: its allowlist stays empty, so any actual holder is unexpected
+			return // Unset optional holder: an empty allowlist makes every actual holder unexpected
 		}
 		if expected[cLabel] == nil {
 			expected[cLabel] = map[string]map[string]bool{}
@@ -132,8 +128,7 @@ func verifyRoles(ctx context.Context, client blockchain.Client, p *models.Projec
 			}
 		}
 	}
-	// sort for a deterministic order: map iteration is random, and these feed the
-	// persisted VerificationNote
+	// Sort map-derived entries for deterministic persisted VerificationNote text
 	sort.Strings(missing)
 	sort.Strings(unexpected)
 	for name := range roles {
@@ -142,10 +137,8 @@ func verifyRoles(ctx context.Context, client blockchain.Client, p *models.Projec
 	return roles, missing, unexpected, nil
 }
 
-// enumerateRoleHolders returns every address currently holding role on contract,
-// using AccessControlEnumerable's getRoleMemberCount and getRoleMember. It reads
-// the members one call at a time, which is acceptable because the holder sets
-// are small.
+// enumerateRoleHolders reads AccessControlEnumerable's getRoleMemberCount and then each
+// getRoleMember in separate calls to list role holders on contract
 func enumerateRoleHolders(ctx context.Context, client blockchain.Client, ac bindings.AccessControl, contract common.Address, role [32]byte) ([]common.Address, error) {
 	countData, err := ac.PackGetRoleMemberCount(role)
 	if err != nil {
@@ -179,11 +172,9 @@ func enumerateRoleHolders(ctx context.Context, client blockchain.Client, ac bind
 	return holders, nil
 }
 
-// factoryBootstrapRoles lists the roles the factory must not hold after deploy.
-// RWAFactory takes a bootstrap COMPLIANCE_ROLE on the registry to allowlist the
-// Vault and escrow and renounces it before deploy returns, and it never holds
-// DEFAULT_ADMIN_ROLE. The check covers every role on every contract, so a
-// factory that kept any of them, and could re-wire the deployment, is caught.
+// factoryBootstrapRoles lists known roles the factory must not retain on any child
+// after deployment. Its temporary COMPLIANCE_ROLE allowlists the Vault/escrow and is
+// renounced before deploy returns; it never holds DEFAULT_ADMIN_ROLE.
 var factoryBootstrapRoles = []struct {
 	name string
 	id   [32]byte
@@ -196,11 +187,9 @@ var factoryBootstrapRoles = []struct {
 	{"REDEMPTION_MANAGER_ROLE", bindings.RedemptionManagerRole},
 }
 
-// verifyNoFactoryRoles returns the roles the factory still holds, as
-// "ROLE on Contract" entries in a deterministic order, so an empty result means
-// the factory kept nothing. A factory that kept a role could grant, revoke or
-// use it, which would defeat the configured operators' exclusive control.
-// Checking only DEFAULT_ADMIN_ROLE would miss a retained COMPLIANCE_ROLE.
+// verifyNoFactoryRoles returns retained factory roles as deterministic "ROLE on
+// Contract" entries. Empty means none of the checked roles remain; checking only
+// DEFAULT_ADMIN_ROLE would miss a retained COMPLIANCE_ROLE and its privileges.
 func verifyNoFactoryRoles(ctx context.Context, client blockchain.Client, factoryAddr common.Address, addrs models.Addresses) ([]string, error) {
 	ac := bindings.NewAccessControl()
 	contracts := []struct{ name, addr string }{
@@ -241,14 +230,10 @@ func hasRole(ctx context.Context, client blockchain.Client, ac bindings.AccessCo
 	return ac.UnpackHasRole(out)
 }
 
-// verifySystemAllowlist reports whether the Vault and RedemptionEscrow are pinned
-// system addresses in the compliance registry with a permanent Allowed record.
-// It checks isSystemAddress and the exact (Allowed, validUntil 0) record from
-// getRecord rather than isAllowed, which cannot distinguish a pinned system
-// address from an ordinary wallet that an operator allowed. isSystemAddress is
-// what makes the registry reject any other status or expiry for the address
-// (SystemAddressCannotBeBlocked), and a validUntil of 0 confirms the record
-// cannot lapse.
+// verifySystemAllowlist requires the Vault and RedemptionEscrow to be pinned system
+// addresses with exact getRecord values (Allowed, validUntil 0). isAllowed alone cannot
+// distinguish ordinary allowlisting from pinning. isSystemAddress makes status/expiry
+// changes fail with SystemAddressCannotBeBlocked; validUntil 0 prevents expiry.
 func verifySystemAllowlist(ctx context.Context, client blockchain.Client, addrs models.Addresses) (bool, error) {
 	if addrs.Compliance == "" || addrs.Vault == "" || addrs.RedemptionEscrow == "" {
 		return false, nil
@@ -286,8 +271,7 @@ func verifySystemAllowlist(ctx context.Context, client blockchain.Client, addrs 
 		if err != nil {
 			return false, err
 		}
-		// a system address needs the permanent record: status Allowed and
-		// validUntil exactly 0 (no expiry)
+		// Pinned addresses require Allowed with validUntil 0 (no expiry)
 		if rec.Status != uint8(bindings.ComplianceStatusAllowed) || rec.ValidUntil != 0 {
 			return false, nil
 		}
@@ -295,16 +279,14 @@ func verifySystemAllowlist(ctx context.Context, client blockchain.Client, addrs 
 	return true, nil
 }
 
-// verifyImmutableConfig compares on-chain getters with p: token wiring,
-// cross-contract references, quote token, treasury, auditor, profileDigest,
-// redemptionTimeout, decimals and non-empty price expectations. Adoption uses
-// deploy values; CheckConfigDrift supplies live expectations for mutable fields.
-// The first mismatch returns (false, reason, nil); RPC or decoding failures
-// return an error.
+// verifyImmutableConfig compares getters with p: token wiring, contract references,
+// quote token, treasury, auditor, profileDigest, redemptionTimeout, decimals and
+// non-empty prices. Adoption uses deploy expectations; CheckConfigDrift substitutes
+// mutable values.
 //
-// vaultStrategy supplies the expected Vault.strategy separately from
-// p.Addresses.Strategy, allowing drift checks to use its live projection.
-// The escrow strategy remains compared with the deployed address.
+// vaultStrategy is the separate Vault.strategy expectation; the escrow uses deployed
+// p.Addresses.Strategy. The first mismatch returns (false, reason, nil); RPC, decoding
+// or invalid expected-value errors propagate.
 func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *models.Project, vaultStrategy common.Address) (bool, string, error) {
 	tokenABI := bindings.NewERC20().ABI
 	vaultABI := bindings.NewVault().ABI
@@ -331,9 +313,8 @@ func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *mod
 	}{
 		{"token.compliance", tokenABI, token, "compliance", compliance},
 		{"token.supplyController", tokenABI, token, "supplyController", controller},
-		// RWAToken.returnEscrowedRWA, the escrow's return path that bypasses the
-		// pause, accepts only msg.sender == redemptionEscrow, so a wrong pointer
-		// would misauthorize or break escrow returns
+		// RWAToken.returnEscrowedRWA bypasses pause only for msg.sender == redemptionEscrow;
+		// a wrong pointer misauthorizes or breaks returns
 		{"token.redemptionEscrow", tokenABI, token, "redemptionEscrow", escrow},
 		{"vault.token", vaultABI, vault, "token", token},
 		{"vault.quoteToken", vaultABI, vault, "quoteToken", wantQuoteToken},
@@ -415,12 +396,9 @@ func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *mod
 	return true, "", nil
 }
 
-// The view helpers (viewAddress, viewUint8, viewUint64, viewUint256, viewString,
-// viewBytes32) call a no-argument view function on contract through
-// blockchain.Call, packing the call and unpacking a single-value result with
-// contractABI. They avoid adding a Pack and Unpack method to internal/bindings
-// for every getter that the checks above read, since the ABI literals there
-// already declare the functions.
+// viewAddress, viewUint8, viewUint64, viewUint256, viewString and viewBytes32 pack
+// no-argument views, call blockchain.Call and unpack one result using contractABI.
+// Existing ABI declarations avoid per-getter Pack/Unpack wrappers in internal/bindings.
 func viewAddress(ctx context.Context, client blockchain.Client, contractABI abi.ABI, contract common.Address, method string) (common.Address, error) {
 	out, err := callView(ctx, client, contractABI, contract, method)
 	if err != nil {

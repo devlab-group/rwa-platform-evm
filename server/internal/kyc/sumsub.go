@@ -94,8 +94,8 @@ func (p *sumsubProvider) StartVerification(ctx context.Context, address string) 
 	}, nil
 }
 
-// do signs ts + METHOD + path + body with HMAC-SHA256, including query parameters
-// and the exact transmitted body bytes
+// do signs the exact ts+METHOD+path+body bytes with HMAC-SHA256, including query
+// parameters
 func (p *sumsubProvider) do(ctx context.Context, method, path string, body []byte, out any) error {
 	req, err := http.NewRequestWithContext(ctx, method, p.cfg.BaseURL+path, bytes.NewReader(body))
 	if err != nil {
@@ -226,9 +226,9 @@ func (p *sumsubProvider) verifyDigest(body []byte, headers http.Header) bool {
 	return hmac.Equal(expected, given)
 }
 
-// sumsubEventID prefers correlationId, otherwise combining applicant, event type,
-// review status and timestamp. A timestamp prevents distinct re-reviews from
-// colliding under provider/event-ID deduplication.
+// sumsubEventID uses correlationId, falling back to
+// applicant/type/review-status/timestamp so distinct reviews do not share the
+// deduplication key
 func sumsubEventID(wh sumsubWebhook) (string, error) {
 	if wh.CorrelationID != "" {
 		return wh.CorrelationID, nil
@@ -245,8 +245,8 @@ func sumsubEventID(wh sumsubWebhook) (string, error) {
 	return strings.Join([]string{wh.ApplicantID, wh.Type, wh.ReviewStatus, ts}, "|"), nil
 }
 
-// sumsubOccurredAt parses createdAtMs or the provider's createdAt into Unix seconds,
-// refusing an unusable timestamp instead of substituting local time
+// sumsubOccurredAt parses provider createdAtMs or createdAt into Unix seconds and
+// rejects unusable timestamps without substituting local time
 func sumsubOccurredAt(wh sumsubWebhook) (int64, error) {
 	if wh.CreatedAtMs != "" {
 		if ms, err := strconv.ParseInt(wh.CreatedAtMs, 10, 64); err == nil {

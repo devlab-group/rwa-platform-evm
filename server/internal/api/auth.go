@@ -11,12 +11,9 @@ import (
 	"github.com/rwa-platform/server/internal/auth"
 )
 
-// createAuthChallenge implements POST /auth/challenge (operationId
-// createAuthChallenge).
-// Public step 1 of admin wallet login: issues a single-use, time-limited
-// message for the wallet to personal_sign. Anyone may request one. Authorization
-// is decided in createSession by recovering the signer and comparing it with the
-// admin address, so this step does not reveal whether the address is the admin.
+// createAuthChallenge handles public POST /auth/challenge, issuing a single-use,
+// expiring personal_sign message. Anyone may request one without revealing admin
+// status; createSession authorizes the recovered signer.
 func (app *App) createAuthChallenge(c *gin.Context) {
 	if app.AdminChallenges == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "admin auth is not configured on this server")
@@ -37,11 +34,9 @@ func (app *App) createAuthChallenge(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": message, "expiresAt": expiresAt.Unix()})
 }
 
-// createSession implements POST /auth/session (operationId createSession).
-// Public step 2 of admin wallet login: recovers the signer of the personal_sign
-// signature over the challenge message and, if it equals the configured admin
-// address, issues an HS256 JWT. There is no DELETE counterpart; the JWT is
-// stateless, so logout drops the token on the client.
+// createSession handles public POST /auth/session, exchanging a challenge signature
+// from the configured admin for an HS256 JWT. Logout discards the stateless token on
+// the client; there is no DELETE endpoint.
 func (app *App) createSession(c *gin.Context) {
 	if app.AdminChallenges == nil || len(app.JWTSecret) == 0 || app.AdminAddress == "" {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "admin auth is not configured on this server")
@@ -61,9 +56,9 @@ func (app *App) createSession(c *gin.Context) {
 		return
 	}
 
-	// Verify enforces single use and expiry and recovers the signer. An unknown
-	// or expired challenge, a replay, a bad signature, an address mismatch and a
-	// non-admin signer all return the same 401, so a probe cannot tell them apart
+	// Verify checks expiry, single use and the signer. Unknown or expired challenges,
+	// replays, bad signatures, address mismatches and non-admin signers all receive the
+	// same 401.
 	recovered, err := app.AdminChallenges.Verify(c.Request.Context(), body.Address, sigBytes)
 	if err != nil || !strings.EqualFold(recovered.Hex(), common.HexToAddress(app.AdminAddress).Hex()) {
 		fail(c, http.StatusUnauthorized, CodeUnauthorized, "invalid credentials")

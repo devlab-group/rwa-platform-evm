@@ -12,24 +12,18 @@ import { clearWalletSession, getWalletSession } from "../../lib/walletSession";
 type KYCSession = components["schemas"]["KYCSession"];
 type WalletStatus = components["schemas"]["WalletStatus"];
 
-/** How often the wallet's own status is re-read while waiting for approval. */
+// Own-status polling interval while awaiting approval
 const POLL_INTERVAL_MS = 5_000;
 
-/**
- * How long to keep polling before telling the applicant to come back later.
- * The provider's review time is outside this app's control, and the status is
- * equally visible on the next visit.
- */
+// Bound polling time; provider review may continue after the page closes
 const POLL_TIMEOUT_MS = 3 * 60_000;
 
 const NOT_ENABLED_MESSAGE =
   "KYC verification is not enabled on this deployment.";
 
 /**
- * The applicant's progress through one verification attempt. `submitted` means
- * the provider has the documents. The outcome then arrives out of band
- * (provider, server webhook, on-chain status), so this page can only watch its
- * own wallet status.
+ * Verification progress: submitted means documents reached the provider;
+ * observe wallet status for the webhook/on-chain decision
  */
 type Phase =
   | { kind: "idle" }
@@ -41,12 +35,7 @@ type Phase =
 
 interface Props {
   walletAddress: string | null | undefined;
-  /**
-   * The connected wallet's own status, loaded by the page through its
-   * X-Wallet-Session. `data === null` means there is no live session yet, so
-   * ownership has not been proven. The post-submission poll calls `reload`,
-   * which keeps the KYC status card in sync with this one.
-   */
+  // Own-wallet session status; null means no live session, reload synchronizes polling and KYC card
   ownWalletStatus: {
     status: "loading" | "error" | "success";
     data?: WalletStatus | null;
@@ -55,9 +44,8 @@ interface Props {
 }
 
 /**
- * Starts verification for the session's wallet and mounts the provider SDK.
- * Documents go to the provider; its signed webhook lets the server apply
- * approval on-chain. After SDK completion, poll the wallet's own status.
+ * Starts KYC for the session wallet and mounts its SDK; documents go to the provider.
+ * Poll own status after submission while the server processes the signed webhook.
  */
 export function KycVerificationSection({
   walletAddress,
@@ -65,8 +53,7 @@ export function KycVerificationSection({
 }: Props) {
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
 
-  // Everything below needs a live X-Wallet-Session: the server takes the
-  // wallet from it, so a verification can't be started without one
+  // KYC start requires X-Wallet-Session; the server takes its wallet address from it
   const hasSession =
     ownWalletStatus.status === "success" && ownWalletStatus.data != null;
   const status = complianceDisplayStatus(
@@ -75,38 +62,31 @@ export function KycVerificationSection({
   );
   const decided = status === "Allowed" || status === "Blocked";
 
-  // Reset when the connected wallet changes: a session and a verification each
-  // belong to one address
+  // Reset per-address verification state on wallet changes
   useEffect(() => {
     setPhase({ kind: "idle" });
   }, [walletAddress]);
 
-  /**
-   * One /kyc/start round trip. It returns the session instead of storing it
-   * because Sumsub's expiration handler also uses it: an expired token is
-   * replaced mid-flow without remounting the widget.
-   */
+  // Returns a /kyc/start session for initial launch or Sumsub token renewal without remounting
   const start = useCallback(async (): Promise<KYCSession> => {
     if (!walletAddress) throw new Error("Connect a wallet first.");
     const session = getWalletSession(walletAddress);
     if (!session) {
       throw new Error(
-        "Prove wallet ownership in the Wallet section first - the verification is bound to your verified session.",
+        "Prove wallet ownership in the Wallet section first; verification uses that session.",
       );
     }
     try {
       return await api.startKYC(session.token);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        // The token looked live locally but the server rejected it; clear it so
-        // the page prompts a new challenge
+        // Clear rejected tokens and reload so the page prompts a fresh challenge
         clearWalletSession(walletAddress);
         ownWalletStatus.reload();
       }
       throw err;
     }
-    // ownWalletStatus.reload is a new closure every render; depending on it
-    // would rebuild this callback on each one
+    // Exclude unstable reload closures to keep the callback stable
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletAddress]);
 
@@ -148,7 +128,7 @@ export function KycVerificationSection({
     setPhase({ kind: "error", message });
   }, []);
 
-  // Poll only while there is an outcome to wait for.
+  // Poll while awaiting a decision
   const pollTimedOut = useStatusPoll(
     phase.kind === "submitted" && !decided,
     ownWalletStatus.reload,
@@ -165,26 +145,26 @@ export function KycVerificationSection({
       ) : !hasSession ? (
         <p className="field__hint">
           Sign an ownership challenge in the Wallet section first. Verification
-          uses the address you proved you control.
+          uses that address.
         </p>
       ) : (
         <>
           {status === "Allowed" ? (
             <p className="field__hint" role="status">
-              This wallet is already Allowed - no further verification needed.
+              This wallet is already Allowed; no further verification is needed.
             </p>
           ) : (
             <>
               {status === "Expired" && (
                 <p className="async-state--error" role="status">
-                  Your verification has expired. To buy, transfer or redeem with
-                  this wallet, verify again and wait for approval.
+                  Your verification expired. Verify again and await approval
+                  before buying, transferring or requesting redemption.
                 </p>
               )}
               <p className="field__hint">
-                Your documents go directly to the provider. After approval, wait
-                for your wallet&apos;s status to update; the server submits the
-                on-chain change.
+                Documents go directly to the provider. After approval, the
+                server submits the on-chain status change; wait for your wallet
+                status to update.
               </p>
             </>
           )}
@@ -241,11 +221,7 @@ export function KycVerificationSection({
   );
 }
 
-/**
- * Mounts the SDK for the provider the server named. `generic` never reaches
- * here (handleStart turns it into the unavailable phase), and a session missing
- * the credentials its SDK needs shows an error instead of mounting the SDK.
- */
+// Mount the named SDK after validating its credentials; handleStart routes generic to unavailable
 function ProviderFlow({
   session,
   onTokenExpired,
@@ -261,8 +237,7 @@ function ProviderFlow({
     if (!session.token) {
       return (
         <p className="async-state--error" role="alert">
-          The provider session is missing its access token - verification cannot
-          start.
+          The provider session has no access token; verification cannot start.
         </p>
       );
     }
@@ -280,8 +255,8 @@ function ProviderFlow({
     if (!session.token || !session.ref) {
       return (
         <p className="async-state--error" role="alert">
-          The provider session is missing its token or workflow run -
-          verification cannot start.
+          The provider session lacks a token or workflow run; verification
+          cannot start.
         </p>
       );
     }
@@ -295,8 +270,7 @@ function ProviderFlow({
     );
   }
 
-  // A provider this build has no SDK for: use the hosted-flow URL if the
-  // server sent one
+  // Use a hosted-flow URL for providers without a bundled SDK
   return session.url ? (
     <p className="field__hint">
       Continue your verification at{" "}
@@ -307,13 +281,12 @@ function ProviderFlow({
     </p>
   ) : (
     <p className="async-state--error" role="alert">
-      This build cannot display the configured verification provider. Contact
-      the issuer.
+      This build does not support the configured provider. Contact the issuer.
     </p>
   );
 }
 
-/** What the applicant sees between documents sent and an on-chain decision. */
+// Displays review progress until wallet status changes
 function ReviewProgress({
   status,
   timedOut,
@@ -326,15 +299,14 @@ function ReviewProgress({
   if (status === "Allowed") {
     return (
       <p className="field__hint" role="status">
-        Approved - your wallet is now Allowed and can buy, transfer and redeem.
+        Approved - your wallet is now Allowed.
       </p>
     );
   }
   if (status === "Blocked") {
     return (
       <p className="async-state--error" role="alert">
-        Your verification was not approved. Contact the issuer if you believe
-        this is wrong.
+        Your wallet is Blocked. Contact the issuer if this is unexpected.
       </p>
     );
   }
@@ -343,7 +315,7 @@ function ReviewProgress({
       <p role="status">
         Verification submitted - awaiting approval.{" "}
         {timedOut
-          ? "Still under review; it's safe to close this page and check back later."
+          ? "Still awaiting a decision; you can close this page and check back later."
           : "Checking your wallet status…"}
       </p>
       {timedOut && (
@@ -359,15 +331,10 @@ function ReviewProgress({
   );
 }
 
-/**
- * Re-reads the wallet's own status every POLL_INTERVAL_MS while `active`, giving
- * up after POLL_TIMEOUT_MS. Returns whether it gave up, so the caller can offer
- * a manual re-check.
- */
+// Poll own status while active until POLL_TIMEOUT_MS; return timeout state for manual re-check
 function useStatusPoll(active: boolean, refresh: () => void): boolean {
   const [timedOut, setTimedOut] = useState(false);
-  // `refresh` is a new closure every render; a ref keeps the interval from
-  // restarting on each one
+  // Keep refresh in a ref so new closures do not restart the interval
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
 

@@ -25,9 +25,8 @@ func captureLog(fn func()) string {
 	return buf.String()
 }
 
-// TestLoadRawModeLogsWarning checks that raw mode, the default when
-// KEY_PROVIDER_MODE is unset, logs a warning, so an operator who forgot to set
-// it learns they are on the least secure backend
+// TestLoadRawModeLogsWarning checks the operator warning for raw mode, including unset
+// KEY_PROVIDER_MODE
 func TestLoadRawModeLogsWarning(t *testing.T) {
 	out := captureLog(func() {
 		if _, err := Load("compliance", Config{RawHexKey: testHexKey}); err != nil {
@@ -143,8 +142,8 @@ func TestRawKeyProviderCloseZeroesKey(t *testing.T) {
 	if p.key.D.Sign() != 0 {
 		t.Error("Close did not zero the private scalar")
 	}
-	// Sign() == 0 alone would pass if the words were only resliced away, so
-	// check the backing words, which a core dump or swap read would recover
+	// Check backing words, not only Sign()==0: reslicing could leave recoverable secret
+	// bytes
 	for _, w := range p.key.D.Bits() {
 		if w != 0 {
 			t.Error("Close resliced the scalar but left its backing words intact")

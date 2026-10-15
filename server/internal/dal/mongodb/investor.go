@@ -20,8 +20,7 @@ func (r *investorRepo) List(ctx context.Context) ([]*models.Investor, error) {
 	return findMany[models.Investor](ctx, r.coll, bson.M{}, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
 }
 
-// ListPage returns one page sorted by address ascending. Address is the _id, so the
-// cursor is a $gt on _id and needs no compound KeysetCursor.
+// ListPage orders by address ascending, using the unique _id as a simple $gt cursor
 func (r *investorRepo) ListPage(ctx context.Context, cursor string, limit int) ([]*models.Investor, string, error) {
 	filter := bson.M{}
 	if cursor != "" {

@@ -1,8 +1,6 @@
-// X-Wallet-Session from challenge verification authorizes one wallet's status
-// and KYC start, with no admin capability. Tokens are stored per address in
-// localStorage until server expiry (15 minutes by default), avoiding another
-// signature on reconnection. Any same-origin script can read this storage;
-// the wallet scope limits exposure.
+// Per-address localStorage sessions authorize own-status reads and KYC, without admin authority.
+// Expired entries (15-minute default TTL) are cleared on read; Disconnect clears the current wallet.
+// Same-origin scripts can read them; wallet scope limits exposure.
 const STORAGE_PREFIX = "rwa.walletSession.";
 
 export interface WalletSession {
@@ -19,7 +17,7 @@ function storage(): Storage | undefined {
   return typeof window === "undefined" ? undefined : window.localStorage;
 }
 
-/** Returns the stored session for `address` if present and not yet expired (clearing it if expired). */
+/** Returns a stored session unless expired; clears expired entries */
 export function getWalletSession(address: string): WalletSession | undefined {
   try {
     const raw = storage()?.getItem(storageKey(address));
@@ -37,8 +35,8 @@ export function getWalletSession(address: string): WalletSession | undefined {
 }
 
 /**
- * Stores the session for `address`. Blocked or full storage is not fatal: the session is
- * just not kept, and the investor signs the ownership challenge again next time.
+ * Stores a per-address session; blocked/full storage is ignored, so a later visit may
+ * require another ownership challenge
  */
 export function setWalletSession(
   address: string,
@@ -51,7 +49,7 @@ export function setWalletSession(
   }
 }
 
-/** Removes the stored session for `address`, ignoring blocked storage */
+/** Removes the session, ignoring blocked storage */
 export function clearWalletSession(address: string): void {
   try {
     storage()?.removeItem(storageKey(address));

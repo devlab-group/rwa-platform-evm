@@ -1,8 +1,6 @@
-// Package token decodes RWAToken's ERC-7943 enforcement logs into the
-// JSON-friendly ChainEvent shape that the project security projector folds into
-// the live frozen-balance map and the latest forced-transfer summary. The
-// token's other watched events are the generic OZ governance ones, which
-// serverwiring routes to internal/governance.
+// Package token decodes RWAToken ERC-7943 logs into JSON-friendly ChainEvent fields for
+// project security's frozen-balance map and latest forced-transfer summary.
+// serverwiring sends other watched token events to internal/governance.
 package token
 
 import (
@@ -11,13 +9,11 @@ import (
 	"github.com/rwa-platform/server/internal/bindings"
 )
 
-// EventNames are the RWAToken-specific events the security projector
-// understands.
+// EventNames lists RWAToken-specific events consumed by project security
 var EventNames = []string{"Frozen", "ForcedTransfer"}
 
-// DecodeLog is an indexer.EventDecoder for RWAToken's ERC-7943 events. Amounts
-// are decimal strings like every uint256 in the pipeline, and addresses come
-// from the indexed topics.
+// DecodeLog is an indexer.EventDecoder for RWAToken ERC-7943 events, with
+// decimal-string amounts and addresses from indexed topics
 func DecodeLog(log types.Log) (string, map[string]any, error) {
 	t := bindings.NewRWAToken()
 	if len(log.Topics) == 0 {

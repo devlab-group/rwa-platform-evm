@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 /// @title IComplianceRegistry
-/// @notice Wallet allowlist with optional KYC expiry. Stores no PII.
-/// @dev Stable interface; implementations must match docs/spec/contracts.md.
+/// @notice Wallet allowlist with optional KYC expiry; stores no PII
+/// @dev Stable interface; implementations must match docs/spec/contracts.md
 interface IComplianceRegistry {
     enum ComplianceStatus {
         Unknown,
@@ -27,16 +27,15 @@ interface IComplianceRegistry {
 
     error ArrayLengthMismatch();
     error ZeroAddressAccount();
-    /// @dev The Vault and RedemptionEscrow are pinned to `Allowed` with no expiry, so a mistaken
-    ///      or compromised COMPLIANCE_ROLE cannot block core flows
+    /// @dev Pins Vault and RedemptionEscrow to Allowed with no expiry, preventing COMPLIANCE_ROLE
+    ///      from blocking or expiring either address
     error SystemAddressCannotBeBlocked(address account);
     error SystemAddressesAlreadySet();
     error OnlyRegistryDeployer(address caller);
 
-    /// @notice One-time deploy wiring: record the Vault and RedemptionEscrow as protected system
-    ///         addresses. Callable exactly once, only by the deployer recorded at construction
-    ///         (normally the RWAFactory). After this, setStatus and setStatuses reject any
-    ///         status other than Allowed, and any nonzero `validUntil`, for them.
+    /// @notice Pins Vault and RedemptionEscrow as system addresses once, deployer-only
+    ///         (normally RWAFactory). Subsequent setStatus/setStatuses updates require Allowed
+    ///         with validUntil == 0; wiring alone does not set their status.
     function setSystemAddresses(address vault, address redemptionEscrow) external;
 
     /// @notice True if `account` is a pinned system address (Vault or RedemptionEscrow)

@@ -22,9 +22,8 @@ func (r *walletChallengeRepo) Get(ctx context.Context, id string) (*models.Walle
 }
 
 func (r *walletChallengeRepo) MarkUsed(ctx context.Context, id string) error {
-	// the filter matches only a challenge that is not yet used, so the update is a
-	// compare-and-set and a concurrent second MarkUsed for the id cannot also
-	// succeed
+	// Match Used=false atomically so a concurrent second MarkUsed cannot consume the same
+	// challenge
 	res, err := r.coll.UpdateOne(ctx, bson.M{"_id": id, "used": bson.M{"$ne": true}}, bson.M{"$set": bson.M{"used": true}})
 	if err != nil {
 		return err
@@ -32,17 +31,16 @@ func (r *walletChallengeRepo) MarkUsed(ctx context.Context, id string) error {
 	if res.MatchedCount == 1 {
 		return nil
 	}
-	// MatchedCount 0 means no such challenge or already used. One more read tells
-	// them apart, and only on this error path.
+	// Read only after a failed match to distinguish a missing challenge from an
+	// already-used one
 	if _, err := r.Get(ctx, id); err != nil {
 		return err // repository.ErrNotFound
 	}
 	return repository.ErrAlreadyExists
 }
 
-// CountActive backs the per-address cap in ChallengeService.Create. It uses
-// CountDocuments and not an estimate because it gates a security decision. The
-// address, used and expiresAt index from EnsureIndexes serves this query.
+// CountActive uses indexed CountDocuments for ChallengeService.Create's active-count
+// check, avoiding an estimate; EnsureIndexes supplies (address, used, expiresAt)
 func (r *walletChallengeRepo) CountActive(ctx context.Context, address string, now time.Time) (int, error) {
 	n, err := r.coll.CountDocuments(ctx, bson.M{"address": address, "used": false, "expiresAt": bson.M{"$gt": now}})
 	return int(n), err

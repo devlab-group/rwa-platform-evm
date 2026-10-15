@@ -13,7 +13,7 @@ import (
 	"github.com/rwa-platform/server/internal/indexer"
 )
 
-// StepResult records one scripted Step's outcome.
+// StepResult records one scripted Step's outcome
 type StepResult struct {
 	Index       int           `json:"index"`
 	Description string        `json:"description"`
@@ -23,46 +23,42 @@ type StepResult struct {
 	Err string `json:"err,omitempty"`
 }
 
-// Report is the full result of a shadow replay run. Its resource snapshots and
-// reconciliation fields are the evidence for the release criteria: resource use
-// within thresholds, and final indexed state matching an independent count. A
-// person or an automated gate can check them.
+// Report records replay outcomes, resource snapshots and final event/DLQ count
+// comparisons. Reconciled checks counts and step errors; resource thresholds require
+// separate human or automated review.
 type Report struct {
 	Steps             []StepResult       `json:"steps"`
 	ResourceSnapshots []ResourceSnapshot `json:"resourceSnapshots"`
-	// FinalEventCount is how many chain_events the indexer persisted for the
-	// expected event names by the end of the run
+	// FinalEventCount counts persisted chain_events for the expected event names at run
+	// completion
 	FinalEventCount int `json:"finalEventCount"`
-	// ExpectedEventCount and ExpectedDLQEntries come from the scenario's final
-	// chain state (see Runner.reconcile), not from what the indexer reported
+	// ExpectedEventCount/ExpectedDLQEntries come from the scenario's final chain state,
+	// independently of the indexer (Runner.reconcile)
 	ExpectedEventCount int `json:"expectedEventCount"`
 	DLQEntries         int `json:"dlqEntries"`
 	ExpectedDLQEntries int `json:"expectedDLQEntries"`
-	// Errors collects every unexpected step failure. The gate passes when it is
-	// empty and Reconciled is true.
+	// Errors records unexpected Poll outcomes; passing requires none and Reconciled=true,
+	// with resource checks evaluated separately
 	Errors     []string `json:"errors,omitempty"`
 	Reconciled bool     `json:"reconciled"`
 }
 
-// Runner drives a Scenario against indexer.Indexer over isolated in-memory
-// repositories. The indexer uses WithBlockHashRepository and
-// WithDeadLetterQueue, as cmd/platform does, but not WithChunkCommitter, which
-// needs MongoDB. The Runner never constructs a blockchain.TxManager,
-// keys.Provider or other signer, so it holds no keys and cannot submit a
-// transaction.
+// Runner drives a Scenario through indexer.Indexer with isolated memory repositories,
+// block-hash history and a DLQ. WithChunkCommitter is disabled, so event/checkpoint
+// writes are separate. No TxManager, keys.Provider or signer is constructed.
 type Runner struct {
 	scenario *Scenario
 }
 
-// NewRunner constructs a Runner for scenario.
+// NewRunner constructs a Runner for scenario
 func NewRunner(scenario *Scenario) *Runner {
 	return &Runner{scenario: scenario}
 }
 
-// Run executes every scripted Step in order, samples resource usage after each
-// one, and then reconciles the final state. A scenario mismatch yields a Report
-// with Reconciled false and a nil error. The error is non-nil only when ctx is
-// cancelled or a repository call in the final reconciliation fails.
+// Run executes steps, samples resources after each and reconciles final counts.
+// Unexpected Poll outcomes enter Report.Errors; count or step mismatches set
+// Reconciled=false without a Go error. A cancellation detected before a step or a final
+// repository read failure returns a Go error.
 func (r *Runner) Run(ctx context.Context) (*Report, error) {
 	sc := r.scenario
 	repos := memory.New()
@@ -126,9 +122,8 @@ func (r *Runner) Run(ctx context.Context) (*Report, error) {
 	return report, nil
 }
 
-// reconcile derives the expected event and dead-letter counts from source's
-// final chain state, not from anything the indexer reported, and records them
-// next to the counts the indexer persisted
+// reconcile compares event/DLQ counts derived independently from source's final chain
+// state with persisted counts
 func (r *Runner) reconcile(ctx context.Context, sc *Scenario, source *indexer.FakeSource, repos *repository.Repositories, undecodable map[string]bool, report *Report) error {
 	configured := map[common.Address]bool{}
 	for _, a := range sc.addressList() {

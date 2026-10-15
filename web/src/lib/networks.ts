@@ -1,9 +1,8 @@
-// Allowlisted network labels and EIP-3085 parameters for the switcher.
-// Add entries here to support another chain. rpcUrls goes to the wallet's
-// wallet_addEthereumChain request; app RPC uses the injected provider.
+// Allowlisted labels and EIP-3085 parameters; add supported chains here.
+// Wallets use rpcUrls when adding chains; app RPC uses the injected provider.
 export interface AllowedNetwork {
   chainId: number;
-  /** Short label shown in the switcher and by networkLabel() */
+  /** Switcher and networkLabel() label */
   label: string;
   /** wallet_addEthereumChain parameters (EIP-3085) */
   chainName: string;
@@ -24,8 +23,7 @@ export const ALLOWED_NETWORKS: AllowedNetwork[] = [
     label: "Ethereum",
     chainName: "Ethereum Mainnet",
     nativeCurrency: ETH,
-    // Wallets ship with mainnet, so wallet_addEthereumChain is not expected to
-    // run for it; the parameters complete the entry
+    // Keep mainnet add-chain parameters for uniform entries; wallets typically know it already
     rpcUrls: ["https://cloudflare-eth.com"],
     blockExplorerUrls: ["https://etherscan.io"],
   },

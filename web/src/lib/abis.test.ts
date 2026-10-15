@@ -3,11 +3,12 @@ import { describe, expect, it } from "vitest";
 import { toFunctionSelector } from "viem";
 import { erc7943Abi } from "./abis";
 
-/** The frozen ERC-7943 ABI surface, shared with the Solidity interface and the server's Go
- * bindings. A selector that drifts here would have the console broadcasting calldata the
- * deployed token does not answer to. */
+/*
+ * Checks ERC-7943 ABI fragments against shared vectors used by Solidity and Go;
+ * selector drift would produce calls the deployed token cannot handle
+ */
 const vectors = JSON.parse(
-  // Relative to web/, which is vitest's root.
+  // Relative to Vitest's web/ root
   readFileSync("../shared/vectors/erc7943-abi.json", "utf8"),
 ) as {
   functions: Record<
@@ -30,8 +31,7 @@ describe("erc7943Abi", () => {
     },
   );
 
-  // A return type is invisible to a selector, but a fragment that claims no return value
-  // makes viem decode nothing where the token actually returns a bool.
+  // Return types do not affect selectors; pin bool outputs so viem decodes the token response
   it.each(["setFrozenTokens", "forcedTransfer"])(
     "declares %s's pinned return type",
     (name) => {

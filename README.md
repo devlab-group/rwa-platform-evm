@@ -1,37 +1,38 @@
 # Self-Hosted RWA Tokenization Platform
 
-A self-hosted platform for tokenizing a real-world asset class as a permissioned ERC-20, with
-auditor-signed minting and burning, and on-chain cash redemption. Each deployment serves
-**one issuer, one token, one Asset Profile, one quote token and one auditor**. Use a separate
-deployment for a materially different asset class.
+A self-hosted platform for a permissioned ERC-20 representing a real-world asset class,
+with auditor-signed minting/burning and on-chain cash redemption. Each deployment serves
+**one issuer, one token, one Asset Profile, one quote token and one auditor**. Deploy separately
+for a materially different asset class.
 
-The issuer deploys and operates the contracts, server, database, IPFS pinning and admin
-interface. The optional investor interface is also issuer-owned; fork the example in
-[`investor-web/`](investor-web/README.md) to build one. This project is a platform, not an SDK.
+The issuer operates the contracts, server, database, IPFS pinning and admin interface.
+Fork [`investor-web/`](investor-web/README.md) for an optional issuer-owned investor interface.
+This project is a platform, not an SDK.
 
-**Stack:** Solidity (Foundry) · Go (server and offline signer) · React (Vite). Requires an EVM
-chain with conventional JSON-RPC and one conventional ERC-20 quote token.
+**Stack:** Solidity (Foundry) · Go (server and offline signer) · React (Vite).
+Requires an EVM chain with conventional JSON-RPC and a conventional ERC-20 quote token.
 
 ---
 
 ## What it does
 
-- Deploys a permissioned fungible token representing claims on a real-world asset class.
-- **Every supply increase requires a valid EIP-712 auditor signature** bound to this chain, this
-  `SupplyController`, this profile, one metadata record, one amount, one Vault, and one unused
-  nonce. The admin broadcasts the auditor-signed mint from their own wallet; the server never
-  relays it and cannot create supply.
-- All minting targets a **Vault** (digital warehouse), never directly to investors.
-- Transfers require **both** sender and recipient to be currently allowed (mint/burn exempt).
-- On-chain purchase with one quote token (`Vault.buy`).
-- **On-chain cash redemption**: `requestRedemption` → issuer `fundRedemption` → permissionless
-  `claimRedemption`. Funded quote lives in an isolated escrow, is never withdrawable, and pays only
-  the recorded beneficiary. Unfunded requests can be cancelled after a timeout.
-- Auditor-attested de-tokenization burn from **unsold Vault inventory only**.
-- Air-gapped auditor signing via an offline Go CLI (zero network during signing).
+- Requires a valid EIP-712 auditor signature for **every supply increase**, bound to the chain,
+  `SupplyController`, profile, metadata record, amount, Vault and unused nonce. The console
+  submits the signed mint from the admin wallet; the server does not relay it. The contract
+  allows anyone to submit a valid signed mint, but nobody can mint without that signature.
+- Mints only to the **Vault** (digital warehouse).
+- Requires currently allowed sender and recipient for ordinary transfers (mint/burn exempt;
+  enforcement and escrow-return exceptions apply).
+- Sells on-chain through `Vault.buy` with one quote token.
+- Redeems through `requestRedemption` → issuer `fundRedemption` → permissionless
+  `claimRedemption`. Funded quote stays in isolated escrow, payable only to the recorded
+  beneficiary, with no role-based withdrawal. An Allowed beneficiary can cancel a Pending
+  request after its timeout.
+- Burns Vault inventory with auditor authorization, including inventory returned by redemption.
+- Signs attestations offline through the air-gapped Go CLI, without network access during signing.
 
-It does **not** establish legal title, custody, regulatory classification, or a guarantee that
-every redemption is funded. Those remain issuer and jurisdiction responsibilities.
+Legal title, custody, regulatory classification and redemption funding remain issuer and
+jurisdiction responsibilities.
 
 ## How the pieces fit together
 
@@ -66,29 +67,29 @@ every redemption is funded. Those remain issuer and jurisdiction responsibilitie
  └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The admin console encodes deployment, minting, role changes, pause, prices, redemption funding
-and rejection, and proceeds withdrawal. It sends them from the connected wallet or exports a
-batch for a Safe that holds the role. Submit burns directly to `SupplyController.burn`.
-Investors send purchases, redemption requests, claims and cancellations from their own wallets.
-The server encodes and submits compliance-status transactions with its only on-chain key.
+The admin console encodes deployment, minting, role changes, pause, prices, redemption funding,
+rejection and proceeds withdrawal. It submits wallet transactions or exports batches for a
+role-holding Safe. Submit burns directly to `SupplyController.burn`. Investors send purchases,
+redemption requests, claims and cancellations from their wallets. The server's sole on-chain
+key capability is submitting compliance-status changes.
 
 ## Monorepo layout
 
-| Path               | What                                                                                                                     | README                                           |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
-| `contracts/`       | Foundry contracts, scripts, unit/fuzz/invariant/adversarial tests                                                        | [contracts/README.md](contracts/README.md)       |
-| `signer/`          | Offline Go EIP-712 signer + `.rwa` package/validation library                                                            | [signer/README.md](signer/README.md)             |
-| `server/`          | Go API, chain integration, indexer, tx manager, embedded web                                                             | [server/README.md](server/README.md)             |
-| `web/`             | React admin console SPA (built and served by the Go binary)                                                              | [web/README.md](web/README.md)                   |
-| `investor-web/`    | Standalone example investor SPA: a self-contained reference to fork for your own investor UI (not served by the binary) | [investor-web/README.md](investor-web/README.md) |
-| `shared/`          | EIP-712 types, golden vectors, JSON schemas                                                                              | -                                                |
-| `api/openapi.yaml` | HTTP contract                                                                                                            | -                                                |
-| `docs/`            | Specs and operator, auditor and security guides                                                                          | [docs index](#documentation)                     |
-| `docker/`          | Local anvil + MongoDB + IPFS compose (dev only)                                                                          | -                                                |
+| Path               | What                                                              | README                                           |
+| ------------------ | ----------------------------------------------------------------- | ------------------------------------------------ |
+| `contracts/`       | Foundry contracts, scripts, unit/fuzz/invariant/adversarial tests | [contracts/README.md](contracts/README.md)       |
+| `signer/`          | Offline Go EIP-712 signer + `.rwa` package/validation library     | [signer/README.md](signer/README.md)             |
+| `server/`          | Go API, chain integration, indexer, tx manager, embedded web      | [server/README.md](server/README.md)             |
+| `web/`             | React admin console SPA (built and served by the Go binary)       | [web/README.md](web/README.md)                   |
+| `investor-web/`    | Investor SPA to fork; served separately from the binary           | [investor-web/README.md](investor-web/README.md) |
+| `shared/`          | EIP-712 types, golden vectors, JSON schemas                       | -                                                |
+| `api/openapi.yaml` | HTTP contract                                                     | -                                                |
+| `docs/`            | Specs and operator, auditor and security guides                   | [docs index](#documentation)                     |
+| `docker/`          | Local anvil + MongoDB + IPFS compose (dev only)                   | -                                                |
 
-`shared/`, `contracts/src/interfaces/`, `api/openapi.yaml`, `docs/spec/`, the `Makefile`, and the
-CI workflows are the contracts between components. Change them deliberately and in one
-reviewed step, since they're what keeps the Solidity, Go, and TypeScript sides in agreement.
+`shared/`, `contracts/src/interfaces/`, `api/openapi.yaml`, `docs/spec/`, the `Makefile` and CI
+workflows define component contracts. Review changes together to keep Solidity, Go and
+TypeScript in agreement.
 
 ## Setup
 
@@ -99,153 +100,145 @@ reviewed step, since they're what keeps the Solidity, Go, and TypeScript sides i
 3. Go 1.26.9+
 4. Node.js 22+
 
-Install every subrepo's dependencies once with `make bootstrap`.
+Install subrepo dependencies with `make bootstrap`.
 
 ### Dev environment
 
-Runs against the local Docker stack (anvil chainId 31337 + MongoDB + IPFS, all on loopback, dev only).
+The local Docker stack runs Anvil (chainId 31337), MongoDB and IPFS on loopback, for development.
 
-1. Copy the example config: `cp server/config.example.yaml server/config.yaml`
-2. Set `security.admin_address` to an Anvil account address (e.g. account 0,
-   `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`), the wallet that logs into the admin console.
+1. Copy the config: `cp server/config.example.yaml server/config.yaml`
+2. Set `security.admin_address` to the Anvil wallet that will log in, e.g. account 0,
+   `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`.
 3. Set `security.jwt_secret` to a random 64-character string (`openssl rand -hex 32`).
-4. Set `keys.compliance_key` to the matching Anvil private key (`keys.provider_mode` stays `raw`,
-   the example default; dev only).
-5. Set `contract.project_id` to a fresh UUID (`uuidgen`). The admin console reads it from
-   `GET /api/v1/config` and every Asset Profile is gated against it, so it must be set before you
-   create a profile.
+4. Set `keys.compliance_key` to the matching Anvil private key. Keep the example's
+   `keys.provider_mode: raw` for development only.
+5. Set `contract.project_id` to a fresh UUID (`uuidgen`) before creating a profile. The console
+   reads it from `GET /api/v1/config`; the server checks profiles against the configured ID.
 6. Start the stack: `make up`
-7. Deploy the `RWAFactory`:
+7. Deploy `RWAFactory`:
    `cd ./contracts && forge script script/DeployFactory.s.sol --rpc-url http://localhost:8545 --broadcast -vv`
-8. Copy `factory` and `start_block` from that output into `contract.factory_address` and
+8. Copy output `factory` and `start_block` to `contract.factory_address` and
    `contract.start_block` in `server/config.yaml`.
 9. Deploy a test USDT quote token:
    `cd ./contracts && forge script script/DeployTestToken.s.sol --rpc-url http://localhost:8545 --broadcast -vv`
-10. Note the `token` address from that output. You enter it as the **Quote Token** in the admin
-    console's project setup.
-11. Build the platform binary (with a fresh embedded SPA): `make platform`
-12. Run it: `./server/bin/platform --config ./server/config.yaml`
+10. Enter the output `token` address as **Quote Token** in the console's project setup.
+11. Build with a fresh embedded SPA: `make platform`
+12. Run: `./server/bin/platform --config ./server/config.yaml`
 
-The console is served at `http.addr` (default `:8080`). Connect the `admin_address` wallet, create the
-Asset Profile, then broadcast `RWAFactory.deploy` from the console.
+Open the console at `http.addr` (default `:8080`), connect the `admin_address` wallet, create the
+Asset Profile and broadcast `RWAFactory.deploy`.
 
 ### Reset dev data
 
-Wipes the local chain, database, and IPFS state for a clean run:
+Wipe local chain, database and IPFS state:
 
 1. `make down`
 2. `rm -rf ./docker/data`
-3. Repeat dev steps 6-12 (redeploying the factory + test token gives fresh addresses, so
-   `contract.factory_address` / `contract.start_block` and the project's quote token must be updated
-   again).
+3. Repeat dev steps 6-12. Redeploy the factory/test token and update
+   `contract.factory_address`, `contract.start_block` and the project's quote token.
 
 ### Production environment
 
-Production runs the same binary against a real EVM chain, managed MongoDB, and durable IPFS pinning,
-with `environment: production` to enable production startup checks. Configure the settings below
-and, before deployment, complete
-[testnet qualification](docs/operator/testnet-qualification.md) and the
-[shadow replay and soak tests](docs/operator/soak-runbook.md).
+Use the same binary with a real EVM chain, managed MongoDB and durable IPFS pinning.
+Before deployment, complete [testnet qualification](docs/operator/testnet-qualification.md)
+and the [shadow replay and soak tests](docs/operator/soak-runbook.md).
 
-1. Copy `server/config.example.yaml` to `server/config.yaml` and set `environment: production`.
-2. `security.admin_address` - the real admin wallet (a multisig is strongly recommended).
-3. `security.jwt_secret` and `security.kyc_webhook_hmac_secret` - strong secrets (≥ 32 bytes each);
-   both are required.
-4. `contract.project_id` - a fresh UUID; required and immutable for the life of the deployment.
-5. `keys.provider_mode` - `local-keystore` or `vault`. Production refuses `kms-mock`, and refuses
-   `raw` when a hot key is configured. The compliance key is the server's only hot key; keep it out
-   of plaintext config.
-6. `mongo.*` - a real MongoDB URI (`persistence_mode: mongo`; `memory` is refused in production).
-7. `ipfs.*` - a real Kubo endpoint plus at least one backup destination (`backup_archive_dir` or
+1. Copy `server/config.example.yaml` to `server/config.yaml`; set `environment: production`
+   to enable startup checks.
+2. `security.admin_address` - the admin wallet; a multisig is strongly recommended.
+3. `security.jwt_secret` - at least 32 bytes. Also set `security.kyc_webhook_hmac_secret`
+   (at least 32 bytes) for `kyc.provider: none`; Sumsub/Onfido use their provider credentials.
+4. `contract.project_id` - a fresh UUID; required in production and fixed for this deployment.
+5. `keys.provider_mode` - `local-keystore` or `vault`. Production rejects `kms-mock` and
+   rejects `raw` when a hot key is configured. The optional compliance key is the only server
+   hot key; keep it out of plaintext config.
+6. `mongo.*` - a real MongoDB URI with `persistence_mode: mongo`; production rejects `memory`.
+7. `ipfs.*` - a real Kubo endpoint, at least one backup destination (`backup_archive_dir` or
    `backup_kubo_url`) and a `replication_threshold`.
-8. `chain.*` - the target chain RPC/id/confirmations and fee caps (`max_fee_per_gas_wei` etc., which
-   production requires).
-9. Deploy the factory with a real key on the target chain, then set `contract.factory_address` /
+8. `chain.*` - target RPC/id/confirmations and required fee caps (`max_fee_per_gas_wei` etc.).
+9. Deploy the factory on the target chain; set `contract.factory_address` and
    `contract.start_block` from the output:
    `DEPLOYER_PK=0x… forge script script/DeployFactory.s.sol --rpc-url <chain-rpc> --broadcast -vv`
 10. Build and run behind TLS / a reverse proxy: `make platform`, then
     `./server/bin/platform --config ./server/config.yaml`.
 
-Use your real ERC-20 as the quote token. Deploy the project and broadcast the auditor-signed mint
-from the admin wallet through the console. The server has no deployer, relayer or pricer key.
-For production, set `adminTransferDelay` to at least 24 hours; the contracts enforce no minimum.
+Use the real ERC-20 quote token; deploy and submit auditor-signed mints through the console.
+The server has no deployer, relayer or pricer key. Set `adminTransferDelay` to at least 24 hours
+in production; contracts enforce no minimum.
 
 ### Root commands
 
 `make <target>`: `bootstrap · format · lint · contracts-test · signer-test · server-test · web-test ·
 investor-web-test · vectors-check · dialect-check · bindings-check · embed-check · e2e · ci ·
-security-scan · up · down · platform · signer`. `make help` lists them with descriptions. `make ci`
-is the PR gate: lint, all tests, cross-language vectors, binding drift and the embedded-SPA
-build. Run `make format` first; the gate does not apply formatting fixes.
+security-scan · up · down · platform · signer`. `make help` describes them.
+`make ci` runs lint, component tests, cross-language vectors, binding checks and the embedded-SPA
+build; run `make e2e` separately for end-to-end flows. Run `make format` before the gate,
+which does not apply formatting fixes.
 
 ### End-to-end lifecycle demos
 
 ```bash
 bash contracts/script/e2e.sh    # live anvil: deploy → allow → mint → buy → request → fund
                                 # → claim → burn, plus timeout → cancel (real broadcasts)
-bash server/e2e/run_e2e.sh      # the same lifecycle driven purely over the documented HTTP API,
-                                # with the offline signer producing the auditor signature
+bash server/e2e/run_e2e.sh      # HTTP API and wallet transactions drive the same lifecycle;
+                                # the offline signer produces the auditor signature
 ```
 
 ## The lifecycle
 
-1. **Setup** - the admin authors an Asset Profile (a JSON Schema subset), which is canonicalized
-   (RFC 8785 JCS), hashed (SHA-256 → `profileDigest`), and pinned to IPFS. The admin then
-   broadcasts `RWAFactory.deploy` from their own wallet, which deploys and wires the whole stack and
-   registers the Vault and Escrow as allowed. The server observes the `ProjectDeployed` event and
-   verifies it before treating the project as usable.
-2. **Onboard** - the investor proves wallet ownership; external KYC (via a signed webhook or a
-   manual action) sets the wallet `Allowed` in `ComplianceRegistry`.
-3. **Record + attest** - the admin creates a metadata record, the server builds a `.rwa` package,
-   the auditor validates and signs it **offline**, and the admin uploads `signed-result.json` and
-   broadcasts `SupplyController.mint` from their wallet (tokens go to the Vault).
-4. **Sell** - an allowed investor calls `Vault.buy` with the quote token (on-chain purchase only).
-5. **Redeem** - the investor calls `requestRedemption` (snapshots the quote, escrows RWA), the
-   treasury calls `fundRedemption` (re-checks compliance, escrows the exact quote), and anyone calls
-   `claimRedemption` (pays the beneficiary, returns RWA to the Vault). Unfunded requests can be
-   cancelled after the timeout.
-6. **Retire** - the auditor signs a `BurnAttestation` and the controller burns Vault inventory only.
+1. **Setup** - the admin creates an Asset Profile with a JSON Schema subset. The server
+   canonicalizes it (RFC 8785 JCS), computes SHA-256 `profileDigest` and CID, and stores it;
+   profile creation does not pin it to IPFS. The admin broadcasts `RWAFactory.deploy`, which
+   deploys and wires the stack and allows the Vault/Escrow. The server observes and verifies
+   `ProjectDeployed` before treating the project as usable.
+2. **Onboard** - the investor proves wallet ownership; KYC via signed webhook or manual action
+   sets the wallet `Allowed` in `ComplianceRegistry`.
+3. **Record + attest** - the admin creates metadata, the server builds a `.rwa` package, and
+   the auditor validates and signs it **offline**. The admin uploads `signed-result.json` and submits
+   `SupplyController.mint` from their wallet; tokens go to the Vault.
+4. **Sell** - an Allowed investor pays the quote token through `Vault.buy`.
+5. **Redeem** - `requestRedemption` snapshots the quote and escrows RWA;
+   treasury `fundRedemption` rechecks compliance and escrows the exact quote;
+   permissionless `claimRedemption` pays the beneficiary and returns RWA to the Vault.
+   An Allowed beneficiary can cancel a Pending request after timeout.
+6. **Retire** - an auditor-signed `BurnAttestation` authorizes burning Vault inventory.
 
 ## Testing & CI
 
-- **Contracts** - `forge test` (unit, fuzz, invariant conservation, adversarial
-  reentrancy/token mocks, integration), a contract-size test (every deployed contract within the
-  EIP-170 limit of 24,576 bytes) and a committed gas snapshot. Slither runs in CI.
-- **Server** - `go test ./... -race`, `cmd/verifyabi` (checks for ABI drift against the compiled
-  contracts), and `server/e2e/run_e2e.sh` for black-box API coverage.
+- **Contracts** - `forge test`: unit, fuzz, invariant conservation, adversarial reentrancy/token
+  mocks and integration. Size tests cover the factory, four helpers and six child contracts
+  against EIP-170's 24,576-byte limit; gas snapshots are committed. Slither runs in CI.
+- **Server** - `go test ./... -race`, `cmd/verifyabi` for compiled-contract ABI drift, and
+  `server/e2e/run_e2e.sh` for black-box API and wallet flows.
 - **Signer** - `go test ./...`, including byte-for-byte reproduction of `shared/vectors`.
-- **Web and investor-web** - `tsc` typecheck, Vitest and a production build. The admin console also
-  has Playwright tests (mocked, or live against a running server) with axe accessibility checks.
-- **Cross-language parity** - the EIP-712 digests and signatures agree across Solidity, the Go
-  signer and the Go server, and the JCS/CID canonicalization agrees between the signer and the
-  server. Golden vectors in `shared/vectors` pin both down.
+- **Web and investor-web** - TypeScript, Vitest and production builds. Admin Playwright tests
+  run with mocks or a live server and include axe accessibility checks.
+- **Cross-language parity** - `shared/vectors` pins Solidity/Go EIP-712 digests/signatures
+  and signer/server JCS/CID canonicalization.
 
-On every PR, CI runs the contracts, signer, server, web and investor-web jobs, the embedded-SPA
-build, a dependency scan, Slither and the end-to-end flows. Mythril runs weekly and on demand.
+PR CI runs contracts, signer, server, web and investor-web jobs, embedded-SPA build,
+dependency scanning, Slither and end-to-end flows. Mythril runs weekly and on demand.
 
 ## Security
 
-- The server holds exactly **one** hot signing key, `compliance`, which sets wallet status in the
-  registry after KYC. It sits behind a `KeyProvider` (`vault` or `local-keystore`; `raw` hex in
-  config is dev-only). Everything else,
-  including project deployment, the auditor-signed mint, and all admin/treasury/redemption-manager/
-  pricer actions, is broadcast from the connected admin wallet or multisig, never from a
-  server hot key. There is no deployer or relayer key.
-- Request size and rate limits, security headers (CSP, `X-Frame-Options: DENY`, `nosniff`),
-  atomic idempotency, webhook replay protection, and constant-time HMAC comparison.
-- The Vault and RedemptionEscrow are pinned `Allowed` so a compromised compliance key
-  cannot freeze core flows.
-- Contract behavior and security boundaries are specified under `docs/spec/`; incident response is in
-  [`docs/security/incident-response.md`](docs/security/incident-response.md).
+- The optional `compliance` hot key sets registry wallet status after KYC through a
+  `KeyProvider` (`vault` or `local-keystore`; raw hex config is development only).
+  Deployment, signed minting and admin/treasury/redemption-manager/pricer actions use wallets
+  or multisigs. The server has no deployer or relayer key.
+- Request size/rate limits, CSP/`X-Frame-Options: DENY`/`nosniff`, atomic idempotency,
+  webhook replay protection and constant-time HMAC comparison.
+- Vault/RedemptionEscrow are pinned `Allowed`, preventing the compliance key from blocking
+  or expiring them.
+- `docs/spec/` defines contract behavior and boundaries;
+  [`docs/security/incident-response.md`](docs/security/incident-response.md) covers incidents.
 
 ## Deployment
 
-`RWAFactory.deploy(ProjectConfig)` deploys the whole stack in one transaction (the factory delegates
-child creation to four helper contracts to stay under the EIP-170 code-size limit). The admin
-broadcasts it from their own wallet (the console reads the factory address from
-`GET /api/v1/config`), and the server observes the `ProjectDeployed` event and verifies bytecode, roles, and allowlisting before
-treating a project as usable. Qualify each target chain with
-[`docs/operator/testnet-qualification.md`](docs/operator/testnet-qualification.md).
+`RWAFactory.deploy(ProjectConfig)` deploys the stack atomically through four helper contracts,
+keeping factory/helper runtime code below EIP-170's limit. The console reads the factory address
+from `GET /api/v1/config` and submits the admin wallet's transaction. The server checks deployed
+bytecode presence, roles and allowlisting before accepting the observed `ProjectDeployed`.
+Qualify each chain with [`docs/operator/testnet-qualification.md`](docs/operator/testnet-qualification.md).
 
 ## Documentation
 
@@ -259,20 +252,18 @@ treating a project as usable. Qualify each target chain with
 ## Scope
 
 The token implements the final [ERC-7943 (uRWA)](https://eips.ethereum.org/EIPS/eip-7943)
-fungible interface: `canSend`/`canReceive`/`canTransfer` queries, per-holder frozen amounts, and
-an admin-only `forcedTransfer` for seizure and court-ordered recovery, with ERC-165 reporting
-`0x3edbb4c4`. Freezing and forced transfers are broadcast from the admin wallet, never a server
-key, and both are indexed into the Security screen's read state (admin-only: `GET /project`
-stays public and names no frozen wallet, while a holder sees their own frozen amount on
-`GET /me/wallet-status`). These powers change what a holder can expect from the token, so the
-example investor SPA states them on its landing screen; an issuer forking it should say the same
-in its own terms.
+fungible interface: `canSend`/`canReceive`/`canTransfer`, per-holder frozen amounts and admin-only
+`forcedTransfer` for seizure/court-ordered recovery. ERC-165 reports `0x3edbb4c4`.
+Freezes and forced transfers use the admin wallet and appear in Security's admin-only read state.
+Public `GET /project` names no frozen wallet; `GET /me/wallet-status` shows a holder's own frozen
+amount. The example investor landing screen discloses these powers; an issuer should preserve
+that disclosure in its interface and terms.
 
-Still out of scope: instant, pooled, or partial redemption; redemption fees; native-currency
-purchases; multiple quote tokens; Chainlink/PoR/DEX/ERC-3643 integrations; forced burn; upgradeable proxies and
-timelocks; cross-chain; payment adapters; and wallet-screening vendor adapters. Sumsub and Onfido
-KYC adapters and a generic signed webhook are included. Safe support covers holding roles, acting
-as the auditor and exporting Transaction Builder batches.
+Out of scope: instant/pooled/partial redemption, redemption fees, native-currency purchases,
+multiple quote tokens, Chainlink/PoR/DEX/ERC-3643 integrations, forced burn, upgradeable proxies,
+general-purpose timelocks, cross-chain, payment adapters and wallet-screening vendor adapters.
+Included: Sumsub/Onfido KYC, generic signed webhooks and Safe support for role holders,
+auditor signatures and Transaction Builder batches.
 
 ## License
 

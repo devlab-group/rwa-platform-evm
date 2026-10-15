@@ -11,29 +11,25 @@ import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 
 /// @title ComplianceRegistry
 /// @notice Wallet allowlist with optional KYC expiry; stores no PII
-/// @dev After one-time system-address wiring, setStatus and setStatuses accept only
-///      Allowed with validUntil == 0 for the Vault and RedemptionEscrow. This prevents
-///      COMPLIANCE_ROLE from blocking or expiring the addresses needed for RWA flows.
-///      AccessControlEnumerable lets post-deployment verification check the full
-///      COMPLIANCE_ROLE and DEFAULT_ADMIN_ROLE holder sets, including factory bootstrap
-///      role removal, without requiring a complete event history.
+/// @dev After wiring, Vault and RedemptionEscrow status updates require Allowed with no expiry.
+///      AccessControlEnumerable exposes complete COMPLIANCE_ROLE and DEFAULT_ADMIN_ROLE
+///      holder sets for verification, including bootstrap-role removal, without event history.
 contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable, AccessControlDefaultAdminRules {
     bytes32 public constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
 
-    /// @notice The deployer (normally RWAFactory), the only caller of `setSystemAddresses`
+    /// @notice Deployer (normally RWAFactory), authorized to call setSystemAddresses once
     address private immutable _deployer;
 
     mapping(address account => ComplianceRecord record) private _records;
     mapping(address account => bool isSystem) private _systemAddresses;
     bool private _systemAddressesSet;
 
-    /// @param adminTransferDelay AccessControlDefaultAdminRules delay for `admin`
+    /// @param adminTransferDelay AccessControlDefaultAdminRules delay for admin
     /// @param admin DEFAULT_ADMIN_ROLE holder
-    /// @param complianceOperator granted COMPLIANCE_ROLE
-    /// @dev The deployer (normally RWAFactory) also receives COMPLIANCE_ROLE so it can allowlist
-    ///      the Vault and RedemptionEscrow it deploys, and is expected to renounce it once
-    ///      wiring is complete. The deployer address is also recorded for the one-time
-    ///      `setSystemAddresses` gate, the same pattern as RWAToken's `setSupplyController`.
+    /// @param complianceOperator COMPLIANCE_ROLE holder
+    /// @dev Also grants the deployer COMPLIANCE_ROLE to allowlist Vault and RedemptionEscrow;
+    ///      RWAFactory renounces it after wiring. Records the deployer for setSystemAddresses,
+    ///      following RWAToken's one-time deployer-only setter pattern.
     constructor(uint48 adminTransferDelay, address admin, address complianceOperator)
         AccessControlDefaultAdminRules(adminTransferDelay, admin)
     {
@@ -83,12 +79,9 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable, Acc
         return _records[account];
     }
 
-    /// @dev `AccessControlEnumerable` and `AccessControlDefaultAdminRules` both extend
-    ///      `AccessControl` and override some of its members: the first `_grantRole`,
-    ///      `_revokeRole` and `supportsInterface` (to track role members), the second every
-    ///      member overridden here (to add the two-step admin transfer rules). Solidity requires this
-    ///      contract to resolve each of them explicitly. Every override only calls `super`, so
-    ///      the full linearized chain runs.
+    /// @dev Both AccessControl extensions override shared members, requiring explicit resolution.
+    ///      Enumerable tracks grants/revokes and exposes its interface; DefaultAdminRules enforces
+    ///      two-step admin transfers. Calling super preserves the full linearized override chain.
     function _grantRole(bytes32 role, address account)
         internal
         override(AccessControlEnumerable, AccessControlDefaultAdminRules)
@@ -144,8 +137,7 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable, Acc
 
     function _setStatus(address account, ComplianceStatus status, uint64 validUntil) private {
         if (account == address(0)) revert ZeroAddressAccount();
-        // A system address must stay Allowed with no expiry; either deviation
-        // (a non-Allowed status, or an Allowed record that will itself expire) reverts
+        // System addresses require Allowed with no expiry
         if (_systemAddresses[account] && (status != ComplianceStatus.Allowed || validUntil != 0)) {
             revert SystemAddressCannotBeBlocked(account);
         }

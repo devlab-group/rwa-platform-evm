@@ -1,13 +1,10 @@
-// Formats minimal-unit amounts and converts whole-unit input to integer units
-// with toMinimalUnits. API amounts stay decimal strings or BigInt rather than
-// JavaScript numbers or JSON floats.
+// Formats and converts whole/minimal units; amounts use decimal strings or BigInt,
+// avoiding JavaScript-number/JSON-float precision loss
 import { formatUnits, parseUnits } from "viem";
 
 /**
- * Renders a minimal-units amount string for display. With `decimals` (e.g.
- * Project.decimals for RWA amounts) the value is scaled to whole units;
- * without, the raw integer is digit-grouped and the caller must label the unit
- * (see TransactionPreview).
+ * Scales minimal-unit strings when decimals is supplied; otherwise groups raw digits.
+ * Callers must label raw units (see TransactionPreview).
  */
 export function formatTokenAmount(raw: string, decimals?: number): string {
   if (raw === "" || raw === undefined) return "-";
@@ -22,11 +19,7 @@ export function formatTokenAmount(raw: string, decimals?: number): string {
   }
 }
 
-/**
- * Thrown by `toMinimalUnits` when the entered value isn't a valid non-negative
- * amount for a token with `decimals` fractional places. `.message` echoes the
- * typed value and is meant to be shown to the user as-is.
- */
+/** Invalid non-negative amount or token precision; message echoes the input for display */
 export class AmountFormatError extends Error {
   constructor(
     public readonly value: string,
@@ -42,21 +35,19 @@ export class AmountFormatError extends Error {
 }
 
 /**
- * Converts whole-unit input, such as "1.5", to minimal-unit decimal strings
- * using viem parseUnits. Rejects empty, negative and over-precise input before
- * coercion or rounding: "1.2345678" at 6 decimals must not become "1234568".
+ * Converts whole-unit input with parseUnits after rejecting empty, negative or over-precise
+ * values, so 1.2345678 at 6 decimals cannot silently become 1234568
  */
 export function toMinimalUnits(human: string, decimals: number): string {
   const value = human.trim();
-  // Non-negative decimal only: "5", "5.", "5.5", ".5", "00.50". Rejects "",
-  // ".", "-1", "1e3", "1,000", "abc", "1.5.5".
+  // Accept decimals like "5", "5.", "5.5", ".5", "00.50"; reject "", ".", "-1", "1e3",
+  // "1,000", "abc" and "1.5.5"
   if (!/^(\d+\.?\d*|\.\d+)$/.test(value)) {
     throw new AmountFormatError(human, decimals);
   }
   const frac = value.includes(".") ? value.slice(value.indexOf(".") + 1) : "";
   if (frac.length > decimals) {
-    // More fractional digits than the token supports: parseUnits would round
-    // and change the amount, so reject
+    // Reject excess fractional digits before parseUnits can round the amount
     throw new AmountFormatError(human, decimals);
   }
   return parseUnits(value, decimals).toString();

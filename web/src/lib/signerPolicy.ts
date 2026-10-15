@@ -1,13 +1,11 @@
-// The offline signer's trust-root policy: the `--policy policy.json` file the
-// admin hands the auditor. The signer requires these six keys and rejects
-// unknown ones. It also accepts optional `maxAttestationLifetimeHours` and
-// `safe` keys, which the console does not write.
+// Signer --policy trust root: six required keys below; rejects unknown keys.
+// Optional maxAttestationLifetimeHours and safe are supported by the signer but not written here.
 import type { components } from "./api-types";
 
 type Project = components["schemas"]["Project"];
 
 export interface SignerPolicy {
-  /** Decimal string such as "31337", not a JSON number; the signer parses it as a decimal integer string */
+  /** Decimal integer string, e.g. "31337"; not a JSON number */
   chainId: string;
   /** SupplyController address */
   controller: string;
@@ -21,11 +19,7 @@ export interface SignerPolicy {
   profileDigest: string;
 }
 
-/**
- * Assembles the signer policy from the loaded project and the profile UUID.
- * Returns null when any of the six values is missing, for example before the
- * project is deployed, so the download is never a partial file.
- */
+/** Builds policy from project/profile UUID; returns null if any required value is absent */
 export function buildSignerPolicy(
   project: Project | undefined,
   projectUuid: string | undefined,

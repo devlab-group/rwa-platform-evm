@@ -1,18 +1,12 @@
-// Command opsctl is the operator CLI for recovery actions: replacing a stuck
-// transaction, resetting the indexer checkpoint, handling dead-letter queue
-// entries, and re-running IPFS replication.
+// Command opsctl recovers transactions, indexer checkpoints, DLQ entries and IPFS
+// publications. It reads platform's --config and uses the same MongoDB, or a throwaway
+// store with mongo.persistence_mode: memory.
 //
-// opsctl does not authenticate its caller. It reads the platform's own --config
-// file, which holds the chain RPC, Mongo and hot key settings, so anyone who can
-// run it already holds those secrets. Access control is host and file access to
-// that config, as for `platform`.
-//
-// The mutating subcommands (everything except dlq list and dlq inspect) write
-// to the same MongoDB as the platform, or to a throwaway in-memory store when
-// mongo.persistence_mode: memory. Each one records an audit_logs entry with category
-// "opsctl" and actor "opsctl:" plus the --actor label or OS user. An intent
-// entry is written before the action and a result entry after it, whether it
-// succeeds or fails; see opsCtx.audited.
+// Host and config-file permissions control access; opsctl does not authenticate
+// callers. Audit entries use category "opsctl" and actor "opsctl:" plus --actor, the OS
+// user or "opsctl". Mutating command functions require a durable intent and attempt a
+// result write after success or failure (opsCtx.audited); preflight failures can occur
+// before auditing.
 //
 // Usage:
 //
@@ -99,9 +93,8 @@ func run(args []string) int {
 	return 0
 }
 
-// auditActor returns the audit actor label: the --actor value, else the OS
-// user, else "opsctl", always prefixed with "opsctl:". The label attributes
-// entries and does not authorize anything.
+// auditActor prefixes "opsctl:" to --actor, the OS user or "opsctl", in that order; the
+// label attributes actions without authorizing them
 func auditActor(actorFlag string) string {
 	label := strings.TrimSpace(actorFlag)
 	if label == "" {
@@ -115,9 +108,8 @@ func auditActor(actorFlag string) string {
 	return "opsctl:" + label
 }
 
-// connectRepos uses development memory storage only when configured explicitly.
-// Otherwise MongoDB connection failures return an error without falling back
-// to a different store
+// connectRepos uses memory only when explicitly configured; MongoDB connection failures
+// return errors without fallback
 func connectRepos(ctx context.Context, cfg config.Config) (*repository.Repositories, func(), error) {
 	if cfg.PersistenceMode == "memory" {
 		return memory.New(), func() {}, nil
@@ -129,17 +121,14 @@ func connectRepos(ctx context.Context, cfg config.Config) (*repository.Repositor
 	return mongodb.New(client.Database(cfg.MongoDB)), func() { _ = client.Disconnect(context.Background()) }, nil
 }
 
-// dialChain connects the chain RPC client for tx replace, indexer
-// reset-checkpoint and dlq retry, and verifies the endpoint serves the
-// configured chain ID (see serverwiring.DialChain). The caller closes it.
+// dialChain verifies chain identity for replacement, checkpoint reset and DLQ retry via
+// serverwiring.DialChain; the caller closes the client
 func dialChain(ctx context.Context, cfg config.Config) (*blockchain.RPCClient, error) {
 	return serverwiring.DialChain(ctx, cfg)
 }
 
-// projectAddresses loads the deployed contract addresses from the Project
-// record in the database; config holds only the factory address. A missing
-// record is an error, because the typed decoders and the indexer's address set
-// depend on it.
+// projectAddresses loads stored child addresses; missing Project records fail because
+// typed decoding and indexer watches need them. Config supplies the factory.
 func projectAddresses(o opsCtx) (models.Addresses, error) {
 	p, err := o.repos.Projects.Get(o.ctx)
 	if err != nil {
@@ -148,25 +137,18 @@ func projectAddresses(o opsCtx) (models.Addresses, error) {
 	return p.Addresses, nil
 }
 
-// buildIndexer builds an indexer with the platform's source, stores, address
-// set and dead-letter queue, enough for ResetToTrustedCheckpoint and
-// RetryDeadLetter. opsctl never polls it. The address set and decoder come from
-// the Project record's addresses.
+// buildIndexer supports checkpoint reset and DLQ retry with the supplied project
+// addresses, configured factory, repositories and DLQ; opsctl never polls it.
 //
-// The decoder is serverwiring.StrictDecoder, which decodes by address like the
-// platform's decoder but returns an error instead of a generic topic-only event
-// for anything that is not a known typed event. RetryDeadLetter records a
-// decode error as another failure instead of resolving the entry, so a retry
-// never resolves an entry it could only decode generically.
+// serverwiring.StrictDecoder rejects generic events. RetryDeadLetter records decode
+// failures without resolving entries; see StrictDecoder for dispatch rules.
 func buildIndexer(cfg config.Config, addrs models.Addresses, repos *repository.Repositories, source indexer.ChainSource) *indexer.Indexer {
 	return indexer.New(source, repos.IndexerCheckpoints, repos.ChainEvents, cfg.ChainID, serverwiring.IndexerAddresses(addrs, cfg.FactoryAddress), cfg.StartBlock, serverwiring.StrictDecoder(addrs, cfg.FactoryAddress),
 		indexer.WithDeadLetterQueue(repos.IndexerDeadLetters))
 }
 
-// buildReplicationManager builds the replication manager as cmd/platform's
-// newIPFSReplicationManager does. That helper is unexported in another main
-// package, so this is a copy. Unlike the platform, it returns an error when no
-// backup destination is configured.
+// buildReplicationManager configures local IPFS and backups as platform does, but
+// requires a backup rather than returning nil when none exists
 func buildReplicationManager(cfg config.Config, repos *repository.Repositories) (*ipfs.ReplicationManager, error) {
 	if cfg.IPFSAPIURL == "" {
 		return nil, fmt.Errorf("IPFS_API_URL is not configured")
@@ -189,10 +171,9 @@ func buildReplicationManager(cfg config.Config, repos *repository.Repositories) 
 	return ipfs.NewReplicationManager(local, backups, cfg.IPFSReplicationThreshold, repos.Publications), nil
 }
 
-// loadRoleSigner loads role's hot key through internal/keys with the platform's
-// KEY_PROVIDER_MODE, so `tx replace` signs with the same key the server uses.
-// Only compliance is valid, because it is the only hot key the platform uses to
-// submit transactions.
+// loadRoleSigner loads the compliance replacement key through internal/keys using cfg's
+// provider settings; other roles fail because the platform submits only compliance
+// transactions
 func loadRoleSigner(role string, cfg config.Config) (keys.Provider, error) {
 	var rawHex string
 	switch role {
@@ -209,10 +190,9 @@ func loadRoleSigner(role string, cfg config.Config) (keys.Provider, error) {
 	})
 }
 
-// refuseIfIndexerUnsafe refuses an action while the indexer is paused in
-// ReconciliationRequired, unless the operator passes --allow-unsafe, because
-// the chain-derived read models are frozen and may be stale. `indexer
-// reset-checkpoint` does not call it, since that command clears the state.
+// refuseIfIndexerUnsafe gates replacement and DLQ retry on ReconciliationRequired
+// unless --allow-unsafe is set, avoiding mutations against unreconciled state.
+// Checkpoint reset bypasses it to clear the flag.
 func refuseIfIndexerUnsafe(o opsCtx, cfg config.Config, allowUnsafe bool) error {
 	unsafe, err := serverwiring.IndexerUnsafe(o.ctx, o.repos, cfg.ChainID)
 	if err != nil {
@@ -243,8 +223,7 @@ func dispatch(o opsCtx, cfg config.Config, group, action string, args []string) 
 			return err
 		}
 		defer client.Close()
-		// Refuse to broadcast a replacement while chain-derived state is frozen,
-		// unless overridden
+		// Require reconciled state before replacement unless overridden
 		if err := refuseIfIndexerUnsafe(o, cfg, *allowUnsafe); err != nil {
 			return err
 		}
@@ -253,8 +232,7 @@ func dispatch(o opsCtx, cfg config.Config, group, action string, args []string) 
 			return err
 		}
 		defer signer.Close()
-		// NewTxManager applies TX_COORDINATION_MODE, so a mongo-lease deployment
-		// shares the nonce lease with the running replicas
+		// Share configured nonce leases and fees with running replicas
 		txs := serverwiring.NewTxManager(cfg, client, o.repos)
 		return runTxReplace(o, txs, signer, *id, *bump)
 
@@ -277,8 +255,7 @@ func dispatch(o opsCtx, cfg config.Config, group, action string, args []string) 
 			return err
 		}
 		defer client.Close()
-		// Not gated by refuseIfIndexerUnsafe, because this command clears
-		// ReconciliationRequired
+		// Reset clears ReconciliationRequired, so it bypasses the safety gate
 		idx := buildIndexer(cfg, addrs, o.repos, client)
 		return runIndexerResetCheckpoint(o, idx, client, *block, *hash)
 
@@ -310,10 +287,8 @@ func dispatch(o opsCtx, cfg config.Config, group, action string, args []string) 
 		if err != nil {
 			return err
 		}
-		// Refuse when no typed contract is deployed: only the generic decoder
-		// would be available, and its events never reach a typed projector.
-		// With typed contracts, StrictDecoder still refuses to resolve an entry
-		// it can only decode generically.
+		// Require configured typed events before retry; StrictDecoder rejects generic-only
+		// decoding
 		if len(serverwiring.KnownEventNames(addrs, cfg.FactoryAddress)) == 0 {
 			return fmt.Errorf("dlq retry refused: the project record has no typed contract addresses, so only the generic decoder is available")
 		}

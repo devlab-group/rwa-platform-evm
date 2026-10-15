@@ -19,10 +19,9 @@ var statusNames = map[uint8]models.ComplianceStatus{
 	2: models.ComplianceBlocked,
 }
 
-// BuildStatuses replays ComplianceRegistry StatusChanged events in
-// (blockNumber, logIndex) order and returns each account's current on-chain
-// status and validUntil. The events say nothing about OwnershipVerified, which
-// Reconcile keeps from the existing investor record.
+// BuildStatuses replays StatusChanged by (blockNumber, logIndex) into account
+// status/validUntil. OwnershipVerified is off-chain and preserved separately by
+// Reconcile.
 func BuildStatuses(events []*models.ChainEvent) map[string]struct {
 	Status     models.ComplianceStatus
 	ValidUntil int64
@@ -65,10 +64,8 @@ func toString(v any) string {
 	return s
 }
 
-// toUint8 and toInt64 accept the numeric types a ChainEvent.Data value can
-// have. It keeps its original Go type (uint8, uint64, ...) straight from the
-// indexer, but after a round trip through MongoDB the driver returns int32 or
-// int64, whatever width was written.
+// toUint8 and toInt64 handle ChainEvent.Data numbers from direct indexer types and
+// MongoDB decoding, including int32/int64
 func toUint8(v any) uint8 {
 	switch t := v.(type) {
 	case uint8:
@@ -105,17 +102,12 @@ func toInt64(v any) int64 {
 	}
 }
 
-// Reconcile rebuilds each account's Status and ValidUntil from the indexed
-// ComplianceRegistry StatusChanged events, so a compliance action taken outside
-// this server, such as by a multisig holding COMPLIANCE_ROLE, is reflected. The
-// chain is the source of truth. OwnershipVerified is off-chain data, so it is
-// kept from the existing investor record and defaults to false for an unknown
-// account.
-//
-// Each call rebuilds from all persisted StatusChanged events. An account whose
-// last such event was removed by an indexer reorg rollback (internal/indexer)
-// has no state and is reset to Unknown with ValidUntil 0, so a rolled-back
-// action cannot leave a wallet Allowed or Blocked.
+// Reconcile rebuilds Status and ValidUntil from persisted ComplianceRegistry
+// StatusChanged events, including multisig actions outside the server. It preserves
+// off-chain OwnershipVerified, defaulting false for new accounts.
+// When no event survives for an account, including after indexer reorg rollback, it
+// resets Status to Unknown and ValidUntil to 0 so orphaned actions cannot leave stale
+// Allowed/Blocked state.
 func Reconcile(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, complianceAddr string, investors repository.InvestorRepository) error {
 	events, err := chainEvents.ListByName(ctx, chainID, complianceAddr, "StatusChanged")
 	if err != nil {

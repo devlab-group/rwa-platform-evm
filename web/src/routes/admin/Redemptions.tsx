@@ -48,8 +48,8 @@ const STATUS_FILTERS = [
 ] as const;
 
 /**
- * Shows redemption status, compliance, fixed quotes and timeout.
- * Privileged funding and rejection use wallet submissions or Safe batches.
+ * Shows redemption states, eligibility, fixed quotes and timeout; routes fund/reject through wallet
+ * or Safe
  */
 export function Redemptions() {
   const [statusFilter, setStatusFilter] =
@@ -68,8 +68,7 @@ export function Redemptions() {
   const proj = project.status === "success" ? project.data : undefined;
   const chainId = proj?.chainId ?? 0;
   const finalityConfirmations = proj?.finalityConfirmations;
-  // Use project decimals for RWA and API-or-chain decimals for quote display;
-  // fall back to raw quote units if resolution fails
+  // Use project RWA decimals and resolved quote decimals; unresolved quotes display raw units
   const rwaDecimals = proj?.decimals;
   const quoteDecimalsState = useAsync<number | null>(async () => {
     if (!proj || !chainId) return null;
@@ -89,8 +88,8 @@ export function Redemptions() {
       <header className="app-main__header">
         <h1>Redemptions</h1>
         <p>
-          Track requests through funding and claim; never guaranteed until
-          claimed.
+          Track funding and claims. Pending or funded requests do not guarantee
+          payment.
         </p>
       </header>
 
@@ -231,7 +230,7 @@ function RedemptionDetail({
   const from = useWalletContext().address;
   const detail = useAsync<Redemption>(() => api.getRedemption(id), [id]);
   const [reasonCode, setReasonCode] = useState("");
-  // Include the claim by default, so a failed payout also reverts the funding
+  // Default to claim in the atomic batch so payout failure rolls back funding
   const [claimInBatch, setClaimInBatch] = useState(true);
   const [busy, setBusy] = useState<"fund" | "reject" | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
@@ -250,9 +249,9 @@ function RedemptionDetail({
     setProgress(null);
   }
 
-  // Wallet funding waits for sufficient quote allowance and then a funding receipt.
-  // Safe export combines approval and funding, optionally with claim;
-  // a beneficiary blocked in the read model cannot be funded here.
+  // Wallet funding checks allowance, awaits approval if needed, then confirms funding.
+  // Safe export combines approval/funding and optional claim; live eligibility preflight
+  // blocks funding for an ineligible Pending beneficiary.
   async function handleFund(route: TxRoute) {
     begin();
     if (blocked) return;
@@ -266,7 +265,7 @@ function RedemptionDetail({
       detail.status === "success" ? detail.data.quoteAmount : undefined;
     if (!escrow || !quoteToken || !quoteAmount) {
       setError(
-        "Missing escrow / quote token address or quote amount - project not deployed?",
+        "Escrow, quote-token address or quote amount is missing. Check deployment.",
       );
       return;
     }
@@ -420,7 +419,7 @@ function RedemptionDetail({
       </AsyncSection>
 
       <div className="tx-preview__actions u-mt-4">
-        {/* Route funding and rejection through their role holder's wallet or Safe batch */}
+        {/* Route fund/reject through their role holder's wallet or Safe */}
         <RoleGate
           roles={roles}
           role={ROLES.treasurer}
@@ -435,7 +434,8 @@ function RedemptionDetail({
                     checked={claimInBatch}
                     onChange={(e) => setClaimInBatch(e.target.checked)}
                   />{" "}
-                  Claim in the same batch to roll back funding if payment fails
+                  Claim atomically with funding so payment failure rolls back
+                  funding
                 </label>
               )}
               <button
@@ -445,7 +445,7 @@ function RedemptionDetail({
                 disabled={busy !== null || blocked}
                 title={
                   blocked
-                    ? "The recorded beneficiary is not currently Allowed. Funding will revert until compliance status is restored."
+                    ? "The beneficiary is not Allowed. Restore compliance before funding or the call will revert."
                     : undefined
                 }
               >
@@ -499,8 +499,7 @@ function RedemptionDetail({
 
       {blocked && (
         <p className="async-state--error" role="alert">
-          Funding is blocked because the beneficiary is not Allowed. Restore
-          their compliance status before funding.
+          Restore the beneficiary&apos;s Allowed status before funding.
         </p>
       )}
 

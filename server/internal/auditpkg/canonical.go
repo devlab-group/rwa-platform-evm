@@ -1,9 +1,7 @@
-// Package auditpkg canonicalizes, hashes and content-addresses profile and
-// metadata documents, and builds and verifies .rwa audit packages.
-// Canonicalization uses github.com/gowebpki/jcs, a fork of the reference Go
-// implementation of RFC 8785, so canonical bytes match other conformant
-// implementations without reimplementing the ECMAScript number and string
-// serialization rules.
+// Package auditpkg canonicalizes, hashes and content-addresses profiles and metadata,
+// and builds and verifies .rwa packages. Canonicalization uses github.com/gowebpki/jcs,
+// a fork of the RFC 8785 reference implementation, for interoperable ECMAScript number
+// and string serialization.
 package auditpkg
 
 import (
@@ -16,9 +14,8 @@ import (
 	"github.com/multiformats/go-multihash"
 )
 
-// The structural limits from docs/spec/asset-profile.md ("Structural limits").
-// They apply even when a schema declares no bounds of its own.
-// MaxStringLength counts UTF-8 bytes and covers object keys as well as values.
+// Structural limits from docs/spec/asset-profile.md apply regardless of schema bounds.
+// MaxStringLength counts UTF-8 bytes in both keys and values.
 const (
 	MaxDocumentBytes = 1 << 20 // 1,048,576 bytes (1 MiB)
 	MaxObjectDepth   = 32
@@ -27,15 +24,10 @@ const (
 	MaxObjectKeys    = 4096
 )
 
-// CheckLimits rejects raw unless it is non-empty, valid UTF-8 and well-formed
-// JSON within the structural limits: document size, nesting depth, string
-// length, array length and object key count. The limits apply regardless of
-// any JSON Schema the caller also uses.
-//
-// Callers that recurse into an untrusted document, such as the asset schema
-// guard, compiler and validator in internal/assets, call it first. The scan
-// reads tokens with an explicit stack instead of recursing, so deeply nested
-// input cannot exhaust the Go stack.
+// CheckLimits requires non-empty, valid UTF-8 JSON within document size, nesting depth,
+// string length, array length and object key limits, regardless of schema bounds. Its
+// iterative token scan prevents deep input from exhausting the Go stack. Call it before
+// recursive schema guards, compilation or validation in internal/assets.
 func CheckLimits(raw []byte) error {
 	if len(raw) == 0 {
 		return fmt.Errorf("auditpkg: empty document")
@@ -49,9 +41,8 @@ func CheckLimits(raw []byte) error {
 	return checkLimits(raw)
 }
 
-// Canonicalize returns the RFC 8785 canonical form of raw. It runs CheckLimits
-// first because jcs.Transform does not enforce the structural limits, and it
-// rejects duplicate object keys through jcs.Transform.
+// Canonicalize returns RFC 8785 canonical JSON. CheckLimits enforces structural bounds
+// first; jcs.Transform rejects duplicate object keys.
 func Canonicalize(raw []byte) ([]byte, error) {
 	if err := CheckLimits(raw); err != nil {
 		return nil, err

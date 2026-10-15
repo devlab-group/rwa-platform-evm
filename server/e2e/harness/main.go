@@ -1275,15 +1275,10 @@ func (e enforcementState) frozenAmount(holder common.Address) (string, bool) {
 	return "", false
 }
 
-// enforcementLifecycle sends the ERC-7943 admin transactions and checks that the
-// server's read model follows. It freezes part of the investor's balance, seizes
-// more than the unfrozen part, which reduces the freeze, and then releases what is
-// left. The admin signs every write and the server only indexes the events, so each
-// assertion polls GET /project/enforcement and does not read anything back from the
-// transaction just sent.
-//
-// It runs last so the redemption assertions above run against an unfrozen
-// balance.
+// enforcementLifecycle checks indexed ERC-7943 freeze, seizure and release state. A
+// seizure larger than the unfrozen balance must reduce the freeze. Admin wallet writes
+// are verified by polling GET /project/enforcement, not transaction results. Run last
+// so redemption tests use unfrozen balances.
 func enforcementLifecycle(
 	ctx context.Context,
 	api *apiClient,

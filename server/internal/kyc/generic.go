@@ -10,15 +10,12 @@ import (
 	"strings"
 )
 
-// GenericWebhookSignatureHeader is the header the "none" provider reads: the
-// hex HMAC-SHA256 of the raw body under the shared secret, optionally
-// 0x-prefixed (see kycWebhook in api/openapi.yaml)
+// GenericWebhookSignatureHeader carries none-mode raw-body HMAC-SHA256 as optional
+// 0x-prefixed hex; see api/openapi.yaml's kycWebhook
 const GenericWebhookSignatureHeader = "X-Webhook-Signature"
 
-// genericProvider is the provider-agnostic default for issuers who feed the
-// webhook from their own integration. It has no server-initiated flow, and the
-// webhook body is already the platform's decision shape, authenticated by a
-// shared HMAC secret.
+// genericProvider accepts the platform decision shape from issuer integrations using
+// shared-secret HMAC authentication. It has no server-initiated verification flow.
 type genericProvider struct {
 	secret string
 }
@@ -35,9 +32,7 @@ func (p *genericProvider) StartVerification(ctx context.Context, address string)
 	return Session{}, ErrStartNotSupported
 }
 
-// genericPayload is the generic webhook body, with the fields of
-// compliance.WebhookPayload. It is redeclared here so this package does not
-// import internal/compliance.
+// genericPayload mirrors compliance.WebhookPayload without importing compliance
 type genericPayload struct {
 	EventID    string `json:"eventId"`
 	Address    string `json:"address"`
@@ -71,10 +66,9 @@ func (p *genericProvider) VerifyWebhook(rawBody []byte, headers http.Header) (De
 	}, nil
 }
 
-// verifyHexHMACSHA256 reports whether sigHex (hex, optionally 0x-prefixed) is a
-// valid HMAC-SHA256 of body under secret, compared in constant time. An empty
-// secret always fails, because anyone can compute an HMAC under an empty key.
-// Providers other than sumsub use it for webhook verification.
+// verifyHexHMACSHA256 checks optionally 0x-prefixed hex HMAC-SHA256 in constant time.
+// Empty secrets fail to prevent forgery. Generic and Onfido webhooks use it; Sumsub has
+// its own verifier.
 func verifyHexHMACSHA256(body []byte, sigHex, secret string) bool {
 	if secret == "" {
 		return false

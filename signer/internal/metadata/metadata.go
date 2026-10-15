@@ -1,7 +1,5 @@
-// Package metadata validates a metadata envelope against the platform schema
-// (shared/schemas/metadata.schema.json) and exposes the parsed fields the signer
-// cross-checks against the typed attestation: issuance.amount, recordId and the proof
-// hashes
+// Package metadata validates shared/schemas/metadata.schema.json rules, exposing
+// issuance.amount/recordId for attestation binding and proof hashes for review
 package metadata
 
 import (
@@ -22,8 +20,8 @@ var (
 	uuidPattern     = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 )
 
-// maxIssuanceAmount is the uint256 maximum, because issuance.amount becomes the mint
-// amount in SupplyController.mint; server/internal/assets/record.go applies the same bound
+// maxIssuanceAmount is mint's uint256 maximum, matching
+// server/internal/assets/record.go
 var maxIssuanceAmount = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 
 // Proof binds an external document to the record by content hash
@@ -33,7 +31,7 @@ type Proof struct {
 	URI    string // optional; empty means not present
 }
 
-// Metadata is a validated, parsed metadata envelope.
+// Metadata is a validated, parsed envelope
 type Metadata struct {
 	PlatformVersion string
 	ProjectID       string
@@ -48,10 +46,9 @@ type Metadata struct {
 	Digest         [32]byte
 }
 
-// Validate parses and validates raw metadata envelope JSON against
-// shared/schemas/metadata.schema.json, the structural limits in canonical.DefaultLimits
-// and the platform rules (recordId pattern, issuance.amount is a positive decimal string
-// within uint256, proofs[].sha256 is lowercase hex)
+// Validate checks metadata envelope rules (shared/schemas/metadata.schema.json) and
+// canonical.DefaultLimits: recordId pattern, positive uint256 issuance.amount and
+// lowercase proof hashes
 func Validate(raw []byte) (*Metadata, error) {
 	v, err := canonical.ParseWithLimits(raw, canonical.DefaultLimits())
 	if err != nil {
@@ -125,10 +122,9 @@ func Validate(raw []byte) (*Metadata, error) {
 	if !ok || !amountPattern.MatchString(amt) {
 		return nil, fmt.Errorf("metadata: issuance.amount must be a decimal string matching ^[0-9]+$")
 	}
-	// The pattern accepts "0" and arbitrarily large numerals, but SupplyController
-	// reverts with ZeroAmount() on a zero amount and the value must fit a uint256. The
-	// same bound is applied in server/internal/assets/record.go so both validators agree
-	// on every amount string.
+	// The digit pattern also accepts zero and oversized values; enforce positive uint256
+	// as server/internal/assets/record.go does and SupplyController's ZeroAmount()
+	// requires
 	amtInt, ok := new(big.Int).SetString(amt, 10)
 	if !ok || amtInt.Sign() <= 0 || amtInt.Cmp(maxIssuanceAmount) > 0 {
 		return nil, fmt.Errorf("metadata: issuance.amount must be a positive integer no greater than 2^256-1 (the contract rejects a zero mint amount)")
@@ -143,10 +139,8 @@ func Validate(raw []byte) (*Metadata, error) {
 	if !ok || unit == "" {
 		return nil, fmt.Errorf("metadata: issuance.unit must be a non-empty string")
 	}
-	// unit and proofs[].type are printed on the review screen. A control character in
-	// either has no legitimate use and is how a package would try to move the terminal
-	// cursor over the amount or digest line, so reject the document instead of relying
-	// on the screen's escaping alone.
+	// Reject non-printable issuance.unit/proofs[].type before review; rendering also
+	// escapes controls that could repaint amounts or digests
 	if !textsafe.IsPrintable(unit) {
 		return nil, fmt.Errorf("metadata: issuance.unit contains a control or non-printable character (%s); only printable text is allowed", textsafe.SanitizeForTerminal(unit))
 	}

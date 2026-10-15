@@ -1,13 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Two modes, selected by whether BASE_URL is set:
-//  - default (no BASE_URL): serves the production build with `vite preview`,
-//    and every spec installs a mocked API and a mocked wallet (see
-//    tests/fixtures). It needs no backend and is deterministic.
-//  - live (BASE_URL=http://host:port): points at an already running
-//    deployment that serves this SPA together with the platform API. Specs
-//    install no mocks in this mode, and specs marked mockOnly() are skipped
-//    (see tests/fixtures/fixtures.ts).
+// BASE_URL selects the test mode:
+// - Unset: vite preview serves the production build; API and wallet mocks need no
+//   backend and keep tests deterministic.
+// - Set (http://host:port): use a running SPA/API deployment without mocks; skip
+//   mockOnly() specs.
+// See tests/fixtures/fixtures.ts.
 const liveBaseUrl = process.env.BASE_URL;
 const PREVIEW_PORT = 4173;
 

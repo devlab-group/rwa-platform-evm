@@ -1,8 +1,7 @@
-// Package rwapkg reads .rwa ZIP archives containing manifest.json, profile.json,
-// metadata.json, typed-data.json and optional proofs/. Extraction stays in memory.
-// It rejects traversal, symlinks, duplicate names, unsupported compression and
-// entry-count or expanded-size excesses. Store and Deflate are supported;
-// size limits count bytes read, not untrusted ZIP-header declarations.
+// Package rwapkg reads .rwa ZIPs in memory for manifest, profile, metadata, typed data
+// and optional proofs. Extract rejects unsafe names, Unix symlinks, duplicates,
+// unsupported compression and exceeded count/byte limits; ParseManifest and VerifyFiles
+// enforce payload inventory.
 package rwapkg
 
 import (
@@ -19,14 +18,12 @@ import (
 	"strings"
 )
 
-// MaxCompressedSize bounds the on-disk size of a .rwa package accepted by
-// ReadPackageFile. ReadPackageFile checks the Stat size and also caps the read itself,
-// so an oversized file cannot exhaust memory before Extract applies its
-// uncompressed-size limits.
+// MaxCompressedSize caps ReadPackageFile's compressed input through Stat and a limited
+// reader, before Extract enforces expanded-size limits
 const MaxCompressedSize = 64 * 1024 * 1024 // 64 MiB
 
-// ReadPackageFile reads the .rwa package at path into memory, rejecting it before
-// allocation if its compressed size exceeds maxCompressed
+// ReadPackageFile reads at most maxCompressed+1 bytes, rejecting oversized Stat results
+// before payload reads and growth beyond maxCompressed afterward
 func ReadPackageFile(path string, maxCompressed int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -42,8 +39,7 @@ func ReadPackageFile(path string, maxCompressed int64) ([]byte, error) {
 		return nil, fmt.Errorf("rwapkg: %q is %d bytes, exceeds the maximum compressed package size of %d bytes", path, info.Size(), maxCompressed)
 	}
 
-	// A file can grow between Stat and read, so cap the read itself, as Extract does
-	// for decompressed bytes
+	// Cap reads as well as Stat size, as Extract does for decompression
 	data, err := io.ReadAll(io.LimitReader(f, maxCompressed+1))
 	if err != nil {
 		return nil, fmt.Errorf("rwapkg: reading %q: %w", path, err)
@@ -61,8 +57,8 @@ type Options struct {
 	MaxTotalUncompressed      int64 // maximum sum of decompressed sizes across all entries
 }
 
-// DefaultOptions returns conservative limits suited to audit packages, which hold a
-// handful of small JSON documents plus a few proof PDFs or images
+// DefaultOptions limits entry count, individual expansion and total expansion for JSON
+// documents and attached proofs
 func DefaultOptions() Options {
 	return Options{
 		MaxFileCount:              256,
@@ -71,22 +67,18 @@ func DefaultOptions() Options {
 	}
 }
 
-// unixSymlinkMode is S_IFLNK (0120000) as stored in the upper 16 bits of a ZIP
-// entry's external file attributes on Unix-created archives
+// unixSymlinkMode is S_IFLNK (0120000) in the upper 16 bits of ZIP external Unix
+// attributes
 const unixSymlinkMode = 0120000
 
-// Extract opens zipBytes and returns each entry's decompressed content keyed by its
-// entry name. It rejects:
-//   - an empty archive or more entries than opts.MaxFileCount;
-//   - empty or absolute names, backslashes, and any name that path.Clean would change,
-//     which covers ".." segments (path traversal), "." segments, repeated slashes and
-//     a trailing slash;
-//   - symlink entries;
-//   - duplicate entry names;
-//   - compression methods other than Store and Deflate;
-//   - any entry, or the archive as a whole, that decompresses past the configured
-//     limits. The check counts the bytes actually read, so a header that under-reports
-//     the size cannot bypass it.
+// Extract returns decompressed entries by name, rejecting:
+//
+//   - Empty archives or counts above opts.MaxFileCount
+//   - Empty/absolute names, backslashes, parent traversal or names changed by path.Clean
+//     (including repeated/trailing slashes and dot segments)
+//   - Unix symlinks, duplicate names or methods other than Store/Deflate
+//   - Entry or total expansion above configured limits, counting bytes read rather than
+//     header declarations
 func Extract(zipBytes []byte, opts Options) (map[string][]byte, error) {
 	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
 	if err != nil {
@@ -186,7 +178,7 @@ var pathPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,255}$`)
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var hexDigestPattern = regexp.MustCompile(`^0x[0-9a-f]{64}$`)
 
-// ParseManifest validates raw manifest.json bytes against
+// ParseManifest checks manifest.json format and inventory rules from
 // shared/schemas/rwa-manifest.schema.json
 func ParseManifest(raw []byte) (*Manifest, error) {
 	var m Manifest
@@ -211,10 +203,8 @@ func ParseManifest(raw []byte) (*Manifest, error) {
 	if !hexDigestPattern.MatchString(m.MetadataDigest) {
 		return nil, fmt.Errorf("rwapkg: manifest metadataDigest must match ^0x[0-9a-f]{64}$")
 	}
-	// Constrain the file list as a whole, not only each entry: no duplicate paths, the
-	// three mandatory documents listed, and every other entry under proofs/. VerifyFiles
-	// then requires the extracted files to match this list exactly, so nothing
-	// undeclared can ride along in the package.
+	// Require unique paths, profile.json/metadata.json/typed-data.json and proofs/-only
+	// extras. VerifyFiles then rejects undeclared extracted payloads.
 	const (
 		mandatoryProfile   = "profile.json"
 		mandatoryMetadata  = "metadata.json"
@@ -256,9 +246,8 @@ func ParseManifest(raw []byte) (*Manifest, error) {
 	return &m, nil
 }
 
-// VerifyFiles checks that files (the extracted entries minus manifest.json) match the
-// manifest exactly: every declared path is present with the declared size and SHA-256,
-// and no extracted file is undeclared
+// VerifyFiles requires the extracted payload map (excluding manifest.json) to match
+// declared paths, sizes and SHA-256 hashes exactly, without extras
 func (m *Manifest) VerifyFiles(files map[string][]byte) error {
 	declared := make(map[string]bool, len(m.Files))
 	for _, mf := range m.Files {

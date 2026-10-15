@@ -47,7 +47,7 @@ type App struct {
 	// Empty disables the match requirement for development or tests.
 	ProjectID        string
 	LastIndexedBlock func() uint64 // nil-safe accessor; defaults to 0 if nil
-	ReadyCheck       func() error  // nil means always ready
+	ReadyCheck       func() error  // nil means not ready
 
 	Project    *project.Service
 	Records    *assets.RecordService
@@ -96,9 +96,9 @@ func (app *App) recordAudit(ctx context.Context, category, actor, action, target
 	}
 }
 
-// recordAuditIntent persists actor/action intent before a privileged effect.
-// Callers MUST abort on error and later link completion with recordAuditResult.
-// A reduced app with no Audit logger returns an empty ID without an error.
+// recordAuditIntent persists intent before a privileged effect. Callers MUST abort on
+// error and link completion with recordAuditResult. A reduced app without Audit returns
+// an empty ID and no error.
 func (app *App) recordAuditIntent(ctx context.Context, category, actor, action, target string, metadata map[string]any) (string, error) {
 	if app.Audit == nil {
 		return "", nil

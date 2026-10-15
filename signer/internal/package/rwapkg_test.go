@@ -12,8 +12,7 @@ import (
 	"testing"
 )
 
-// buildZip writes a well-formed zip archive from name to content pairs with the default
-// zip.Writer
+// buildZip uses zip.Writer to build an archive from name/content pairs
 func buildZip(t *testing.T, entries map[string][]byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -128,8 +127,8 @@ func TestExtract_RejectsUnsupportedCompression(t *testing.T) {
 	// Method 99 is neither Store nor Deflate
 	_, err := zw.CreateHeader(&zip.FileHeader{Name: "weird.bin", Method: 99})
 	if err != nil {
-		// archive/zip may refuse to write an unknown method; either way unsupported
-		// methods never get through, so treat this as a pass
+		// A writer refusal prevents constructing this case; otherwise Extract must reject the
+		// unsupported method
 		return
 	}
 	if err := zw.Close(); err != nil {
@@ -140,10 +139,8 @@ func TestExtract_RejectsUnsupportedCompression(t *testing.T) {
 	}
 }
 
-// TestExtract_RejectsZipBomb builds a real (not header-lied) decompression
-// bomb: a few kilobytes of compressed data that inflate to well past the
-// configured limit. The defense must be based on bytes actually read, not
-// on the archive's self-reported UncompressedSize64.
+// Inflate a real compressed payload past the limit; enforcement must count bytes read,
+// not trust UncompressedSize64
 func TestExtract_RejectsZipBomb(t *testing.T) {
 	payload := bytes.Repeat([]byte{0}, 50*1024*1024) // 50 MiB of zeros, compresses tiny
 	var buf bytes.Buffer
@@ -176,9 +173,7 @@ func TestExtract_RejectsTooManyEntries(t *testing.T) {
 	}
 }
 
-// TestReadPackageFile_RejectsOversizedCompressed checks that the compressed-size limit
-// is enforced through Stat before the whole file is allocated, not only after Extract
-// inflates it
+// Reject oversized compressed files at Stat before reading/allocating their payload
 func TestReadPackageFile_RejectsOversizedCompressed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "oversized.rwa")
 	if err := os.WriteFile(path, bytes.Repeat([]byte{0}, 4096), 0o644); err != nil {
@@ -210,19 +205,14 @@ func TestReadPackageFile_MissingFile(t *testing.T) {
 	}
 }
 
-// manifestFileEntry builds a ManifestFile whose sha256 and size are computed from
-// data, so callers do not have to keep them in sync by hand
+// manifestFileEntry computes data's size/SHA-256 so fixtures stay consistent
 func manifestFileEntry(path string, data []byte, mime string) ManifestFile {
 	sum := sha256.Sum256(data)
 	return ManifestFile{Path: path, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(data)), MIME: mime}
 }
 
-// mandatoryPackageFiles returns a name->content map for the three
-// mandatory package documents (profile.json/metadata.json/typed-data.json,
-// each with placeholder content) plus, if extra is non-nil, its entries
-// merged in. Used to build a manifest fixture that satisfies ParseManifest's
-// "the three mandatory documents must be present exactly once" rule without
-// every test having to spell all three out.
+// mandatoryPackageFiles supplies profile.json, metadata.json and typed-data.json
+// placeholders plus extras for valid manifest fixtures
 func mandatoryPackageFiles(extra map[string][]byte) map[string][]byte {
 	files := map[string][]byte{
 		"profile.json":    []byte(`{"profile":1}`),
@@ -268,8 +258,7 @@ func TestParseManifest_RejectsWrongVersion(t *testing.T) {
 	}
 }
 
-// TestParseManifest_RejectsDuplicatePaths checks that two manifest.files entries naming
-// the same path are rejected instead of one silently shadowing the other
+// Reject duplicate manifest paths instead of shadowing an earlier declaration
 func TestParseManifest_RejectsDuplicatePaths(t *testing.T) {
 	contents := mandatoryPackageFiles(map[string][]byte{"proofs/a.pdf": []byte("x")})
 	var files []ManifestFile
@@ -293,9 +282,8 @@ func TestParseManifest_RejectsDuplicatePaths(t *testing.T) {
 	}
 }
 
-// TestParseManifest_RejectsNonProofsExtraPath checks that a manifest.files entry other
-// than the three mandatory documents must live under proofs/, so an arbitrary top-level
-// path is rejected
+// Require non-mandatory manifest payloads under proofs/, rejecting arbitrary top-level
+// paths
 func TestParseManifest_RejectsNonProofsExtraPath(t *testing.T) {
 	contents := mandatoryPackageFiles(map[string][]byte{"sneaky.bin": []byte("x")})
 	var files []ManifestFile
@@ -316,9 +304,8 @@ func TestParseManifest_RejectsNonProofsExtraPath(t *testing.T) {
 	}
 }
 
-// TestParseManifest_RejectsMissingMandatoryFile checks that a manifest that never lists
-// one of the three mandatory documents is rejected up front, not later when main.go
-// looks it up among the extracted files
+// Reject missing mandatory document declarations in ParseManifest before CLI extraction
+// lookups
 func TestParseManifest_RejectsMissingMandatoryFile(t *testing.T) {
 	data := []byte(`{"profile":1}`)
 	manifest := Manifest{
@@ -335,8 +322,7 @@ func TestParseManifest_RejectsMissingMandatoryFile(t *testing.T) {
 	}
 }
 
-// TestManifest_VerifyFiles_RejectsUndeclaredExtra checks that an extracted file not
-// named in manifest.files is rejected instead of passing as an undeclared payload
+// Reject extracted files absent from manifest.files
 func TestManifest_VerifyFiles_RejectsUndeclaredExtra(t *testing.T) {
 	data := []byte(`{"asset":1}`)
 	sum := sha256.Sum256(data)

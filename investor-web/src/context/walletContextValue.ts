@@ -4,9 +4,8 @@ import type { Address, Hex } from "viem";
 export type WalletStatus = "disconnected" | "connecting" | "connected";
 
 /**
- * App-wide connected-wallet state (see WalletContext.tsx for the provider).
- * Kept in its own module so WalletContext.tsx exports only a component, as the
- * react-refresh lint rule requires.
+ * Shared wallet state for WalletContext.tsx; separate exports keep its provider compatible with
+ * react-refresh
  */
 export interface WalletContextValue {
   address: Address | null;
@@ -15,13 +14,13 @@ export interface WalletContextValue {
   connecting: boolean;
   switching: boolean;
   error: string | null;
-  /** Prompts the wallet for account access (eth_requestAccounts). */
+  /** Requests account access through eth_requestAccounts */
   connect: () => Promise<void>;
-  /** Client-side disconnect: forgets the account locally and does not revoke the wallet's permission for this site. */
+  /** Forgets the account locally without revoking the wallet's site permission */
   disconnect: () => void;
-  /** personal_sign the given message with the connected account. Throws if no wallet is connected. */
+  /** personal_sign with the connected account; throws when disconnected */
   signMessage: (message: string) => Promise<Hex>;
-  /** Requests the wallet switch to `expectedChainId` (wallet_switchEthereumChain), then refreshes chainId. */
+  /** Requests wallet_switchEthereumChain, then refreshes chainId */
   switchChain: (expectedChainId: number) => Promise<void>;
 }
 
@@ -29,7 +28,7 @@ export const WalletContext = createContext<WalletContextValue | undefined>(
   undefined,
 );
 
-/** Reads the app-wide wallet context. Throws if used outside <WalletProvider>. */
+/** Reads shared wallet state; throws outside WalletProvider */
 export function useWalletContext(): WalletContextValue {
   const ctx = useContext(WalletContext);
   if (!ctx)

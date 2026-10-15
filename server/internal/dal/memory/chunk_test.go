@@ -9,10 +9,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// TestChainChunkCommitConditionalVersion checks that CommitChunk succeeds only when
-// the stored checkpoint version equals ExpectedCheckpointVersion, bumps the
-// version on success, and writes nothing, with no events and no checkpoint
-// change, when another writer already advanced it
+// TestChainChunkCommitConditionalVersion checks matching-version commits and version
+// increments. Stale commits must write neither events nor checkpoint changes.
 func TestChainChunkCommitConditionalVersion(t *testing.T) {
 	ctx := context.Background()
 	events := NewChainEventRepository()

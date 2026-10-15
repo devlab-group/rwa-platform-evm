@@ -10,16 +10,14 @@ import (
 	"github.com/rwa-platform/server/internal/api/dto"
 )
 
-// getHealth implements GET /healthz (operationId getHealth).
-// Public liveness probe: always 200 with the chain id and the indexer's last
-// processed block. It checks no dependencies (see getReady).
+// getHealth serves public GET /healthz: always 200 with chain ID and indexer block,
+// without dependency checks; see getReady
 func (app *App) getHealth(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.NewHealth("ok", app.ChainID, app.lastIndexedBlock()))
 }
 
-// getReady implements GET /readyz (operationId getReady).
-// Public readiness probe: 200 when the chain, storage and indexer checks all
-// pass, otherwise 503 with a coarse reason.
+// getReady serves public GET /readyz: 200 if chain, storage and indexer checks pass,
+// otherwise 503 with a coarse reason
 func (app *App) getReady(c *gin.Context) {
 	// A nil ReadyCheck means the chain-dependent services were never wired (no,
 	// failed or wrong-chain RPC), so the instance must not report ready
@@ -28,9 +26,8 @@ func (app *App) getReady(c *gin.Context) {
 		return
 	}
 	if err := app.ReadyCheck(); err != nil {
-		// /readyz is unauthenticated, so the client gets only a coarse category.
-		// The underlying errors wrap RPC dial and Mongo ping failures that carry
-		// backend host:port and RPC endpoint details; the full text goes to the log.
+		// Public /readyz returns only a coarse category. Full errors, which may expose Mongo
+		// hosts or RPC endpoints, go to the log.
 		log.Printf("api: readiness check failed: %v", err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "reason": readinessReason(err)})
 		return
@@ -38,9 +35,9 @@ func (app *App) getReady(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.NewHealth("ready", app.ChainID, app.lastIndexedBlock()))
 }
 
-// readinessReason maps a readiness failure to a fixed label that reveals no
-// backend detail. The readiness closure in cmd/platform prefixes each failure
-// with "chain:", "storage:" or "indexer:"; any other error maps to "not ready".
+// readinessReason maps cmd/platform's "chain:", "storage:" and "indexer:" error
+// prefixes to fixed labels. Other errors become "not ready"; backend details remain
+// private.
 func readinessReason(err error) string {
 	switch {
 	case err == nil:

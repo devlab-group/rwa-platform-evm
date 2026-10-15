@@ -12,10 +12,9 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// TestAllTxStatusesUniqueAndComplete guards models.AllTxStatuses, the single
-// list of statuses, against duplicates and empties. The two tests below pin it to
-// the TxStatus constants and to the OpenAPI enum, so a status missing from the API
-// contract fails CI instead of rendering as an undefined badge in the SPA.
+// TestAllTxStatusesUniqueAndComplete rejects duplicate or empty models.AllTxStatuses
+// entries. The following tests match the list to TxStatus constants and the OpenAPI
+// enum, keeping generated client status coverage complete.
 func TestAllTxStatusesUniqueAndComplete(t *testing.T) {
 	seen := map[models.TxStatus]bool{}
 	for _, s := range models.AllTxStatuses {
@@ -45,11 +44,9 @@ func TestAllTxStatusesUniqueAndComplete(t *testing.T) {
 	}
 }
 
-// TestTransactionStatusEnumMatchesDomain checks that the statuses the handler
-// can emit (models.AllTxStatuses, since the handler returns string(tx.Status))
-// equal the api/openapi.yaml Transaction.status enum exactly. A status the server
-// can persist but the schema omits is out of contract, and the generated client
-// and UI cannot render it.
+// TestTransactionStatusEnumMatchesDomain requires models.AllTxStatuses to equal
+// OpenAPI's Transaction.status enum. The handler emits string(tx.Status), so every
+// persisted status must be covered by the API and generated clients.
 func TestTransactionStatusEnumMatchesDomain(t *testing.T) {
 	enum := transactionStatusEnumFromOpenAPI(t)
 

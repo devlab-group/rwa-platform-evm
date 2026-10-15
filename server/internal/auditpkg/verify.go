@@ -21,11 +21,9 @@ type SignedResult struct {
 	SignedAt        string `json:"signedAt"`
 }
 
-// VerifyMintSignedResult checks a signed result for a MintAttestation. It
-// recomputes the EIP-712 digest from the attestation instead of trusting
-// sr.TypedDataDigest, requires the two to match, recovers the signer from the
-// signature, and requires that signer to equal sr.Auditor, the attestation's
-// auditor and configuredAuditor.
+// VerifyMintSignedResult recomputes the MintAttestation EIP-712 digest, checks
+// sr.TypedDataDigest, and recovers the signer. That signer must equal sr.Auditor, the
+// attestation's auditor and configuredAuditor.
 func VerifyMintSignedResult(sr SignedResult, domain eip712.Domain, attestation eip712.MintAttestation, configuredAuditor common.Address) error {
 	if sr.FormatVersion != "1.0" {
 		return fmt.Errorf("auditpkg: unsupported formatVersion %q", sr.FormatVersion)

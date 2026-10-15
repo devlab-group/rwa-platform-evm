@@ -28,7 +28,7 @@ const fixedPriceStrategyABIJSON = `[
 // FixedPriceStrategy encodes calldata / decodes reads for IFixedPriceStrategy.
 type FixedPriceStrategy struct{ ABI abi.ABI }
 
-// NewFixedPriceStrategy parses the FixedPriceStrategy ABI once.
+// NewFixedPriceStrategy parses the FixedPriceStrategy ABI
 func NewFixedPriceStrategy() FixedPriceStrategy {
 	return FixedPriceStrategy{ABI: mustABI(fixedPriceStrategyABIJSON)}
 }

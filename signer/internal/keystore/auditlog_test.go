@@ -83,9 +83,8 @@ func TestAuditLog_MissingLogVerifiesClean(t *testing.T) {
 }
 
 func TestAuditLog_NeverContainsPasswordOrKeyFieldNames(t *testing.T) {
-	// Guards against a call site passing secret material through AppendAuditEvent's
-	// free-form fields map. It cannot inspect field values, only catch a caller that
-	// labels a field password or key material.
+	// Catch secret-like field names passed to AppendAuditEvent; this test cannot inspect
+	// values for secret material
 	path := filepath.Join(t.TempDir(), "auditor.json")
 	AppendAuditEvent(path, "unlock_success", map[string]string{"address": "0xabc", "digest": "0xdead"})
 	data, err := os.ReadFile(auditLogPath(path))
@@ -99,12 +98,10 @@ func TestAuditLog_NeverContainsPasswordOrKeyFieldNames(t *testing.T) {
 	}
 }
 
-// --- verify-before-append, locking, fsync, anchor ---
+// Audit verification, locking, sync and anchors
 
-// TestAuditLog_AppendRefusesToExtendBrokenChain checks that AppendAuditEvent
-// re-verifies the whole existing chain before adding to it, not just the final line, so
-// corruption earlier in the log stops later activity from being recorded as if the log
-// were intact.
+// Recheck the whole chain before appending; earlier corruption must block later entries
+// too
 func TestAuditLog_AppendRefusesToExtendBrokenChain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auditor.json")
 	if err := AppendAuditEvent(path, "unlock_success", nil); err != nil {
@@ -126,9 +123,7 @@ func TestAuditLog_AppendRefusesToExtendBrokenChain(t *testing.T) {
 	}
 }
 
-// TestAuditLogAnchored_DetectsTruncation: deleting the newest entries from the main log
-// leaves its hash chain valid, because nothing after the cut contradicts it, so only a
-// cross-check against the anchor can catch it.
+// Tail deletion leaves a valid shorter chain; the retained anchor must detect it
 func TestAuditLogAnchored_DetectsTruncation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auditor.json")
 	anchorPath := DefaultAnchorPath(path)
@@ -141,7 +136,7 @@ func TestAuditLogAnchored_DetectsTruncation(t *testing.T) {
 		t.Fatalf("expected a fresh log+anchor to verify, got: %v", err)
 	}
 
-	// Truncate the main log to its first entry, which is still a valid, shorter chain
+	// Retain only the first entry: a valid shorter chain
 	lines, err := readAuditLines(path)
 	if err != nil {
 		t.Fatalf("readAuditLines: %v", err)
@@ -163,10 +158,8 @@ func TestAuditLogAnchored_DetectsTruncation(t *testing.T) {
 	}
 }
 
-// TestAuditLogAnchored_DetectsRewrittenHistory covers the other case: the main log has
-// as many entries as the anchor recorded, or more, but the entry at the anchored
-// sequence number has a different hash, so history was rewritten and re-extended
-// instead of shortened.
+// Detect recomputed history whose hash at the anchored sequence differs, even without
+// shortening the log
 func TestAuditLogAnchored_DetectsRewrittenHistory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auditor.json")
 	anchorPath := DefaultAnchorPath(path)
@@ -177,9 +170,8 @@ func TestAuditLogAnchored_DetectsRewrittenHistory(t *testing.T) {
 		t.Fatalf("AppendAuditEvent: %v", err)
 	}
 
-	// Rewrite from entry 1 with different content and a self-consistent chain of the
-	// same length. It passes VerifyAuditLog on its own, but it is not the chain the
-	// anchor recorded.
+	// Recompute a same-length chain from altered entry 1; it passes VerifyAuditLog but
+	// disagrees with the anchor
 	e1 := AuditEvent{Seq: 1, Time: time.Now().UTC().Format(time.RFC3339), Event: "forged", PrevHash: ""}
 	h1, err := hashEvent(e1)
 	if err != nil {
@@ -216,11 +208,8 @@ func TestAuditLogAnchored_EmptyAnchorVerifiesClean(t *testing.T) {
 	}
 }
 
-// TestAuditLog_ConcurrentAppendsDoNotForkTheChain: concurrent signer processes must not
-// fork the sequence and hash chain. The test races goroutines calling AppendAuditEvent
-// on one keystore path instead of spawning processes, which exercises the same
-// acquireAuditLock and verify-then-append critical section that a second `signer sign`
-// process would hit.
+// Race AppendAuditEvent goroutines through the same OS lock used by concurrent signer
+// processes; sequence and hashes must remain linear
 func TestAuditLog_ConcurrentAppendsDoNotForkTheChain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auditor.json")
 	const n = 25
@@ -271,11 +260,7 @@ func TestAcquireAuditLock_BreaksStaleLockFromCrashedProcess(t *testing.T) {
 	release()
 }
 
-// TestAuditLog_AppendFailsOnUnwritableDirectory stands in for a full disk: a directory
-// the process cannot write to is a portable way to make the append itself fail. It
-// checks that AppendAuditEvent returns an error instead of succeeding silently or
-// panicking, which cmd/signer relies on to abort signing when the audit trail cannot be
-// durably recorded.
+// An unwritable audit directory must return an append error so cmd/signer can abort
 func TestAuditLog_AppendFailsOnUnwritableDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permission bits do not work the same way on windows")

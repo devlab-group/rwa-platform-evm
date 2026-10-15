@@ -1,7 +1,5 @@
-// Package alerts implements the operational alert evaluators. They are pure
-// functions over domain state that the caller has already loaded, so they need
-// no chain or database. cmd/platform runs them on a ticker and reports what
-// they return.
+// Package alerts evaluates caller-loaded domain state without chain or database access.
+// cmd/platform runs the evaluators on a ticker and reports their alerts.
 package alerts
 
 import (
@@ -20,11 +18,9 @@ type Alert struct {
 	Age          time.Duration
 }
 
-// EvaluatePendingRedemptionSLA returns one Alert per redemption request that
-// has been Pending (requested on-chain, not yet funded) for at least threshold,
-// measured from its on-chain creation time. A Pending redemption is not a
-// payment guarantee, so an operator needs to know when one has waited that
-// long.
+// EvaluatePendingRedemptionSLA alerts for each Pending redemption whose on-chain
+// creation time is at least threshold old. Pending means requested but unfunded, with
+// no payment guarantee; the alert flags requests needing operator attention.
 func EvaluatePendingRedemptionSLA(requests []*models.RedemptionRequest, threshold time.Duration, now time.Time) []Alert {
 	var out []Alert
 	for _, r := range requests {
@@ -44,13 +40,11 @@ func EvaluatePendingRedemptionSLA(requests []*models.RedemptionRequest, threshol
 	return out
 }
 
-// EvaluateFundedClaimFailure returns one Alert per redemption request that has
-// been Funded for at least threshold without reaching Completed. That means
-// nobody has submitted the permissionless claimRedemption call, which points to
-// a broken claim flow or a beneficiary who was never notified.
-//
-// The age is measured from FundedAt, the time the server indexed the
-// RedemptionFunded event. Requests with no FundedAt are skipped.
+// EvaluateFundedClaimFailure alerts for each redemption still Funded at least threshold
+// after FundedAt, when the server indexed RedemptionFunded. Requests without FundedAt
+// are skipped. A delayed completion may indicate a broken permissionless
+// claimRedemption flow or a missing beneficiary notification; it does not establish
+// whether anyone submitted a claim.
 func EvaluateFundedClaimFailure(requests []*models.RedemptionRequest, threshold time.Duration, now time.Time) []Alert {
 	var out []Alert
 	for _, r := range requests {

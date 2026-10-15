@@ -164,16 +164,10 @@ func TestCreateChallengeEnforcesActiveCapWith429(t *testing.T) {
 	}
 }
 
-// A correctly signed provider delivery that carries a decision but no provider
-// timestamp is dropped, not applied with a made-up one. internal/compliance takes
-// the freshness window and newest-decision-wins ordering from that timestamp (see
-// kyc.ErrMissingTimestamp).
-//
-// The HTTP answer is 202 rather than a 4xx because redelivery cannot supply the
-// missing timestamp. Sumsub retries most non-2xx responses and can disable a
-// webhook after continuous failures, so a refusal could block later well-formed
-// deliveries. The drop is recorded in the audit log, which this test checks along
-// with the 202 and that nothing is applied.
+// A signed decision without a provider timestamp is dropped: compliance needs that
+// timestamp for freshness and newest-decision-wins ordering (kyc.ErrMissingTimestamp).
+// The handler acknowledges it with 202, records the drop for audit and applies no
+// decision. Retrying the same payload cannot supply the missing timestamp.
 func TestKYCWebhookDropsDecisionWithNoProviderTimestamp(t *testing.T) {
 	env := setupTestApp(t)
 	walletAddr := addr("0xB0B0")
@@ -190,9 +184,8 @@ func TestKYCWebhookDropsDecisionWithNoProviderTimestamp(t *testing.T) {
 	}
 	env.app.KYC = onfido
 
-	// Bind the workflow run to the wallet first; otherwise the handler returns its
-	// own 422 for an unresolvable reference and the test would pass without the
-	// timestamp check
+	// Bind the workflow first; otherwise an unresolvable reference returns 422 before
+	// timestamp validation and could mask a missing check
 	if err := env.app.Repos.KYCVerifications.Upsert(context.Background(), &models.KYCVerification{
 		Provider: "onfido", Ref: "run-123", Address: walletAddr,
 	}); err != nil {
@@ -261,10 +254,8 @@ func TestKYCWebhookRecordsWebhookEventAndListsIt(t *testing.T) {
 		t.Fatalf("webhook status = %d, body=%s", req.Code, req.Body.String())
 	}
 
-	// The handler only persists the decision. Submitting the on-chain status
-	// transaction and confirming it happen asynchronously in WebhookReconciler, so
-	// run one submit tick and one confirm tick here instead of asserting Applied
-	// right after the webhook POST.
+	// Webhook handlers persist decisions; WebhookReconciler submits and confirms
+	// asynchronously. Run a submit tick and a confirm tick before asserting Applied.
 	ctx := context.Background()
 	reconciler := compliance.NewWebhookReconciler(env.app.Repos.KYCEvents, env.app.Repos.Transactions, env.app.Status)
 	if err := reconciler.Reconcile(ctx); err != nil {
@@ -347,11 +338,9 @@ func TestListPurchasesEmpty(t *testing.T) {
 	}
 }
 
-// TestListPurchasesPaginatesViaKeysetCursor is the API-level keyset pagination
-// test: with more than one page of purchases, the response is capped at `limit`,
-// X-Next-Cursor is present, and following `cursor` visits every purchase exactly
-// once. The repository layer is covered by internal/dal/memory's
-// pagination_test.go.
+// TestListPurchasesPaginatesViaKeysetCursor checks the limit, X-Next-Cursor and an
+// exactly-once walk across multiple purchase pages. Repository pagination is tested in
+// internal/dal/memory/pagination_test.go.
 func TestListPurchasesPaginatesViaKeysetCursor(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -557,10 +546,9 @@ func TestListTransactionsFiltersByAddress(t *testing.T) {
 	}
 }
 
-// TestListTransactionsIncludesEventDerived checks that after the
-// stack-transactions projector runs, a wallet-broadcast action that never touched
-// TxManager (here a treasury withdrawal) appears in GET /transactions and is
-// found by ?address= with the acting EOA
+// TestListTransactionsIncludesEventDerived checks that the stack-transactions projector
+// exposes a wallet-broadcast treasury withdrawal through GET /transactions and
+// ?address=, without TxManager involvement
 func TestListTransactionsIncludesEventDerived(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -773,9 +761,8 @@ func TestProjectResponsePriceOverlay(t *testing.T) {
 	}
 }
 
-// TestProjectResponseStrategyOverlay checks that after Vault.setStrategy,
-// addresses.strategy reports the current strategy and not the deploy-time one,
-// because the admin console sends price and PRICER_ROLE transactions to it
+// TestProjectResponseStrategyOverlay checks that Vault.setStrategy updates
+// addresses.strategy, the admin console's target for price and PRICER_ROLE transactions
 func TestProjectResponseStrategyOverlay(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()

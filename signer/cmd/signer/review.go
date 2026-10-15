@@ -15,9 +15,8 @@ import (
 	"github.com/rwa-platform/signer/internal/ui"
 )
 
-// normalizedAmount renders a raw smallest-unit token amount as a decimal string with
-// decimals fractional digits. The review screen shows it beside the raw amount, so a
-// wrong tokenDecimals or a misread magnitude is easier to spot.
+// normalizedAmount renders smallest units with decimals fractional digits beside the
+// raw amount, helping reviewers spot wrong tokenDecimals or magnitudes
 func normalizedAmount(amount *big.Int, decimals int) string {
 	if decimals <= 0 {
 		return amount.String()
@@ -39,10 +38,9 @@ func normalizedAmount(amount *big.Int, decimals int) string {
 	return out
 }
 
-// resolvePointer follows RFC 6901 against a parsed document: "" selects the
-// document, "/" selects the empty-name member, and readable array indices match
-// 0|[1-9][0-9]* rather than "-". Unresolvable pointers return not found, allowing
-// optional displayFields to be absent without blocking signing.
+// resolvePointer follows RFC 6901: "" selects the document, "/" the empty-name member,
+// and array indices match 0|[1-9][0-9]*, excluding "-". Unresolved optional
+// displayFields return not found without blocking signing.
 func resolvePointer(root canonical.Value, pointer string) (canonical.Value, bool) {
 	if pointer == "" {
 		return root, true
@@ -113,9 +111,8 @@ func displayString(v canonical.Value) string {
 	}
 }
 
-// buildDisplayFields resolves a profile's displayFields against the parsed asset
-// object. The result is for the review screen only; it is not used for hashing or
-// validation. A pointer that does not resolve shows "(not present)" with a warning.
+// buildDisplayFields resolves profile pointers against asset for review only, without
+// affecting hashing/validation; missing pointers show "(not present)" with a warning
 func buildDisplayFields(p *profile.Profile, asset canonical.Value) []ui.Field {
 	fields := make([]ui.Field, 0, len(p.DisplayFields))
 	for _, df := range p.DisplayFields {
@@ -129,8 +126,8 @@ func buildDisplayFields(p *profile.Profile, asset canonical.Value) []ui.Field {
 	return fields
 }
 
-// legalFields shows each legal descriptor member bound by profileDigest on the review
-// screen. Document references remain text and are never fetched.
+// legalFields displays profileDigest-bound legal members without fetching document
+// references
 func legalFields(l *profile.Legal) []ui.Field {
 	if l == nil {
 		return nil
@@ -158,14 +155,13 @@ func legalFields(l *profile.Legal) []ui.Field {
 	return fields
 }
 
-// proofFields builds one review-screen line per metadata proof and flags a proof whose
-// hash matches no attached file, so the auditor can tell when only the hash is present
+// proofFields renders each metadata proof, warning when no attached file matches its
+// hash
 func proofFields(meta *metadata.Metadata, files map[string][]byte) []ui.Field {
 	if len(meta.Proofs) == 0 {
 		return nil
 	}
-	// Index attached files by content hash so a proof matches regardless of its filename
-	// inside proofs/
+	// Match proofs by content hash, independent of filenames in proofs/
 	byHash := make(map[string]string, len(files))
 	for name, data := range files {
 		if !strings.HasPrefix(name, "proofs/") {

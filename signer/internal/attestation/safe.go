@@ -46,9 +46,9 @@ func SafeMessageHash(chainID *big.Int, safe common.Address, digest common.Hash) 
 	return Digest(sep, structHash), nil
 }
 
-// CombineSafeSignatures sorts by owner address and concatenates 65-byte signatures.
-// It requires v of 27/28; Safe reserves 0/1 for contract signatures and pre-approved hashes.
-// The caller must verify signature recovery and owner membership.
+// CombineSafeSignatures sorts owners and concatenates 65-byte signatures with v=27/28;
+// Safe reserves 0/1 for contract signatures/pre-approved hashes. Callers must verify
+// recovery and owner membership.
 func CombineSafeSignatures(sigs map[common.Address][]byte) ([]byte, error) {
 	if len(sigs) == 0 {
 		return nil, errors.New("attestation: no owner signatures to combine")

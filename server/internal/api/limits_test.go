@@ -8,11 +8,10 @@ import (
 	"testing"
 )
 
-// TestOversizedBodyRejected404s exercises the request-size limit
-// (auth.MaxRequestBody, installed router-wide in NewRouter) end to end: a body
-// larger than App.MaxRequestBodyBytes is rejected with 413, not truncated or
-// accepted, on a route that reads the raw body (profile/validate) and on one that
-// binds JSON into a struct (compliance/challenge)
+// TestOversizedBodyRejected404s checks router-wide auth.MaxRequestBody: exceeding
+// App.MaxRequestBodyBytes returns 413 on both raw-body profile/validate and
+// JSON-binding compliance/challenge routes, rather than truncating or accepting the
+// body
 func TestOversizedBodyRejected(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.MaxRequestBodyBytes = 16 // tiny, so the test doesn't need to send megabytes
@@ -24,9 +23,8 @@ func TestOversizedBodyRejected(t *testing.T) {
 	}{
 		// Raw io.ReadAll body (validateProfile): any bytes past the limit trip it
 		{"/api/v1/profile/validate", bytes.Repeat([]byte("x"), 1024)},
-		// c.ShouldBindJSON (createChallenge): the body must be valid so far, so the
-		// decoder keeps reading and reaches the size limit instead of failing on a syntax
-		// error
+		// Keep JSON valid until the size limit so c.ShouldBindJSON reaches it before any
+		// syntax error
 		{"/api/v1/compliance/challenge", append(append([]byte(`{"address":"`), bytes.Repeat([]byte("x"), 1024)...), []byte(`"}`)...)},
 	}
 	for _, tc := range cases {
@@ -41,9 +39,8 @@ func TestOversizedBodyRejected(t *testing.T) {
 	}
 }
 
-// TestKYCWebhookOversizedBodyRejectedBeforeHMAC checks that kycWebhook, which
-// reads the whole body before verifying the HMAC (the signature covers the raw
-// body), rejects an oversized delivery at read time, so no HMAC work runs on it
+// TestKYCWebhookOversizedBodyRejectedBeforeHMAC checks that raw-body reading rejects an
+// oversized delivery before HMAC verification
 func TestKYCWebhookOversizedBodyRejectedBeforeHMAC(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.MaxRequestBodyBytes = 16

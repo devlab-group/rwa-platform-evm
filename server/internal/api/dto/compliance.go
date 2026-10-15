@@ -26,10 +26,9 @@ func ToWalletStatus(inv *models.Investor) WalletStatus {
 	}
 }
 
-// WithFrozenTokens returns the status with this wallet's frozen amount filled
-// in from the security projection. The lookup is case-insensitive because the
-// projection stores checksummed addresses. Callers pass only the session
-// wallet's own status.
+// WithFrozenTokens adds the session wallet's frozen amount from the security
+// projection. Lookup ignores case because projected addresses are checksummed; callers
+// pass only the session wallet's status.
 func (w WalletStatus) WithFrozenTokens(p *models.Project) WalletStatus {
 	if p == nil || p.Security == nil {
 		return w
@@ -43,9 +42,9 @@ func (w WalletStatus) WithFrozenTokens(p *models.Project) WalletStatus {
 	return w
 }
 
-// AllowedResult mirrors components.schemas.AllowedResult. It holds one boolean
-// because the endpoint is public and must not disclose a third party's full
-// WalletStatus (see isAddressAllowed in package api).
+// AllowedResult mirrors components.schemas.AllowedResult. The public endpoint exposes
+// only this boolean, keeping third-party WalletStatus private; see
+// api.isAddressAllowed.
 type AllowedResult struct {
 	Allowed bool `json:"allowed"`
 }
@@ -76,11 +75,9 @@ func ToTxRef(tx *models.Transaction) TxRef {
 	return TxRef{TxHash: tx.TxHash, Status: string(tx.Status), IdempotencyKey: tx.IdempotencyKey}
 }
 
-// KYCSession mirrors components.schemas.KYCSession: what POST
-// /compliance/kyc/start returns so the investor app can launch the provider's
-// verification flow. Depending on the provider, Token is an SDK token or URL is
-// a hosted link. Ref is the provider-side reference (for Onfido, the workflow
-// run id)
+// KYCSession mirrors components.schemas.KYCSession for POST /compliance/kyc/start.
+// Token launches a provider SDK; URL opens a hosted flow. Ref identifies the provider
+// session, such as an Onfido workflow run.
 type KYCSession struct {
 	Provider  string `json:"provider"`
 	Token     string `json:"token,omitempty"`
@@ -105,12 +102,9 @@ func ToChallengeResponse(ch *models.WalletChallenge) ChallengeResponse {
 	}
 }
 
-// WebhookEventResponse mirrors components.schemas.WebhookEvent. EventID and
-// OccurredAt are omitted for records that lack them.
-//
-// ApplyStatus is the outbox state (see models.KYCApplyStatus). Applied is true
-// only when ApplyStatus is "Applied", that is, the linked on-chain transaction
-// confirmed.
+// WebhookEventResponse mirrors components.schemas.WebhookEvent, omitting absent EventID
+// and OccurredAt. ApplyStatus is the models.KYCApplyStatus outbox state; Applied
+// requires "Applied", meaning the linked on-chain transaction confirmed.
 type WebhookEventResponse struct {
 	ID          string `json:"id"`
 	Address     string `json:"address"`

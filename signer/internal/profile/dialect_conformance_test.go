@@ -7,9 +7,8 @@ import (
 	"testing"
 )
 
-// envelopeCase mirrors one entry of shared/vectors/schema-dialect-conformance.json's
-// "envelopeCases" array: strict-decoding parity for a whole profile or metadata
-// document, not just its assetSchema
+// envelopeCase models whole profile/metadata envelopeCases from
+// shared/vectors/schema-dialect-conformance.json, beyond assetSchema-only checks
 type envelopeCase struct {
 	Name        string          `json:"name"`
 	Target      string          `json:"target"` // "profile" | "metadata"
@@ -23,12 +22,9 @@ type envelopeConformanceFile struct {
 	EnvelopeCases []envelopeCase `json:"envelopeCases"`
 }
 
-// TestDialectEnvelopeConformance checks profile envelopeCases from the shared
-// schema-dialect vectors, including unknown fields in displayFields objects.
-// The server and signer must accept the same documents.
-//
-// Keep this test in profile: jsonschema cannot import profile without a cycle.
-// make dialect-check runs both packages.
+// Match shared profile envelopeCases, including unknown displayFields members. Keep
+// "Dialect" in the name for make dialect-check and this test in profile to avoid a
+// jsonschema import cycle.
 func TestDialectEnvelopeConformance(t *testing.T) {
 	path, err := filepath.Abs(filepath.Join("..", "..", "..", "shared", "vectors", "schema-dialect-conformance.json"))
 	if err != nil {

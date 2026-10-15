@@ -19,11 +19,9 @@ import {
 } from "./walletContextValue";
 
 /**
- * App-wide connected-wallet state, built on viem and the injected provider in
- * lib/wallet. One provider at the app root gives every screen the same wallet
- * connection and one set of `accountsChanged` and `chainChanged` subscriptions.
- * The context value, type and hook live in ./walletContextValue so this file
- * exports only the component, as react-refresh requires.
+ * Shares wallet state and account/chain/disconnect listeners across screens.
+ * Context types and hook live in walletContextValue so this provider exports only
+ * a component for react-refresh.
  */
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<Address | null>(null);
@@ -49,9 +47,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const disconnect = useCallback(() => {
-    // Injected wallets have no disconnect RPC, so disconnecting only forgets
-    // the account here and the header shows Connect again. The admin JWT is
-    // cleared separately
+    // Forget local connection state; the header separately clears the JWT
     setAddress(null);
     setChainId(null);
     setError(null);
@@ -70,8 +66,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       await requestSwitchChain(expectedChainId);
-      // Read the chain here for wallets that do not emit chainChanged reliably;
-      // wallets that do also trigger the listener below
+      // Refresh chainId even if the wallet emits no chainChanged event
       const provider = getInjectedProvider();
       if (provider) {
         const chainIdHex = (await provider.request({
@@ -88,9 +83,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Follow the wallet's account and chain changes, so a network switch or
-  // account swap shows at once. Nothing calls connect() until the user clicks
-  // Connect, so the app starts disconnected.
+  // Follow account, chain and disconnect events; initial state is disconnected,
+  // but accountsChanged can set an address before explicit connect
   useEffect(() => {
     const provider = getInjectedProvider();
     if (!provider?.on) return;

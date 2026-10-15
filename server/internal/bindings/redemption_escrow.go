@@ -47,7 +47,7 @@ const redemptionEscrowABIJSON = `[
 // RedemptionEscrow encodes calldata / decodes events for IRedemptionEscrow.
 type RedemptionEscrow struct{ ABI abi.ABI }
 
-// NewRedemptionEscrow parses the RedemptionEscrow ABI once.
+// NewRedemptionEscrow parses the RedemptionEscrow ABI
 func NewRedemptionEscrow() RedemptionEscrow {
 	return RedemptionEscrow{ABI: mustABI(redemptionEscrowABIJSON)}
 }
@@ -116,9 +116,8 @@ type RedemptionRequestedEvent struct {
 
 // UnpackRedemptionRequested decodes a RedemptionRequested log.
 func (r RedemptionEscrow) UnpackRedemptionRequested(data []byte, topics []common.Hash) (RedemptionRequestedEvent, error) {
-	// RWAAmount needs an explicit abi tag: without one, go-ethereum matches the
-	// ABI name "rwaAmount" to a field named ToCamelCase("rwaAmount"), which is
-	// "RwaAmount" (only the first letter is upcased), not "RWAAmount"
+	// The abi tag maps rwaAmount to RWAAmount; go-ethereum's default ToCamelCase mapping
+	// expects RwaAmount
 	var partial struct {
 		RWAAmount   *big.Int `abi:"rwaAmount"`
 		QuoteAmount *big.Int `abi:"quoteAmount"`

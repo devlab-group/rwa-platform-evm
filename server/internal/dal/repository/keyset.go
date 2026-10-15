@@ -5,24 +5,19 @@ import (
 	"encoding/json"
 )
 
-// KeysetCursor is an opaque keyset-pagination cursor. It names the last item of the
-// previous page by its sort value and id, so the next page is the items strictly
-// after that one, and no rows are counted and skipped. Pagination therefore stays
-// correct, and costs one page of work, while the indexer and reconcilers insert
-// into the collection. An offset cursor would skip or repeat rows when that
-// happens.
-//
-// SortValue is an int64: a block number, a unix-second timestamp, or the UnixNano
-// of a time.Time field. ID is the item's id and breaks ties between items with the
-// same SortValue, such as two purchases in one block.
+// KeysetCursor identifies the previous page's last item by SortValue and ID. Continuing
+// strictly beyond that pair avoids offset shifts when items are inserted ahead of it;
+// existing sort keys must stay stable.
+// SortValue holds a block number, Unix seconds or time.Time.UnixNano; ID breaks ties,
+// such as purchases in one block. MongoDB filters and limits queries; memory walks an
+// already-sorted slice.
 type KeysetCursor struct {
 	SortValue int64  `json:"v"`
 	ID        string `json:"id"`
 }
 
-// EncodeKeysetCursor renders c as the opaque string a ListPage response carries in
-// its X-Next-Cursor header. Clients pass it back unchanged as the cursor query
-// parameter and do not build or parse one.
+// EncodeKeysetCursor produces the opaque X-Next-Cursor value clients return unchanged
+// as the cursor parameter
 func EncodeKeysetCursor(c KeysetCursor) string {
 	raw, err := json.Marshal(c)
 	if err != nil {
@@ -31,9 +26,8 @@ func EncodeKeysetCursor(c KeysetCursor) string {
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
-// DecodeKeysetCursor is the inverse of EncodeKeysetCursor. ok is false for an
-// empty or malformed cursor, which callers treat as no cursor (the first
-// page) and not as an error
+// DecodeKeysetCursor reverses encoding; empty or malformed input returns ok=false,
+// treated as the first page rather than an error
 func DecodeKeysetCursor(s string) (KeysetCursor, bool) {
 	if s == "" {
 		return KeysetCursor{}, false
@@ -49,12 +43,10 @@ func DecodeKeysetCursor(s string) (KeysetCursor, bool) {
 	return c, true
 }
 
-// KeysetPage returns up to limit items from items that come strictly after cursor,
-// and a cursor for the next page when more remain. items must already be sorted by
-// (sortValue, id) in the direction desc gives: descending for the newest-first
-// collections (purchases, redemption requests) and ascending for asset records and
-// transactions. The in-memory repositories use it. The MongoDB repositories push
-// the equivalent filter, sort and limit into the query and walk the same order.
+// KeysetPage slices sorted (sortValue, id) items strictly beyond cursor, using desc for
+// direction. A positive limit caps the page; non-positive returns the remainder. next
+// is set only when more remain. Memory repositories use this helper; MongoDB pushes
+// equivalent filtering into queries.
 func KeysetPage[T any](items []T, sortValue func(T) int64, id func(T) string, cursor string, limit int, desc bool) (page []T, next string) {
 	start := 0
 	if c, ok := DecodeKeysetCursor(cursor); ok {

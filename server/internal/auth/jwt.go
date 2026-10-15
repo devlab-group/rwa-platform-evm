@@ -8,9 +8,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// adminJWTRole is the only role issued: the single configured admin wallet.
-// It is carried as a claim so ParseAdminJWT rejects a token minted with any
-// other role
+// adminJWTRole is the configured admin wallet's sole issued role. ParseAdminJWT rejects
+// other role claims.
 const adminJWTRole = "admin"
 
 // adminClaims is the admin JWT payload: the registered claims sub (admin
@@ -20,10 +19,9 @@ type adminClaims struct {
 	jwt.RegisteredClaims
 }
 
-// IssueAdminJWT returns a compact HS256 JWT for the admin wallet address,
-// signed with secret and expiring after ttl, together with its expiry time
-// (surfaced by the API as AuthSession.expiresAt). Claims are sub=address,
-// role="admin", iat=now and exp=now+ttl.
+// IssueAdminJWT signs an HS256 token with secret and returns its expiry, exposed by the
+// API as AuthSession.expiresAt. Claims are sub=address, role="admin", iat=now and
+// exp=now+ttl.
 func IssueAdminJWT(secret []byte, address string, ttl time.Duration) (token string, expiresAt time.Time, err error) {
 	if len(secret) == 0 {
 		return "", time.Time{}, errors.New("auth: JWT secret is not configured")
@@ -45,11 +43,9 @@ func IssueAdminJWT(secret []byte, address string, ttl time.Duration) (token stri
 	return signed, expiresAt, nil
 }
 
-// ParseAdminJWT verifies token against secret and returns the admin address
-// from its sub claim. It rejects any signing method other than HS256 (which
-// rules out alg "none" and asymmetric-key confusion), a bad signature, a token
-// with a missing or past exp, a role other than "admin", and an empty sub. The
-// iat claim is not validated.
+// ParseAdminJWT returns sub after requiring HS256, a valid signature, a present
+// unexpired exp, role="admin" and non-empty sub. It rejects alg="none" and
+// asymmetric-key methods; iat is unchecked.
 func ParseAdminJWT(secret []byte, token string) (address string, err error) {
 	if len(secret) == 0 {
 		return "", errors.New("auth: JWT secret is not configured")

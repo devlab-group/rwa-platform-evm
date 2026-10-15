@@ -3,13 +3,13 @@ on:
   pull_request:
   push:
     branches: [master]
-  # Mythril (symbolic execution) is too slow for the per-PR gate, so the `mythril` job
-  # runs weekly and on demand. Slither is the per-PR static-analysis gate.
+  # Mythril symbolic execution runs weekly and on demand because it is too slow for per-PR checks.
+  # Slither provides the per-PR static-analysis gate.
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
   workflow_dispatch:
 
-# Every job only reads the repository, so the default token gets read access only
+# Give the workflow token read-only repository contents access
 permissions:
   contents: read
 
@@ -42,8 +42,7 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version: "1.26" }
       - run: cd server && go vet ./... && go test -race ./...
-      # ABI/binding drift gate: the hand-written bindings must match the
-      # compiled contract artifacts.
+      # Check hand-written bindings against compiled ABIs
       - uses: foundry-rs/foundry-toolchain@v1
       - uses: ./.github/actions/forge-deps
       - run: cd contracts && forge build
@@ -55,11 +54,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
-      # Match `make ci` (Makefile web-test): typecheck + test + build, not just build.
+      # Match `make ci` (web-test): typecheck, test and build
       - run: cd web && npm ci && npm run typecheck && npm test && npm run build
 
-  # Standalone investor example SPA: self-contained, not embedded by the server
-  # (Makefile target investor-web-test)
+  # Test the standalone investor SPA, which the server does not embed (investor-web-test)
   investor-web:
     runs-on: ubuntu-latest
     steps:
@@ -68,11 +66,9 @@ jobs:
         with: { node-version: "22" }
       - run: cd investor-web && npm ci && npm run typecheck && npm test && npm run build
 
-  # The platform binary embeds the built SPA via go:embed, but the SPA is not committed
-  # (only dist/.gitkeep is tracked and assets/ is gitignored). This job builds web/,
-  # embeds it and compiles the release binary to show that go:embed resolves the real
-  # assets. It also checks that long-lived API-key storage (`rwa.apiKey`) is absent
-  # from the bundle and the binary.
+  # Build the SPA and release binary to verify go:embed resolves real assets.
+  # Only dist/.gitkeep is tracked; assets/ is gitignored. Check the bundle for API-key
+  # storage patterns and the binary for `rwa.apiKey`.
   embed:
     runs-on: ubuntu-latest
     steps:
@@ -83,8 +79,7 @@ jobs:
         with: { go-version: "1.26" }
       - name: build web
         run: cd web && npm ci && npm run build
-      # Neither the embedded dist directory nor the fresh bundle may contain
-      # long-lived API-key storage
+      # Check both dist directories for the API-key storage patterns below
       - name: assert embedded SPA has no long-lived API-key storage
         run: |
           for dir in server/internal/webui/dist web/dist; do
@@ -98,16 +93,15 @@ jobs:
           cp -r web/dist/. server/internal/webui/dist/
           cd server && go build -o /tmp/platform ./cmd/platform
           test -x /tmp/platform
-      # The same check against the linked binary
+      # Check the linked binary for rwa.apiKey
       - name: assert release binary embeds no API-key storage
         run: |
           if strings /tmp/platform | grep -qE "rwa\.apiKey"; then
             echo "FAIL: release binary embeds rwa.apiKey storage"; exit 1
           fi
 
-  # Dependency vulnerability scan on every PR. govulncheck reports only advisories
-  # whose vulnerable code the module's call graph reaches, so an unreachable transitive
-  # advisory does not fail the build and a reachable one does.
+  # Scan dependencies on every PR. govulncheck fails on reachable vulnerabilities;
+  # unreachable advisories may be reported without failing the build.
   security-scan:
     runs-on: ubuntu-latest
     steps:
@@ -123,8 +117,7 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           (cd server && govulncheck ./...)
           (cd signer && govulncheck ./...)
-      # CycloneDX SBOMs for the server, signer and web app, uploaded as a workflow
-      # artifact for the release record
+      # Upload server, signer and web CycloneDX SBOMs as a release-record artifact
       - name: SBOM (Go modules + web)
         run: |
           (cd server && go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest app -json -output /tmp/sbom-server.json -main cmd/platform .)
@@ -135,15 +128,13 @@ jobs:
           name: sboms
           path: /tmp/sbom-*.json
 
-  # Static-analysis gate: Slither fails the job on High findings. Documented
-  # false-positive suppressions are in docs/security/slither-report.md.
+  # Fail on Slither High findings; see docs/security/slither-report.md for documented suppressions
   slither:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
-      # Slither compiles the Foundry project (crytic-compile runs forge build), so the
-      # gitignored contract deps must be installed first
+      # Install gitignored dependencies before Slither's crytic-compile invokes forge build
       - uses: ./.github/actions/forge-deps
       - uses: crytic/slither-action@v0.4.2
         with:
@@ -151,30 +142,24 @@ jobs:
           fail-on: high
           slither-args: --exclude-dependencies
 
-  # Mythril symbolic execution, the slower counterpart to the Slither gate. It runs
-  # only on the weekly schedule and on manual workflow_dispatch (see `on:`). The loop
-  # below records a failing analysis and fails the job after all contracts are analyzed.
-  # Record confirmed false positives in docs/security/ next to the Slither report.
+  # Run Mythril weekly or through workflow_dispatch. Collect analysis failures across the list;
+  # record confirmed false positives in docs/security/ beside the Slither report.
   mythril:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
-      # lib/ (OpenZeppelin, forge-std) is gitignored, so the forge-deps action installs
-      # the pinned versions before compiling
+      # Install missing dependencies at forge-deps' pinned OpenZeppelin and forge-std refs
       - uses: ./.github/actions/forge-deps
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      # setuptools 81 dropped the bundled pkg_resources, which Mythril (via its deps)
-      # still imports at runtime, so pin below 81 to avoid a ModuleNotFoundError
+      # Compatibility pin for Mythril dependencies that import pkg_resources
       - run: pip install "setuptools<81" mythril
       - name: build contracts
         run: cd contracts && forge build
-      # Flatten each deployed contract into one source file (resolving remappings and
-      # imports) and analyze it by contract name so the report centers on our code, not
-      # the inherited OpenZeppelin base. The solc version matches solc_version in
-      # foundry.toml, and each analysis has a 180 second execution timeout.
+      # Flatten imports and remappings, then select each entry contract by name for analysis.
+      # Match foundry.toml's solc version and limit each analysis to 180 seconds.
       - name: mythril analyze
         run: |
           cd contracts
@@ -190,12 +175,11 @@ jobs:
           done
           exit $rc
 
-  # Full on-chain + HTTP-API end-to-end flow.
+  # On-chain and HTTP API E2E flow
   e2e:
     runs-on: ubuntu-latest
-    # No `services:` here: server/e2e/run_e2e.sh starts and tears down its own anvil,
-    # MongoDB (a single-node replica set rs0, required by the indexer's transactional
-    # CommitChunk) and IPFS
+    # server/e2e/run_e2e.sh manages Anvil, IPFS and MongoDB itself.
+    # MongoDB uses replica set rs0 for the indexer's transactional CommitChunk.
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
@@ -209,15 +193,12 @@ jobs:
       - name: server HTTP-API e2e
         run: cd server && bash e2e/run_e2e.sh
 
-  # Not yet pinned to immutable references. Pinning needs tags resolved to SHAs or
-  # digests from a registry, so it belongs in a reviewed dependency PR:
-  #   - Every `uses:` action to a full 40-character commit SHA, with the tag in a
-  #     trailing comment (actions/checkout, setup-go, setup-node, setup-python,
-  #     upload-artifact, foundry-rs/foundry-toolchain, crytic/slither-action). For
-  #     foundry-toolchain, also pin a Foundry release through its `version:` input.
-  #   - `services.mongo.image: mongo:7` in the server job to `mongo@sha256:<digest>`.
-  #   - govulncheck and cyclonedx-gomod, installed with `@latest` in this file
-  #     (govulncheck also in the Makefile), to exact versions.
+  # TODO: pin mutable dependencies in a reviewed dependency PR:
+  #   - Every `uses:` action to a full 40-character SHA with its tag in a trailing comment:
+  #     checkout, setup-go, setup-node, setup-python, upload-artifact, foundry-toolchain
+  #     and slither-action. Also set foundry-toolchain's `version:` to a Foundry release.
+  #   - The server job's `services.mongo.image` to `mongo@sha256:<digest>`.
+  #   - govulncheck and cyclonedx-gomod from `@latest` to exact versions; update
+  #     govulncheck in the Makefile too.
   #   - Node "22" and Go "1.26" to exact patch releases.
-  # Keep the CycloneDX SBOMs from the security-scan job and the source revision with
-  # each release.
+  # Keep security-scan's CycloneDX SBOMs and the source revision with each release.

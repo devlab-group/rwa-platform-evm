@@ -17,9 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// fakeVaultTransit serves the parts of the Transit HTTP API that vaultProvider
-// uses (GET .../keys/:name, POST .../sign/:name), backed by an in-memory
-// secp256k1 key so signatures are real
+// fakeVaultTransit serves key-read/sign endpoints using a real in-memory secp256k1 key
 type fakeVaultTransit struct {
 	key      *ecdsa.PrivateKey
 	pubBytes []byte
@@ -63,8 +61,7 @@ func newFakeVaultTransit(t *testing.T, keyName, token string) (*httptest.Server,
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		// A Transit sign response is an ASN.1 DER (r,s) without a recovery id,
-		// which ecdsa.SignASN1 also produces
+		// Transit's DER (r,s) has no recovery ID, as with ecdsa.SignASN1
 		der, err := ecdsa.SignASN1(rand.Reader, f.key, digest)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)

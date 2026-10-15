@@ -12,9 +12,9 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// liveDB connects to the MongoDB named by MONGO_TEST_URI and returns a throwaway
-// database, and skips the test when the variable is unset, so `go test ./...` needs
-// no running MongoDB. To run these tests, point it at the e2e harness's instance:
+// liveDB uses MONGO_TEST_URI and the throwaway rwa_pagination_test database, dropped
+// during cleanup. Without the variable, live tests skip. The e2e harness can supply
+// MongoDB.
 func liveDB(t *testing.T) *mongo.Database {
 	t.Helper()
 	uri := os.Getenv("MONGO_TEST_URI")
@@ -39,8 +39,8 @@ func liveDB(t *testing.T) *mongo.Database {
 	return db
 }
 
-// pageAll walks every page a ListPage-style function returns. It fails if the
-// cursor never advances or a page is empty.
+// pageAll follows cursors and requires full nonterminal pages, with a guard against
+// non-terminating walks
 func pageAll(t *testing.T, limit int, next func(cursor string) ([]string, string)) []string {
 	t.Helper()
 	var ids []string
@@ -61,11 +61,9 @@ func pageAll(t *testing.T, limit int, next func(cursor string) ([]string, string
 	}
 }
 
-// TestLiveAssetRecordListPagePagesPastTheFirstPage checks against a live MongoDB
-// that asset_records pages past the first page. createdAt is a BSON Date, and the
-// keyset filter once compared it with an int64 nanosecond operand, which MongoDB
-// never matches, so page 2 was empty. The in-memory adapter cannot catch this,
-// because both sides are int64 there.
+// TestLiveAssetRecordListPagePagesPastTheFirstPage verifies pagination over createdAt
+// BSON Dates. An int64 operand would empty later pages, a type mismatch the memory
+// adapter cannot expose.
 func TestLiveAssetRecordListPagePagesPastTheFirstPage(t *testing.T) {
 	db := liveDB(t)
 	ctx := context.Background()

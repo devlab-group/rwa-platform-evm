@@ -92,8 +92,7 @@ describe("TransactionStatusBadge", () => {
     expect(screen.getByText(/Reverted/)).toHaveTextContent("failed on-chain");
   });
 
-  // Covers every status in the Transaction.status enum: label text, tone class,
-  // data-status attribute, and whether the badge is marked as needing attention
+  // Checks label, tone, data-status and attention marker for each Transaction.status value
   const CASES: Array<{
     status: string;
     label: string;
@@ -182,7 +181,7 @@ describe("TransactionStatusBadge", () => {
     const badge = screen.getByText("Unknown");
     expect(badge).toHaveClass("badge", "badge--warning");
     expect(badge).toHaveAttribute("data-status", "unknown");
-    // An unrecognized status is flagged as needing attention
+    // Flag unknown statuses for attention
     expect(badge).toHaveAttribute("data-attention", "true");
     expect(badge).toHaveAttribute(
       "title",

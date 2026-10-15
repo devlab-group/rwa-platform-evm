@@ -13,9 +13,8 @@ import {MockERC20} from "../../mocks/token/MockERC20.sol";
 import {ISupplyController} from "../../../src/interfaces/ISupplyController.sol";
 import {IRedemptionEscrow} from "../../../src/interfaces/IRedemptionEscrow.sol";
 
-/// @notice Fuzzes mint, buy, request, fund, claim, reject, cancel and burn on one project
-///         with ghost accounting checked against live state. Expected reverts, such as
-///         insufficient balances or unavailable requests, skip a step without ending the run.
+/// @notice Fuzzes mint, buy, request, fund, claim, reject, cancel and burn with ghost accounting;
+///         caught reverts, such as insufficient balances or unavailable requests, skip the step
 contract RedemptionHandler is Test {
     RWAToken public token;
     ComplianceRegistry public compliance;
@@ -37,8 +36,8 @@ contract RedemptionHandler is Test {
     // ghost accounting
     uint256 public ghost_totalMinted;
     uint256 public ghost_totalBurned;
-    uint256 public ghost_escrowedRwaSum; // sum of rwaAmount over {Pending, Funded} requests
-    uint256 public ghost_fundedQuoteSum; // sum of quoteAmount over {Funded} requests
+    uint256 public ghost_escrowedRwaSum; // RWA in Pending and Funded requests
+    uint256 public ghost_fundedQuoteSum; // Quote in Funded requests
 
     uint256[] internal _pendingIds;
     uint256[] internal _fundedIds;

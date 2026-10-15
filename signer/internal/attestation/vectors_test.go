@@ -95,8 +95,8 @@ func mustBigInt(t *testing.T, s string) *big.Int {
 	return v
 }
 
-// TestVectors reproduces the type hashes, domain, struct hash, digest and exact signature
-// from shared/vectors/typehashes.json and shared/vectors/mint-eip712.json
+// Reproduce type hashes, domain, struct hash, digest and exact signature from
+// shared/vectors/typehashes.json and shared/vectors/mint-eip712.json
 func TestVectors(t *testing.T) {
 	dir := sharedVectorsDir(t)
 
@@ -203,8 +203,7 @@ func TestVectors(t *testing.T) {
 	}
 }
 
-// TestVectors_BurnTypeHashIndependentlyDerivable hashes the canonical burn type string
-// from shared/eip712/types.md independently of the golden vector
+// Derive the burn type hash independently from shared/eip712/types.md
 func TestVectors_BurnTypeHashIndependentlyDerivable(t *testing.T) {
 	want := crypto.Keccak256Hash([]byte(BurnTypeString))
 	if BurnTypeHash() != want {
@@ -237,8 +236,8 @@ func TestHashStruct_RejectsNegativeAmount(t *testing.T) {
 	}
 }
 
-// TestSign_Deterministic requires identical signatures for the same key and digest
-// (RFC 6979), supporting exact golden-vector comparisons
+// The same key/digest must produce identical signatures (RFC 6979) for exact vector
+// comparisons
 func TestSign_Deterministic(t *testing.T) {
 	key, err := crypto.GenerateKey()
 	if err != nil {
@@ -291,8 +290,8 @@ type safeAuditorVector struct {
 	CombinedSignature string `json:"combinedSignature"`
 }
 
-// TestVectors_SafeAuditor reproduces the hashes, owner signatures and combined bytes
-// in shared/vectors/safe-auditor.json without deploying a Safe
+// Reproduce shared/vectors/safe-auditor.json hashes, owner signatures and combined
+// bytes without deploying a Safe
 func TestVectors_SafeAuditor(t *testing.T) {
 	v := loadJSON[safeAuditorVector](t, filepath.Join(sharedVectorsDir(t), "safe-auditor.json"))
 

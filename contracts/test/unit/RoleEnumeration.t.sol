@@ -4,20 +4,13 @@ pragma solidity ^0.8.24;
 import {TestBase} from "../helpers/TestBase.sol";
 import {IAccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
 
-/// @notice Covers `AccessControlEnumerable` on every role-bearing contract in the stack. The
-///         server's post-deploy verifier enumerates role holders on-chain, mainly to confirm
-///         that `RWAFactory`'s bootstrap `COMPLIANCE_ROLE` grant was renounced and that no
-///         unexpected address holds any role, without depending on a complete event history.
-///         These tests check `getRoleMemberCount`, `getRoleMember` and `getRoleMembers` against
-///         the set the factory is expected to have wired, on every contract that combines
-///         `AccessControlEnumerable` with `AccessControlDefaultAdminRules` (ComplianceRegistry
-///         explains the inheritance overrides this exercises indirectly).
+/// @notice Checks getRoleMemberCount, getRoleMember and getRoleMembers against fixture role holders
+///         on all six role-bearing contracts. Enumeration supports post-deploy verification
+///         without complete event history; see ComplianceRegistry for inheritance overrides.
 contract RoleEnumerationTest is TestBase {
     function test_complianceRegistry_complianceRoleEnumeration_bootstrapRenounced() public view {
         bytes32 role = compliance.COMPLIANCE_ROLE();
-        // Exactly complianceOperator: the factory's bootstrap grant was renounced in
-        // RWAFactory.deploy(), so it must not appear even though ComplianceRegistry's
-        // constructor granted it
+        // Only complianceOperator remains after the factory renounces its bootstrap grant
         assertEq(compliance.getRoleMemberCount(role), 1);
         assertEq(compliance.getRoleMember(role, 0), complianceOperator);
         address[] memory members = compliance.getRoleMembers(role);
@@ -74,8 +67,7 @@ contract RoleEnumerationTest is TestBase {
         assertEq(strategy.getRoleMember(strategy.DEFAULT_ADMIN_ROLE(), 0), admin);
     }
 
-    /// @dev Enumeration must also track grants and revokes made after deploy, not only the
-    ///      factory's initial wiring
+    /// @dev Enumeration must track post-deploy grants and revokes
     function test_enumeration_tracksGrantsAndRevokesAfterDeploy() public {
         bytes32 role = compliance.COMPLIANCE_ROLE();
 
@@ -91,19 +83,13 @@ contract RoleEnumerationTest is TestBase {
         assertFalse(compliance.hasRole(role, outsider));
     }
 
-    /// @dev The server's post-deploy verifier walks `getRoleMemberCount` and `getRoleMember` on
-    ///      every child contract and rejects any unexpected holder, instead of checking `hasRole`
-    ///      only for known candidates. That is only as strong as the factory not remaining a
-    ///      role holder after `deploy()` returns. ComplianceRegistry is the only contract that
-    ///      ever grants the factory a role: its constructor grants `COMPLIANCE_ROLE` to
-    ///      `msg.sender` so the factory can call `setSystemAddresses` and `setStatus` before
-    ///      renouncing it in `RWAFactory.deploy()`. Every other child grants roles directly to
-    ///      the `admin` and operational addresses in `ProjectConfig`, never to the factory.
-    ///      This test checks the enumerable holder set of every role on every contract.
+    /// @dev Checks every configured role's enumerable holders exclude the factory in this fixture.
+    ///      The registry's bootstrap COMPLIANCE_ROLE is renounced after setStatus; other grants
+    ///      follow ProjectConfig, whose fixture addresses are separate from the factory.
     function test_factory_holdsNoBootstrapRoleOnAnyChildPostDeploy() public view {
         address f = address(factory);
 
-        // ComplianceRegistry: the only contract where the factory ever held a role
+        // Registry: factory's bootstrap role has been renounced
         assertFalse(compliance.hasRole(compliance.COMPLIANCE_ROLE(), f));
         assertFalse(compliance.hasRole(compliance.DEFAULT_ADMIN_ROLE(), f));
         _assertNotAMember(compliance.getRoleMembers(compliance.COMPLIANCE_ROLE()), f);
@@ -148,10 +134,8 @@ contract RoleEnumerationTest is TestBase {
         }
     }
 
-    /// @dev Every `supportsInterface` override in this stack chains through `super` across two
-    ///      sibling `AccessControl` extensions (`AccessControlEnumerable` and
-    ///      `AccessControlDefaultAdminRules`). This checks that the resolved override advertises
-    ///      `IAccessControlEnumerable`, not just that it compiles.
+    /// @dev The super chain through both AccessControl extensions must advertise IAccessControlEnumerable;
+    ///      compilation alone does not verify interface support
     function test_supportsInterface_advertisesEnumerable() public view {
         assertTrue(compliance.supportsInterface(type(IAccessControlEnumerable).interfaceId));
         assertTrue(token.supportsInterface(type(IAccessControlEnumerable).interfaceId));

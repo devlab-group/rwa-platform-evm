@@ -12,11 +12,9 @@ import (
 	"github.com/rwa-platform/server/internal/redemption"
 )
 
-// toRedemptionResponse computes the values the view mapper cannot derive from
-// the record: claimable and confirmations, from the indexer's block height and
-// the configured finality depth, and beneficiaryAllowed, from a live
-// ComplianceRegistry.isAllowed read. A failed chain read leaves
-// beneficiaryAllowed false instead of failing the response.
+// toRedemptionResponse derives claimable and confirmations from indexer height and
+// finality depth. It reads beneficiaryAllowed from ComplianceRegistry.isAllowed; read
+// failure reports false without failing the response.
 func (app *App) toRedemptionResponse(ctx context.Context, r *models.RedemptionRequest) dto.RedemptionResponse {
 	currentBlock := app.lastIndexedBlock()
 	allowed := false
@@ -32,12 +30,9 @@ func (app *App) toRedemptionResponse(ctx context.Context, r *models.RedemptionRe
 	)
 }
 
-// listRedemptions implements GET /api/v1/redemptions (operationId
-// listRedemptions).
-// Public, because redemption requests are public on-chain data. The page is
-// keyset-paginated by RedemptionRequestRepository.ListPage, with X-Total-Count
-// omitted, and takes optional `status` and `address` filters. The address
-// filter selects one beneficiary's requests, case-insensitively.
+// listRedemptions handles public GET /api/v1/redemptions using repository keyset
+// pagination without X-Total-Count. Optional filters select status or beneficiary
+// address, case-insensitively.
 func (app *App) listRedemptions(c *gin.Context) {
 	if app.Redemptions == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "redemptions is not configured on this server")

@@ -44,9 +44,8 @@ func (r *transactionRepo) GetByTxHash(ctx context.Context, chainID int64, txHash
 	return nil, repository.ErrNotFound
 }
 
-// preferSubmitted returns the first manager-submitted record, or else the first
-// event-derived one, so the projector's dedup is deterministic as in the memory
-// adapter. It returns nil for an empty slice.
+// preferSubmitted returns the first manager record, otherwise the first event-derived
+// record, or nil for no matches, mirroring memory's deduplication preference
 func preferSubmitted(txs []*models.Transaction) *models.Transaction {
 	var match *models.Transaction
 	for _, tx := range txs {
@@ -68,12 +67,9 @@ func (r *transactionRepo) Update(ctx context.Context, tx *models.Transaction) er
 	return nil
 }
 
-// UpdateConditional replaces tx only if the stored document has version
-// expectedVersion. The filter match is the atomic step, as in idempotencyRepo.Reserve
-// and nonceLeaseRepo.Acquire. MatchedCount 0 means the id does not exist or another
-// writer advanced the version, and the result cannot say which, so it reads the
-// record again: not found returns ErrNotFound, and a moved version returns
-// (false, nil).
+// UpdateConditional atomically replaces _id at expectedVersion. On no match, Get
+// distinguishes ErrNotFound from a moved version, returned as (false, nil), as
+// assetRecordRepo does.
 func (r *transactionRepo) UpdateConditional(ctx context.Context, tx *models.Transaction, expectedVersion int) (bool, error) {
 	cp := *tx
 	cp.Version = expectedVersion + 1
@@ -104,8 +100,8 @@ func (r *transactionRepo) ListByStatuses(ctx context.Context, statuses ...models
 	return findMany[models.Transaction](ctx, r.coll, bson.M{"status": bson.M{"$in": statuses}})
 }
 
-// ListUnfinalized returns the records that can still change, see the interface doc
-// comment. Both branches use the (status, blockNumber) index from EnsureIndexes.
+// ListUnfinalized applies the interface's work filter using both branches of the
+// (status, blockNumber) index
 func (r *transactionRepo) ListUnfinalized(ctx context.Context, confirmedFromBlock uint64) ([]*models.Transaction, error) {
 	filter := bson.M{"$or": bson.A{
 		bson.M{"status": bson.M{"$nin": bson.A{models.TxReplaced, models.TxFailed, models.TxConfirmed}}},
@@ -118,9 +114,8 @@ func (r *transactionRepo) ListReplacements(ctx context.Context) ([]*models.Trans
 	return findMany[models.Transaction](ctx, r.coll, bson.M{"replaces": bson.M{"$gt": ""}})
 }
 
-// ListPage returns one keyset page sorted by (submittedAt, _id) ascending, the same
-// order as List. A non-empty address is matched against from or to in the query with
-// a case-insensitive anchored regex, not by filtering in Go.
+// ListPage queries (submittedAt, _id) ascending with keyset pagination and
+// case-insensitive anchored From/To filtering
 func (r *transactionRepo) ListPage(ctx context.Context, address, cursor string, limit int) ([]*models.Transaction, string, error) {
 	clauses := bson.A{keysetFilterDirDate(cursor, "submittedAt", false)}
 	if address != "" {

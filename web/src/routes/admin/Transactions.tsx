@@ -21,8 +21,7 @@ export function Transactions() {
       <header className="app-main__header">
         <h1>Transactions</h1>
         <p>
-          Indexer-observed transactions. Unconfirmed and reorged states are
-          called out.
+          Indexed transactions, with unconfirmed and reorged states flagged.
         </p>
       </header>
 
@@ -48,12 +47,11 @@ export function Transactions() {
                       {flagged.length} transaction
                       {flagged.length === 1 ? "" : "s"} need
                       {flagged.length === 1 ? "s" : ""} operator attention:
-                      automated progress is stopped or unsafe. These reverted
-                      on-chain, were rejected before reaching the mempool, had
-                      their block dropped by a reorg, have an ambiguous
-                      broadcast outcome that must not be blindly resubmitted,
-                      had their nonce consumed elsewhere, or exhausted automatic
-                      replacement and require manual intervention.
+                      progress is stopped or unsafe. Check the statuses below
+                      for reverts, pre-mempool rejection, reorgs, unknown
+                      broadcast outcomes, externally consumed nonces or
+                      exhausted replacements. Never blindly resubmit an unknown
+                      broadcast.
                     </p>
                     <ul className="u-mt-2">
                       {flagged.map((tx) => (
@@ -80,8 +78,7 @@ export function Transactions() {
                               </a>
                             </>
                           )}
-                          {/* Sender, nonce and replacement details, shown only when the
-                              server sends these optional fields */}
+                          {/* Optional sender, nonce and replacement details */}
                           {(tx.sender != null ||
                             tx.nonce != null ||
                             tx.replacedBy != null ||

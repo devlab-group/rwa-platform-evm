@@ -48,9 +48,8 @@ func TestRateLimitPerIPIsolation(t *testing.T) {
 	}
 }
 
-// TestRateLimitEvictsStaleBuckets checks that a bucket untouched for longer
-// than ttl is evicted on a later sweep, so rotating source addresses cannot
-// grow the map forever. A fake clock and short windows avoid real sleeps.
+// TestRateLimitEvictsStaleBuckets uses a fake clock to check that a later sweep removes
+// buckets idle beyond TTL, without real sleeps
 func TestRateLimitEvictsStaleBuckets(t *testing.T) {
 	now := time.Unix(0, 0)
 	clock := func() time.Time { return now }

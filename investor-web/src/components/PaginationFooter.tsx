@@ -1,9 +1,4 @@
-/**
- * Shown under a paginated list: says when the list stops at the server's page
- * size, and offers an explicit "Load more" button instead of loading every page
- * automatically. When the server omits `totalCount`, it shows only the loaded
- * count and a "more available" notice, not an invented total.
- */
+/** Shows loaded count and manual Load more; omits unknown totals and indicates available pages */
 export function PaginationFooter({
   loadedCount,
   totalCount,

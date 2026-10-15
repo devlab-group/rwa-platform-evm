@@ -10,10 +10,9 @@ import {
 } from "../../lib/wallet";
 import { installFakeWallet, renderWithWallet } from "../../test/walletHarness";
 
-// The admin wallet broadcasts RWAFactory.deploy. Prices entered in whole
-// quote units must be scaled using the quote token's on-chain decimals before
-// building ProjectConfig. This fixture uses 18 decimals to catch an unscaled
-// value. Missing or unreadable tokens and over-precise prices block deployment.
+// Deployment prices scale by on-chain quote decimals before ProjectConfig assembly;
+// the 18-decimal fixture catches unscaled inputs. Missing/unreadable quote tokens and
+// excess precision block deployment.
 vi.mock("../../lib/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/client")>();
   return {
@@ -29,10 +28,8 @@ vi.mock("../../lib/client", async (importOriginal) => {
   };
 });
 
-// readErc20Decimals is stubbed, and sendDeployProject and waitForTxReceipt are
-// spied so the deploy tests assert the exact broadcast (chain, factory,
-// ProjectConfig) without a chain. The chain ID and factory address come from
-// api.getConfig().
+// Stub quote decimals and spy on deploy/receipt; assert chain/factory from getConfig and exact
+// ProjectConfig
 vi.mock("../../lib/wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/wallet")>();
   return {
@@ -47,9 +44,7 @@ const ADDR = (n: number) =>
   `0x${n.toString(16).padStart(40, "0")}` as `0x${string}`;
 
 const FACTORY = ADDR(0xfac);
-// The projectId comes from GET /api/v1/config, so getConfig returns this fixed
-// UUID and the on-chain projectId (keccak256 of the UUID string) is
-// deterministic.
+// Fix getConfig projectId so its UUID keccak256 is deterministic
 const FIXED_UUID = "12345678-1234-1234-1234-123456789abc";
 
 // Every required address field plus name and symbol; each price defaults to 1 whole unit
@@ -60,9 +55,7 @@ async function reachDeployFormAndFill(
   },
 ) {
   renderWithWallet(<Setup />, { connected: true });
-  // The profile loads on mount (mocked 404, so none) and the projectId loads
-  // from GET /config. Validate stays disabled until the projectId arrives, so
-  // wait for it to enable before driving the form.
+  // Wait for configured projectId to enable Validate; profile lookup returns 404 for creation tests
   const validateBtn = await screen.findByRole("button", {
     name: "Validate profile",
   });
@@ -125,8 +118,7 @@ describe("Setup deploy price conversion", () => {
     vi.mocked(sendDeployProject).mockClear().mockResolvedValue("0xdeployhash");
     vi.mocked(waitForTxReceipt).mockClear().mockResolvedValue(undefined);
     vi.mocked(readErc20Decimals).mockClear().mockResolvedValue(18);
-    // The admin is connected on chain 31337; the deploy form reads the quote
-    // decimals on that chain and broadcasts from that wallet
+    // Connected chain 31337 supplies quote-decimal reads and deployment
     wallet = installFakeWallet({ chainId: 31337 });
   });
 
@@ -140,8 +132,7 @@ describe("Setup deploy price conversion", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm deploy" }));
 
     await waitFor(() => expect(sendDeployProject).toHaveBeenCalled());
-    // The factory address and chain come from GET /config; decimals are read
-    // from the entered quoteToken on the config chain
+    // Use getConfig chain/factory and read entered quoteToken decimals on that chain
     expect(api.getConfig).toHaveBeenCalled();
     expect(readErc20Decimals).toHaveBeenCalledWith(31337, ADDR(2));
     const [chainId, from, factory, config] =
@@ -167,13 +158,12 @@ describe("Setup deploy price conversion", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Confirm deploy" }));
 
-    await screen.findByText(/couldn't read the quote token's decimals/i);
+    await screen.findByText(/Cannot read quote-token decimals/i);
     expect(sendDeployProject).not.toHaveBeenCalled();
   });
 
   it("blocks the deploy when a price has more precision than the quote token allows", async () => {
-    // The quote token has 6 decimals but the operator typed 7 fractional digits;
-    // parseUnits would round, so the form must reject it
+    // Reject 7 fractional digits on a 6-decimal quote token before parseUnits rounds
     vi.mocked(readErc20Decimals).mockResolvedValue(6);
     await reachDeployFormAndFill({ purchase: "1.2345678", redemption: "1" });
 
@@ -223,19 +213,15 @@ describe("Setup load-existing-profile on mount", () => {
 
     renderWithWallet(<Setup />, { connected: true });
 
-    // The page shows the stored profile instead of the empty create form, with
-    // the raw JSON read-only
-    await screen.findByText(
-      /Persisted - immutable for the life of this deployment/i,
-    );
+    // Show stored profile with read-only JSON instead of creation form
+    await screen.findByText(/Persisted - immutable for this project/i);
     const storedJson = screen.getByLabelText(
       "Stored Asset Profile JSON",
     ) as HTMLTextAreaElement;
     expect(storedJson.value).toContain("proj-1");
     expect(storedJson).toHaveAttribute("readonly");
 
-    // Deployment is unlocked (Review deployment is the deploy form's first
-    // button) without creating the profile again
+    // Unlock Review deployment without recreating the profile
     await screen.findByRole("button", { name: "Review deployment" });
     expect(
       screen.queryByRole("button", { name: "Validate profile" }),
@@ -253,7 +239,7 @@ describe("Setup load-existing-profile on mount", () => {
     // The create flow shows, and Deployment stays locked
     await screen.findByRole("button", { name: "Validate profile" });
     expect(
-      screen.getByText(/Create the Asset Profile above before deploying/i),
+      screen.getByText(/Create the Asset Profile above to supply project ID/i),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Review deployment" }),
@@ -261,7 +247,7 @@ describe("Setup load-existing-profile on mount", () => {
   });
 });
 
-// A stored profile, so the deploy gate has one to deploy
+// Supply a stored profile to unlock deployment
 function storedProfileResponse() {
   return {
     profile: {
@@ -368,7 +354,7 @@ describe("Setup deployment status gating", () => {
 
       renderWithWallet(<Setup />);
 
-      // Flush the initial loads → Deploying (form hidden, indicator shown).
+      // Flush loads; Deploying shows progress in place of the form
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -380,7 +366,7 @@ describe("Setup deployment status gating", () => {
       ).toBeNull();
       expect(api.getProject).toHaveBeenCalledTimes(1);
 
-      // One poll interval later, GET /project reports Active → UI flips.
+      // A poll returning Active updates the UI
       await act(async () => {
         await vi.advanceTimersByTimeAsync(DEPLOY_POLL_MS);
       });
@@ -388,7 +374,7 @@ describe("Setup deployment status gating", () => {
       expect(screen.getByText(/Deployed -/i)).toBeInTheDocument();
       expect(screen.queryByText(/Deployment in progress/i)).toBeNull();
 
-      // A terminal status stops the polling, so no further GET /project calls follow
+      // Active stops Setup's deployment polling
       await act(async () => {
         await vi.advanceTimersByTimeAsync(DEPLOY_POLL_MS * 3);
       });

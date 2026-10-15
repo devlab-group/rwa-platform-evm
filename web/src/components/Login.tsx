@@ -5,10 +5,9 @@ import { setSession } from "../lib/authSession";
 import { shortenAddress } from "../lib/format";
 
 /**
- * Admin wallet login: request POST /auth/challenge, personal_sign the message,
- * then exchange the signature at POST /auth/session. A configured-admin match
- * returns the JWT persisted by lib/authSession.ts and sent by lib/client.ts.
- * AppLayout shows this connect/sign/verify screen while no live session exists.
+ * Requests /auth/challenge, personal_signs its message, then exchanges the signature at
+ * /auth/session. lib/authSession.ts persists the JWT and lib/client.ts sends it;
+ * AppLayout displays login without a live session.
  */
 export function Login() {
   const wallet = useWalletContext();
@@ -45,9 +44,8 @@ export function Login() {
     <div className="card login-card">
       <h1>Admin sign-in</h1>
       <p>
-        Connect the project admin wallet and sign a one-time challenge to start
-        a session. The signature proves wallet ownership; it sends no on-chain
-        transaction and costs no gas.
+        Connect the admin wallet and sign a one-time challenge. The signature
+        proves ownership without an on-chain transaction or gas fee.
       </p>
 
       {wallet.address ? (
@@ -87,17 +85,15 @@ export function Login() {
   );
 }
 
-// Turns a login failure into an operator-facing message. The server returns the
-// same 401 for a non-admin signer and for a bad, expired or replayed challenge.
-// A dismissed wallet prompt gets a milder message than a fault.
+// Explains login failures: the server uses one 401 for wrong admin, bad signature or
+// expired/replayed challenge. Wallet rejection gets a milder message.
 function loginErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 401)
-      return "This wallet is not the project admin, or the sign-in challenge expired. Switch to the admin account and try again.";
+      return "This wallet is not the project admin, or the challenge expired. Select the admin account and retry.";
     return err.message;
   }
-  // EIP-1193 reports a user rejection as code 4001; some wallets only put
-  // "reject" in the message
+  // Recognize user rejection by EIP-1193 code 4001 or a message containing "reject"
   if (isUserRejection(err))
     return "Signature request was rejected. Sign the challenge to sign in.";
   return "Sign-in failed. Try again.";

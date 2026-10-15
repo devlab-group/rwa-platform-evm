@@ -3,8 +3,8 @@ import type { ContractCall } from "./safeBatch";
 import { erc20ApproveCall, escrowCall } from "./wallet";
 
 /**
- * Encodes a non-empty rejection reason as bytes32, matching internal/redemption EncodeReasonCode.
- * An exact 0x-prefixed 64-hex-character value passes through; other text uses SHA-256.
+ * Passes through exact 0x-prefixed bytes32 hex; hashes other non-empty reasons with SHA-256,
+ * matching server EncodeReasonCode
  */
 export function encodeReasonCode(input: string): Hex {
   if (!input) {
@@ -17,8 +17,8 @@ export function encodeReasonCode(input: string): Hex {
 }
 
 /**
- * Builds exact-amount approval, funding and optional claim calls in that order.
- * When executed atomically with claim, a refused payout also rolls back funding.
+ * Orders exact-amount approval, funding and optional claim; atomic execution rolls back funding on
+ * payout failure
  */
 export function fundBatchCalls(
   quoteToken: Address,

@@ -6,16 +6,9 @@ import (
 	"strings"
 )
 
-// This file enforces the assetSchema dialect "rwa-profile-assetSchema/1" defined
-// in docs/spec/profile-schema-dialect.md.
-//
-// The server and the offline signer must agree on which schema keywords apply.
-// The server compiles with a full Draft 2020-12 validator while the signer uses
-// its own, so a schema with a keyword such as multipleOf could be enforced by one
-// and ignored by the other. Both therefore accept only the same allowlist of
-// keywords and reject every other one. The vectors in
-// shared/vectors/schema-dialect-conformance.json check that parity, and
-// TestDialectConformance runs them.
+// Enforce rwa-profile-assetSchema/1 (docs/spec/profile-schema-dialect.md) before
+// compilation so server and signer reject unsupported keywords consistently.
+// TestDialectConformance checks shared/vectors/schema-dialect-conformance.json.
 
 // allowedValidationKeywords are the dialect's validation and applicator keywords
 var allowedValidationKeywords = map[string]bool{
@@ -49,10 +42,9 @@ var allowedTypeValues = map[string]bool{
 // maxRefDepth bounds the length of a $ref chain
 const maxRefDepth = 32
 
-// guardAssetSchema rejects a raw assetSchema that falls outside the
-// rwa-profile-assetSchema/1 dialect, before it is compiled. It checks the keys
-// of every schema object, the "type" values, and every $ref: it must be local,
-// the only member of its object, resolvable, and not part of a cycle.
+// guardAssetSchema checks rwa-profile-assetSchema/1 before compilation: allowed schema
+// keys and type values, plus $ref locality, sole-member placement, resolvability and
+// absence of cycles
 func guardAssetSchema(raw json.RawMessage) error {
 	var root any
 	if err := json.Unmarshal(raw, &root); err != nil {
@@ -65,9 +57,8 @@ func guardAssetSchema(raw json.RawMessage) error {
 // schemaGuard holds the parsed document root, against which $ref pointers resolve
 type schemaGuard struct{ root any }
 
-// walkSchema checks node as a schema object at path. refChain holds the $ref
-// pointers already followed on the current path and is nil at the start of an
-// independent walk, such as each $defs entry
+// walkSchema checks node at path. refChain tracks references followed on this path;
+// independent walks, including each $defs entry, start with nil.
 func (g *schemaGuard) walkSchema(node any, path string, refChain map[string]bool) error {
 	obj, ok := node.(map[string]any)
 	if !ok {

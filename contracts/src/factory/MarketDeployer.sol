@@ -6,11 +6,9 @@ import {FixedPriceStrategy} from "../pricing/FixedPriceStrategy.sol";
 import {Vault} from "../Vault.sol";
 
 /// @title MarketDeployer
-/// @notice Stateless deploy logic for FixedPriceStrategy and Vault. ComplianceTokenDeployer
-///         explains why RWAFactory's `new` calls are split across helper contracts.
-/// @dev Called through `delegatecall` from RWAFactory like the other helpers. Neither child reads
-///      `msg.sender` for anything privileged, because admin and role addresses are constructor
-///      parameters, so a plain `call` would also work. Holds no state.
+/// @notice Stateless FixedPriceStrategy and Vault deployment helper
+/// @dev Uses RWAFactory's delegatecall helper pattern; see ComplianceTokenDeployer. These children
+///      take privileged addresses as constructor arguments, so plain call would also work.
 contract MarketDeployer {
     function deploy(IRWAFactory.ProjectConfig calldata config, address token)
         external

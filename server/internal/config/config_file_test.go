@@ -18,9 +18,8 @@ func writeConfig(t *testing.T, contents string) string {
 	return path
 }
 
-// TestLoadExampleConfig checks that server/config.example.yaml loads. LoadFile
-// rejects unknown fields, so the test fails if the example uses a key that
-// fileSchema does not declare.
+// TestLoadExampleConfig requires server/config.example.yaml to match fileSchema;
+// LoadFile rejects unknown keys
 func TestLoadExampleConfig(t *testing.T) {
 	cfg, err := LoadFile("../../config.example.yaml")
 	if err != nil {
@@ -68,9 +67,8 @@ func TestLoadFileEmptyYieldsDefaults(t *testing.T) {
 	}
 }
 
-// TestLoadFileFullRoundTrip parses a complete YAML file, secrets included, and
-// checks that every field group resolves: strings, numbers, durations, the
-// comma-joined trusted proxies list and secrets
+// TestLoadFileFullRoundTrip checks YAML strings, numbers, durations, comma-joined
+// trusted proxies and secrets across every field group
 func TestLoadFileFullRoundTrip(t *testing.T) {
 	const yaml = `
 environment: development
@@ -174,8 +172,7 @@ alerts:
 			t.Errorf("TrustedProxies[%d] = %q, want %q", i, cfg.TrustedProxies[i], w)
 		}
 	}
-	// cors_allowed_origins belongs under http:. Loading it through the file path
-	// pins the block, because a key under the wrong block is rejected as unknown
+	// Keep cors_allowed_origins under http:; strict decoding rejects it in another block
 	wantOrigins := []string{"http://localhost:5173", "https://investor.example"}
 	if len(cfg.CORSAllowedOrigins) != len(wantOrigins) {
 		t.Fatalf("CORSAllowedOrigins = %v, want %v", cfg.CORSAllowedOrigins, wantOrigins)
@@ -215,8 +212,8 @@ func TestLoadFileRejectsWrongScalarType(t *testing.T) {
 	}
 }
 
-// prodYAML is a minimal production config that passes every production check,
-// the LoadFile counterpart of prodEnv in config_test.go
+// prodYAML supplies minimal valid production settings for LoadFile, matching
+// config_test.go's prodEnv
 const prodYAML = `
 environment: production
 contract:
@@ -243,10 +240,9 @@ func TestLoadFileProductionRoundTrips(t *testing.T) {
 	}
 }
 
-// TestLoadFileProductionRejectsPlaceholderWebhookSecret checks that the
-// 32-zero placeholder, which meets the 32-byte length floor, is rejected by the
-// same blocklist that covers JWT_SECRET. A forged KYC decision signed with a
-// guessable webhook secret would be relayed on-chain by the compliance hot key.
+// TestLoadFileProductionRejectsPlaceholderWebhookSecret rejects 32 zeroes despite
+// meeting the length floor, applying the shared JWT/webhook placeholder blocklist
+// against forgeable KYC secrets
 func TestLoadFileProductionRejectsPlaceholderWebhookSecret(t *testing.T) {
 	yaml := strings.Replace(prodYAML,
 		`kyc_webhook_hmac_secret: "01234567890123456789012345678901"`,
@@ -260,9 +256,8 @@ func TestLoadFileProductionRejectsPlaceholderWebhookSecret(t *testing.T) {
 	}
 }
 
-// TestLoadFileProductionValidationFires checks that the production checks
-// LoadFromMap enforces also fire for YAML input. Each case drops or weakens one
-// required value and expects an error.
+// TestLoadFileProductionValidationFires weakens one required value per case to check
+// that YAML enforces the same production rules as LoadFromMap
 func TestLoadFileProductionValidationFires(t *testing.T) {
 	cases := map[string]string{
 		"weak webhook secret": `
@@ -373,9 +368,8 @@ ipfs:
 	}
 }
 
-// TestLoadFileProductionExplicitZeroHonored checks that an explicit zero, as
-// opposed to an omitted key, reaches validation and is rejected in production
-// where it would disable a control
+// TestLoadFileProductionExplicitZeroHonored checks that explicit zero reaches
+// production validation and is rejected where it disables a control
 func TestLoadFileProductionExplicitZeroHonored(t *testing.T) {
 	const yaml = `
 environment: production
@@ -394,9 +388,8 @@ chain:
 	}
 }
 
-// TestLoadFileProductionOverride checks that the production_overrides keys work
-// from YAML: disabling the rate limit is rejected by default and accepted with
-// the override
+// TestLoadFileProductionOverride checks YAML production_overrides: disabled rate
+// limiting requires explicit permission
 func TestLoadFileProductionOverride(t *testing.T) {
 	base := `
 environment: production

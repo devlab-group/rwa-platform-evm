@@ -1,6 +1,4 @@
-// UI-level status derivation. Chain state (from api-types) is the source of
-// truth; this module only adds display labels and the Funded -> Claimable
-// split, so the UI can tell Pending, Funded and Claimable apart.
+// Labels chain statuses and splits Funded into confirming/Claimable for display
 import type { components } from "./api-types";
 
 export type RedemptionChainStatus = NonNullable<
@@ -10,10 +8,7 @@ export type TransactionChainStatus = NonNullable<
   components["schemas"]["Transaction"]["status"]
 >;
 
-/**
- * Confirmations threshold used only when neither Redemption.claimable nor
- * Project.finalityConfirmations is available.
- */
+/** Fallback when neither claimable nor finalityConfirmations is supplied */
 export const FALLBACK_FINALITY_CONFIRMATIONS = 12;
 
 export type RedemptionDisplayStatus =
@@ -26,13 +21,8 @@ export type RedemptionDisplayStatus =
   | "Unknown";
 
 /**
- * A `Funded` redemption is claimable on-chain as soon as it is funded, but the
- * indexer's view of the funding transaction is unconfirmed until it has the
- * configured number of confirmations. The server derives that as
- * `Redemption.claimable` (status is Funded and confirmations reach
- * Project.finalityConfirmations), which takes precedence. The
- * confirmations/threshold comparison below applies only when `claimable` is
- * absent.
+ * Funded claims have no on-chain confirmation delay, but the UI waits for indexed finality.
+ * Prefer server claimable; otherwise compare confirmations with the project threshold or fallback.
  */
 export function redemptionDisplayStatus(
   status: RedemptionChainStatus | undefined,
@@ -75,11 +65,8 @@ export const REDEMPTION_STATUS_LABEL: Record<RedemptionDisplayStatus, string> =
   };
 
 /**
- * Label for every status in the OpenAPI Transaction.status enum. It is keyed
- * by the generated `TransactionChainStatus` union, so adding an enum value
- * makes an incomplete map (and `TRANSACTION_TONE`) fail typecheck. For a
- * status outside the union, such as one a newer server adds, use
- * `transactionStatusLabel`, which falls back to "Unknown".
+ * Typed transaction labels; new statuses also require TRANSACTION_TONE updates.
+ * Use transactionStatusLabel for arbitrary strings.
  */
 export const TRANSACTION_STATUS_LABEL: Record<TransactionChainStatus, string> =
   {
@@ -95,18 +82,13 @@ export const TRANSACTION_STATUS_LABEL: Record<TransactionChainStatus, string> =
     needs_intervention: "Needs operator intervention",
   };
 
-/** Label shown for any status the client doesn't recognize (forward-compat). */
+/** Unknown-status label for forward compatibility */
 export const TRANSACTION_STATUS_UNKNOWN_LABEL = "Unknown";
 
 /**
- * Transaction states in which automated progress has stopped or is unsafe, so
- * a person needs to look: the attempt reverted on-chain (`reverted`) or was
- * never broadcast (`failed`), its block was dropped (`reorged`), whether it
- * reached the node is unknown and it must not be blindly resubmitted
- * (`broadcast_unknown`), another transaction consumed its nonce
- * (`nonce_consumed_externally`), or the transaction manager exhausted its
- * replacement attempts (`needs_intervention`). `pending`, `mined`, `confirmed`
- * and `replaced` are excluded.
+ * States needing attention: reverted on-chain, failed before broadcast, reorged,
+ * broadcast outcome unknown, nonce consumed externally or replacement attempts exhausted.
+ * Pending, mined, confirmed and replaced are excluded; see TRANSACTION_STATUS_LABEL.
  */
 const TRANSACTION_ATTENTION: ReadonlySet<TransactionChainStatus> = new Set([
   "reverted",
@@ -117,38 +99,28 @@ const TRANSACTION_ATTENTION: ReadonlySet<TransactionChainStatus> = new Set([
   "needs_intervention",
 ]);
 
-/** Narrowing guard: is `status` one of the statuses this client has a label for? */
+/** Narrows status to a known label key */
 export function isKnownTransactionStatus(
   status: string,
 ): status is TransactionChainStatus {
   return Object.prototype.hasOwnProperty.call(TRANSACTION_STATUS_LABEL, status);
 }
 
-/**
- * Display label for any status string. A value missing from the generated enum,
- * such as one a newer server sends, gets "Unknown" instead of an empty label.
- */
+/** Returns a known label or Unknown for unsupported server statuses */
 export function transactionStatusLabel(status: string): string {
   return isKnownTransactionStatus(status)
     ? TRANSACTION_STATUS_LABEL[status]
     : TRANSACTION_STATUS_UNKNOWN_LABEL;
 }
 
-/**
- * True for the states in `TRANSACTION_ATTENTION`. An unrecognized status is
- * flagged too, since the client cannot tell whether it is safe. Transaction
- * lists can use this for a page-level warning instead of relying on a single
- * row's badge color.
- */
+/** Flags TRANSACTION_ATTENTION states and unknown statuses for badges or page-level warnings */
 export function needsAttention(status: string): boolean {
   return !isKnownTransactionStatus(status) || TRANSACTION_ATTENTION.has(status);
 }
 
 /**
- * True when a Pending request's beneficiaryAllowed is false, indicating that
- * fundRedemption would fail compliance. Absent beneficiaryAllowed means false.
- * Funded claims do not recheck compliance, so later status changes do not
- * block their payout.
+ * True only for Pending with beneficiaryAllowed === false; missing eligibility is not flagged.
+ * Funded claims skip beneficiary platform-compliance checks.
  */
 export function redemptionBlockedByCompliance(
   status: RedemptionChainStatus | undefined,
@@ -165,10 +137,8 @@ export type ComplianceDisplayStatus =
   "Allowed" | "Expired" | "Blocked" | "NotOnboarded";
 
 /**
- * Returns the compliance status for display, checking expiry at `nowSeconds`.
- * An `Allowed` record keeps that status in storage after a nonzero `validUntil`
- * passes, but the registry's `isAllowed` returns false. Showing `Expired`
- * avoids implying that the wallet can still buy, transfer or redeem.
+ * Displays Expired when an Allowed record's nonzero validUntil has passed;
+ * the registry retains Allowed in storage but isAllowed returns false
  */
 export function complianceDisplayStatus(
   status: ComplianceChainStatus | undefined,

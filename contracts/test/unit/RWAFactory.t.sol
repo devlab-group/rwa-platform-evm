@@ -50,8 +50,7 @@ contract RWAFactoryTest is TestBase {
     function test_deploy_emitsProjectDeployed() public {
         IRWAFactory.ProjectConfig memory cfg = _defaultConfig();
         cfg.projectId = keccak256("event-project");
-        // Only check topics we can predict ahead of the call (projectId, profileDigest); data
-        // fields (addresses) are asserted via the returned Deployment instead
+        // Check predictable projectId/profileDigest topics here; assert returned addresses below
         vm.recordLogs();
         IRWAFactory.Deployment memory dep = factory.deploy(cfg);
         assertTrue(dep.token != address(0));
@@ -149,8 +148,7 @@ contract RWAFactoryTest is TestBase {
     }
 
     function test_deploy_failedAttemptLeavesNoZombieState() public {
-        // A reverted deploy() must not leave any partially-wired contracts behind, nor block a
-        // subsequent successful deploy
+        // Reverted deployment leaves no partial wiring and permits a later successful deployment
         IRWAFactory.ProjectConfig memory bad = _defaultConfig();
         bad.decimals = 200;
         vm.expectRevert(abi.encodeWithSelector(IRWAFactory.InvalidConfig.selector, "decimals"));

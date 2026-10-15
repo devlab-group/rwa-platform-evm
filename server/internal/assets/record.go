@@ -13,11 +13,9 @@ import (
 var recordIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 var sha256HexPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// decimalAmountPattern is the issuance.amount pattern from
-// shared/schemas/metadata.schema.json, and must match the signer's check. It
-// accepts "0", which SupplyController.mint rejects with ZeroAmount, and
-// numerals above uint256, so ValidateRecord also bounds the amount to
-// [1, maxIssuanceAmount].
+// decimalAmountPattern matches metadata.schema.json and the signer. It accepts zero and
+// values above uint256, so ValidateRecord also enforces [1, maxIssuanceAmount];
+// on-chain zero minting fails with ZeroAmount.
 var decimalAmountPattern = regexp.MustCompile(`^[0-9]+$`)
 
 // maxIssuanceAmount is 2^256-1, the largest uint256, since issuance.amount
@@ -52,12 +50,10 @@ type Metadata struct {
 	CID       string
 }
 
-// ValidateRecord validates a raw metadata envelope against
-// shared/schemas/metadata.schema.json and its asset object against profile's
-// assetSchema. When profile is nil the asset schema is not applied. A non-empty
-// expectedAmount must equal issuance.amount, and a non-empty expectedProjectID
-// must equal projectId. Problems are listed in ValidationResult.Errors, and the
-// returned *Metadata is nil when the document is invalid.
+// ValidateRecord checks the metadata envelope against metadata.schema.json and, with a
+// non-nil profile, asset against assetSchema. Non-empty expectedAmount and
+// expectedProjectID must match issuance.amount and projectId. Invalid documents return
+// nil *Metadata and ValidationResult.Errors.
 func ValidateRecord(profile *Profile, raw []byte, expectedAmount, expectedProjectID string) (ValidationResult, *Metadata) {
 	var errs []string
 

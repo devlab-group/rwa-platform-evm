@@ -1,9 +1,4 @@
-/**
- * Footer under a paginated admin list. It shows when the list stops at the
- * server's page size and offers a "Load more" button. When the server omits
- * `totalCount` (for example for audit logs), it shows a plain "more available"
- * notice instead of a total.
- */
+/** Shows loaded count and Load more; omits unknown totals and indicates available pages */
 export function PaginationFooter({
   loadedCount,
   totalCount,

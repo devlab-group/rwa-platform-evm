@@ -6,12 +6,9 @@ import (
 	"testing"
 )
 
-// TestDefaultTrustedProxiesIgnoresForwardedFor covers SetTrustedProxies: with
-// App.TrustedProxies at its zero value (nil), gin must not honor X-Forwarded-For
-// for c.ClientIP(), which auth.RateLimit keys on, so a caller cannot dodge per-IP
-// rate limiting by spoofing a new IP on each request. Two requests with the same
-// RemoteAddr but different spoofed X-Forwarded-For values must share one
-// rate-limit bucket.
+// TestDefaultTrustedProxiesIgnoresForwardedFor requires nil TrustedProxies to ignore
+// X-Forwarded-For in c.ClientIP(). Requests sharing RemoteAddr must share
+// auth.RateLimit's bucket despite different spoofed headers.
 func TestDefaultTrustedProxiesIgnoresForwardedFor(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.RateLimitRPS = 0.001 // effectively "one request, then blocked" for the rest of this test's short lifetime

@@ -1,8 +1,6 @@
-// Stateful mock of the api/openapi.yaml surface, built on Playwright route
-// interception. Each spec gets a fresh in-memory store from installMockApi, so
-// it can drive the UI and also assert or change server-side state directly,
-// for example to simulate a funded redemption that shows as Claimable after a
-// reload.
+// Stateful Playwright route mock for api/openapi.yaml. installMockApi gives each spec a
+// fresh store it can inspect or change, for example funding a redemption so it shows
+// Claimable after reload
 import type { Page, Route } from "@playwright/test";
 import type { components } from "../../src/lib/api-types";
 import { MOCK_WALLET_ADDRESS } from "./mock-wallet";

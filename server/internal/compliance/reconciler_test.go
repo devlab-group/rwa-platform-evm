@@ -15,9 +15,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// reconcilerFixture wires a WebhookReconciler to in-memory KYCEventRepository
-// and TransactionRepository implementations and a FakeClient, so tests can
-// drive a submission from Pending to Confirmed as the background loop does
+// reconcilerFixture uses memory KYC/transaction repositories and FakeClient to drive
+// Pending-to-Confirmed submission as the background loop does
 type reconcilerFixture struct {
 	r      *WebhookReconciler
 	events *memory.KYCEventRepository
@@ -43,9 +42,8 @@ func newReconcilerFixture(t *testing.T) *reconcilerFixture {
 	}
 }
 
-// seedAccepted claims and stores an Accepted event, the state
-// WebhookService.ProcessDecision leaves it in, so tests exercise the reconciler
-// without the webhook path
+// seedAccepted stores and claims the state ProcessDecision leaves for relay, bypassing
+// webhook handling
 func (f *reconcilerFixture) seedAccepted(t *testing.T, id, address, provider, eventID, outcome string, occurredAt time.Time) *models.KYCEvent {
 	t.Helper()
 	ctx := context.Background()
@@ -116,9 +114,8 @@ func TestWebhookReconcilerSubmitsThenConfirms(t *testing.T) {
 	}
 }
 
-// TestWebhookReconcilerRetriesAfterTxFailed checks that a transaction that
-// never reached the mempool (TxFailed) returns the event to Accepted and is
-// resubmitted under the same idempotency key on the next tick
+// TestWebhookReconcilerRetriesAfterTxFailed checks that a rejected send returns the
+// event to Accepted for same-key resubmission next tick
 func TestWebhookReconcilerRetriesAfterTxFailed(t *testing.T) {
 	f := newReconcilerFixture(t)
 	ctx := context.Background()
@@ -198,8 +195,7 @@ func TestWebhookReconcilerSupersedesStaleAcceptedEvent(t *testing.T) {
 	addr := "0x00000000000000000000000000000000000000D4"
 	t0 := time.Now().UTC().Add(-time.Hour)
 	f.seedAccepted(t, "evt-d4-old", addr, "test-provider", "evt-d4-old", "Blocked", t0)
-	// A newer decision for the same address claims it before the old event is
-	// reconciled, as a second delivery arriving while the first is queued
+	// A newer delivery claims the address while the older Accepted event is queued
 	f.seedAccepted(t, "evt-d4-new", addr, "test-provider", "evt-d4-new", "Allowed", t0.Add(time.Minute))
 
 	if err := f.r.Reconcile(ctx); err != nil {
@@ -218,10 +214,8 @@ func TestWebhookReconcilerSupersedesStaleAcceptedEvent(t *testing.T) {
 	}
 }
 
-// TestWebhookReconcilerRetriesAfterTxReorged checks that a transaction that was
-// mined and then reorged out (TxReorged) is handled like TxFailed. The event
-// returns to Accepted with TxID cleared and is resubmitted under the same
-// idempotency key on the next tick.
+// TestWebhookReconcilerRetriesAfterTxReorged checks that an orphaned transaction clears
+// TxID, restores Accepted and resubmits under the same key next tick
 func TestWebhookReconcilerRetriesAfterTxReorged(t *testing.T) {
 	f := newReconcilerFixture(t)
 	ctx := context.Background()
@@ -260,10 +254,8 @@ func TestWebhookReconcilerRetriesAfterTxReorged(t *testing.T) {
 	}
 }
 
-// TestWebhookReconcilerReopensApplyStatusAfterPostConfirmationReorg checks that
-// an Applied event whose confirmed transaction is later reorged out is reopened
-// to Accepted and resubmitted, so the decision is not left recorded as applied
-// on-chain when it is not
+// TestWebhookReconcilerReopensApplyStatusAfterPostConfirmationReorg checks that a
+// reorged Applied event returns to Accepted for resubmission
 func TestWebhookReconcilerReopensApplyStatusAfterPostConfirmationReorg(t *testing.T) {
 	f := newReconcilerFixture(t)
 	ctx := context.Background()

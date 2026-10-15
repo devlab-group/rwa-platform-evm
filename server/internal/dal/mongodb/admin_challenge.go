@@ -12,15 +12,13 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// adminChallengeRepo persists admin_challenges, one active challenge per address
-// with the normalized address as _id (see models.AdminChallenge). The TTL index on
-// expiresAt is background cleanup. Get checks ExpiresAt itself, as walletSessionRepo.Get
-// does.
+// adminChallengeRepo stores one address-keyed challenge in admin_challenges. Get
+// enforces ExpiresAt independently of TTL cleanup, as walletSessionRepo.Get does.
 type adminChallengeRepo struct{ coll *mongo.Collection }
 
 func (r *adminChallengeRepo) Upsert(ctx context.Context, c *models.AdminChallenge) error {
-	// replace any earlier document for this _id, used or not, because the verify step
-	// has no client-supplied nonce to choose between several
+	// Replace the address's challenge because verification supplies no nonce to select
+	// among multiple messages
 	_, err := r.coll.ReplaceOne(ctx, bson.M{"_id": c.Address}, c, options.Replace().SetUpsert(true))
 	return err
 }
@@ -37,9 +35,8 @@ func (r *adminChallengeRepo) Get(ctx context.Context, address string) (*models.A
 }
 
 func (r *adminChallengeRepo) MarkUsed(ctx context.Context, address string) error {
-	// the filter matches only a challenge that is not yet used, so two concurrent
-	// verifies of the same signature cannot both succeed, as in
-	// walletChallengeRepo.MarkUsed
+	// Match unused challenges atomically so only one concurrent verification consumes the
+	// stored challenge
 	res, err := r.coll.UpdateOne(ctx, bson.M{"_id": address, "used": bson.M{"$ne": true}}, bson.M{"$set": bson.M{"used": true}})
 	if err != nil {
 		return err
@@ -47,8 +44,7 @@ func (r *adminChallengeRepo) MarkUsed(ctx context.Context, address string) error
 	if res.MatchedCount == 1 {
 		return nil
 	}
-	// MatchedCount 0 means no such challenge or one already used. A read tells them
-	// apart, and Get reports an expired challenge as not found.
+	// On no match, Get distinguishes absent/expired challenges from already-used ones
 	if _, err := r.Get(ctx, address); err != nil {
 		return err // repository.ErrNotFound
 	}

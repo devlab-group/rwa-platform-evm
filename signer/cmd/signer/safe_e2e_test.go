@@ -50,8 +50,8 @@ func writeSafePolicy(t *testing.T, dir string, pkg builtPackage, owners []string
 	return path
 }
 
-// TestE2E_SafeAuditor_SignAndCombine exercises two-owner signing and combining through the CLI,
-// including non-owner, threshold and duplicate-share refusals and signature ordering
+// Exercise two-owner CLI signing/combining, owner/threshold/duplicate refusals and
+// signature ordering
 func TestE2E_SafeAuditor_SignAndCombine(t *testing.T) {
 	signerBin := buildSignerBinary(t, findGoBinary(t), t.TempDir())
 	pkg := buildPackageWithOverrides(t, testChainID, testController, testVault, docOverrides{auditor: testSafe})

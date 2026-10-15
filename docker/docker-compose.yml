@@ -1,7 +1,7 @@
-# Local development only; do not expose these services or deploy this file in production.
-# Host ports bind to loopback, but MongoDB and IPFS are unauthenticated: anyone who can
-# reach them has full access. Production needs MongoDB authentication, a private or
-# authenticated IPFS API, and TLS for the platform API. See docs/operator/operator-guide.md.
+# Local development only; keep services private and do not deploy this file in production.
+# Loopback ports expose unauthenticated MongoDB/IPFS locally. Production requires MongoDB
+# authentication, a private/authenticated IPFS API and platform API TLS; see
+# docs/operator/operator-guide.md.
 services:
   anvil:
     image: ghcr.io/foundry-rs/foundry:latest
@@ -11,12 +11,10 @@ services:
       - ./data/anvil:/anvil-data
 
   mongo:
-    # Docker-official image (not mongodb-community-server): its entrypoint runs as root,
-    # chowns the mounted /data/db to the mongodb user, then drops privileges, so the host
-    # bind mount below needs no chmod or chown. The community image runs as non-root and
-    # cannot write to a bind mount owned by another user ("create_directory
-    # /data/db/journal: Permission denied"). mongo:7 also bundles mongosh for the
-    # healthcheck and matches the image the API e2e uses.
+    # Official mongo:7's root entrypoint adjusts /data/db ownership before running mongod as
+    # mongodb;
+    # this handles ordinary bind-mount ownership without manual chmod/chown. It includes mongosh
+    # for the healthcheck and matches the API E2E image.
     image: mongo:7
     command: --replSet rs0 --bind_ip_all --port 27017
     healthcheck:
@@ -25,7 +23,7 @@ services:
       timeout: 15s
       start_period: 15s
       retries: 10
-    # For production, set strong credentials and require them in the server URI
+    # Production needs strong credentials in MongoDB and the server URI:
     # environment:
     #   MONGO_INITDB_ROOT_USERNAME: rwa
     #   MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?set MONGO_PASSWORD}
@@ -37,9 +35,8 @@ services:
 
   ipfs:
     image: ipfs/kubo:latest
-    # Kubo's HTTP API (5001) is unauthenticated, so keep it on loopback only. The server
-    # uses only this API; the gateway (8080) stays unpublished so it can't clash with the
-    # server's default http.addr (:8080)
+    # Keep unauthenticated Kubo API 5001 on loopback for the server; leave gateway 8080
+    # unpublished to avoid the server's default http.addr (:8080)
     ports: ["127.0.0.1:5001:5001"]
     volumes:
       - ./data/ipfs:/data/ipfs

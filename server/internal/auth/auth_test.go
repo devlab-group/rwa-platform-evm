@@ -21,9 +21,8 @@ import (
 
 func init() { gin.SetMode(gin.TestMode) }
 
-// TestContentSecurityPolicyMatchesWebEngValidatedString pins the exact policy
-// string, which the admin SPA production build is checked against (see
-// web/CSP-AUDIT.md), so an edit here cannot drift from it unnoticed
+// TestContentSecurityPolicyMatchesWebEngValidatedString pins the policy validated by
+// the admin SPA production build; see web/CSP-AUDIT.md
 func TestContentSecurityPolicyMatchesWebEngValidatedString(t *testing.T) {
 	want := "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
 	if ContentSecurityPolicy != want {
@@ -137,10 +136,9 @@ func TestIdempotencyReplaysIdenticalResponse(t *testing.T) {
 	}
 }
 
-// TestIdempotencyConcurrentIdenticalRequestsExecuteHandlerOnce fires N
-// identical requests (same key, same body) at once. Reserve's atomicity must
-// let exactly one run the handler. Each other request replays that response or,
-// if it arrives before Complete, gets 409 "in progress".
+// TestIdempotencyConcurrentIdenticalRequestsExecuteHandlerOnce checks atomic
+// reservation: one identical request runs the handler; others replay its response or
+// receive 409 while it is in progress
 func TestIdempotencyConcurrentIdenticalRequestsExecuteHandlerOnce(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	var calls int32
@@ -292,10 +290,9 @@ func TestIdempotencyScopedByRoute(t *testing.T) {
 	}
 }
 
-// TestIdempotencyScopedByPathParams checks that requests to one route template
-// with different path parameter values, the same Idempotency-Key and an empty
-// body each execute. Otherwise reissuing record B would replay record A's
-// response.
+// TestIdempotencyScopedByPathParams checks that identical keys and empty bodies with
+// different path parameters execute separately, preventing record B's reissue from
+// replaying record A's response
 func TestIdempotencyScopedByPathParams(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	var calls int
@@ -325,10 +322,9 @@ func TestIdempotencyScopedByPathParams(t *testing.T) {
 	}
 }
 
-// TestIdempotencyScopedByPrincipal checks that two principals sending the same
-// key and body to the same route do not share a cached response. A small
-// middleware sets the principal directly, so the test exercises Idempotency
-// alone.
+// TestIdempotencyScopedByPrincipal requires identical keys, bodies and routes to
+// produce separate caches for different principals. Inject the principal directly to
+// isolate Idempotency.
 func TestIdempotencyScopedByPrincipal(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	var calls int
@@ -359,10 +355,9 @@ func TestIdempotencyScopedByPrincipal(t *testing.T) {
 	}
 }
 
-// TestIdempotencyRequireRoleBeforeMiddlewareBlocksUnauthorizedReplay checks the
-// ordering used in internal/api/api.go, RequireRole before Idempotency. An
-// unauthorized caller with a valid Idempotency-Key is rejected by RequireRole
-// and never reaches the cache.
+// TestIdempotencyRequireRoleBeforeMiddlewareBlocksUnauthorizedReplay checks the API's
+// middleware order: RequireRole rejects unauthorized callers before Idempotency can
+// replay a cached response
 func TestIdempotencyRequireRoleBeforeMiddlewareBlocksUnauthorizedReplay(t *testing.T) {
 	const adminAddr = "0x2222222222222222222222222222222222222222"
 	token, _, err := IssueAdminJWT(testJWTSecret, adminAddr, time.Hour)
@@ -450,10 +445,9 @@ func TestIdempotencyExpiredReservationIsTakenOver(t *testing.T) {
 	}
 }
 
-// TestIdempotencyOversizedResponseIsNotReexecuted covers a success response too
-// large to cache. The original caller gets the full response, and a replay gets
-// a placeholder at the original status code without running the handler
-// again.
+// TestIdempotencyOversizedResponseIsNotReexecuted checks that the original caller gets
+// the full response, while replay gets a placeholder at the original status without
+// rerunning the handler
 func TestIdempotencyOversizedResponseIsNotReexecuted(t *testing.T) {
 	old := maxCachedResponseBytes
 	maxCachedResponseBytes = 16
@@ -489,11 +483,8 @@ func TestIdempotencyOversizedResponseIsNotReexecuted(t *testing.T) {
 	}
 }
 
-// TestIdempotencyRepositoryFencingTokenBlocksSlowOwner exercises fencing
-// directly on memory.IdempotencyRepository, because it needs two Reserve calls
-// across an expiry. A caller that reserves a key, outlives ttl and then calls
-// Complete must not overwrite what a second caller completed after taking the
-// key over.
+// TestIdempotencyRepositoryFencingTokenBlocksSlowOwner reserves a memory-store key
+// across expiry. A stale owner's Complete must not overwrite the next owner's result.
 func TestIdempotencyRepositoryFencingTokenBlocksSlowOwner(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	ctx := context.Background()

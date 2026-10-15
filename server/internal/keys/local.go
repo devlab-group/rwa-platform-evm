@@ -15,9 +15,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// localKeystoreProvider decrypts a password-encrypted go-ethereum keystore
-// JSON file at construction and on Reload. To rotate, replace the file and
-// password file on disk, then call Reload or restart
+// localKeystoreProvider decrypts go-ethereum JSON at construction/Reload. Rotate the
+// keystore and password files, then Reload or restart.
 type localKeystoreProvider struct {
 	path         string
 	passwordFile string

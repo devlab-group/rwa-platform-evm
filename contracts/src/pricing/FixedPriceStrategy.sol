@@ -11,10 +11,8 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {IFixedPriceStrategy} from "../interfaces/IFixedPriceStrategy.sol";
 
 /// @title FixedPriceStrategy
-/// @notice Fixed purchase and redemption prices that `PRICER_ROLE` holders can update.
-/// @dev `AccessControlEnumerable` lets an off-chain verifier enumerate `PRICER_ROLE` and
-///      `DEFAULT_ADMIN_ROLE` holders on-chain. ComplianceRegistry explains the inheritance
-///      overrides reused below.
+/// @notice PRICER_ROLE can update fixed purchase/redemption prices
+/// @dev Enumerable PRICER_ROLE and DEFAULT_ADMIN_ROLE; see ComplianceRegistry for inheritance overrides
 contract FixedPriceStrategy is IFixedPriceStrategy, AccessControlEnumerable, AccessControlDefaultAdminRules {
     bytes32 public constant PRICER_ROLE = keccak256("PRICER_ROLE");
 

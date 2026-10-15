@@ -14,9 +14,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/memory"
 )
 
-// TestGetProfileReturnsStoredProfile checks that GET /api/v1/profile returns the
-// stored profile (setupTestApp seeds one): the raw document plus the derived
-// identity fields, so the admin console can repopulate after a reload
+// TestGetProfileReturnsStoredProfile checks that GET /api/v1/profile returns stored
+// JSON and derived identity fields for restoring the admin console after reload
 func TestGetProfileReturnsStoredProfile(t *testing.T) {
 	env := setupTestApp(t)
 

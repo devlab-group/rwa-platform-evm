@@ -212,10 +212,9 @@ func mustProfileAndDigest(t *testing.T) ([32]byte, *Profile) {
 	return profile.Digest, profile
 }
 
-// TestCreateRecordReservesRecordBeforePublish checks that creating a record
-// with an existing RecordID, even with different metadata, fails when the record
-// is stored and never reaches Publish, so it cannot overwrite the publication
-// row bound to the original record
+// TestCreateRecordReservesRecordBeforePublish checks that a duplicate RecordID, even
+// with different metadata, fails before Publish and preserves the original publication
+// row
 func TestCreateRecordReservesRecordBeforePublish(t *testing.T) {
 	_, profile := mustProfileAndDigest(t)
 	auditorKey, _ := crypto.GenerateKey()

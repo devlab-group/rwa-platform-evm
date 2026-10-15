@@ -11,8 +11,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// deadLetterRepo persists indexer_dead_letters. See repository.DeadLetterRepository
-// for Record's upsert and increment behavior. Record is one atomic upsert.
+// deadLetterRepo persists indexer_dead_letters using one atomic Record upsert; see
+// repository.DeadLetterRepository
 type deadLetterRepo struct{ coll *mongo.Collection }
 
 func (r *deadLetterRepo) Record(ctx context.Context, e *models.DeadLetterEntry) error {
@@ -20,11 +20,10 @@ func (r *deadLetterRepo) Record(ctx context.Context, e *models.DeadLetterEntry) 
 	return err
 }
 
-// deadLetterRecordUpdate builds Record's update as an aggregation pipeline, so one
-// upsert can branch on whether the entry exists. A new entry is stored as given. A
-// repeat keeps firstFailedAt, bumps retryCount, un-resolves the entry and takes the
-// latest failure fields. $literal keeps values that start with "$" from being read
-// as field paths.
+// deadLetterRecordUpdate uses an aggregation pipeline for atomic insert-or-update. New
+// rows store the supplied entry; repeats preserve firstFailedAt, increment retryCount,
+// clear Resolved and refresh failure fields. $literal protects values beginning with
+// "$" from field-path interpretation.
 func deadLetterRecordUpdate(e *models.DeadLetterEntry) mongo.Pipeline {
 	lit := func(v any) bson.M { return bson.M{"$literal": v} }
 	return mongo.Pipeline{{{Key: "$set", Value: bson.M{

@@ -5,16 +5,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// governanceEventsABIJSON covers shared OpenZeppelin governance events:
-// Pausable's Paused/Unpaused, AccessControl's RoleGranted/RoleRevoked, and
-// DefaultAdminTransferScheduled/DefaultAdminTransferCanceled. Their signatures
-// are shared across contracts, so one binding decodes them at any address.
-//
-// Paused/Unpaused put account in log.Data. RoleGranted/RoleRevoked index role,
-// account and sender in log.Topics. DefaultAdminTransferScheduled indexes newAdmin
-// and puts acceptSchedule in log.Data; DefaultAdminTransferCanceled has no fields.
-// Acceptance emits RoleRevoked and RoleGranted, which the role projection handles,
-// rather than a separate completion event.
+// governanceEventsABIJSON shares OpenZeppelin event layouts across contracts:
+// Paused/Unpaused store account in log.Data; RoleGranted/RoleRevoked index role,
+// account and sender; DefaultAdminTransferScheduled indexes newAdmin with
+// acceptSchedule in log.Data; DefaultAdminTransferCanceled has no fields.
+// Admin-transfer acceptance emits RoleRevoked/RoleGranted for the role projection, with
+// no separate completion event.
 const governanceEventsABIJSON = `[
   {"type":"event","name":"Paused","anonymous":false,"inputs":[{"name":"account","type":"address","indexed":false}]},
   {"type":"event","name":"Unpaused","anonymous":false,"inputs":[{"name":"account","type":"address","indexed":false}]},
@@ -31,7 +27,7 @@ const governanceEventsABIJSON = `[
 // AccessControlDefaultAdminRules events that project contracts share
 type Governance struct{ ABI abi.ABI }
 
-// NewGovernance parses the shared governance-events ABI once.
+// NewGovernance parses the shared governance-events ABI
 func NewGovernance() Governance { return Governance{ABI: mustABI(governanceEventsABIJSON)} }
 
 // EventID returns the keccak256 topic0 for the named event.
@@ -53,8 +49,8 @@ type RoleEvent struct {
 	Sender  common.Address
 }
 
-// UnpackRoleEvent decodes a RoleGranted/RoleRevoked log from its topics; both
-// events share this layout (role, account, sender all indexed).
+// UnpackRoleEvent decodes the indexed role, account and sender shared by RoleGranted
+// and RoleRevoked
 func (g Governance) UnpackRoleEvent(topics []common.Hash) RoleEvent {
 	var ev RoleEvent
 	if len(topics) >= 4 {
@@ -65,10 +61,9 @@ func (g Governance) UnpackRoleEvent(topics []common.Hash) RoleEvent {
 	return ev
 }
 
-// AdminTransferNewAdmin decodes the indexed newAdmin (topic1) of a
-// DefaultAdminTransferScheduled log, returning the zero address when the log
-// has no such topic. acceptSchedule is non-indexed and not needed by the
-// pending-admin projection, so it is left in log.Data undecoded.
+// AdminTransferNewAdmin reads topic1 from DefaultAdminTransferScheduled, returning zero
+// if absent. The pending-admin projection does not need acceptSchedule, so it remains
+// undecoded in log.Data.
 func (g Governance) AdminTransferNewAdmin(topics []common.Hash) common.Address {
 	if len(topics) >= 2 {
 		return common.HexToAddress(topics[1].Hex())
@@ -76,10 +71,8 @@ func (g Governance) AdminTransferNewAdmin(topics []common.Hash) common.Address {
 	return common.Address{}
 }
 
-// roleNamesByID maps each platform role's bytes32 id to its name (the set
-// internal/project's knownRoles enumerates) so a decoded RoleGranted or
-// RoleRevoked can be folded into the named Roles map. The security projector
-// ignores an id that is not here
+// roleNamesByID maps the roles in internal/project's knownRoles to projection names.
+// The security projector ignores unknown IDs.
 var roleNamesByID = map[common.Hash]string{
 	common.Hash(DefaultAdminRole): "DEFAULT_ADMIN_ROLE",
 	PauserRole:                    "PAUSER_ROLE",
@@ -89,8 +82,7 @@ var roleNamesByID = map[common.Hash]string{
 	RedemptionManagerRole:         "REDEMPTION_MANAGER_ROLE",
 }
 
-// RoleName returns the platform role name for a bytes32 role id, and false if
-// the id is not one of the platform's known roles.
+// RoleName returns a known platform role's name, or false for an unknown ID
 func RoleName(id common.Hash) (string, bool) {
 	name, ok := roleNamesByID[id]
 	return name, ok

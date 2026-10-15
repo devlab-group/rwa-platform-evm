@@ -14,25 +14,20 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// hashSessionToken returns the SHA-256 digest of a session token. Only the
-// digest is stored, as the session's lookup id, so read access to the session
-// collection does not yield usable tokens: presenting a stored digest hashes
-// to a different value on lookup.
+// hashSessionToken derives the SHA-256 session lookup ID. Storage exposes only the
+// digest, not a usable token: submitting that digest hashes it again.
 func hashSessionToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
 
-// SessionManager issues and validates short-lived wallet sessions bound to one
-// Ethereum address. A session lets an investor act only for its own address and
-// is issued after the caller proves wallet ownership through
-// compliance.ChallengeService.VerifyOwnership (see the WalletSession security
-// scheme in api/openapi.yaml).
-//
-// Sessions are stored through repository.WalletSessionRepository, which is
-// shared by all replicas in the MongoDB backend (with a TTL index) and
-// process-local in the in-memory backend used for PERSISTENCE_MODE=memory.
-// SessionManager owns token generation (crypto/rand) and the TTL.
+// SessionManager issues and validates short-lived wallet sessions bound to one Ethereum
+// address. API callers must prove ownership through
+// compliance.ChallengeService.VerifyOwnership before issuance; see api/openapi.yaml's
+// WalletSession scheme.
+// It owns crypto/rand token generation and TTL configuration.
+// repository.WalletSessionRepository shares sessions across server replicas using
+// MongoDB with a TTL index, or stores them locally under PERSISTENCE_MODE=memory.
 type SessionManager struct {
 	ttl  time.Duration
 	repo repository.WalletSessionRepository
@@ -44,9 +39,8 @@ func NewSessionManager(repo repository.WalletSessionRepository, ttl time.Duratio
 	return &SessionManager{ttl: ttl, repo: repo}
 }
 
-// Issue returns a new random opaque session token bound to address, valid for
-// the manager's TTL. Every call issues an independent token, so a wallet may
-// hold several valid sessions at once, for example in two browser tabs.
+// Issue returns a random opaque token bound to address for the manager's TTL.
+// Independent tokens allow concurrent sessions, such as separate browser tabs.
 func (sm *SessionManager) Issue(ctx context.Context, address string) (token string, expiresAt time.Time, err error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -62,10 +56,9 @@ func (sm *SessionManager) Issue(ctx context.Context, address string) (token stri
 	return token, expiresAt, nil
 }
 
-// Validate resolves token to its bound address. ok is false for an unknown,
-// malformed or expired token, and callers must not distinguish those cases in a
-// response (see RequireWalletSession). A store error, such as an unreachable
-// database, also yields ok == false. Expiry is enforced by repo.Get.
+// Validate resolves token to its address. Unknown, malformed or expired tokens and
+// store errors all yield ok == false; callers must not distinguish them in responses.
+// repo.Get enforces expiry.
 func (sm *SessionManager) Validate(ctx context.Context, token string) (address string, ok bool) {
 	// Look up by the digest stored at Issue
 	s, err := sm.repo.Get(ctx, hashSessionToken(token))
@@ -83,11 +76,9 @@ const walletSessionContextKey = "auth.walletSessionAddress"
 // (api/openapi.yaml's WalletSession securityScheme: "X-Wallet-Session")
 const WalletSessionHeader = "X-Wallet-Session"
 
-// RequireWalletSession resolves the WalletSessionHeader through sm and aborts
-// with 401 if it is missing, unrecognized or expired. On success handlers read
-// the session's address with WalletSessionAddress. Handlers behind it act only
-// for that address, which is what separates it from the admin JWT. A nil sm
-// answers 501.
+// RequireWalletSession resolves WalletSessionHeader through sm, returning 401 for
+// missing, unknown or expired tokens, or 501 for nil sm. Handlers use
+// WalletSessionAddress and act only for that wallet, independently of admin JWTs.
 func RequireWalletSession(sm *SessionManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if sm == nil {

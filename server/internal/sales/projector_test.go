@@ -14,12 +14,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// delayedPurchaseRepo wraps a repository.PurchaseRepository and sleeps briefly
-// around every write that Reconcile's generation swap performs. That widens the
-// window in which a concurrent List() can interleave with a rebuild, which
-// TestReconcileNeverExposesEmptyOrPartialPurchasesToConcurrentReaders needs: the
-// memory repository's calls are fast and individually locked, so without the
-// delay the test would almost never observe a mid-rebuild state.
+// delayedPurchaseRepo delays generation writes so concurrent List calls can expose
+// delete-first gaps that fast, individually locked memory writes could hide
 type delayedPurchaseRepo struct {
 	repository.PurchaseRepository
 }
@@ -96,12 +92,8 @@ func TestReconcileRebuildsPurchases(t *testing.T) {
 	}
 }
 
-// TestReconcileNeverExposesEmptyOrPartialPurchasesToConcurrentReaders rebuilds
-// the purchases read model twice, the second time replacing every seeded
-// purchase with a different one, while a goroutine polls List() in a tight
-// loop. That is the worst case for a rebuild that deletes before it inserts: a
-// reader could see an empty or partial list. The observed count must never drop
-// below the pre-rebuild count.
+// Replace all seeded purchases while another goroutine polls List; its count must not
+// fall below the pre-rebuild value, detecting delete-first gaps
 func TestReconcileNeverExposesEmptyOrPartialPurchasesToConcurrentReaders(t *testing.T) {
 	vaultAddr := common.HexToAddress("0x0000000000000000000000000000000000000A")
 	events := memory.NewChainEventRepository()

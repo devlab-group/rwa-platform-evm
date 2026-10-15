@@ -7,10 +7,9 @@ import (
 	"testing"
 )
 
-// conformanceVectors mirrors shared/vectors/schema-dialect-conformance.json. It
-// has separate vector sets for schema compilation, instance validation,
-// structural-limit boundaries and nested-envelope decoding. The tests in
-// dialect_differential_test.go use the fields besides the compile cases.
+// conformanceVectors mirrors shared/vectors/schema-dialect-conformance.json:
+// compilation, instance validation, structural boundaries and nested envelopes.
+// dialect_differential_test.go covers the non-compilation cases.
 type conformanceVectors struct {
 	Dialect string `json:"dialect"`
 	Cases   []struct {
@@ -46,10 +45,9 @@ type conformanceVectors struct {
 		Note  string `json:"note"`
 	} `json:"limitCases"`
 
-	// EnvelopeCases run a full profile or metadata document through
-	// ValidateProfile or ValidateRecord, which catches unknown-field gaps that a
-	// schema compile check cannot, such as an extra field in displayFields[],
-	// issuance or proofs[]
+	// EnvelopeCases test full profiles and metadata through ValidateProfile or
+	// ValidateRecord, catching unknown fields in displayFields[], issuance and proofs[]
+	// beyond schema compilation
 	EnvelopeCases []struct {
 		Name        string          `json:"name"`
 		Target      string          `json:"target"` // "profile" | "metadata"
@@ -76,12 +74,10 @@ func loadConformanceVectors(t *testing.T) conformanceVectors {
 	return v
 }
 
-// TestDialectConformance checks that every vector's "expect" matches what
-// guardAssetSchema and the Draft 2020-12 compiler do with the vector's schema.
-// The signer runs the same vectors against its own compiler under the same test
-// name, and a mismatch on either side blocks a release. `make dialect-check`
-// runs `go test ./internal/assets/... -run Dialect`, so keep "Dialect" in the
-// names of the tests it should run.
+// TestDialectConformance compares each vector's expect with the guard and Draft 2020-12
+// compiler. The signer tests the same vectors; either mismatch blocks release. Keep
+// "Dialect" in test names: make dialect-check runs go test ./internal/assets/... -run
+// Dialect.
 func TestDialectConformance(t *testing.T) {
 	vectors := loadConformanceVectors(t)
 	if vectors.Dialect != "rwa-profile-assetSchema/1" {

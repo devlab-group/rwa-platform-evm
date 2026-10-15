@@ -6,11 +6,8 @@ import { api, ApiError } from "../../lib/client";
 import { sendMint, waitForTxReceipt } from "../../lib/wallet";
 import { installFakeWallet, renderWithWallet } from "../../test/walletHarness";
 
-// The admin's wallet broadcasts the mint (SupplyController.mint); the server
-// does not relay it. signed-result.json supplies only the auditor signature,
-// which the MintAttestation carries, and the auditor address, which the page
-// checks against the project. Every other attestation field comes from the
-// record and the project.
+// Mint uses the admin wallet, not server relay. Upload supplies the separate auditor
+// signature/address; the page checks the address and builds attestation fields from record/project.
 vi.mock("../../lib/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/client")>();
   return {
@@ -25,8 +22,7 @@ vi.mock("../../lib/client", async (importOriginal) => {
   };
 });
 
-// sendMint/waitForTxReceipt are spied so the mint test can assert the exact
-// broadcast (chain, supplyController, MintAttestation, signature) without a chain.
+// Spy on mint/receipt to check chain, controller, attestation and signature without a chain
 vi.mock("../../lib/wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/wallet")>();
   return {
@@ -63,8 +59,7 @@ const PROJECT = {
 
 const SIGNATURE = `0x${"ab".repeat(65)}`;
 
-// jsdom's File has no .text(); the form reads the upload via file.text(), so a
-// File-like object with a text() method is enough to drive handleFile.
+// Use a File-like text() stub for jsdom upload handling
 function signedResultFile(auditor: string = AUDITOR): File {
   const content = JSON.stringify({
     formatVersion: "1.0",
@@ -89,7 +84,7 @@ describe("Assets signature upload → wallet mint", () => {
       .mockReset()
       .mockResolvedValue({ items: [RECORD] });
     vi.mocked(api.getProject).mockReset().mockResolvedValue(PROJECT);
-    // No stored profile → empty metadata skeleton; irrelevant to the mint path.
+    // No stored profile; metadata skeleton is irrelevant to this mint test
     vi.mocked(api.getProfile)
       .mockReset()
       .mockRejectedValue(
@@ -106,7 +101,7 @@ describe("Assets signature upload → wallet mint", () => {
   it("assembles the MintAttestation from the record + project and broadcasts SupplyController.mint", async () => {
     renderWithWallet(<Assets />, { connected: true });
 
-    // Wait for the record to load (so the form can find it by ID).
+    // Wait for the record to load before selecting its ID
     await screen.findByText("record-001");
 
     fireEvent.change(
@@ -118,7 +113,7 @@ describe("Assets signature upload → wallet mint", () => {
     fireEvent.change(screen.getByLabelText("Signed result"), {
       target: { files: [signedResultFile()] },
     });
-    // The parsed-file summary confirms the file was read before we mint.
+    // Wait for the parsed-file summary before minting
     await screen.findByText(AUDITOR);
 
     fireEvent.click(
@@ -188,7 +183,7 @@ describe("Assets signature upload → wallet mint", () => {
       screen.getByRole("button", { name: "Upload signature & mint" }),
     );
 
-    await screen.findByText(/no loaded record matches that id/i);
+    await screen.findByText(/no loaded record matches this id/i);
     expect(sendMint).not.toHaveBeenCalled();
   });
 });
@@ -224,7 +219,7 @@ describe("Assets signer policy (offline signing trust root)", () => {
   it("returns null when the project isn't deployed or the UUID is missing", () => {
     expect(buildSignerPolicy(undefined, POLICY_UUID)).toBeNull();
     expect(buildSignerPolicy(PROJECT, undefined)).toBeNull();
-    // Without the deployed addresses (before deployment) there is no policy
+    // No policy before deployment addresses exist
     expect(
       buildSignerPolicy({ ...PROJECT, addresses: {} }, POLICY_UUID),
     ).toBeNull();
@@ -278,9 +273,7 @@ describe("Assets signer policy (offline signing trust root)", () => {
 
     renderWithWallet(<Assets />);
 
-    await screen.findByText(
-      /Create the Asset Profile and deploy the project first/i,
-    );
+    await screen.findByText(/Create the Asset Profile and deploy first/i);
     expect(
       screen.queryByRole("button", { name: "Download policy.json" }),
     ).toBeNull();

@@ -41,10 +41,7 @@ const WEBHOOK_TONE: Record<WebhookOutcome, string> = {
   Pending: "badge--neutral",
 };
 
-/**
- * Compliance: investor status/expiry, manual allow/block, wallet-ownership
- * challenge/evidence, KYC webhook history, and audit log.
- */
+/** Wallet status/expiry, manual decisions, ownership proofs, webhook history and audit log */
 export function Compliance() {
   const wallets = usePaginatedList<WalletStatus>(
     (cursor, signal) => api.listWallets({ signal, cursor }),
@@ -264,7 +261,7 @@ function SetStatusForm({ onSubmitted }: { onSubmitted: () => void }) {
         `compliance-${address}-${status}`,
       );
       setResult(ref.txHash ?? "submitted");
-      setConfirmGateKey((k) => k + 1); // collapse the confirm panel back down
+      setConfirmGateKey((k) => k + 1); // Close the confirmation panel
       onSubmitted();
     } catch (err) {
       setError(
@@ -313,7 +310,7 @@ function SetStatusForm({ onSubmitted }: { onSubmitted: () => void }) {
         reviewLabel="Review status change"
         confirmLabel="Confirm set status"
         confirmHeading="Confirm compliance status change"
-        confirmWarning="This submits a transaction using the server's compliance key. It takes effect when mined; no wallet approval follows this confirmation."
+        confirmWarning="Submits through the server's compliance key, taking effect when mined. This confirmation has no further wallet approval."
         disabled={!address}
         submitting={submitting}
         onConfirm={handleSubmit}

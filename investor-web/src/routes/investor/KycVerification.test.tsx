@@ -18,9 +18,8 @@ vi.mock("../../lib/client", async (importOriginal) => {
   };
 });
 
-// Both provider SDKs are replaced by stand-ins: the real ones load code from
-// the provider and drive a camera, which jsdom can't do. The stand-ins keep the
-// props contract, so a wrong prop name still fails here.
+// Replace SDKs with stand-ins because jsdom cannot run vendor capture flows;
+// keep their prop types to catch incorrect integration parameters
 vi.mock("@sumsub/websdk-react", () => ({
   default: ({
     accessToken,
@@ -41,7 +40,7 @@ vi.mock("@sumsub/websdk-react", () => ({
   ),
 }));
 
-/** The subset of Onfido.init's parameters these tests assert on. */
+// Onfido.init parameters asserted by these tests
 interface OnfidoInitParams {
   token: string;
   workflowRunId: string;
@@ -60,7 +59,7 @@ vi.mock("onfido-sdk-ui", () => ({
 
 const ADDRESS = "0x1111111111111111111111111111111111111111";
 
-/** A loaded wallet-status result; `data !== null` means the wallet has a live session. */
+// Loaded own status; non-null data indicates an accepted session
 function statusProp(
   status: "Unknown" | "Allowed" | "Blocked" | null,
   reload: () => void = vi.fn(),
@@ -191,16 +190,12 @@ describe("KycVerificationSection", () => {
       workflowRunId: "workflow-run-1",
     });
 
-    // Completion is signalled by the SDK's own onComplete callback.
+    // SDK onComplete signals submission
     act(() => params.onComplete());
     await screen.findByText(/Verification submitted - awaiting approval/);
   });
 
-  /**
-   * Drives the section to the submitted state under fake timers (installed
-   * before render so the poll's interval is the fake one), returning the
-   * `reload` spy the poll is expected to call.
-   */
+  // Install fake timers before rendering submission; return the reload spy for poll assertions
   async function renderSubmitted(reload: () => void) {
     giveSession();
     vi.mocked(api.startKYC).mockResolvedValue({
@@ -245,7 +240,7 @@ describe("KycVerificationSection", () => {
     const reload = vi.fn();
     const { rerender } = await renderSubmitted(reload);
 
-    // The poll observes the webhook-driven on-chain approval.
+    // Observe webhook-driven on-chain approval
     rerender(
       <KycVerificationSection
         walletAddress={ADDRESS}
@@ -281,9 +276,7 @@ describe("KycVerificationSection", () => {
         ownWalletStatus={expired}
       />,
     );
-    expect(
-      screen.getByText(/Your verification has expired/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Your verification expired/)).toBeInTheDocument();
     expect(screen.queryByText(/already Allowed/)).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Start verification" }));
@@ -302,7 +295,7 @@ describe("KycVerificationSection", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(4 * 60_000);
     });
-    expect(screen.getByText(/safe to close this page/)).toBeInTheDocument();
+    expect(screen.getByText(/you can close this page/)).toBeInTheDocument();
 
     reload.mockClear();
     await act(async () => {

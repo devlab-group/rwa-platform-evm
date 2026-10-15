@@ -1,15 +1,12 @@
-// Pinned ABI fragments for wallet transactions and on-chain price previews.
-// Encoding and quoting happen locally; project addresses still come from
-// server configuration and must be checked in the transaction preview.
+// Pinned ABIs for locally encoded transactions and on-chain previews.
+// Verify server-supplied project addresses in the transaction preview.
 import type { Abi } from "viem";
 
-/** Vault.buy is the investor purchase. The vault pulls the quoted amount of
- * quote token from the buyer with safeTransferFrom and reverts if the quote
- * exceeds `maxQuoteAmount`, so the buyer must approve the vault first. Both the
- * caller and `recipient` must be Allowed. Amounts are minimal units
- * (`tokenAmount` in RWA decimals, quote amounts in quote-token decimals).
- * previewBuy prices the same `tokenAmount` at the current on-chain price; the
- * slippage ceiling is applied to that figure. */
+/**
+ * Vault.buy pulls quote tokens after checking maxQuoteAmount; approve Vault first.
+ * Caller and recipient must be Allowed. tokenAmount uses RWA minimal units; quotes use
+ * quote-token minimal units. previewBuy supplies the price used for the slippage ceiling.
+ */
 export const vaultAbi = [
   {
     type: "function",
@@ -32,13 +29,12 @@ export const vaultAbi = [
   },
 ] as const satisfies Abi;
 
-/** RedemptionEscrow calls the investor makes. requestRedemption escrows the RWA
- * (approve the escrow first) and returns the new request id. claimRedemption is
- * permissionless once a request is funded and always pays the recorded
- * beneficiary. cancelRedemption, callable only by the beneficiary after the
- * timeout, returns the escrowed RWA. previewRedeem is the view the request form
- * quotes from. Funding and rejection are issuer-side calls and are not part of
- * this app. */
+/**
+ * Escrow investor calls: requestRedemption pulls approved RWA and assigns a request ID;
+ * funded claim is permissionless and pays the recorded beneficiary. Only the beneficiary
+ * can cancel a Pending request after timeout. previewRedeem supplies request quotes;
+ * funding and rejection are issuer-side calls.
+ */
 export const redemptionEscrowAbi = [
   {
     type: "function",
@@ -74,9 +70,7 @@ export const redemptionEscrowAbi = [
   },
 ] as const satisfies Abi;
 
-/** The RWAToken revert reasons an investor can hit, so a failed transfer or
- * redemption reads as a sentence instead of raw hex. Errors only: it is used
- * solely to decode a revert. */
+/** Token errors used only to decode failed transfers/redemptions into readable messages */
 export const tokenErrorsAbi = [
   {
     type: "error",

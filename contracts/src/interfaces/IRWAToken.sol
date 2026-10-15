@@ -4,8 +4,8 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title IRWAToken
-/// @notice Permissioned ERC-20 with pause; mint/burn restricted to SupplyController.
-/// @dev Stable interface; implementations must match docs/spec/contracts.md.
+/// @notice Permissioned ERC-20 with pause; only SupplyController mints/burns
+/// @dev Stable interface; implementations must match docs/spec/contracts.md
 interface IRWAToken is IERC20 {
     error SenderNotAllowed(address from);
     error RecipientNotAllowed(address to);
@@ -13,17 +13,14 @@ interface IRWAToken is IERC20 {
     error SupplyControllerAlreadySet();
     error OnlyTokenDeployer(address caller);
 
-    /// @notice One-time deploy wiring: set the SupplyController address, which resolves the
-    ///         Token<->Controller<->Vault construction cycle. Callable exactly once, only by
-    ///         the deployer recorded at construction (normally the RWAFactory), and locked
-    ///         afterwards. It behaves as immutable after setup but is not the Solidity
-    ///         `immutable` keyword.
+    /// @notice Wires SupplyController once, deployer-only (normally RWAFactory), resolving the
+    ///         Token/Controller/Vault construction cycle. Locked after setup, though not declared immutable.
     function setSupplyController(address controller) external;
 
-    /// @notice Mint `value` to `to`. Callable only by SupplyController
+    /// @notice SupplyController-only mint of `value` to `to`
     function controllerMint(address to, uint256 value) external;
 
-    /// @notice Burn `value` from `from`. Callable only by SupplyController
+    /// @notice SupplyController-only burn of `value` from `from`
     function controllerBurn(address from, uint256 value) external;
 
     function paused() external view returns (bool);

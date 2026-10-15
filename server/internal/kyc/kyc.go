@@ -1,12 +1,9 @@
-// Package kyc authenticates provider webhooks and starts verification flows.
-// KYC_PROVIDER selects one adapter:
-//
-//   - "none": generic HMAC-SHA256 decisions; no server-initiated verification
-//   - "sumsub": WebSDK tokens bound to externalUserId; X-Payload-Digest webhooks
-//   - "onfido": applicant, Studio workflow and SDK token; X-SHA2-Signature webhooks
-//
-// Adapters hold no database handle. API and compliance services own wallet bindings,
-// replay checks, decision persistence and on-chain relay.
+// Package kyc starts verification and authenticates webhooks. KYC_PROVIDER selects:
+// - "none": generic HMAC-SHA256 decisions without initiation.
+// - "sumsub": WebSDK tokens bound to externalUserId, with X-Payload-Digest webhooks.
+// - "onfido": applicant, Studio workflow and SDK token, with X-SHA2-Signature webhooks.
+// Adapters hold no database handles; API/compliance own wallet bindings, replay checks,
+// persistence and on-chain relay.
 package kyc
 
 import (
@@ -39,9 +36,9 @@ var (
 	// it is acknowledged with 202 without being recorded
 	ErrUnhandledEvent = errors.New("kyc: webhook carried no actionable decision")
 
-	// ErrMissingTimestamp marks a decision without a usable provider timestamp.
-	// Substituting local time would defeat freshness and ordering of late deliveries.
-	// The API drops and audits it with 202, distinct from an irrelevant event.
+	// ErrMissingTimestamp rejects decisions without usable provider time, preserving
+	// freshness and ordering. The API drops/audits with 202, separately from irrelevant
+	// events.
 	ErrMissingTimestamp = errors.New("kyc: webhook carries no usable provider decision timestamp")
 
 	// ErrMonitoringSignal carries a signed monitoring reference without a wallet binding.
@@ -49,8 +46,8 @@ var (
 	ErrMonitoringSignal = errors.New("kyc: monitoring signal with no wallet in the delivery")
 )
 
-// Session supplies the token or hosted URL used to launch verification.
-// The caller persists Ref with its provider and wallet for later webhook resolution.
+// Session supplies an SDK token or hosted URL. The caller persists Ref/provider/wallet
+// for webhook resolution.
 type Session struct {
 	Provider  string    `json:"provider"`
 	Token     string    `json:"token,omitempty"`
@@ -59,9 +56,9 @@ type Session struct {
 	ExpiresAt time.Time `json:"expiresAt,omitempty"`
 }
 
-// Decision is an authenticated provider outcome before wallet resolution.
-// Address is populated when the provider includes it; otherwise Ref resolves through
-// a persisted verification binding. Status is Allowed, Blocked or Pending.
+// Decision holds an authenticated outcome before wallet resolution. Use Address when
+// supplied, otherwise resolve Ref through the stored binding. Consumers accept Allowed,
+// Blocked or Pending.
 type Decision struct {
 	Provider   string
 	EventID    string
@@ -82,9 +79,10 @@ type Provider interface {
 	Name() string
 	// StartVerification returns the session launched by the SPA, or ErrStartNotSupported
 	StartVerification(ctx context.Context, address string) (Session, error)
-	// VerifyWebhook checks the raw body and signature, then maps the delivery to a Decision.
-	// Errors distinguish authentication, ignored events, missing timestamps and monitoring signals.
-	// Timestamps MUST come from the provider payload; the API checks freshness and positivity.
+	// VerifyWebhook authenticates raw bytes and maps Decision, distinguishing invalid
+	// signatures, ignored events, missing timestamps and monitoring signals. Timestamps
+	// MUST come from provider payloads; compliance.ProcessDecision enforces freshness and
+	// positivity.
 	VerifyWebhook(rawBody []byte, headers http.Header) (Decision, error)
 }
 
@@ -99,8 +97,8 @@ type Config struct {
 	Onfido OnfidoConfig
 }
 
-// New selects the configured adapter, defaulting an empty Mode to none.
-// None mode without GenericHMACSecret returns nil, nil to disable KYC.
+// New defaults empty Mode to none; none without GenericHMACSecret returns (nil, nil),
+// disabling KYC
 func New(cfg Config) (Provider, error) {
 	mode := cfg.Mode
 	if mode == "" {

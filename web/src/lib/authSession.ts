@@ -1,9 +1,6 @@
-// Admin JWT from POST /auth/session, issued after the configured admin signs
-// a login challenge. Logout removes it locally; the server has no revocation.
-//
-// Persist in IndexedDB across reloads. An in-memory mirror supplies synchronous
-// reads for client.ts headers and useSyncExternalStore; writes also update
-// IndexedDB. main.tsx hydrates the mirror once at startup.
+// Admin JWT from /auth/session; logout is local, without server revocation.
+// IndexedDB survives reloads, while a memory mirror serves synchronous client/hook reads.
+// Writes update memory first; main.tsx starts hydration at startup.
 import { idbDelete, idbGet, idbSet } from "./idb";
 
 const STORAGE_KEY = "authSession";
@@ -43,9 +40,8 @@ export function getSession(): AuthSession | undefined {
 }
 
 /**
- * Sets the session, or clears it when `next` is undefined. The in-memory mirror
- * updates synchronously, so getSession reflects the change at once; the
- * IndexedDB write follows in the background.
+ * Updates the memory mirror synchronously, then writes/deletes IndexedDB in the background;
+ * undefined clears
  */
 export function setSession(next: AuthSession | undefined): void {
   session = next;
@@ -69,10 +65,9 @@ export function subscribeSession(listener: Listener): () => void {
 }
 
 /**
- * Loads a persisted JWT from IndexedDB into the in-memory mirror and notifies
- * subscribers. main.tsx starts it without awaiting, so the shell renders
- * first. An expired token is deleted instead of restored. Without IndexedDB it
- * resolves to a signed-out state.
+ * Hydrates memory from IndexedDB and notifies subscribers; expired entries are deleted.
+ * main.tsx does not await it, so the shell renders first; unavailable storage leaves a fresh
+ * page signed out.
  */
 export async function hydrateSession(): Promise<void> {
   let stored: AuthSession | undefined;
@@ -90,12 +85,8 @@ export async function hydrateSession(): Promise<void> {
   notify();
 }
 
-// Test-only bootstrap. Playwright page objects call `page.goto(path)` per
-// screen, which reloads the document and would force a login each time. The
-// fixtures in tests/fixtures seed a session through `page.addInitScript`,
-// which sets this global before any app code runs. Production code never sets
-// `window.__RWA_E2E_SESSION__`; a script able to set it already has
-// same-origin script execution.
+// Playwright seeds window.__RWA_E2E_SESSION__ through addInitScript on document loads.
+// Production does not populate it; writing it requires same-origin script execution.
 declare global {
   interface Window {
     __RWA_E2E_SESSION__?: AuthSession;

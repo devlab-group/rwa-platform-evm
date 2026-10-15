@@ -6,9 +6,9 @@ interface ConfirmStepProps {
   /** Label for the button in the confirm panel that submits */
   confirmLabel: string;
   confirmHeading: string;
-  /** Why the action needs a second look, such as "This calls the server's compliance hot key directly" */
+  // Reason for review, such as a server compliance-key call
   confirmWarning: string;
-  /** Disables the review button, for example while required fields are empty */
+  // Disables review while required input is missing
   disabled?: boolean;
   submitting?: boolean;
   onConfirm: () => void;
@@ -16,7 +16,7 @@ interface ConfirmStepProps {
   children: ReactNode;
 }
 
-/** Two-step review and confirm gate for admin actions that call a server hot-key endpoint directly */
+/** Review/confirm step for admin calls to server hot-key endpoints */
 export function ConfirmStep({
   reviewLabel,
   confirmLabel,

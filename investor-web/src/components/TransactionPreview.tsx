@@ -13,7 +13,7 @@ export interface AmountField {
   symbol: string;
 }
 
-/** Client-side wallet-submission lifecycle, separate from the server's TransactionChainStatus. */
+/** Browser wallet-submission state, separate from server TransactionChainStatus */
 export type ConfirmationState =
   | "draft"
   | "awaiting-signature"
@@ -35,9 +35,8 @@ export interface TransactionPreviewProps {
   title: string;
   chainId: number;
   /**
-   * The contracts involved, one of which is the transaction's target. The
-   * calldata is encoded in the browser (lib/abis.ts, lib/wallet.ts) and sent to
-   * the project addresses shown here.
+   * Project contract addresses, including the target; lib/abis.ts and lib/wallet.ts encode calldata
+   * locally
    */
   addresses: AddressField[];
   amounts: AmountField[];
@@ -45,15 +44,14 @@ export interface TransactionPreviewProps {
   quoteTokenSymbol?: string;
   slippageBps?: number;
   confirmationState: ConfirmationState;
-  /** Extra call-specific caveat, appended after the standard non-guarantee notice. */
+  /** Call-specific caveat appended to the payment disclaimer */
   notice?: string;
   children?: ReactNode;
 }
 
 /**
- * Pre-approval summary shown before the user approves a wallet transaction:
- * chain ID, addresses, amounts with units, price side, quote token, slippage
- * bounds and confirmation state.
+ * Shows chain, addresses, amounts/units, price side, quote token, slippage bounds and
+ * confirmation state before wallet approval
  */
 export function TransactionPreview({
   title,
@@ -130,9 +128,9 @@ export function TransactionPreview({
       </dl>
 
       <p className="tx-preview__notice">
-        Amounts are final only after the transaction is mined and passes the
-        platform&apos;s finality threshold. A pending or funded redemption does
-        not guarantee payment.
+        Wait for mining and the platform&apos;s finality threshold before
+        treating amounts as final. A pending or funded redemption does not
+        guarantee payment.
         {notice ? ` ${notice}` : ""}
       </p>
 

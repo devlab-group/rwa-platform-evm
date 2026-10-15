@@ -7,9 +7,9 @@ import { TxRouteContext, type TxRoute } from "../lib/txRoute";
 type RoleHolders = components["schemas"]["RoleHolders"];
 
 /**
- * Routes authorized wallet actions directly, or renders Safe-batch actions for a selected holder.
- * Nested forms use useTxRoute; function children receive the route explicitly.
- * The selection does not verify Safe bytecode; contracts enforce role authorization.
+ * Routes role-holding wallets directly; other callers select a holder for Safe export.
+ * Nested forms use useTxRoute, function children receive it. Selection checks no Safe
+ * bytecode; contracts enforce authorization.
  */
 export function RoleGate({
   roles,

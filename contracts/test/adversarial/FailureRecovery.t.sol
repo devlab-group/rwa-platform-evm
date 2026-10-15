@@ -10,11 +10,8 @@ import {Vault} from "../../src/Vault.sol";
 import {BlacklistableERC20} from "../mocks/token/BlacklistableERC20.sol";
 import {FeeOnTransferERC20} from "../mocks/token/FeeOnTransferERC20.sol";
 
-/// @notice Failure injection on the redemption funding and claim path, showing that each
-///         failure is recoverable instead of a stuck state: no role can force a loss, and a
-///         retry after the underlying condition clears succeeds. Covers an underfunded
-///         treasury, a quote-token blacklist during a funded claim (with a recovery rehearsal
-///         once the blacklist lifts), and fee-on-transfer quote-token rejection at funding.
+/// @notice Tests atomic funding/claim failures from insufficient treasurer balance, quote-token
+///         blacklisting and transfer fees, with successful claim retries after restrictions lift
 contract FailureRecoveryTest is TestBase {
     function setUp() public override {
         super.setUp();
@@ -26,14 +23,12 @@ contract FailureRecoveryTest is TestBase {
         token.approve(address(escrow), 40 ether);
     }
 
-    /// @dev A treasurer with insufficient quote balance cannot fund a redemption: the pull-in
-    ///      leg reverts, the request stays Pending, and the beneficiary's RWA stays escrowed,
-    ///      neither lost nor double-counted
+    /// @dev Insufficient treasurer balance reverts funding, leaving the request Pending and its RWA escrowed
     function test_fundRedemption_underfundedTreasuryReverts() public {
         vm.prank(investor);
         uint256 id = escrow.requestRedemption(40 ether, 0, uint64(block.timestamp + 1 hours));
 
-        // The treasurer approves but never received any quote token, so the balance is zero
+        // Treasurer has approved but has no quote balance
         vm.prank(treasurer);
         quoteToken.approve(address(escrow), type(uint256).max);
         assertEq(quoteToken.balanceOf(treasurer), 0);
@@ -48,10 +43,8 @@ contract FailureRecoveryTest is TestBase {
         assertEq(token.balanceOf(address(escrow)), escrowRwaBefore);
     }
 
-    /// @dev Funded-redemption recovery rehearsal: the quote token blacklists the beneficiary
-    ///      after funding (for example a sanctions hit on the off-chain rail behind the quote
-    ///      token), `claimRedemption` reverts and leaves the Funded status and escrowed funds
-    ///      untouched, and once the blacklist lifts a plain retry of the same claim succeeds
+    /// @dev Blacklisting the beneficiary after funding reverts claim without changing status or balances;
+    ///      retry succeeds after the blacklist lifts
     function test_claimRedemption_blacklistedBeneficiary_recoversAfterUnblacklist() public {
         BlacklistableERC20 busd = new BlacklistableERC20();
         (address freshTokenAddr, address freshVaultAddr,,, address freshEscrowAddr) =
@@ -85,14 +78,14 @@ contract FailureRecoveryTest is TestBase {
         vm.expectRevert(abi.encodeWithSelector(BlacklistableERC20.AccountBlacklisted.selector, investor));
         freshEscrow.claimRedemption(id);
 
-        // Reverted atomically: status, escrow balances, and Vault inventory are all untouched
+        // Atomic rollback preserves status, escrow balances and Vault inventory
         IRedemptionEscrow.RedemptionRequest memory r = freshEscrow.getRedemption(id);
         assertEq(uint8(r.status), uint8(IRedemptionEscrow.RedemptionStatus.Funded));
         assertEq(freshToken.balanceOf(freshEscrowAddr), escrowRwaBefore);
         assertEq(busd.balanceOf(freshEscrowAddr), escrowQuoteBefore);
         assertEq(Vault(freshVaultAddr).inventory(), vaultInventoryBefore);
 
-        // Recovery: blacklist lifts, the exact same claim call is retried and succeeds
+        // Lift the blacklist and retry the same claim
         busd.setBlacklisted(investor, false);
         freshEscrow.claimRedemption(id);
 
@@ -102,9 +95,7 @@ contract FailureRecoveryTest is TestBase {
         assertEq(busd.balanceOf(investor), quoteAmount);
     }
 
-    /// @dev A fee-on-transfer quote token can never fund a redemption for less than the recorded
-    ///      quoteAmount: the exact balance-delta check in `fundRedemption`'s pull-in leg rejects
-    ///      it instead of under-funding the escrow
+    /// @dev Funding rejects a fee-shortened quote transfer through its exact balance-delta check
     function test_fundRedemption_feeOnTransferQuoteRejected() public {
         FeeOnTransferERC20 feeToken = new FeeOnTransferERC20(500); // 5% fee
         (address freshTokenAddr, address freshVaultAddr,,, address freshEscrowAddr) =
@@ -133,15 +124,11 @@ contract FailureRecoveryTest is TestBase {
         assertEq(uint8(r.status), uint8(IRedemptionEscrow.RedemptionStatus.Pending));
     }
 
-    /// @dev `fundRedemption`'s exact-delta check protects only the inbound leg. A quote token
-    ///      whose fee turns on after funding (the treasurer paid in full and the escrow holds
-    ///      `quoteAmount`) must still be caught on the outbound leg: `claimRedemption` cannot
-    ///      complete the request while underpaying the beneficiary. The call reverts atomically
-    ///      (status stays Funded, escrow balance untouched) and succeeds once the fee is
-    ///      disabled, the same recovery shape as the blacklist test above.
+    /// @dev A fee enabled after full funding must still revert claim on short payment, preserving
+    ///      Funded status and escrow balances. Disabling the fee permits the same retry.
     function test_claimRedemption_feeEnabledAfterFunding_recoversOnceDisabled() public {
         FeeOnTransferERC20 feeToken = new FeeOnTransferERC20(500); // 5% fee, starts enabled
-        feeToken.setFeeEnabled(false); // disabled for funding so the escrow receives the full amount
+        feeToken.setFeeEnabled(false); // Disable for full funding
         (address freshTokenAddr, address freshVaultAddr,,, address freshEscrowAddr) =
             _deployWithQuoteToken(address(feeToken), "fee-claim-demo");
         RWAToken freshToken = RWAToken(freshTokenAddr);
@@ -164,8 +151,7 @@ contract FailureRecoveryTest is TestBase {
         assertEq(uint8(freshEscrow.getRedemption(id).status), uint8(IRedemptionEscrow.RedemptionStatus.Funded));
         assertEq(feeToken.balanceOf(freshEscrowAddr), quoteAmount);
 
-        // The fee turns on after funding. The escrow's balance is untouched, but a plain
-        // `safeTransfer` to the beneficiary would now deliver 5% less.
+        // Enable the fee after funding; safeTransfer alone would deliver 5% less
         feeToken.setFeeEnabled(true);
 
         uint256 escrowRwaBefore = freshToken.balanceOf(freshEscrowAddr);
@@ -175,14 +161,14 @@ contract FailureRecoveryTest is TestBase {
         vm.expectRevert(); // QuoteDeltaMismatch(expected, actual), with actual < expected after the fee
         freshEscrow.claimRedemption(id);
 
-        // Reverted atomically: status, escrow balances, and Vault inventory are all untouched
+        // Atomic rollback preserves status, escrow balances and Vault inventory
         IRedemptionEscrow.RedemptionRequest memory r = freshEscrow.getRedemption(id);
         assertEq(uint8(r.status), uint8(IRedemptionEscrow.RedemptionStatus.Funded));
         assertEq(freshToken.balanceOf(freshEscrowAddr), escrowRwaBefore);
         assertEq(feeToken.balanceOf(freshEscrowAddr), escrowQuoteBefore);
         assertEq(Vault(freshVaultAddr).inventory(), vaultInventoryBefore);
 
-        // Recovery: fee turns back off, the exact same claim call is retried and succeeds
+        // Disable the fee and retry the same claim
         feeToken.setFeeEnabled(false);
         freshEscrow.claimRedemption(id);
 

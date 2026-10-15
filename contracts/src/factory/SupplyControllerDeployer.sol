@@ -5,10 +5,9 @@ import {IRWAFactory} from "../interfaces/IRWAFactory.sol";
 import {SupplyController} from "../SupplyController.sol";
 
 /// @title SupplyControllerDeployer
-/// @notice Stateless deploy logic for SupplyController. ComplianceTokenDeployer explains why
-///         RWAFactory's `new` calls are split across helper contracts.
-/// @dev Called through `delegatecall` from RWAFactory like the other helpers. The constructor
-///      does not read `msg.sender` for anything privileged. Holds no state.
+/// @notice Stateless SupplyController deployment helper
+/// @dev Uses RWAFactory's delegatecall helper pattern; see ComplianceTokenDeployer. The child
+///      constructor assigns no privilege from msg.sender.
 contract SupplyControllerDeployer {
     function deploy(IRWAFactory.ProjectConfig calldata config, address token, address vault)
         external

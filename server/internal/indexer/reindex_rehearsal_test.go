@@ -15,17 +15,9 @@ import (
 	"github.com/rwa-platform/server/internal/redemption"
 )
 
-// TestReindexRehearsalReconstructsIdenticalReadModel is the chain reindex
-// rehearsal on the fake path: FakeSource stands in for the RPC, so no live
-// infrastructure is needed (server/ops/reindex_rehearsal.sh is the equivalent
-// procedure against a real deployment).
-//
-// It builds a small RedemptionEscrow event history, indexes and reconciles it (the
-// "before" state), then simulates total loss of the server's own index: chain_events
-// and the redemption_requests read model are wiped and the indexer checkpoint is
-// new, while FakeSource keeps the full log history as a real chain would. Running
-// Poll and Reconcile again must rebuild the same read model. That is the premise
-// of deriving redemption status only from events (see internal/redemption).
+// TestReindexRehearsalReconstructsIdenticalReadModel wipes indexed events, redemptions
+// and checkpoints, then rebuilds the same RedemptionEscrow model from FakeSource logs.
+// server/ops/reindex_rehearsal.sh checks recovery against a deployment.
 func TestReindexRehearsalReconstructsIdenticalReadModel(t *testing.T) {
 	ctx := context.Background()
 	const chainID = 31337
@@ -74,9 +66,8 @@ func TestReindexRehearsalReconstructsIdenticalReadModel(t *testing.T) {
 		t.Fatalf("before.Status = %s, want Funded", before.Status)
 	}
 
-	// simulate total index loss: drop every indexed event for this address, drop the
-	// derived read model, and start from a new (never polled) checkpoint repo, while
-	// the underlying chain (source) is untouched
+	// Drop events and the derived model, then use fresh checkpoint storage while
+	// preserving the source chain
 	if _, err := chainEvents.DeleteFromBlock(ctx, chainID, escrowAddr.Hex(), 0); err != nil {
 		t.Fatalf("DeleteFromBlock: %v", err)
 	}

@@ -18,8 +18,8 @@ type KYCEventRepository struct {
 	byHash    map[string]bool
 	byEventID map[string]bool // key: provider + "|" + eventId
 
-	// claims holds, per address, the event that currently has the latest-decision
-	// claim. ClaimLatestForAddress updates it with the (occurredAt, eventKey) order.
+	// claims stores each address's latest (occurredAt, eventKey), updated by
+	// ClaimLatestForAddress
 	claims map[string]claimState
 }
 
@@ -101,8 +101,7 @@ func (r *KYCEventRepository) ListPending(ctx context.Context) ([]*models.KYCEven
 	defer r.mu.RUnlock()
 	out := make([]*models.KYCEvent, 0)
 	for _, v := range r.byID {
-		// Claiming is included so the reconciler picks up an event whose claim was never
-		// resolved because Process stopped at the claim and finalize step
+		// Include Claiming so the reconciler can finish interrupted claim finalization
 		if v.ApplyStatus != models.KYCApplyClaiming && v.ApplyStatus != models.KYCApplyAccepted && v.ApplyStatus != models.KYCApplyApplying {
 			continue
 		}
@@ -113,11 +112,8 @@ func (r *KYCEventRepository) ListPending(ctx context.Context) ([]*models.KYCEven
 	return out, nil
 }
 
-// ClaimLatestForAddress reports whether the event (occurredAt, eventKey) is the
-// newest decision for address. The later occurredAt wins, and eventKey breaks a tie
-// so two events with the same timestamp resolve the same way on every replica. The
-// compare-and-set runs under one lock, so concurrent deliveries for the same
-// address cannot both win.
+// ClaimLatestForAddress atomically compares and stores under one lock. Later occurredAt wins;
+// lexicographically greater eventKey breaks ties. Increasing decisions may win successively.
 func (r *KYCEventRepository) ClaimLatestForAddress(ctx context.Context, address string, occurredAt time.Time, eventKey string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -139,9 +135,8 @@ func (r *KYCEventRepository) CurrentClaimEventKey(ctx context.Context, address s
 	return cur.eventKey, nil
 }
 
-// claimIsNewer reports whether (at, key) strictly outranks (curAt, curKey): a later
-// occurredAt wins, and on an exact tie the greater eventKey wins. The MongoDB
-// implementation uses the same comparison, so both stores decide alike.
+// claimIsNewer orders by occurredAt, then eventKey lexicographically, matching the
+// MongoDB comparison
 func claimIsNewer(at time.Time, key string, curAt time.Time, curKey string) bool {
 	if at.After(curAt) {
 		return true

@@ -48,10 +48,8 @@ func (r *assetRecordRepo) Update(ctx context.Context, rec *models.AssetRecord) e
 	return nil
 }
 
-// UpdateConditional replaces the record only if the stored version equals
-// expectedVersion, as transactionRepo.UpdateConditional does. The filter match is
-// the atomic step. MatchedCount 0 means the id is gone or another writer advanced
-// the version, which a read of the record tells apart.
+// UpdateConditional matches _id and expectedVersion atomically. On no match, Get
+// distinguishes ErrNotFound from a version conflict, as in transactionRepo.
 func (r *assetRecordRepo) UpdateConditional(ctx context.Context, rec *models.AssetRecord, expectedVersion int) (bool, error) {
 	cp := *rec
 	cp.Version = expectedVersion + 1

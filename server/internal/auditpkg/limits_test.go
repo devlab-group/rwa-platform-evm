@@ -16,7 +16,9 @@ func TestCanonicalizeRejectsExcessiveObjectKeys(t *testing.T) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		b.WriteString(`"k` + strconv.Itoa(i) + `":1`)
+		b.WriteString(`"k`)
+		b.WriteString(strconv.Itoa(i))
+		b.WriteString(`":1`)
 	}
 	b.WriteByte('}')
 	if _, err := Canonicalize([]byte(b.String())); err == nil {
@@ -34,7 +36,9 @@ func TestCanonicalizeAcceptsObjectAtExactlyMaxObjectKeys(t *testing.T) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		b.WriteString(`"k` + strconv.Itoa(i) + `":1`)
+		b.WriteString(`"k`)
+		b.WriteString(strconv.Itoa(i))
+		b.WriteString(`":1`)
 	}
 	b.WriteByte('}')
 	if _, err := Canonicalize([]byte(b.String())); err != nil {

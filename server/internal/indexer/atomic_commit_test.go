@@ -13,17 +13,15 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// atomicIndexer builds an indexer wired with the in-memory atomic chunk committer,
-// sharing the events and checkpoints that the committer writes to
+// atomicIndexer shares memory event/checkpoint stores with its chunk committer
 func atomicIndexer(t *testing.T, source *FakeSource, checkpoints *memory.IndexerCheckpointRepository, events *memory.ChainEventRepository, committer repository.ChainChunkRepository) *Indexer {
 	t.Helper()
 	return New(source, checkpoints, events, chainID, []common.Address{addr1}, 1, nil,
 		WithChunkCommitter(committer))
 }
 
-// TestAtomicChunkCommitAdvancesCheckpointAndVersion is the happy path: a chunk's
-// events and checkpoint land together through CommitChunk, and the checkpoint
-// version increases (the version is what makes the advance conditional).
+// TestAtomicChunkCommitAdvancesCheckpointAndVersion checks that events and checkpoint
+// commit together and advance the version
 func TestAtomicChunkCommitAdvancesCheckpointAndVersion(t *testing.T) {
 	source := NewFakeSource()
 	for i := uint64(1); i <= 5; i++ {
@@ -60,9 +58,8 @@ func TestAtomicChunkCommitAdvancesCheckpointAndVersion(t *testing.T) {
 	}
 }
 
-// conflictCommitter always reports a lost version race (committed=false), as if a
-// concurrent replica had advanced the checkpoint first, for both the forward
-// commit and the backwards rewind
+// conflictCommitter rejects forward commits and rewinds as stale, simulating a
+// competing replica's checkpoint advance
 type conflictCommitter struct{}
 
 func (conflictCommitter) CommitChunk(ctx context.Context, c repository.ChunkCommit) (bool, error) {
@@ -73,10 +70,8 @@ func (conflictCommitter) RewindChunk(ctx context.Context, r repository.ChunkRewi
 	return false, nil
 }
 
-// TestAtomicChunkCommitVersionConflictStopsCleanly covers two replicas: when
-// CommitChunk reports that a concurrent writer advanced the checkpoint, Poll stops
-// without an error, and this indexer neither advances the checkpoint nor writes
-// events.
+// TestAtomicChunkCommitVersionConflictStopsCleanly checks that a stale commit makes
+// Poll stop without error, event writes or checkpoint advance
 func TestAtomicChunkCommitVersionConflictStopsCleanly(t *testing.T) {
 	source := NewFakeSource()
 	for i := uint64(1); i <= 3; i++ {
@@ -101,8 +96,7 @@ func TestAtomicChunkCommitVersionConflictStopsCleanly(t *testing.T) {
 	}
 }
 
-// forkTo reorganizes source from block from onto a new fork: fresh header hashes up
-// to head, and the old logs above the fork point dropped
+// forkTo replaces headers from from through head and removes old logs there
 func forkTo(source *FakeSource, from, head uint64, seed byte) {
 	for i := from; i <= head; i++ {
 		source.SetHeader(i, seed)
@@ -111,11 +105,8 @@ func forkTo(source *FakeSource, from, head uint64, seed byte) {
 	source.SetHead(head)
 }
 
-// TestAtomicRollbackIsVersionFenced: in atomic mode a reorg rollback goes through
-// RewindChunk, so it deletes the fork's events and increases the checkpoint
-// version instead of resetting it to 0. The version keeps a concurrent forward
-// commit from being buried by the rewind, and a rollback that reset it to 0 would
-// reopen that race for every later commit.
+// TestAtomicRollbackIsVersionFenced checks event deletion and increasing rewind
+// versions so rollback cannot bury concurrent forward commits
 func TestAtomicRollbackIsVersionFenced(t *testing.T) {
 	source := NewFakeSource()
 	for i := uint64(1); i <= 3; i++ {
@@ -157,9 +148,8 @@ func TestAtomicRollbackIsVersionFenced(t *testing.T) {
 	}
 }
 
-// rewindConflictCommitter accepts forward commits but always reports a lost version
-// race on the rewind, as if a concurrent replica had advanced the checkpoint
-// between this replica computing the rewind and applying it
+// rewindConflictCommitter accepts forward commits but rejects rewinds, simulating a
+// checkpoint advance after rewind calculation
 type rewindConflictCommitter struct {
 	inner   repository.ChainChunkRepository
 	rewinds int
@@ -174,12 +164,9 @@ func (c *rewindConflictCommitter) RewindChunk(ctx context.Context, r repository.
 	return false, nil
 }
 
-// TestAtomicRollbackVersionConflictStopsCleanlyAndWritesNothing checks the
-// version check on rollback. An unconditional rewind would delete events and force
-// the checkpoint down over what a concurrent replica just committed. With the
-// check, a lost race writes nothing, the checkpoint keeps the winner's value, and
-// Poll stops cleanly so the next one re-reads that checkpoint and detects the
-// reorg from it.
+// TestAtomicRollbackVersionConflictStopsCleanlyAndWritesNothing checks that stale
+// rollback preserves the winning events/checkpoint; the next Poll re-reads it and
+// detects the reorg again
 func TestAtomicRollbackVersionConflictStopsCleanlyAndWritesNothing(t *testing.T) {
 	source := NewFakeSource()
 	for i := uint64(1); i <= 3; i++ {
@@ -221,10 +208,9 @@ func TestAtomicRollbackVersionConflictStopsCleanlyAndWritesNothing(t *testing.T)
 	}
 }
 
-// TestAtomicResetToTrustedCheckpointIsVersionFenced: the operator recovery path
-// also checks the version. It succeeds against the current version (advancing it)
-// and returns an error, instead of leaving a running replica's events above a
-// rewound checkpoint, when the checkpoint has moved.
+// TestAtomicResetToTrustedCheckpointIsVersionFenced requires trusted reset to advance
+// the current version and reject a moved checkpoint, preserving a concurrent replica's
+// events
 func TestAtomicResetToTrustedCheckpointIsVersionFenced(t *testing.T) {
 	newSource := func() *FakeSource {
 		source := NewFakeSource()
@@ -283,9 +269,8 @@ func TestAtomicResetToTrustedCheckpointIsVersionFenced(t *testing.T) {
 	}
 }
 
-// failOnceCommitter aborts the first commit as a transaction would, writing
-// nothing, then delegates every later commit to inner. It models a crash or
-// storage failure mid-commit followed by recovery.
+// failOnceCommitter writes nothing on its first commit, simulating a transaction
+// failure, then delegates to inner for recovery
 type failOnceCommitter struct {
 	inner  repository.ChainChunkRepository
 	failed bool
@@ -303,10 +288,8 @@ func (c *failOnceCommitter) RewindChunk(ctx context.Context, r repository.ChunkR
 	return c.inner.RewindChunk(ctx, r)
 }
 
-// TestAtomicCommitFailureLeavesNoOrphansThenReorg covers a crash followed by a
-// reorg: a commit that fails midway must leave no events and not advance the
-// checkpoint, so a later reorg to a different fork yields only the new fork's
-// events, with none of the aborted fork's events left behind a stale checkpoint.
+// TestAtomicCommitFailureLeavesNoOrphansThenReorg checks that an aborted commit leaves
+// no events/checkpoint advance and subsequent reorg recovery stores only the new fork
 func TestAtomicCommitFailureLeavesNoOrphansThenReorg(t *testing.T) {
 	source := NewFakeSource()
 	for i := uint64(1); i <= 3; i++ {
@@ -334,8 +317,7 @@ func TestAtomicCommitFailureLeavesNoOrphansThenReorg(t *testing.T) {
 		t.Fatalf("aborted commit left %d orphaned fork-A events", len(forkA))
 	}
 
-	// the chain reorganizes to fork B at block 2 and above: the header hash differs,
-	// the fork-A log is gone, and a fork-B log takes its place
+	// Reorganize block 2 onward to fork B, replacing its headers and logs
 	source.SetHeader(2, 2)
 	source.SetHeader(3, 2)
 	source.RemoveLogsAtOrAfter(2)

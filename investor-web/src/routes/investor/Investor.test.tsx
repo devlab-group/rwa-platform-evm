@@ -16,9 +16,8 @@ import {
   waitForTxReceipt,
 } from "../../lib/wallet";
 
-// The investor forms take whole-unit amounts and must convert them to the
-// token's minimal units before anything reaches a contract. A 6-decimal token
-// is used throughout, so "1" must become "1000000".
+// Forms convert whole-unit input to minimal units before contract calls;
+// the six-decimal fixture maps "1" to "1000000"
 vi.mock("../../lib/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/client")>();
   return {
@@ -34,10 +33,8 @@ vi.mock("../../lib/client", async (importOriginal) => {
   };
 });
 
-// Stub quote decimals and preview views so display and pricing need no wallet.
-// Buy, claim and cancel spies verify submissions without a chain. Approval,
-// receipt and allowance stubs let the Buy button enable only after a mined
-// approval leaves sufficient allowance.
+// Stub decimals/previews and submissions for chain-free tests; mined receipt plus sufficient
+// allowance enables Buy
 vi.mock("../../lib/wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/wallet")>();
   return {
@@ -87,8 +84,7 @@ describe("Investor amount conversion", () => {
       screen.getAllByRole("button", { name: "Preview quote" })[0],
     );
 
-    // "1" whole unit at 6 decimals -> 1000000n minimal units, priced by the
-    // project's own Vault on the project's chain.
+    // Quote 1 whole unit as 1000000n on the project Vault/chain
     await waitFor(() =>
       expect(readPreviewBuy).toHaveBeenCalledWith(
         PROJECT.chainId,
@@ -154,7 +150,7 @@ function makeRedemption(over: Record<string, unknown>) {
   };
 }
 
-/** The <tr> containing a redemption row's id cell. */
+// Finds the row containing a redemption's ID
 function rowById(id: string): HTMLElement {
   return screen.getByText(id).closest("tr") as HTMLElement;
 }
@@ -193,7 +189,7 @@ describe("Investor redemptions list (connected wallet)", () => {
 
     renderWithWallet(<Investor />, { connected: true });
 
-    // The list is address-filtered to the connected wallet.
+    // Filter to the connected wallet
     await waitFor(() =>
       expect(api.listRedemptions).toHaveBeenCalledWith(
         expect.objectContaining({ address: CONNECTED }),
@@ -309,10 +305,8 @@ describe("Investor redemptions list (connected wallet)", () => {
   });
 });
 
-// Buy and redemption request are encoded in the browser and sent from the
-// connected wallet. The target is the project's own Vault or escrow, and the
-// arguments carry the amounts, the slippage bound, the connected recipient and
-// a future deadline that the page derives itself.
+// Check browser-encoded buys/requests target the project contracts with minimal-unit amounts,
+// slippage bounds, connected recipient and a future deadline
 describe("Investor buy and redemption request (client-encoded)", () => {
   let wallet: ReturnType<typeof installFakeWallet>;
 
@@ -368,7 +362,7 @@ describe("Investor buy and redemption request (client-encoded)", () => {
     ]);
     expect(args).toMatchObject({
       tokenAmount: 1000000n,
-      // 2000000 quote + the default 50 bps.
+      // 2000000 quote + default 50 bps
       maxQuoteAmount: 2010000n,
       recipient: CONNECTED,
     });
@@ -411,7 +405,7 @@ describe("Investor buy and redemption request (client-encoded)", () => {
     ]);
     expect(args).toMatchObject({
       rwaAmount: 2500000n,
-      // 5000000 quote less the default 50 bps.
+      // 5000000 quote - default 50 bps
       minQuoteOut: 4975000n,
     });
     expect(args.deadline).toBeGreaterThan(
@@ -422,11 +416,8 @@ describe("Investor buy and redemption request (client-encoded)", () => {
   });
 
   it("keeps the redemption request disabled when the approval left too small an allowance", async () => {
-    // The approve tx returns a hash and is mined, but the on-chain allowance
-    // covers less than the requested amount (e.g. a re-quote for more, or a
-    // wallet that edited the amount down). A submitted hash alone must not
-    // enable the request, because requestRedemption would revert on
-    // safeTransferFrom.
+    // A mined approval may leave insufficient allowance; keep Request disabled
+    // until the allowance covers the amount
     vi.mocked(readErc20Allowance).mockResolvedValue(2499999n);
 
     renderWithWallet(<Investor />, { connected: true });
@@ -475,8 +466,7 @@ describe("Investor frozen balance", () => {
     clearWalletSession(CONNECTED);
   });
 
-  // A holder with frozen tokens sees the full balance in their wallet, so
-  // without this the failed transfer that follows looks like a broken app
+  // Explain why frozen tokens appear in balance but cannot be transferred
   it("shows how much of the balance is actually spendable", async () => {
     vi.mocked(api.getMyWalletStatus).mockResolvedValue({
       address: CONNECTED,

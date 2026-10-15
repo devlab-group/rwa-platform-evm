@@ -14,12 +14,12 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// NativeFormat identifies the Argon2id and AES-256-GCM keystore this signer writes.
-// Load recognizes it by the "format" field; --keystore also accepts Ethereum V3 files.
+// NativeFormat marks this signer's Argon2id/AES-256-GCM files; Load auto-detects the
+// format, while --keystore also accepts V3
 const NativeFormat = "rwa-argon2id-v1"
 
-// Minimum Argon2id work factors, enforced at creation and on every load.
-// They match RFC 9106's second recommended option: 3 passes, 64 MiB and 4 threads.
+// Argon2id floors apply at creation/load, matching RFC 9106's second option: 3 passes,
+// 64 MiB, 4 threads
 const (
 	MinArgon2Time      uint32 = 3
 	MinArgon2MemoryKiB uint32 = 64 * 1024 // 64 MiB
@@ -28,18 +28,16 @@ const (
 	argon2SaltLen             = 16
 )
 
-// Maximum Argon2id work factors limit resource use before the password is checked.
-// Creation uses the MinArgon2 values; a loaded file may use stronger ones within these
-// bounds.
+// Argon2id ceilings limit work before authentication; creation uses MinArgon2 values
+// and loaded files may use values within these bounds
 const (
 	MaxArgon2Time      uint32 = 100
 	MaxArgon2MemoryKiB uint32 = 2 * 1024 * 1024 // 2 GiB
 	MaxArgon2Threads   uint8  = 64
 )
 
-// Native files use a 16-byte salt, a 12-byte GCM nonce, and a 32-byte private key plus a
-// 16-byte tag as ciphertext. Check the lengths before derivation and decryption, because
-// GCM.Open panics on a wrong-sized nonce.
+// Native files require a 16-byte salt, 12-byte nonce and 48-byte ciphertext (32-byte
+// key plus 16-byte tag), checked before derivation/decryption to avoid GCM nonce panics
 const (
 	gcmStandardNonceSize  = 12
 	gcmStandardTagSize    = 16
@@ -79,8 +77,8 @@ func isNativeFormat(keyJSON []byte) bool {
 	return hdr.Format == NativeFormat
 }
 
-// CreateNative validates the password and encrypts priv with Argon2id and AES-256-GCM,
-// returning the bytes to write to disk
+// CreateNative validates password strength and encrypts priv with Argon2id/AES-256-GCM,
+// returning file bytes
 func CreateNative(priv *ecdsa.PrivateKey, password string) ([]byte, error) {
 	if err := ValidatePassword(password); err != nil {
 		return nil, err
@@ -182,8 +180,8 @@ func loadNative(keyJSON []byte, password string) (*ecdsa.PrivateKey, common.Addr
 	return decryptNativeRecovered(password, salt, nonce, ciphertext, p, f.Address)
 }
 
-// decryptNativeRecovered derives and decrypts after length checks, converting KDF/cipher
-// panics to errors as a final safeguard
+// decryptNativeRecovered derives/decrypts after shape checks, recovering KDF/cipher
+// panics as errors
 func decryptNativeRecovered(password string, salt, nonce, ciphertext []byte, p nativeKDFParams, declaredAddr string) (priv *ecdsa.PrivateKey, addr common.Address, err error) {
 	defer func() {
 		if r := recover(); r != nil {

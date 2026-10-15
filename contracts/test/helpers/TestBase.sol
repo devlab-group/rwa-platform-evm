@@ -18,8 +18,7 @@ import {RedemptionEscrow} from "../../src/RedemptionEscrow.sol";
 import {FixedPriceStrategy} from "../../src/pricing/FixedPriceStrategy.sol";
 import {MockERC20} from "../mocks/token/MockERC20.sol";
 
-/// @notice Shared fixture: deploys one full project through RWAFactory and exposes EIP-712
-///         signing helpers that mirror shared/eip712/types.md
+/// @notice Deploys a project through RWAFactory; EIP-712 signing helpers mirror shared/eip712/types.md
 abstract contract TestBase is Test {
     RWAFactory internal factory;
     RWAToken internal token;
@@ -90,8 +89,7 @@ abstract contract TestBase is Test {
         vm.stopPrank();
     }
 
-    /// @dev RWAFactory's constructor takes the four stateless deployer helpers, so they must be
-    ///      deployed first (ComplianceTokenDeployer explains why they exist)
+    /// @dev Deploy helpers before the factory; see ComplianceTokenDeployer for the size constraint
     function _deployFactory() internal returns (RWAFactory) {
         return new RWAFactory(
             address(new ComplianceTokenDeployer()),
@@ -127,9 +125,7 @@ abstract contract TestBase is Test {
         });
     }
 
-    // ---------------------------------------------------------------------
     // EIP-712 signing helpers (mirror shared/eip712/types.md)
-    // ---------------------------------------------------------------------
 
     function _mintAttestation(address signerAuditor, uint256 amount, string memory recordId, uint256 nonce)
         internal
@@ -230,12 +226,9 @@ abstract contract TestBase is Test {
         return keccak256(abi.encodePacked(bytes2(0x1901), domainSeparator, structHash));
     }
 
-    /// @dev Deploys a second, independent project through the same factory with a different quote
-    ///      token and 100 ether minted to the new Vault's inventory, so adversarial-token tests
-    ///      do not disturb the shared fixture's balances. `salt` makes projectId and recordKey
-    ///      distinct when one test calls this more than once. A caller that needs `investor` to
-    ///      hold RWA (for example to call `requestRedemption`) must transfer it out of the new
-    ///      Vault itself.
+    /// @dev Deploys a separate project with the supplied quote token and 100 ether of Vault inventory,
+    ///      preserving shared-fixture balances. salt distinguishes projectId and recordKey across calls.
+    ///      Tests needing investor-held RWA must transfer it from the new Vault.
     function _deployWithQuoteToken(address quoteToken_, bytes32 salt)
         internal
         returns (

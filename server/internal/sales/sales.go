@@ -1,8 +1,6 @@
-// Package sales provides read models for the Vault contract: inventory and the
-// indexed purchase history. Clients read per-amount purchase quotes from
-// Vault.previewBuy themselves. The package neither builds nor submits
-// transactions: the investor's Vault.buy and the treasurer's withdrawal are
-// assembled and signed in the wallet or multisig.
+// Package sales reads Vault inventory and indexed purchase history. Clients quote via
+// Vault.previewBuy; investor wallets build/sign Vault.buy and treasurer wallets or
+// multisigs build/sign withdrawals. This package builds or submits no transactions.
 package sales
 
 import (
@@ -36,8 +34,8 @@ type PurchaseView struct {
 	Confirmations uint64 `json:"confirmations"`
 }
 
-// Service reads Vault and strategy state and maintains the purchases read
-// model. It submits no transactions.
+// Service reads Vault/strategy state and maintains purchase history without submitting
+// transactions
 type Service struct {
 	client         blockchain.Client
 	vault          bindings.Vault
@@ -48,9 +46,8 @@ type Service struct {
 	purchases      repository.PurchaseRepository
 }
 
-// New constructs a sales Service. purchases may be nil if the caller never
-// calls ListPurchases or Reconcile. The strategy address is not a parameter;
-// see strategyAddress.
+// New constructs a Service; purchases may be nil if ListPurchases and Reconcile are
+// unused. strategyAddress resolves the strategy live.
 func New(client blockchain.Client, vaultAddr, quoteTokenAddr common.Address, purchases repository.PurchaseRepository) *Service {
 	return &Service{
 		client: client,
@@ -60,11 +57,9 @@ func New(client blockchain.Client, vaultAddr, quoteTokenAddr common.Address, pur
 	}
 }
 
-// strategyAddress reads the Vault's current pricing strategy instead of using
-// the address recorded at deployment. Vault.setStrategy is callable by the
-// admin (RedemptionEscrow's strategy is immutable), so the deployed address can
-// go stale. Reading it live keeps the public inventory prices in line with what
-// Vault.buy and Vault.previewBuy use.
+// strategyAddress reads live Vault.strategy so inventory prices follow the contract
+// used by buy/previewBuy after an admin's setStrategy. The deploy-time address can
+// become stale; RedemptionEscrow's strategy remains immutable.
 func (s *Service) strategyAddress(ctx context.Context) (common.Address, error) {
 	data, err := s.vault.PackStrategy()
 	if err != nil {
@@ -148,10 +143,9 @@ func (s *Service) readStrategyPrice(ctx context.Context, strategyAddr common.Add
 	return s.strategy.UnpackQuote(method, out)
 }
 
-// ListPurchases returns one page of indexed Vault.buy fills, newest block
-// first, using keyset pagination (see repository.PurchaseRepository.ListPage).
-// Confirmations are derived from currentBlock, typically the indexer's last
-// scanned block. cursor is "" for the first page.
+// ListPurchases keyset-paginates indexed Vault.buy fills by newest block
+// (repository.PurchaseRepository.ListPage); empty cursor starts the first page.
+// Confirmations use currentBlock, usually the indexer checkpoint.
 func (s *Service) ListPurchases(ctx context.Context, currentBlock uint64, cursor string, limit int) ([]PurchaseView, string, error) {
 	items, next, err := s.purchases.ListPage(ctx, cursor, limit)
 	if err != nil {

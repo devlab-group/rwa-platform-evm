@@ -1,8 +1,7 @@
-// Package eip712 computes the RWA-Supply-Attestation EIP-712 domain
-// separator, struct hashes and digests, and recovers the signer of a digest.
-// Type strings and field order are defined in shared/eip712/types.md and must
-// match byte for byte across Solidity, the Go signer and this package; the
-// golden values are in shared/vectors/typehashes.json and mint-eip712.json.
+// Package eip712 computes RWA-Supply-Attestation domain separators, struct hashes,
+// digests and recovered signers. Type strings and field order must match
+// shared/eip712/types.md across Solidity and Go. Golden vectors are
+// shared/vectors/typehashes.json and mint-eip712.json.
 package eip712
 
 import (
@@ -160,9 +159,8 @@ func BurnDigest(d Domain, b BurnAttestation) [32]byte {
 	return Digest(DomainSeparator(d), HashBurnAttestation(b))
 }
 
-// RecoverSigner returns the address that produced signature over digest.
-// signature must be 65 bytes in [R || S || V] form with V in {0,1,27,28}; V is
-// normalized to {0,1} for go-ethereum's recovery API.
+// RecoverSigner requires a 65-byte R||S||V signature, accepts V=0/1/27/28, normalizes
+// to 0/1 and returns the digest's recovered signing address
 func RecoverSigner(digest [32]byte, signature []byte) (common.Address, error) {
 	if len(signature) != 65 {
 		return common.Address{}, errors.New("eip712: signature must be 65 bytes")

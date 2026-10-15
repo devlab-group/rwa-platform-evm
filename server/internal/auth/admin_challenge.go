@@ -17,10 +17,8 @@ import (
 	"github.com/rwa-platform/server/internal/eip712"
 )
 
-// ErrAdminChallengeExpired is returned by AdminChallengeService.Verify when no
-// unexpired challenge exists for the address, either because none was issued
-// or because it expired. The two cases are not distinguished, so a login probe
-// learns nothing about which applies.
+// ErrAdminChallengeExpired covers both an absent and an expired challenge in
+// AdminChallengeService.Verify, preventing login probes from distinguishing them
 var ErrAdminChallengeExpired = errors.New("auth: no active admin challenge for this address")
 
 // ErrAdminChallengeUsed is returned by Verify for a challenge that was already
@@ -31,16 +29,11 @@ var ErrAdminChallengeUsed = errors.New("auth: admin challenge already used")
 // control the address the challenge was issued for
 var ErrAdminAddressMismatch = errors.New("auth: recovered signer does not match challenge address")
 
-// AdminChallengeService issues and verifies single-use admin wallet-login
-// challenges, the first half of the wallet-signature to JWT flow. A challenge
-// is a random nonce in a personal_sign (EIP-191) message. The service only
-// proves control of a wallet and has no link to investor records; the caller
-// (api/auth.go) compares the recovered signer to the configured admin address
-// before issuing a JWT.
-//
-// Each address has one active challenge (Create upserts). POST /auth/session
-// carries only {address, signature}, so Verify looks the challenge up by
-// address and recovers the signer from the stored message.
+// AdminChallengeService proves wallet ownership with single-use random-nonce
+// personal_sign (EIP-191) messages, independent of investor records. api/auth.go
+// compares the recovered signer with the configured admin before issuing a JWT.
+// Create replaces the address's active challenge. POST /auth/session supplies only
+// {address, signature}, so Verify retrieves the stored message by address.
 type AdminChallengeService struct {
 	repo   repository.AdminChallengeRepository
 	ttl    time.Duration
@@ -54,11 +47,8 @@ func NewAdminChallengeService(repo repository.AdminChallengeRepository, ttl time
 	return &AdminChallengeService{repo: repo, ttl: ttl, domain: domainName}
 }
 
-// Create stores a new challenge for address, replacing any earlier one, and
-// returns the exact message the wallet must personal_sign with its expiry. It
-// does not check whether address is the admin, so anyone may request a
-// challenge; authorization rests on Verify and the caller's comparison with the
-// configured admin address.
+// Create replaces address's challenge and returns the personal_sign message and expiry.
+// Anyone may request one; Verify proves ownership and the caller authorizes the admin.
 func (s *AdminChallengeService) Create(ctx context.Context, address string) (message string, expiresAt time.Time, err error) {
 	if !common.IsHexAddress(address) {
 		return "", time.Time{}, fmt.Errorf("auth: invalid address %q", address)
@@ -87,12 +77,10 @@ func (s *AdminChallengeService) Create(ctx context.Context, address string) (mes
 	return message, expiresAt, nil
 }
 
-// Verify checks a personal_sign signature over the active challenge for
-// address, enforcing expiry and single use, and returns the recovered signer.
-// The caller decides authorization by comparing the returned address to the
-// configured admin address. The challenge is consumed only when the signature
-// recovers to the address it was issued for, so a wrong signature cannot burn
-// the admin's pending challenge.
+// Verify returns the recovered personal_sign signer after checking expiry and single
+// use. Only a signature matching the challenged address consumes it, so a wrong
+// signature cannot burn a pending challenge. The caller authorizes the returned
+// address.
 func (s *AdminChallengeService) Verify(ctx context.Context, address string, signature []byte) (common.Address, error) {
 	if !common.IsHexAddress(address) {
 		return common.Address{}, fmt.Errorf("auth: invalid address %q", address)

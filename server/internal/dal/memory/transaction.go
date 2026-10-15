@@ -66,8 +66,8 @@ func (r *TransactionRepository) GetByTxHash(ctx context.Context, chainID int64, 
 		if v.ChainID != chainID || v.TxHash != txHash {
 			continue
 		}
-		// prefer a record submitted by the manager over an event-derived one that shares
-		// the hash, so the projector's dedup is deterministic
+		// Prefer manager-submitted records over event-derived duplicates for deterministic
+		// projector deduplication
 		if match == nil || (!models.IsEventDerived(v) && models.IsEventDerived(match)) {
 			cp := *v
 			match = &cp
@@ -161,9 +161,8 @@ func (r *TransactionRepository) filter(keep func(*models.Transaction) bool) ([]*
 	return out, nil
 }
 
-// ListPage returns one page in ascending SubmittedAt order, as in
-// mongodb.transactionRepo. A non-empty address is matched against From or To,
-// ignoring case, before the keyset walk.
+// ListPage orders by SubmittedAt ascending and applies case-insensitive From/To
+// filtering before keyset pagination, matching MongoDB
 func (r *TransactionRepository) ListPage(ctx context.Context, address, cursor string, limit int) ([]*models.Transaction, string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

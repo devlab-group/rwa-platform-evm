@@ -38,10 +38,9 @@ func (r *redemptionRequestRepo) DeleteStaleGeneration(ctx context.Context, gen i
 	return err
 }
 
-// ListPage returns one keyset page sorted by (createdAt, _id) descending, as in
-// purchaseRepo.ListPage. The optional status and beneficiary filters are combined
-// with the keyset condition using $and. The beneficiary match is case-insensitive
-// (an anchored $regex with the "i" option), as in transactionRepo.ListPage.
+// ListPage sorts (createdAt, _id) descending, combining keyset, status and
+// case-insensitive beneficiary filters with $and. The address uses anchored regex, as
+// in transactionRepo.ListPage.
 func (r *redemptionRequestRepo) ListPage(ctx context.Context, status, address, cursor string, limit int) ([]*models.RedemptionRequest, string, error) {
 	clauses := bson.A{keysetFilter(cursor, "createdAt")}
 	if status != "" {

@@ -77,8 +77,8 @@ export const accessControlAdminAbi = [
 ] as const satisfies Abi;
 
 /**
- * Admin-only ERC-7943 enforcement: setFrozenTokens replaces the absolute RWA amount;
- * forcedTransfer bypasses sender eligibility and pause while checking the recipient.
+ * Admin ERC-7943 calls: replace absolute frozen amounts or force transfers past sender
+ * eligibility, freeze and pause checks; recipient eligibility still applies.
  * Selectors are pinned in shared/vectors/erc7943-abi.json.
  */
 export const erc7943Abi = [
@@ -106,8 +106,8 @@ export const erc7943Abi = [
 ] as const satisfies Abi;
 
 /**
- * Known token and access-control errors for describeWalletError; these fragments encode no calls.
- * Shared ERC-7943 vectors pin selectors, and unlisted errors fall back to wallet messages.
+ * Error-only fragments for describeWalletError; shared vectors pin ERC-7943 selectors,
+ * and unlisted errors fall back to wallet messages
  */
 export const rwaTokenErrorsAbi = [
   {
@@ -175,9 +175,8 @@ export const rwaTokenErrorsAbi = [
 ] as const satisfies Abi;
 
 /**
- * Vault preview and treasury withdrawal calls.
- * previewBuy returns quote-token minimal units; withdrawProceeds uses those units,
- * pays configured treasury and requires TREASURER_ROLE without an approval.
+ * Vault preview/withdrawal use quote-token minimal units; withdrawal pays configured
+ * treasury, requires TREASURER_ROLE and needs no approval
  */
 export const vaultAbi = [
   {
@@ -197,9 +196,9 @@ export const vaultAbi = [
 ] as const satisfies Abi;
 
 /**
- * Permissionless factory deployment; config.admin receives admin authority.
- * Field order follows IRWAFactory.ProjectConfig, with a Deployment result tuple.
- * The console uses the transaction hash and the server observes ProjectDeployed.
+ * Permissionless deployment; config.admin receives admin authority. Tuples follow
+ * IRWAFactory.ProjectConfig/Deployment; the console uses the hash and server observes
+ * ProjectDeployed.
  */
 export const rwaFactoryAbi = [
   {
@@ -249,8 +248,8 @@ export const rwaFactoryAbi = [
 ] as const satisfies Abi;
 
 /**
- * Wallet-submitted mint with fields matching ISupplyController.MintAttestation.
- * The contract checks the auditor signature and unused nonce; the server observes Minted.
+ * Wallet mint follows ISupplyController.MintAttestation; signature/nonce checks precede indexed
+ * Minted
  */
 export const supplyControllerAbi = [
   {
@@ -279,9 +278,8 @@ export const supplyControllerAbi = [
 ] as const satisfies Abi;
 
 /**
- * Redemption funding and rejection calls plus permissionless claim.
- * Funding requires TREASURER_ROLE and quote allowance; rejection requires REDEMPTION_MANAGER_ROLE.
- * A Safe batch can claim immediately after funding.
+ * Funding needs TREASURER_ROLE and quote allowance; rejection needs REDEMPTION_MANAGER_ROLE.
+ * Safe batches may append permissionless claim after funding.
  */
 export const redemptionEscrowAbi = [
   {

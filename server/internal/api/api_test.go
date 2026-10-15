@@ -62,9 +62,8 @@ type testEnv struct {
 	vaultAddr      common.Address
 	escrowAddr     common.Address
 
-	// Admin auth (wallet signature to JWT): adminKey signs login challenges,
-	// adminAddr is the configured admin, jwtSecret signs JWTs, and bearer is the admin's
-	// "Authorization: Bearer <jwt>" header value for admin-only routes
+	// Admin login fixtures: adminKey signs challenges, adminAddr is the configured admin,
+	// jwtSecret signs JWTs, and bearer holds the admin's Authorization header
 	adminKey  *ecdsa.PrivateKey
 	adminAddr common.Address
 	jwtSecret []byte
@@ -355,8 +354,8 @@ func TestCreateProfileIsCreateOnce(t *testing.T) {
 		t.Fatalf("first create status = %d, body=%s", w.Code, w.Body.String())
 	}
 
-	// The second call uses a different Idempotency-Key so the handler runs again and
-	// hits the create-once conflict instead of replaying the first call's 201
+	// Use a different Idempotency-Key to exercise the create-once conflict; reusing the
+	// key would replay the first 201
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/profile", bytes.NewReader([]byte(goldGramProfileOtherProject)))
 	req.Header.Set("Authorization", env.bearer)
 	req.Header.Set("Idempotency-Key", "create-once-2")
@@ -402,9 +401,9 @@ func TestCreateProfileGateAcceptsMatchingProjectId(t *testing.T) {
 	}
 }
 
-// TestRecordCreationBlockedOnProfileDigestMismatch checks that when the stored
-// profile's digest differs from the project's profileDigest (the digest submitted
-// on-chain), record, package and signature operations refuse to use the profile
+// TestRecordCreationBlockedOnProfileDigestMismatch checks that record, package and
+// signature operations reject a stored profile whose digest differs from the project's
+// on-chain profileDigest
 func TestRecordCreationBlockedOnProfileDigestMismatch(t *testing.T) {
 	env := setupTestApp(t)
 	p, err := env.app.Repos.Projects.Get(context.Background())
@@ -653,8 +652,8 @@ func TestSalesInventory(t *testing.T) {
 	env := setupTestApp(t)
 
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/sales/inventory", nil, nil)
-	// No canned CallContract response is configured, so an internal error is
-	// expected; the check is that the route is wired and does not return 404
+	// Without a canned CallContract response, expect an internal error. A 404 would mean
+	// the route is missing.
 	if w.Code == http.StatusNotFound {
 		t.Fatalf("route not found: %d", w.Code)
 	}
@@ -691,10 +690,8 @@ func TestListTransactionsEmpty(t *testing.T) {
 	}
 }
 
-// TestListRecordsIsPaginated checks that the list is bounded server-side even
-// when the client sends no parameters. It seeds more records than the default page
-// size and checks the default response and a limit and cursor walk through every
-// page.
+// TestListRecordsIsPaginated seeds more than defaultListLimit records, checks the
+// default response bound, then walks every page with an explicit limit and cursor
 func TestListRecordsIsPaginated(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -788,10 +785,8 @@ func TestListRecordsRejectsOversizedLimit(t *testing.T) {
 	}
 }
 
-// TestAuthSessionHasItsOwnRateLimitIndependentOfGlobal checks that the login
-// limiter applies even when the global limiter is off. env.app never sets
-// RateLimitRPS, so NewRouter installs no global limiter, yet rapid POST
-// /auth/session calls must still be throttled.
+// TestAuthSessionHasItsOwnRateLimitIndependentOfGlobal checks login throttling with
+// RateLimitRPS unset, so NewRouter installs no global limiter
 func TestAuthSessionHasItsOwnRateLimitIndependentOfGlobal(t *testing.T) {
 	env := setupTestApp(t)
 	if env.app.RateLimitRPS > 0 {

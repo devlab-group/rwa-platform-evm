@@ -1,10 +1,8 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
-// The Go binary embeds same-origin scripts and styles; no CDN assets load.
-// Wallet requests use the extension channel, outside fetch/XHR connect-src.
-// Browsers apply frame-ancestors only from HTTP headers; the server sends the
-// same policy from server/internal/auth/limits.go.
+// Same-origin embedded assets; wallet RPC uses the extension channel. Send frame-ancestors by HTTP
+// header; see server/internal/auth/limits.go.
 const CSP =
   "default-src 'self'; " +
   "script-src 'self'; " +
@@ -18,10 +16,7 @@ const CSP =
   "frame-ancestors 'none'; " +
   "upgrade-insecure-requests";
 
-// Injects the CSP as a <meta> tag into the built index.html only. `vite dev`
-// is excluded because its HMR client needs a WebSocket connection and an inline
-// bootstrap script, which a strict CSP would block. `vite preview` and the
-// server, which embeds `dist/`, both serve the built file. See CSP-AUDIT.md.
+// Injects build CSP; dev HMR needs WebSockets and inline bootstrap. See CSP-AUDIT.md
 function injectCsp(): Plugin {
   return {
     name: "inject-csp",

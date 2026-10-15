@@ -1,10 +1,7 @@
-// Package attestation implements the EIP-712 domain separator, type hashes,
-// struct hashes, and digest construction for MintAttestation and
-// BurnAttestation, following the types in shared/eip712/types.md.
-//
-// All struct fields are EVM value types (address, bytesN, uintN), so
-// abi.encode(...) is exactly the concatenation of each field's 32-byte
-// left-padded word; no dynamic-type ABI encoding is required here.
+// Package attestation implements EIP-712 domain separators, type/struct hashes and
+// digests for MintAttestation/BurnAttestation (shared/eip712/types.md). Attestation
+// fields occupy fixed 32-byte ABI words: addresses/uints are left-padded and bytes32
+// values are already word-sized.
 package attestation
 
 import (
@@ -65,8 +62,7 @@ func (d Domain) Separator() (common.Hash, error) {
 	return crypto.Keccak256Hash(buf), nil
 }
 
-// MintAttestation mirrors the Solidity MintAttestation struct. Field order
-// matters and must not change.
+// MintAttestation mirrors Solidity; keep its field order aligned with the EIP-712 type
 type MintAttestation struct {
 	Auditor        common.Address
 	ProfileDigest  [32]byte
@@ -78,8 +74,7 @@ type MintAttestation struct {
 	Vault          common.Address
 }
 
-// BurnAttestation mirrors the Solidity BurnAttestation struct. Field order
-// matters and must not change.
+// BurnAttestation mirrors Solidity; keep its field order aligned with the EIP-712 type
 type BurnAttestation struct {
 	Auditor        common.Address
 	ProfileDigest  [32]byte
@@ -191,8 +186,8 @@ func RecordKey(recordID string) [32]byte {
 	return crypto.Keccak256Hash([]byte(recordID))
 }
 
-// Sign signs the raw 32-byte EIP-712 digest (no EIP-191 personal-message prefix) with
-// key and returns a 65-byte [R || S || V] signature with V in {27, 28}
+// Sign returns a 65-byte [R || S || V] signature with V=27/28 over the raw EIP-712
+// digest, without an EIP-191 personal-message prefix
 func Sign(digest common.Hash, key *ecdsa.PrivateKey) ([]byte, error) {
 	if key == nil {
 		return nil, errors.New("attestation: signing key is nil")
@@ -206,8 +201,8 @@ func Sign(digest common.Hash, key *ecdsa.PrivateKey) ([]byte, error) {
 	return sig, nil
 }
 
-// Recover returns the signer address of a 65-byte [R || S || V] signature over digest,
-// with V in {27,28} or {0,1}
+// Recover recovers the signer of a 65-byte [R || S || V] signature over digest,
+// accepting V=27/28 or 0/1
 func Recover(digest common.Hash, sig []byte) (common.Address, error) {
 	if len(sig) != 65 {
 		return common.Address{}, fmt.Errorf("attestation: signature must be 65 bytes, got %d", len(sig))

@@ -1,7 +1,5 @@
-// Package mongodb implements every internal/dal/repository interface against
-// MongoDB. Its tests that need a live server skip unless MONGO_TEST_URI is set, so
-// `go test ./...` runs without one. Other tests use internal/dal/memory, which
-// implements the same interfaces.
+// Package mongodb implements repository interfaces against MongoDB. Live tests require
+// MONGO_TEST_URI and otherwise skip; memory provides database-free workflow tests.
 package mongodb
 
 import (
@@ -117,9 +115,8 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	if err != nil {
 		return err
 	}
-	// (provider, eventId) is a second replay-protection constraint: payloadHash catches
-	// a byte-for-byte resend but not the same event serialized or signed differently.
-	// The partial filter leaves out documents with an empty or missing eventId.
+	// The unique (provider, eventId) index catches reserialized deliveries missed by
+	// payloadHash. Its partial filter excludes empty or missing eventId values.
 	_, err = db.Collection(collKYCEvents).Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "provider", Value: 1}, {Key: "eventId", Value: 1}},
 		Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.D{{Key: "eventId", Value: bson.D{{Key: "$gt", Value: ""}}}}),
@@ -142,27 +139,17 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	if err != nil {
 		return err
 	}
-	// kyc_claims needs no index declared here, and neither does idempotency_keys for
-	// its _id. kycClaim.Address and IdempotencyRecord.Key are the _id, and MongoDB
-	// always keeps a unique index on _id. ClaimLatestForAddress and Reserve rely on it
-	// for atomicity.
-	//
-	// The TTL index on idempotency_keys removes completed and abandoned reservations,
-	// which would otherwise stay in the collection forever. A live reservation is
-	// never removed early: Reserve compares expiresAt itself and takes over an expired
-	// one atomically.
+	// kyc_claims and idempotency_keys use MongoDB's unique _id index for conditional
+	// claims. The idempotency TTL index cleans up completed or abandoned expired rows;
+	// Reserve independently checks expiry for atomic takeover.
 	_, err = db.Collection(collIdempotency).Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0),
 	})
 	if err != nil {
 		return err
 	}
-	// wallet_challenges: any unauthenticated caller can create a challenge for a valid
-	// address, and each call creates a document, so the collection has a TTL index and
-	// a per-address cap. A TTL index with expireAfterSeconds 0 deletes a document once
-	// its own expiresAt has passed. The second index backs CountActive: address and
-	// used narrow the query to the few active challenges before the expiresAt range
-	// check.
+	// Public wallet challenges use expiresAt TTL cleanup. The (address, used, expiresAt)
+	// index supports CountActive's pre-insert limit check; expiry cleanup is asynchronous.
 	_, err = db.Collection(collWalletChallenges).Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
 		{Keys: bson.D{{Key: "address", Value: 1}, {Key: "used", Value: 1}, {Key: "expiresAt", Value: 1}}},
@@ -170,9 +157,8 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	if err != nil {
 		return err
 	}
-	// wallet_sessions and admin_challenges: the TTL index is background cleanup only.
-	// walletSessionRepo.Get and adminChallengeRepo.Get check ExpiresAt themselves,
-	// because the MongoDB TTL monitor runs about once every 60 seconds
+	// Wallet-session and admin-challenge Get methods enforce ExpiresAt directly; TTL
+	// indexes perform later background cleanup
 	_, err = db.Collection(collWalletSessions).Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0),
 	})
@@ -185,9 +171,8 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	if err != nil {
 		return err
 	}
-	// purchases and redemption_requests: these compound indexes match ListPage's
-	// (sort field descending, _id descending) query. Without them the results are the
-	// same but come from a collection scan once the collection outgrows memory.
+	// Purchase and redemption compound indexes match ListPage's descending sort field and
+	// _id, avoiding collection scans and in-memory sorting
 	_, err = db.Collection(collPurchases).Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "blockNumber", Value: -1}, {Key: "_id", Value: -1}},
 	})
@@ -214,17 +199,16 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	if err != nil {
 		return err
 	}
-	// (status, blockNumber) backs the 10-second status refresh: both branches of
-	// ListUnfinalized and ListByStatuses, which uses the status prefix alone. Without
-	// it they scan the whole transaction history.
+	// The (status, blockNumber) index serves both ListUnfinalized branches and
+	// ListByStatuses through its status prefix, avoiding history-wide scans
 	_, err = db.Collection(collTransactions).Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "status", Value: 1}, {Key: "blockNumber", Value: 1}},
 	})
 	if err != nil {
 		return err
 	}
-	// replaces backs ListReplacements. The index is partial because only replacement
-	// records have the field, and they are few.
+	// The partial replaces index serves ListReplacements without indexing non-replacement
+	// rows
 	_, err = db.Collection(collTransactions).Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "replaces", Value: 1}},
 		Options: options.Index().SetPartialFilterExpression(bson.D{{Key: "replaces", Value: bson.D{{Key: "$gt", Value: ""}}}}),
@@ -262,10 +246,9 @@ func createDoc(ctx context.Context, coll *mongo.Collection, doc any) error {
 	return err
 }
 
-// createDocWithID inserts doc under a given _id, for collections whose Go struct
-// has no field mapped to "_id", so bson tags cannot set a fixed id. It marshals doc
-// to a bson.M and sets _id there, leaving the caller's struct unchanged. A
-// duplicate key returns repository.ErrAlreadyExists, as in createDoc.
+// createDocWithID inserts a fixed _id for structs without an _id BSON field. It
+// marshals a copy to bson.M, leaving the struct unchanged; duplicate keys return
+// repository.ErrAlreadyExists.
 func createDocWithID(ctx context.Context, coll *mongo.Collection, id any, doc any) error {
 	raw, err := bson.Marshal(doc)
 	if err != nil {
@@ -320,33 +303,23 @@ func keysetFilter(cursor, sortField string) bson.M {
 	return keysetFilterDir(cursor, sortField, true)
 }
 
-// keysetFilterDir builds the keyset filter for either direction. A descending sort
-// (purchases, redemption requests) uses $lt, and an ascending one (asset records,
-// transactions) uses $gt. The query's sort and the compound index (see
-// EnsureIndexes) must use the same direction.
-//
-// Use it only for a sort field stored as a number (purchases' blockNumber,
-// redemption requests' int64 createdAt). A field stored from a time.Time is a BSON
-// Date and needs keysetFilterDirDate.
+// keysetFilterDir compares numeric sort fields with $lt descending or $gt ascending,
+// matching query sort and compound-index direction. Use keysetFilterDirDate for
+// time.Time/BSON Date fields; purchases.blockNumber and redemption_requests.createdAt
+// use numeric operands.
 func keysetFilterDir(cursor, sortField string, desc bool) bson.M {
 	return keysetFilterOperand(cursor, sortField, desc, func(v int64) any { return v })
 }
 
-// keysetFilterDirDate is keysetFilterDir for a sort field stored from a time.Time,
-// which is a BSON Date.
-//
-// MongoDB comparison operators match only values of the same BSON type, so
-// {createdAt: {$gt: <int64>}} against a Date field matches nothing, and every page
-// after the first would be empty. The cursor carries UnixNano int64 values, as
-// KeysetCursor requires, and this converts that to a time.Time so the operand and
-// the field have the same type. The conversion is exact because a BSON Date holds
-// milliseconds and a value read from MongoDB is already aligned to them.
+// keysetFilterDirDate converts cursor UnixNano to time.Time for BSON Date comparisons;
+// int64 operands would empty later pages. Stored Dates are millisecond-aligned,
+// preserving the round trip.
 func keysetFilterDirDate(cursor, sortField string, desc bool) bson.M {
 	return keysetFilterOperand(cursor, sortField, desc, func(v int64) any { return time.Unix(0, v).UTC() })
 }
 
-// keysetFilterOperand is the shared body of the two filters above. operand converts
-// the cursor's int64 sort value to the BSON type the field stores
+// keysetFilterOperand shares cursor filtering; operand converts the sort value to its
+// stored BSON type
 func keysetFilterOperand(cursor, sortField string, desc bool, operand func(int64) any) bson.M {
 	c, ok := repository.DecodeKeysetCursor(cursor)
 	if !ok {
@@ -363,10 +336,8 @@ func keysetFilterOperand(cursor, sortField string, desc bool, operand func(int64
 	}}
 }
 
-// trimKeysetPage turns a result fetched with SetLimit(limit+1), which every ListPage
-// here does, into the page and the next cursor. If limit+1 rows came back there is
-// another page, and the cursor is built from the last row returned, the one the
-// next request resumes after.
+// trimKeysetPage trims limit+1 query results to limit. An extra row yields a cursor
+// from the returned page's last item; otherwise no cursor is needed.
 func trimKeysetPage[T any](items []*T, limit int, extract func(*T) (sortValue int64, id string)) ([]*T, string, error) {
 	if len(items) <= limit {
 		return items, "", nil

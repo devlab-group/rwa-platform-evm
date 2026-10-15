@@ -25,8 +25,7 @@ var (
 
 var evSeq int
 
-// seedEvent creates one chain event. Each call gets a distinct IndexedAt so
-// SubmittedAt ordering is deterministic.
+// seedEvent assigns distinct IndexedAt values for deterministic SubmittedAt ordering
 func seedEvent(t *testing.T, repos *repository.Repositories, addr, txHash, name string, block uint64, logIndex uint, removed bool, data map[string]any) {
 	t.Helper()
 	evSeq++
@@ -101,9 +100,8 @@ func TestProjectsRoleGrantedFromSender(t *testing.T) {
 	}
 }
 
-// TestMultiEventTxPicksPrimary: a buy tx emits Purchased (Vault), an
-// undecodable ERC20 Transfer ("unknown") and a low-priority RoleGranted. It
-// yields one record, keyed by the highest-priority event (Purchased).
+// Purchased outranks an "unknown" ERC20 Transfer and RoleGranted in the same buy
+// transaction; create one txHash-based record with Purchased's Kind
 func TestMultiEventTxPicksPrimary(t *testing.T) {
 	repos := memory.New()
 	txHash := "0xbuy"
@@ -133,8 +131,7 @@ func TestMultiEventTxPicksPrimary(t *testing.T) {
 	}
 }
 
-// TestDedupSkipsManagerTx: a transaction-manager record already owns the
-// txHash, so the projector does not synthesize a duplicate event-derived record
+// A manager-owned txHash must not produce a duplicate event-derived record
 func TestDedupSkipsManagerTx(t *testing.T) {
 	repos := memory.New()
 	ctx := context.Background()
@@ -161,9 +158,8 @@ func TestDedupSkipsManagerTx(t *testing.T) {
 	}
 }
 
-// TestReorgFlipsToReorged: an event-derived record whose events are all
-// soft-removed becomes TxReorged rather than being deleted, and so does one
-// whose events vanish in a deep rollback
+// Soft-removing or deleting all backing events marks the derived record TxReorged
+// without deleting it
 func TestReorgFlipsToReorged(t *testing.T) {
 	repos := memory.New()
 	ctx := context.Background()
@@ -217,8 +213,7 @@ func TestIdempotentAcrossRuns(t *testing.T) {
 	}
 }
 
-// TestFreezesWhileReconciliationRequired: while the indexer is frozen
-// mid-reorg, the projector returns nil without writing anything
+// ReconciliationRequired returns nil without writes during indexer recovery
 func TestFreezesWhileReconciliationRequired(t *testing.T) {
 	repos := memory.New()
 	ctx := context.Background()

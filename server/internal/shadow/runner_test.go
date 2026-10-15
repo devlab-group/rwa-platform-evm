@@ -15,10 +15,9 @@ var testAddr = "0x0000000000000000000000000000000000A001"
 
 func falseVal() *bool { f := false; return &f }
 
-// TestRunnerReplaysScriptedScenarioAndReconciles replays a scripted history
-// (ordinary ingestion, a duplicate log redelivery, a reorg, a transient RPC
-// fault and an undecodable event) against the real indexer in an isolated
-// in-memory database, with resource sampling and a final reconciliation.
+// Replay ingestion, duplicate delivery, reorg, transient RPC failure and undecodable
+// logs through the real indexer in memory, sampling resources and reconciling final
+// counts
 func TestRunnerReplaysScriptedScenarioAndReconciles(t *testing.T) {
 	sc := &Scenario{
 		ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1,
@@ -88,8 +87,8 @@ func TestRunnerReplaysScriptedScenarioAndReconciles(t *testing.T) {
 	if !report.Reconciled {
 		t.Fatalf("expected Reconciled=true, got report: %+v", report)
 	}
-	// 5 canonical decodable events: block1(0x01), block2(0x02), block3(0x03),
-	// block4(0x04b), which replaced the reorged-out 0x04, and block5(0x05b)
+	// Five canonical events: blocks 1(0x01), 2(0x02), 3(0x03), 4(0x04b, replacing 0x04),
+	// 5(0x05b)
 	if report.FinalEventCount != 5 {
 		t.Fatalf("FinalEventCount = %d, want 5", report.FinalEventCount)
 	}
@@ -98,9 +97,8 @@ func TestRunnerReplaysScriptedScenarioAndReconciles(t *testing.T) {
 	}
 }
 
-// TestRunnerExpectPollErrorForDeepReorg checks that a transient fault the
-// indexer recovers from within one Poll, with ExpectPollError false, adds no
-// report errors
+// A transient fault recovered within one Poll with ExpectPollError=false adds no report
+// errors
 func TestRunnerExpectPollErrorForDeepReorg(t *testing.T) {
 	sc := &Scenario{
 		ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1, MaxLogRange: 10,
@@ -123,8 +121,7 @@ func TestRunnerExpectPollErrorForDeepReorg(t *testing.T) {
 	}
 }
 
-// TestRunnerRespectsContextCancellation checks that Run returns the context's
-// error when ctx is already cancelled
+// Run returns the context error when already cancelled
 func TestRunnerRespectsContextCancellation(t *testing.T) {
 	sc := &Scenario{ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1, Steps: []Step{
 		{Description: "one", Headers: []HeaderSpec{{Number: 1, Seed: 1}}, Head: 1},
@@ -138,8 +135,7 @@ func TestRunnerRespectsContextCancellation(t *testing.T) {
 	}
 }
 
-// TestLoadScenarioRoundTrips checks that a Scenario written to disk loads back
-// with the same chain ID and step count
+// Loading a saved Scenario preserves its chain ID and step count
 func TestLoadScenarioRoundTrips(t *testing.T) {
 	sc := &Scenario{ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1, Steps: []Step{
 		{Description: "genesis", Headers: []HeaderSpec{{Number: 1, Seed: 1}}, Head: 1},
@@ -163,8 +159,7 @@ func TestLoadScenarioRoundTrips(t *testing.T) {
 
 func uint64Ptr(v uint64) *uint64 { return &v }
 
-// TestSampleReturnsPlausibleValues checks that Sample returns a positive
-// goroutine count and a timestamp that is not in the future
+// Sample reports positive goroutines and a timestamp no later than now
 func TestSampleReturnsPlausibleValues(t *testing.T) {
 	s := Sample()
 	if s.NumGoroutine <= 0 {

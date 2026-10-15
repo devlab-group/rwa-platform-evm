@@ -158,9 +158,8 @@ func rawZip(t *testing.T, entries map[string]string) []byte {
 	return buf.Bytes()
 }
 
-// validManifestEntries returns manifest.json, profile.json, metadata.json and
-// typed-data.json entries whose manifest sizes and SHA-256 values are correct,
-// so each test can change one thing and pass every other check
+// validManifestEntries supplies the manifest and three required files with correct
+// sizes and hashes, letting tests vary one constraint at a time
 func validManifestEntries(t *testing.T) map[string]string {
 	t.Helper()
 	profile := `{"a":1}`
@@ -235,9 +234,8 @@ func TestOpenPackageRejectsMissingMandatoryManifestEntry(t *testing.T) {
 	}
 }
 
-// TestOpenPackageRejectsManifestEntryOutsideProofs checks that a manifest
-// declaring a file at the archive root, other than the three mandatory files, is
-// rejected even when its hash and size are correct
+// TestOpenPackageRejectsManifestEntryOutsideProofs rejects extra root files even with
+// correct hashes and sizes; only the three mandatory files may appear there
 func TestOpenPackageRejectsManifestEntryOutsideProofs(t *testing.T) {
 	entries := validManifestEntries(t)
 	sum := func(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
@@ -282,9 +280,8 @@ func TestOpenPackageRejectsUnknownManifestField(t *testing.T) {
 	}
 }
 
-// TestOpenPackageAcceptsSelfConsistentManifest is the control for the tests
-// above: the unmodified validManifestEntries fixture is accepted, so a failure
-// in a mutation test comes from its mutation and not from the fixture
+// TestOpenPackageAcceptsSelfConsistentManifest validates the unmodified fixture,
+// confirming mutation-test failures come from their changes
 func TestOpenPackageAcceptsSelfConsistentManifest(t *testing.T) {
 	if _, err := OpenPackage(rawZip(t, validManifestEntries(t))); err != nil {
 		t.Fatalf("expected the self-consistent fixture to be accepted: %v", err)

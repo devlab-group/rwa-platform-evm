@@ -12,9 +12,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// vectorPath returns the path of a file in shared/vectors. Tests run with the
-// package directory as the working directory, so the repo root is three levels
-// up (internal/eip712 -> internal -> server -> repo root).
+// vectorPath resolves shared/vectors three levels above the package test working
+// directory
 func vectorPath(t *testing.T, name string) string {
 	t.Helper()
 	p := filepath.Join("..", "..", "..", "shared", "vectors", name)
@@ -145,9 +144,8 @@ func TestMintDigestMatchesGoldenVector(t *testing.T) {
 		t.Fatalf("Digest = %s, want %s", got, want)
 	}
 
-	// Sign with the vector's private key and check that RecoverSigner returns
-	// the auditor, which tests the digest end to end and not only the
-	// precomputed intermediate hashes
+	// Sign with the vector key and recover the auditor, checking the complete digest
+	// rather than only intermediate hashes
 	privBytes, err := hex.DecodeString(trim0x(v.SignerPrivateKey))
 	if err != nil {
 		t.Fatalf("bad private key hex: %v", err)

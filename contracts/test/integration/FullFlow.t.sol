@@ -10,13 +10,13 @@ import {IRWAToken} from "../../src/interfaces/IRWAToken.sol";
 import {RWAToken} from "../../src/RWAToken.sol";
 import {Vm} from "forge-std/Vm.sol";
 
-/// @notice deploy -> allow -> mint(golden sig) -> buy -> requestRedemption -> fund -> claim ->
-///         auditor burn of returned Vault inventory, plus a timeout -> cancel branch
+/// @notice Deploy -> allow -> locally signed mint -> buy -> requestRedemption -> fund -> claim ->
+///         auditor burn of returned Vault inventory, plus timeout -> cancel
 contract FullFlowTest is TestBase {
     function test_fullFlow_mintBuyRedeemClaimBurn() public {
-        // 1. deploy + allow already done in setUp(); investor is Allowed
+        // 1. setUp() deployed the stack and allowed the investor
 
-        // 2. mint via SupplyController using a locally-signed attestation
+        // 2. Mint with a locally signed attestation
         ISupplyController.MintAttestation memory mintAttestation =
             _mintAttestation(auditor, 1_000 ether, "GOLD-BAR-1", 1);
         bytes memory mintSig = _signMint(mintAttestation, AUDITOR_PK);
@@ -61,7 +61,7 @@ contract FullFlowTest is TestBase {
         IRedemptionEscrow.RedemptionRequest memory funded = escrow.getRedemption(requestId);
         assertEq(uint8(funded.status), uint8(IRedemptionEscrow.RedemptionStatus.Funded));
 
-        // 6. claim (permissionless): RWA returns to the Vault, quote goes to the beneficiary
+        // 6. Permissionless claim returns RWA to Vault and pays the beneficiary
         uint256 vaultInventoryBefore = vault.inventory();
         uint256 investorQuoteBefore = quoteToken.balanceOf(investor);
         escrow.claimRedemption(requestId);
@@ -100,7 +100,7 @@ contract FullFlowTest is TestBase {
         vm.expectRevert();
         escrow.cancelRedemption(requestId);
 
-        // Warp past the timeout and cancel successfully
+        // Cancel after timeout
         vm.warp(block.timestamp + REDEMPTION_TIMEOUT);
         uint256 rwaBalanceBefore = token.balanceOf(investor);
         uint256 quoteBalanceBefore = quoteToken.balanceOf(investor);
@@ -110,7 +110,7 @@ contract FullFlowTest is TestBase {
         assertEq(token.balanceOf(investor), rwaBalanceBefore + 20 ether);
         IRedemptionEscrow.RedemptionRequest memory r = escrow.getRedemption(requestId);
         assertEq(uint8(r.status), uint8(IRedemptionEscrow.RedemptionStatus.Cancelled));
-        // No quote was ever paid for a cancelled request
+        // Cancellation pays no quote
         assertEq(quoteToken.balanceOf(investor), quoteBalanceBefore);
     }
 
@@ -150,15 +150,13 @@ contract FullFlowTest is TestBase {
         supplyController.burn(blockedBurn, blockedBurnSig);
     }
 
-    /// @notice The ERC-7943 enforcement lifecycle on a stack deployed as in production: mint
-    ///         through the attestation path, buy, freeze part of a holder's balance, check that
-    ///         the query and the transfer agree, then seize from that holder after blocking them
-    ///         and pausing the project. The other tests in this file cover the redemption,
-    ///         cancel and pause behavior this must not disturb.
+    /// @notice Tests ERC-7943 enforcement on the factory stack: attested mint, buy, partial freeze,
+    ///         query/transfer agreement, then seizure from a blocked holder while paused.
+    ///         Other tests cover redemption, cancellation and pause behavior.
     function test_fullFlow_erc7943EnforcementLifecycle() public {
         assertTrue(token.supportsInterface(type(IERC7943).interfaceId), "token must advertise uRWA");
 
-        // Mint into the Vault through the unchanged EIP-712 path, then sell to the investor
+        // Mint through SupplyController, then sell to the investor
         ISupplyController.MintAttestation memory a = _mintAttestation(auditor, 1_000 ether, "GOLD-BAR-7943", 1);
         supplyController.mint(a, _signMint(a, AUDITOR_PK));
         quoteToken.mint(investor, 1_000_000_000);
@@ -175,7 +173,7 @@ contract FullFlowTest is TestBase {
         token.setFrozenTokens(investor, 40 ether);
         assertEq(token.getFrozenTokens(investor), 40 ether);
 
-        // The query and the transfer agree on every amount that matters
+        // Check query/transfer agreement at the tested freeze boundaries
         assertTrue(token.canTransfer(investor, investor2, 60 ether));
         assertFalse(token.canTransfer(investor, investor2, 60 ether + 1));
 
@@ -191,8 +189,7 @@ contract FullFlowTest is TestBase {
         token.transfer(investor2, 20 ether);
         assertEq(token.balanceOf(investor), 80 ether);
 
-        // The investor is blocked and the whole project is paused: an ordinary transfer is
-        // impossible from here on, and only enforcement can still move these tokens
+        // Blocked investor and paused project: ordinary transfer fails, forced transfer remains available
         vm.prank(complianceOperator);
         compliance.setStatus(investor, IComplianceRegistry.ComplianceStatus.Blocked, 0);
         vm.prank(admin);
@@ -200,9 +197,8 @@ contract FullFlowTest is TestBase {
         assertFalse(token.canSend(investor));
         assertFalse(token.canTransfer(investor, investor2, 1));
 
-        // A seizure larger than the 40 unfrozen tokens eats 10 out of the frozen 40, which the
-        // contract must record BEFORE the Transfer so an integrator reading the log stream
-        // never sees a balance move against a stale frozen amount
+        // Seize 50 from 40 unfrozen and 40 frozen tokens; emit the reduced freeze before Transfer
+        // so log readers see the updated frozen amount first
         vm.recordLogs();
         vm.prank(admin);
         token.forcedTransfer(investor, investor2, 50 ether);
@@ -219,14 +215,14 @@ contract FullFlowTest is TestBase {
         assertEq(token.balanceOf(investor2), 70 ether);
         assertEq(token.totalSupply(), supplyBefore, "a seizure moves tokens, it never mints or burns");
 
-        // The destination is still held to the compliance rule, blocked sender or not
+        // The seizure recipient must still be Allowed
         vm.prank(complianceOperator);
         compliance.setStatus(investor2, IComplianceRegistry.ComplianceStatus.Blocked, 0);
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(IERC7943.ERC7943CannotReceive.selector, investor2));
         token.forcedTransfer(investor, investor2, 1 ether);
 
-        // Neither contract that moves RWA on behalf of everyone can be frozen
+        // Reject nonzero freezes on Vault and escrow
         vm.startPrank(admin);
         vm.expectRevert(abi.encodeWithSelector(RWAToken.SystemAddressCannotBeFrozen.selector, address(vault)));
         token.setFrozenTokens(address(vault), 1);
@@ -234,7 +230,7 @@ contract FullFlowTest is TestBase {
         token.setFrozenTokens(address(escrow), 1);
         vm.stopPrank();
 
-        // Supply still answers only to a valid auditor attestation, pause included
+        // Supply changes still require valid attestations and an unpaused project
         ISupplyController.MintAttestation memory blocked = _mintAttestation(auditor, 1 ether, "GOLD-BAR-7943-B", 2);
         bytes memory blockedSig = _signMint(blocked, AUDITOR_PK);
         vm.expectRevert();
@@ -249,11 +245,8 @@ contract FullFlowTest is TestBase {
         assertEq(token.totalSupply(), supplyBefore, "no path in this test changed supply");
     }
 
-    /// @notice A funded redemption is already paid for: the beneficiary's quote sits in the
-    ///         escrow and `claimRedemption` moves the RWA leg first, so anything that empties
-    ///         the escrow's balance strands the claim (cancel and reject are Pending-only).
-    ///         This checks that no enforcement action can freeze the escrow or seize from it,
-    ///         and that the claim still settles afterwards.
+    /// @notice Funded requests can only exit through claim, which returns RWA before paying quote.
+    ///         Reject nonzero escrow freezes and seizures to preserve that backing, then settle claim.
     function test_fullFlow_enforcementCannotStrandAFundedRedemption() public {
         ISupplyController.MintAttestation memory a = _mintAttestation(auditor, 1_000 ether, "GOLD-BAR-ESCROW", 1);
         supplyController.mint(a, _signMint(a, AUDITOR_PK));
@@ -276,7 +269,7 @@ contract FullFlowTest is TestBase {
         vm.prank(treasurer);
         escrow.fundRedemption(requestId);
 
-        // Every enforcement action an admin can aim at the escrow, refused
+        // Reject nonzero freezes and seizures from escrow
         vm.startPrank(admin);
         vm.expectRevert(abi.encodeWithSelector(RWAToken.SystemAddressCannotBeFrozen.selector, address(escrow)));
         token.setFrozenTokens(address(escrow), redeemAmount);
@@ -284,15 +277,14 @@ contract FullFlowTest is TestBase {
         token.forcedTransfer(address(escrow), investor2, redeemAmount);
         vm.stopPrank();
 
-        // Freezing and seizing the investor's own remaining balance is still allowed, and
-        // touches nothing the escrow is holding for them
+        // Investor-balance freezes and seizures remain valid without touching escrowed RWA
         vm.prank(admin);
         token.setFrozenTokens(investor, 60 ether);
         vm.prank(admin);
         token.forcedTransfer(investor, investor2, 10 ether);
         assertEq(token.balanceOf(address(escrow)), redeemAmount, "escrowed RWA is untouched");
 
-        // The claim still settles: RWA back to the Vault, quote to the beneficiary
+        // Claim returns RWA to Vault and pays quote to the beneficiary
         uint256 vaultInventoryBefore = vault.inventory();
         uint256 investorQuoteBefore = quoteToken.balanceOf(investor);
         escrow.claimRedemption(requestId);

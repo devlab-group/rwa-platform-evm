@@ -1,6 +1,5 @@
-// Package policy loads the auditor's local deployment policy, maintained
-// independently of the package under review. Every signing run requires it
-// to pin the chain, controller, Vault, auditor, project and profile digest.
+// Package policy loads independent local deployment values required for signing: chain,
+// controller, Vault, auditor, project and profile digest
 package policy
 
 import (
@@ -27,14 +26,14 @@ type Policy struct {
 	Auditor       string
 	ProjectID     string
 	ProfileDigest string
-	// MaxAttestationLifetime bounds validUntil relative to both signing time
-	// and metadata.createdAt, defaulting to DefaultMaxAttestationLifetime
+	// MaxAttestationLifetime supplies the deadline window enforced by cmd/signer against
+	// now and metadata.createdAt; defaults to DefaultMaxAttestationLifetime
 	MaxAttestationLifetime time.Duration
-	// Safe is set when Auditor is a Safe multisig; nil for a single-key auditor
+	// Safe selects multisig signing; nil selects a single-key auditor
 	Safe *Safe
 }
 
-// Safe holds the independently verified owner list and threshold for the auditor Safe
+// Safe holds operator-supplied owners/threshold, which must be verified independently
 type Safe struct {
 	Owners    []common.Address
 	Threshold int

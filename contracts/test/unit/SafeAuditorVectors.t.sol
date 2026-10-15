@@ -4,8 +4,8 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
-/// @notice Reproduces hashes, owner signatures and ordering from shared/vectors/safe-auditor.json
-///         using the fixture's exact values, without deploying a Safe
+/// @notice Reproduces shared/vectors/safe-auditor.json hashes, owner signatures and ordering
+///         from exact fixture values, without deploying a Safe
 contract SafeAuditorVectorsTest is Test {
     bytes32 internal constant DOMAIN_TYPEHASH = 0x8b73c3c69bb8fe3d512ecc4cf759cc79239f7b179b0ffacaa9a75d522b39400f;
     bytes32 internal constant MINT_TYPEHASH = 0xf12e40dc7b0ffb8e8fea2265ce997eba525261e102f3513e3f98ba437ef847bb;

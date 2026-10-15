@@ -1,8 +1,7 @@
-// Package strategy decodes FixedPriceStrategy price-update logs into the
-// JSON-friendly ChainEvent shape that the project security projector folds into
-// the live purchase and redemption prices. The indexer watches the strategy
-// address because its watch set comes from the deployed Project record
-// (serverwiring.IndexerAddresses).
+// Package strategy decodes FixedPriceStrategy price updates into JSON-friendly
+// ChainEvent fields for project security's live purchase/redemption prices.
+// cmd/platform follows Security.Strategy in the indexer watch set via
+// serverwiring.IndexerAddresses, including after strategy swaps.
 package strategy
 
 import (
@@ -11,13 +10,11 @@ import (
 	"github.com/rwa-platform/server/internal/bindings"
 )
 
-// EventNames are the FixedPriceStrategy events the security projector
-// understands.
+// EventNames lists FixedPriceStrategy events consumed by project security
 var EventNames = []string{"PurchasePriceUpdated", "RedemptionPriceUpdated"}
 
-// DecodeLog is an indexer.EventDecoder for FixedPriceStrategy logs. It decodes
-// the two price-update events into the previous and new price, as decimal
-// strings like every uint256 in the pipeline, plus the indexed caller.
+// DecodeLog is an indexer.EventDecoder for both price updates, returning previous/new
+// uint256 prices as decimal strings and the indexed caller
 func DecodeLog(log types.Log) (string, map[string]any, error) {
 	s := bindings.NewFixedPriceStrategy()
 	if len(log.Topics) == 0 {

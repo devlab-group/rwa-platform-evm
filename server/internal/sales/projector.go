@@ -9,9 +9,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// BuildPurchases converts decoded Vault Purchased chain events into
-// models.Purchase records, one per event, since each Purchased log is a
-// complete fill
+// BuildPurchases converts decoded Vault Purchased events into models.Purchase records,
+// one per complete fill
 func BuildPurchases(events []*models.ChainEvent) []*models.Purchase {
 	out := make([]*models.Purchase, 0, len(events))
 	for _, e := range events {
@@ -35,16 +34,12 @@ func toString(v any) string {
 	return s
 }
 
-// Reconcile rebuilds the purchases read model from every persisted Vault chain
-// event for (chainID, vaultAddr), as internal/redemption.Service.Reconcile does.
-// It is safe to call at any time, including after an indexer rollback.
+// Reconcile rebuilds purchases from persisted Vault events for (chainID, vaultAddr),
+// reflecting indexer rollbacks as internal/redemption.Service.Reconcile does.
 //
-// The rebuild swaps generations so a concurrent API reader never sees an empty
-// or partial history. Every purchase that should exist is upserted (created or
-// replaced by id, never deleted first) with a fresh generation. Only after
-// all upserts succeed are records from older generations, such as purchases
-// rolled back by a reorg, deleted. A crash midway leaves the previous
-// records in place.
+// Upsert every fill under a fresh generation before pruning older rows, avoiding
+// delete-first gaps for surviving purchases. Readers can see mixed generations; a crash
+// leaves old rows alongside completed upserts.
 func (s *Service) Reconcile(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64) error {
 	var all []*models.ChainEvent
 	for _, name := range EventNames {

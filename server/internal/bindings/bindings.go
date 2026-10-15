@@ -1,11 +1,7 @@
-// Package bindings encodes calldata and decodes events for the contracts in
-// contracts/src.
-//
-// The bindings are hand-written, not abigen output. Each one builds a
-// go-ethereum abi.ABI from a JSON fragment copied from the Solidity
-// interfaces in contracts/src/interfaces, so field order and types must be kept
-// in step with them by hand. cmd/verifyabi compares the selectors and event
-// topics with the compiled artifacts in contracts/out.
+// Package bindings encodes contract calldata and decodes events for contracts/src using
+// hand-written go-ethereum ABI fragments. Keep field order and types aligned with
+// Solidity interfaces and concrete-contract additions. cmd/verifyabi compares selectors
+// and event topics against contracts/out artifacts.
 package bindings
 
 import (
@@ -14,8 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 )
 
-// mustABI parses a JSON ABI fragment and panics on error. The fragments are
-// compile-time constants, so a parse failure is a programming error
+// mustABI parses a constant JSON ABI fragment, panicking on malformed program data
 func mustABI(jsonABI string) abi.ABI {
 	parsed, err := abi.JSON(strings.NewReader(jsonABI))
 	if err != nil {

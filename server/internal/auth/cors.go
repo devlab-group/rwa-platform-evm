@@ -9,11 +9,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// corsAllowedHeaders lists the request headers a browser client may send.
-// Authorization carries the admin JWT, X-Wallet-Session the investor session,
-// and Idempotency-Key is required by the idempotent admin routes. A header
-// missing from this list fails the preflight, which looks like a server bug
-// rather than a CORS error.
+// corsAllowedHeaders permits Content-Type, the admin JWT's Authorization header, the
+// investor's X-Wallet-Session and admin write routes' Idempotency-Key in browser
+// preflights
 var corsAllowedHeaders = strings.Join([]string{
 	"Authorization",
 	"Content-Type",
@@ -32,26 +30,19 @@ var corsAllowedMethods = strings.Join([]string{
 	http.MethodOptions,
 }, ", ")
 
-// corsMaxAge is how long a browser may cache a preflight result. Ten minutes
-// lets an origin-list change take effect within the hour while still sparing a
-// burst of calls a preflight each.
+// corsMaxAge caches preflight results for ten minutes, reducing repeated preflights
+// while bounding the delay before origin-list changes take effect
 const corsMaxAge = 10 * time.Minute
 
-// CORS permits browser access from allowedOrigins. The embedded admin console
-// is same-origin; the standalone investor SPA needs this allowlist for public
-// and X-Wallet-Session routes.
-//
-// An empty list emits no CORS headers and lets preflight requests reach the
-// router, which has no OPTIONS routes. With a configured list:
-//   - A matching Origin is echoed in Access-Control-Allow-Origin. An unmatched
-//     origin gets no CORS headers; the browser blocks access to the response,
-//     while the server still handles the request. Non-browser clients are unaffected.
-//   - Configuration rejects "*" to avoid exposing authenticated API responses
-//     to arbitrary origins.
-//   - Access-Control-Allow-Credentials is omitted because authentication uses
-//     Authorization and X-Wallet-Session headers, not cookies.
-//   - Vary: Origin appears on matched and unmatched responses to prevent a
-//     shared cache from mixing origins' CORS headers.
+// CORS permits browser access from allowedOrigins, used by the standalone investor SPA;
+// the embedded admin console is same-origin. An empty list emits no CORS headers and
+// passes OPTIONS to the router, which has no OPTIONS routes.
+// With a configured list, every response varies by Origin. Matching origins are echoed
+// in Access-Control-Allow-Origin; their preflights return 204 before auth and rate
+// limiting. Unmatched requests still run, but browsers block response access.
+// Non-browser clients are unaffected.
+// Configuration rejects "*". Access-Control-Allow-Credentials is omitted because
+// authentication uses Authorization and X-Wallet-Session headers, not cookies.
 func CORS(allowedOrigins []string) gin.HandlerFunc {
 	allowed := make(map[string]struct{}, len(allowedOrigins))
 	for _, o := range allowedOrigins {

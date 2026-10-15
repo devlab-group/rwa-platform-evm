@@ -12,10 +12,8 @@ type Purchase struct {
 	TxHash      string    `json:"txHash" bson:"txHash"`
 	BlockNumber uint64    `json:"blockNumber" bson:"blockNumber"`
 	CreatedAt   time.Time `json:"createdAt" bson:"createdAt"`
-	// Generation is read-model rebuild bookkeeping and is not part of any API
-	// response. sales.Service.Reconcile stamps every record it upserts with the current
-	// generation and then deletes records with a different one. A concurrent reader
-	// therefore sees, for each id, either the previous generation's value or the new
-	// one, and never a gap.
+	// Generation marks sales.Service.Reconcile's rebuild: upsert survivors with the new
+	// generation, then delete stale rows. Each surviving ID stays readable as its old or
+	// new value; Generation is omitted from API responses.
 	Generation int64 `json:"-" bson:"generation"`
 }

@@ -25,11 +25,9 @@ type ManifestFile struct {
 	MIME   string `json:"mime"`
 }
 
-// TypedDataDoc is the package's typed-data.json. Its fields match
-// shared/schemas/typed-data.schema.json, which sets additionalProperties to
-// false, so the server and the offline signer must use the same field names.
-// It has no digest field: the signer recomputes the EIP-712 digest from the
-// domain and message instead of trusting a supplied value.
+// TypedDataDoc mirrors typed-data.json and shared/schemas/typed-data.schema.json. The
+// closed schema requires identical field names in server and signer. No digest is
+// supplied: the signer recomputes it from domain and message.
 type TypedDataDoc struct {
 	PrimaryType string           `json:"primaryType"`
 	Domain      TypedDataDomain  `json:"domain"`
@@ -86,11 +84,9 @@ var (
 // shared/schemas/rwa-manifest.schema.json (100 MiB)
 const maxManifestFileSize = 104857600
 
-// parseManifestStrict decodes raw as manifest.json and checks it against the
-// constraints in shared/schemas/rwa-manifest.schema.json. Unknown fields and
-// trailing content are rejected. It also enforces file-set rules the schema
-// cannot express: no duplicate paths, the three mandatory files present, and
-// every other entry under proofs/.
+// parseManifestStrict enforces rwa-manifest.schema.json, rejecting unknown fields and
+// trailing content. It also rejects duplicate paths, requires each mandatory file once,
+// and permits other entries only under proofs/.
 func parseManifestStrict(raw []byte) (Manifest, error) {
 	var m Manifest
 	dec := json.NewDecoder(bytes.NewReader(raw))

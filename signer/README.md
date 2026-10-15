@@ -1,12 +1,12 @@
 # signer: air-gapped EIP-712 auditor signer
 
-`signer` reviews a `.rwa` audit package offline and creates a `signed-result.json` authorizing
-one mint or burn on `SupplyController`. For a Safe auditor, each owner signs a share and
-`signer combine` assembles the final result. The signing commands make no network requests.
+`signer` reviews `.rwa` packages offline and creates `signed-result.json` authorizing one mint
+or burn on `SupplyController`. Safe owners sign individual shares; `signer combine` assembles
+the result. Signing makes no network requests.
 
-Start with the [auditor guide](../docs/auditor/auditor-guide.md) for machine hygiene, evidence
-review and key management. This README describes validation, formats and tests. The shared
-interfaces are `shared/eip712/types.md`, `shared/schemas/*.json` and `shared/vectors/*.json`.
+The [auditor guide](../docs/auditor/auditor-guide.md) covers machine hygiene, evidence review and
+key management. This README covers validation, formats and tests against `shared/eip712/types.md`,
+`shared/schemas/*.json` and `shared/vectors/*.json`.
 
 ## What it does, end to end
 
@@ -14,95 +14,79 @@ interfaces are `shared/eip712/types.md`, `shared/schemas/*.json` and `shared/vec
 signer sign <package.rwa> --keystore <path> --policy <path-to-policy.json>
 ```
 
-Every signing run requires a local `--policy` maintained independently of the package. Its six
-deployment fields are `chainId`, `controller`, `vault`, `auditor`, `projectId` and
-`profileDigest`; lifetime and Safe settings are optional. See "The `--policy` flag" below.
+Every run needs an independent local `--policy` pinning `chainId`, `controller`, `vault`,
+`auditor`, `projectId` and `profileDigest`; lifetime and Safe settings are optional
+(see "The `--policy` flag"). The signing flow is:
 
-1. Read the compressed package with `rwapkg.ReadPackageFile`. Check its size with `Stat`, then
-   enforce the bound with a limited reader. Extract the ZIP in memory without writing entries
-   to disk. Reject traversal (any name that `path.Clean` would change, such as `../`, `./` or
-   a trailing slash, plus absolute paths and backslashes), symlinks indicated by either decoded
-   file mode or raw Unix attributes, duplicate names, unsupported compression methods and
-   excessive entry counts. Only Store and Deflate are accepted. Decompression limits count
-   bytes actually read across the archive, regardless of sizes claimed in ZIP headers.
-2. Parse the manifest with `rwapkg.ParseManifest`, checking the
-   `shared/schemas/rwa-manifest.schema.json` envelope. Each mandatory document must appear once,
-   file paths must be unique, and other payloads must live under `proofs/`. Verify every listed
-   file's size and SHA-256 and reject undeclared payloads; the manifest itself is not a payload
-   entry in its own inventory.
-3. Validate the profile envelope in `internal/profile`: fixed `profileVersion`, UUID `projectId`,
-   string bounds, `displayFields` shape and no unknown fields, including in nested display-field
-   objects. Validate an optional `legal` descriptor against the
-   [Legal descriptor rules](../docs/spec/asset-profile.md#legal-descriptor).
-   Compile `assetSchema` with `internal/jsonschema` using the pinned
-   `rwa-profile-assetSchema/1` dialect (`docs/spec/profile-schema-dialect.md`). Its keywords are:
+1. `rwapkg.ReadPackageFile` checks compressed size with `Stat` and a limited reader. Extraction
+   stays in memory and rejects empty archives, excessive counts, unsafe paths, Unix symlinks,
+   duplicate names and methods other than Store/Deflate. Unsafe names include absolute paths,
+   backslashes and names changed by `path.Clean`, such as `../`, `./` and trailing slashes.
+   Expanded-size limits count bytes read per entry and in total, regardless of ZIP-header sizes.
+2. `rwapkg.ParseManifest` checks the `shared/schemas/rwa-manifest.schema.json` envelope. Require
+   `profile.json`, `metadata.json` and `typed-data.json` once each; paths are unique and extras
+   live under `proofs/`.
+   `VerifyFiles` requires matching sizes/SHA-256 and no undeclared payloads; the manifest excludes
+   itself from its inventory.
+3. `internal/profile` checks fixed `profileVersion`, UUID `projectId`, bounded strings,
+   `displayFields` and unknown fields, including nested display-field members. Optional `legal`
+   follows the [Legal descriptor rules](../docs/spec/asset-profile.md#legal-descriptor).
+   `internal/jsonschema` compiles `assetSchema` under `rwa-profile-assetSchema/1`
+   (`docs/spec/profile-schema-dialect.md`), accepting:
 
-   - validation: `type`, `properties`, `required`, `additionalProperties`, `items`, `$ref`, `enum`,
+   - Validation: `type`, `properties`, `required`, `additionalProperties`, `items`, `$ref`, `enum`,
      `const`, `minLength`, `maxLength`, `pattern`, `minimum`, `maximum`, `exclusiveMinimum`,
-     `exclusiveMaximum`, `minItems`, `maxItems`, `uniqueItems`;
-   - annotations and definition containers: `$schema`, `$id`, `$comment`, `$defs`, `title`,
-     `description`, `default`, `examples`, `deprecated`, `readOnly`, `writeOnly`.
+     `exclusiveMaximum`, `minItems`, `maxItems`, `uniqueItems`.
+   - Annotations/definitions: `$schema`, `$id`, `$comment`, `$defs`, `title`, `description`,
+     `default`, `examples`, `deprecated`, `readOnly`, `writeOnly`.
 
-   `type` accepts any of the seven JSON types or a non-empty array of unique types. Local `$ref`
-   values (`#` or `#/...`) must have no sibling keywords; resolution has cycle and depth bounds.
-   Unsupported keywords, including `multipleOf`, `format` and `patternProperties`, are rejected
-   in compiled schema nodes, including every `$defs` member even when no reference reaches it.
-   The canonical parser used for profiles, metadata and schema instances defaults to 1 MiB,
-   depth 32, 32768 UTF-8 bytes per string or key, 4096 array items and 4096 object properties.
-   `TestDialectStructuralLimitsMatchSharedConstants` checks these values
-   against `shared/schemas/structural-limits.json` and the copy in
-   `shared/vectors/schema-dialect-conformance.json`.
-4. Validate metadata in `internal/metadata`: `recordId` matches `^[A-Za-z0-9._:-]{1,128}$`,
-   `issuance.amount` is a positive decimal string at most 2²⁵⁶ − 1, proof hashes are lowercase
-   hex, and `createdAt` is RFC 3339. Unknown fields are rejected, including in `issuance` and
-   proof objects. Validate `asset` against the compiled profile schema with
-   `Profile.ValidateAsset`. Require the metadata, profile and policy project IDs to agree and
-   `issuance.unit` to equal `profile.tokenUnit`.
-5. Canonicalize the raw profile and metadata with RFC 8785 JCS and recompute their SHA-256
-   digests. The profile digest must match the policy and manifest; the metadata digest must
-   match the manifest. `internal/canonical` rejects duplicate keys and invalid UTF-8, enforces
-   configurable structural limits, sorts keys by UTF-16 code units, formats numbers using
-   ECMAScript `Number::toString`, and escapes strings minimally. `internal/cid` derives CIDv1
-   with codec `raw` (0x55) and multihash sha2-256 from the same bytes. Signing does not call it;
-   the vector tests do. Its vectors were generated with
-   `ipfs add --cid-version=1 --raw-leaves --hash=sha2-256 --only-hash`.
-6. Parse and cross-check typed data (`cmd/signer/typeddata.go`; format:
-   `shared/schemas/typed-data.schema.json`). Digests and `primaryType` must match the package.
-   Compare amounts as `big.Int`, so leading-zero decimal representations are equivalent. For
-   a mint, check `recordId` and `recordKey = keccak256(bytes(recordId))`.
-7. Check chain ID, controller, Vault and auditor against the policy. Require
-   `now < validUntil <= min(now, metadata.createdAt) + maxAttestationLifetime`, with a 30-day
-   default. Reject mismatches and invalid deadlines before review, then compute the EIP-712
-   digest in `internal/attestation`.
-8. Render the review screen in `internal/ui`. Show the mint or burn banner, `primaryType`, both
-   project IDs, unit, decimals, chain, controller, auditor, Vault, digests, raw and normalized
-   amounts, nonce, deadline and policy window, EIP-712 digest, and policy path. Mint review also
-   shows `recordId` and `recordKey`; burn review shows `operationId`. Safe mode adds its auditor
-   type, threshold, owners and message hash. Resolve each `displayFields` JSON pointer (RFC 6901)
-   against the metadata's `asset`, using "(not present)" when it cannot resolve. Rendering happens
-   after digest computation; the `displayFields` definitions themselves are validated and included
-   in the profile digest. Show an optional `legal` descriptor before the asset display fields,
-   with document references as text; the signer never fetches them. List each proof with a
-   matching attached file or `NO ATTACHED FILE MATCHES THIS HASH`. Sanitize screen titles,
-   labels and values with
-   `textsafe.SanitizeForTerminal` to neutralize control, ANSI and bidi characters. Parsing already
-   rejects non-printable text in `assetType`, `tokenUnit`, `recordIdLabel`, display-field labels,
+   `type` accepts any JSON type or a nonempty array of unique types. Local `$ref` (`#` or `#/...`)
+   permits no siblings; cycles, depth and processed nodes are bounded. Unsupported keywords,
+   including `multipleOf`, `format` and `patternProperties`, fail in every compiled schema node,
+   including unused `$defs`; enum/const/default/examples values remain opaque data.
+   Profiles, metadata and raw schema instances use defaults of 1 MiB, depth 32, 32768 UTF-8 bytes
+   per string/key, 4096 array items and 4096 properties. `TestDialectStructuralLimitsMatchSharedConstants`
+   compares defaults with the limits copied into `shared/vectors/schema-dialect-conformance.json`
+   from `shared/schemas/structural-limits.json`.
+4. `internal/metadata` requires `recordId` matching `^[A-Za-z0-9._:-]{1,128}$`, positive decimal
+   `issuance.amount` up to 2^256-1, lowercase proof hashes and RFC 3339 `createdAt`. Unknown fields,
+   including in `issuance` and proofs, fail. `Profile.ValidateAsset` checks `asset`; metadata,
+   profile and policy project IDs must match, and `issuance.unit` must equal `profile.tokenUnit`.
+5. Profile/metadata validation canonicalizes through `internal/canonical`, then computes SHA-256.
+   The CLI requires the profile digest to match policy/manifest and metadata to match the manifest.
+   Canonical parsing rejects duplicate keys/invalid UTF-8 and applies structural limits;
+   serialization uses UTF-16 key order, ECMAScript `Number::toString` and minimal escaping.
+   `internal/cid` derives raw-codec (0x55), sha2-256 CIDv1 from those bytes for vectors; signing
+   does not call it. CID fixtures use `ipfs add --cid-version=1 --raw-leaves --hash=sha2-256 --only-hash`.
+6. `cmd/signer/typeddata.go` checks `shared/schemas/typed-data.schema.json` field rules and package
+   digests/`primaryType`. Amounts compare as `big.Int`, accepting equivalent leading-zero forms.
+   Mint data must match `recordId` and `recordKey = keccak256(bytes(recordId))`.
+7. Check policy chain, controller, Vault and auditor; require
+   `now < validUntil <= min(now, metadata.createdAt) + maxAttestationLifetime` (default 30 days).
+   Reject mismatches/deadlines before review, then compute the EIP-712 digest in `internal/attestation`.
+8. The CLI builds fields for `internal/ui`: mint/burn banner, primary type, both project IDs,
+   unit/decimals, chain/controller/auditor/Vault, profile/metadata/EIP-712 digests, raw/normalized
+   amount, nonce, deadline/window and policy path.
+   Mint adds `recordId`/`recordKey`; burn adds `operationId`; Safe mode adds its type, owners,
+   threshold and message hash. Resolve RFC 6901 `displayFields` pointers against metadata `asset`,
+   warning with "(not present)" when unresolved. Resolution follows hashing; definitions are
+   validated and profile-digest-bound. Legal terms precede asset fields; document references
+   remain unfetched text. Proofs show matching attachments or `NO ATTACHED FILE MATCHES THIS HASH`.
+   `textsafe.SanitizeForTerminal` escapes controls, ANSI and bidi characters in titles/labels/values.
+   Parsing also rejects non-printable `assetType`, `tokenUnit`, `recordIdLabel`, display labels,
    `issuance.unit` and proof types.
-9. Read confirmation from stdin with `ui.Confirm`. Only `y` or `yes`, ignoring case and surrounding
-   whitespace, proceeds. Blank or other responses decline; EOF with no response declines too.
-   `--yes` skips confirmation only with `--unsafe-test-mode`. Both flags are for tests and CI;
-   they do not bypass policy validation.
-10. Unlock the key and sign with go-ethereum's `crypto.Sign`, using deterministic RFC 6979
-    nonces. The EOA path signs the raw EIP-712 digest and produces 65-byte `[R‖S‖V]`, with `V`
-    adjusted to 27 or 28. Check the loaded key's address against the declared auditor after
-    signing. A mismatch prevents output but can leave unlock and signature audit entries.
-11. Write `signed-result.json`, defaulting to `<package-dir>/signed-result.json`; `--out` changes
-    the path. `SignedResult.Validate` checks field formats corresponding to the shared schema.
+9. `ui.Confirm` accepts only trimmed, case-insensitive `y`/`yes`. Blank, other answers and EOF
+   without input decline. Test/CI flags `--yes --unsafe-test-mode` skip confirmation, preserving
+   policy checks.
+10. Unlock and sign with deterministic RFC 6979 `crypto.Sign`. EOA signing uses the raw EIP-712
+    digest and 65-byte `[R‖S‖V]` with V=27/28. Auditor-address matching happens afterward: mismatch
+    prevents output but may leave unlock/signature audit entries.
+11. Write `signed-result.json` beside the package or at `--out`, after `SignedResult.Validate`
+    checks field formats.
 
-Safe signing replaces steps 10 and 11 as described below. Errors return a non-zero status.
-Validation, confirmation and key-identity failures occur before output; an output-write error
-can leave a partial file. Audit, anchor and throttle files have their own side effects and error
-rules under "Keys and secrets".
+Safe mode replaces steps 10/11 as described below. Errors return nonzero status; validation,
+confirmation and identity failures precede output. Write errors may leave partial files;
+audit, anchor and throttle side effects follow "Keys and secrets".
 
 ## Module layout
 
@@ -129,11 +113,11 @@ signer/
     └── ui/                 review-screen rendering, mint/burn banner, fail-closed confirm prompt
 ```
 
-Import `internal/package` as `rwapkg`; `package` is a reserved Go word.
+Import `internal/package` as `rwapkg`; `package` is reserved in Go.
 
 ## EIP-712 construction and vector reproduction
 
-`internal/attestation` uses the canonical type strings in `shared/eip712/types.md`:
+`internal/attestation` uses the type strings in `shared/eip712/types.md`:
 
 ```
 EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)
@@ -141,99 +125,82 @@ MintAttestation(address auditor,bytes32 profileDigest,bytes32 recordKey,bytes32 
 BurnAttestation(address auditor,bytes32 profileDigest,bytes32 operationId,bytes32 metadataDigest,uint256 amount,uint256 nonce,uint64 validUntil,address vault)
 ```
 
-Both attestations contain only EVM value types (`address`, `bytesN`, `uintN`). Their
-`abi.encode(...)` representation is a sequence of 32-byte words, built directly with
-`common.LeftPadBytes` and `crypto.Keccak256Hash` without a general ABI encoder. `validUntil`
-occupies a full word even though its type is `uint64`. Profile and metadata digests use SHA-256;
-EIP-712 hashes and the record key use keccak256.
+Attestations encode static 32-byte words: addresses/uints are left-padded, bytes32 values are
+already word-sized, and `validUntil` fills a word despite its `uint64` type. Encoding uses
+`common.LeftPadBytes` and `crypto.Keccak256Hash` without a general ABI encoder. Profile/metadata
+digests use SHA-256; EIP-712 and record-key hashes use keccak256.
 
-The shared vectors pin the following results:
-
-- `TestVectors` in `internal/attestation/vectors_test.go` reproduces the frozen domain and
-  attestation type hashes from `shared/vectors/typehashes.json`, then the domain separator,
-  struct hash, digest and exact deterministic signature from `shared/vectors/mint-eip712.json`
-  using its `signerPrivateKey`.
-- `TestVectors_SafeAuditor` reproduces the Safe hashes, owner signatures and concatenated result
-  from `shared/vectors/safe-auditor.json` (see below).
-- `internal/canonical/jcscid_vector_test.go` reproduces canonical bytes, SHA-256 and CIDv1 from
-  `shared/vectors/jcs-cid.json`. The canonical serializer's tests also cover UTF-16 key ordering
-  for supplementary characters.
+`TestVectors` (`internal/attestation/vectors_test.go`) reproduces type hashes from
+`shared/vectors/typehashes.json`, then the domain separator, struct hash, digest and exact
+signature from `shared/vectors/mint-eip712.json` using its `signerPrivateKey`. Safe vectors are
+covered below. `internal/canonical/jcscid_vector_test.go` reproduces canonical bytes, SHA-256
+and CIDv1 from `shared/vectors/jcs-cid.json`; serializer tests also cover supplementary-character
+UTF-16 ordering.
 
 ## Keys and secrets
 
-`internal/keystore.Load` returns a private key and its address. It detects Ethereum V3 JSON
-keystores (`keystore.DecryptKey`) or the native `rwa-argon2id-v1` format, which uses Argon2id and
-AES-256-GCM. Defer `keystore.Zero` immediately after loading, as the CLI does. It overwrites the
-key's `D` scalar, but cannot guarantee removal of every copy held by Go or a library.
+`internal/keystore.Load` detects Ethereum V3 (`keystore.DecryptKey`) or native `rwa-argon2id-v1`
+(Argon2id/AES-256-GCM), returning key/address. It rejects group/other permission bits and
+`Stat` sizes above `MaxKeystoreFileBytes` (1 MiB), then rechecks length after reading.
+The post-read check rejects growth but does not cap `os.ReadFile` allocation.
 
-Before decryption, `Load` rejects any group or other permission bits and checks the file's size
-against `MaxKeystoreFileBytes` (1 MiB). It rechecks the length after reading to detect growth.
-Both formats enforce lower and upper KDF bounds before key derivation:
+Both formats bound KDF work before derivation:
 
-| KDF | Accepted parameters |
-| --- | --- |
-| V3 scrypt | 2¹⁷ ≤ N ≤ 2²², N a power of two; 8 ≤ r ≤ 64; 1 ≤ p ≤ 16; N·r·128 ≤ 1 GiB |
-| V3 PBKDF2 | 600,000 ≤ c ≤ 10,000,000 |
-| Native Argon2id | 3 ≤ time ≤ 100; 64 MiB ≤ memory ≤ 2 GiB; 4 ≤ threads ≤ 64 |
+| KDF             | Accepted parameters                                                      |
+| --------------- | ------------------------------------------------------------------------ |
+| V3 scrypt       | 2¹⁷ ≤ N ≤ 2²², N a power of two; 8 ≤ r ≤ 64; 1 ≤ p ≤ 16; N·r·128 ≤ 1 GiB |
+| V3 PBKDF2       | 600,000 ≤ c ≤ 10,000,000                                                 |
+| Native Argon2id | 3 ≤ time ≤ 100; 64 MiB ≤ memory ≤ 2 GiB; 4 ≤ threads ≤ 64                |
 
-`internal/keystore/kdf.go` and `native.go` define these bounds. Weak parameters and excessive
-resource demands are refused. The native format checks salt, GCM nonce and ciphertext lengths
-before decryption and verifies the decrypted key against the declared address. Both decryption
-paths recover panics as errors, including malformed-input failures not caught by earlier checks.
+`kdf.go`/`native.go` define these bounds. Native loading checks salt, GCM nonce and ciphertext
+lengths before derivation, then verifies the decrypted address. Both decryption paths recover
+KDF/cipher panics as errors.
 
-Create a new key with `signer keystore create --out <path>`, or encrypt an existing hex key with
-`signer keystore import --privkey-file <path> --out <path>`. The source key file must be accessible
-only to its owner. Both commands write the native format and prompt twice for a new password
-unless `--password-file` supplies it. Creation and import enforce `keystore.ValidatePassword`:
-at least 12 bytes, at least six distinct Unicode characters, and no known weak value from the
-blocklist. This strength check does not apply when unlocking an existing keystore.
+`signer keystore create --out <path>` creates a key;
+`signer keystore import --privkey-file <path> --out <path>` imports owner-only hex key files. Both write native format, prompt twice unless
+`--password-file` is supplied, and enforce `keystore.ValidatePassword`: >=12 bytes, six distinct
+Unicode characters and no case-insensitive blocklist match. Existing-password unlocks have no
+strength check. `createKeystoreFileExclusive` uses `O_CREATE|O_EXCL`, rejects existing entries
+including dangling symlinks, checks regular-file type, sets 0600, syncs and closes. No export
+subcommand exists; encrypted files can still be copied.
 
-`createKeystoreFileExclusive` opens a new destination with `os.O_CREATE|os.O_EXCL`, refusing
-existing entries, including dangling symlinks. It checks for a regular file, sets `0600`,
-syncs and closes it. There is no export subcommand; encrypted key files can still be copied.
+Terminal prompts use `golang.org/x/term.ReadPassword`; piped input uses a shared `bufio.Reader`
+to preserve later lines. Owner-only `--password-file` supports automation. Deprecated `--password`
+takes precedence and warns about process-list/shell-history exposure. File/prompt buffers are
+zeroed after string conversion; string/argument copies remain. Defer `keystore.Zero` after Load
+as the CLI does: it clears scalar backing words, not every runtime/library copy. Keep secrets
+out of audit metadata; V3 password failure reports "could not decrypt key with given password".
 
-The default password prompt uses `golang.org/x/term.ReadPassword` on a terminal. With piped
-stdin it reads lines through one shared `bufio.Reader`, preserving input for subsequent prompts.
-`--password-file` supports automation and requires owner-only access. Deprecated `--password`
-takes precedence and warns on every use because arguments appear in process listings and shell
-history. File and prompt byte buffers are zeroed after conversion to a string; the string and
-argument copies cannot be cleared the same way. Passwords and private keys are not included in
-logs or errors. V3 decryption reports the fixed error "could not decrypt key with given password".
+Before reading a password, `signDigest` checks `<keystore>.throttle.json`. Three consecutive
+failures are free; the fourth starts five seconds, doubling to one hour. Success clears state.
+There is no bypass flag, but deleting it or making it unreadable resets recorded failures;
+malformed JSON creates a fresh short lockout on each read. Throttle writes are not synced.
 
-`signDigest` checks persisted throttling before reading a password. Three consecutive failures
-are free; the fourth starts a five-second lockout, doubling on further failures up to one hour.
-`<keystore>.throttle.json` stores the state; successful unlock clears it. There is no bypass
-flag, but this local file is mutable and its updates are not synced like audit appends.
+`internal/keystore/auditlog.go` records unlock successes/failures and signatures with address,
+signed hash or failure reason:
 
-The audit log in `internal/keystore/auditlog.go` records successful unlocks, failed unlocks
-and signatures with their address, signed hash or failure reason:
+- `VerifyAuditLogAnchored` checks chain/watermark before unlock; `AppendAuditEvent`/`AppendAuditEventTo`
+  recheck the main chain before appending. Broken chains block signing.
+- `<keystore>.auditlog.jsonl` uses an exclusive file lock for each read/verify/append, without
+  flock/cgo. Age above two minutes triggers assumed-abandoned takeover, without a liveness check.
+- Each synced main entry's sequence/hash is appended to `<keystore>.auditlog.anchor.jsonl` or
+  `--audit-anchor`. Success syncs both files; anchor failure can leave the main entry persisted.
+  An intact watermark detects tail deletion/recomputed history. Missing/empty anchors supply
+  none; use independent protection, not merely a different writable path/filesystem.
+- Normal mode aborts output on throttle-clear, unlock-success or signature-audit failure;
+  `--unsafe-test-mode` warns instead. Failed-unlock bookkeeping is best effort in both modes,
+  so not every unlock attempt is guaranteed a record.
 
-- Verify the full chain before unlocking with `VerifyAuditLogAnchored` and before each append
-  with `AppendAuditEvent`/`AppendAuditEventTo`. A broken chain blocks signing.
-- Append JSON lines to `<keystore>.auditlog.jsonl` under an exclusive file lock covering
-  read, verify and append. The lock uses neither flock nor cgo and is held only for that append.
-  A lock file older than two minutes is treated as abandoned and removed. Main-log and anchor
-  appends call `fsync` before returning.
-- Record each new entry's sequence and hash in `<keystore>.auditlog.anchor.jsonl`, or at
-  `--audit-anchor <path>`. An intact anchor detects deletion of recent main-log entries. A missing
-  or empty anchor supplies no watermark. The default shares the keystore's storage; protection
-  against rewriting both files requires an independently protected anchor, not merely another
-  path or filesystem.
-- In normal mode, failure to clear throttling, record a successful unlock or record the signature
-  aborts output. `--unsafe-test-mode` permits these failures with warnings. Failed-unlock
-  bookkeeping is best effort in either mode: errors recording the failure or its throttle state
-  warn, so the log is not a guaranteed record of every attempted unlock.
-
-`internal/hardware` defines `Signer` (`Address`, `SignDigest`, `Close`) and
-`Open(DeviceKind) (Signer, error)` for `ledger`, `trezor`, `yubikey` and `hsm`. All four return a
-`StubAdapter` that reports `ErrNotSupported`; no device integration exists. Unknown device names
-produce a separate error. Hardware-backed signing remains the recommended production setup.
-The auditor guide's §5 covers operational custody and incident response.
+`internal/hardware` exposes `Signer` (`Address`, `SignDigest`, `Close`) and `Open(DeviceKind)`
+for `ledger`, `trezor`, `yubikey`, `hsm`. Recognized names return `StubAdapter`: Address/SignDigest
+report `ErrNotSupported`, Close succeeds; unknown names error separately. Device integration
+is required before hardware signing can be used. The auditor guide §5 covers recommended
+hardware custody and incident response.
 
 ## The `--policy` flag
 
-`--policy <path>` supplies the deployment values an offline signer cannot query from the chain.
-Keep it independent of every package under review:
+Maintain `--policy <path>` independently of packages; it supplies deployment values the offline
+signer cannot query:
 
 ```json
 {
@@ -247,73 +214,62 @@ Keep it independent of every package under review:
 }
 ```
 
-The six deployment fields are required and non-empty; `chainId` must parse as a decimal integer.
-`maxAttestationLifetimeHours` is optional, defaults to 720 (30 days) when omitted or zero, and
-cannot be negative. The optional `safe` block selects Safe signing. `policy.Load` rejects unknown
-fields. Signing checks project IDs exactly, addresses and digests without case sensitivity, and
-the numeric typed-data chain ID against the policy string. Use the canonical decimal chain ID
-and verified deployment values.
+All six deployment fields are required/nonempty; `chainId` must parse as a decimal integer.
+`policy.Load` rejects unknown fields. `maxAttestationLifetimeHours` defaults to 720 (30 days)
+when omitted/zero and rejects negatives; optional `safe` selects multisig signing.
 
-Policy mismatches fail before confirmation. `Policy.MaxAttestationLifetime` bounds the deadline
-relative to both the signing time and metadata creation time, as in step 7. `--yes` requires
-`--unsafe-test-mode` and skips only confirmation, leaving policy checks active. See the auditor
-guide's §3 for provisioning instructions.
+Signing compares project IDs exactly, addresses/digests case-insensitively, and the numeric
+typed-data chain ID with the policy string. Use canonical decimal chain IDs and independently
+verified values. Policy/time mismatches fail before confirmation under step 7's lifetime bound.
+`--yes` requires `--unsafe-test-mode` and skips only confirmation. See auditor guide §3 for provisioning.
 
 ## Safe multisig auditor
 
-For a Safe auditor, set `auditor` to the Safe address and add this policy fragment:
+Set `auditor` to the Safe address and add:
 
 ```json
 "safe": { "owners": ["0x...", "0x...", "0x..."], "threshold": 2 }
 ```
 
-`policy.Load` requires a valid auditor address, a non-empty list of valid, non-zero, distinct
-owner addresses, and a threshold from 1 through the number of owners. It does not query on-chain
-membership. Obtain the current owners and threshold independently and update policies after
-changes. The Safe checks its current membership and threshold when verifying the final result;
-a stale policy does not necessarily make a signature fail.
+`policy.Load` checks the auditor address, nonempty valid/nonzero/distinct owners and threshold
+1..owner count. It queries no chain state: provision owners/threshold independently and update
+after changes. Safe verifies current membership/threshold; stale policy does not necessarily
+invalidate signatures.
 
-With this block, `signer sign` runs the same package checks and review, then:
+`signer sign` performs the same validation/review, then signs
+`attestation.SafeMessageHash(chainId, safe, digest)` under the Safe's chain/address domain,
+wrapping the attestation as `SafeMessage(bytes message)`. This follows the digest-based
+ERC-1271 `CompatibilityFallbackHandler` path ([v1.3.0 handler](https://github.com/safe-global/safe-smart-account/blob/v1.3.0/contracts/handler/CompatibilityFallbackHandler.sol)).
+The audit records this Safe hash. After signing, the key must match a policy owner.
 
-- Signs `attestation.SafeMessageHash(chainId, safe, digest)`, which wraps the EIP-712 digest in
-  a `SafeMessage(bytes message)` hash under the Safe's own chain/address domain. This matches
-  the digest-based ERC-1271 path in Safe v1.3.0+ with `CompatibilityFallbackHandler`.
-  See the [v1.3.0 handler](https://github.com/safe-global/safe-smart-account/blob/v1.3.0/contracts/handler/CompatibilityFallbackHandler.sol).
-  The audit entry records the Safe message hash.
-- Checks after signing that the key belongs to the policy's owners.
-- Writes a `SignatureShare` to `<package-dir>/signature-share-<owner>.json`, with a lowercase
-  owner address, or the `--out` path. Its nine fields are `formatVersion`, `safe`, `chainId`,
-  `owner`, `primaryType`, `typedDataDigest`, `safeMessageHash`, `signature` and `signedAt`.
-  `shared/schemas/safe-signature-share.schema.json` defines the format, including one 65-byte
-  signature. No final result is written by this command in Safe mode.
+Safe mode writes a `SignatureShare` at `<package-dir>/signature-share-<owner>.json`, using a
+lowercase owner in the filename, or at `--out`, rather than a final result. Its fields are `formatVersion`, `safe`,
+`chainId`, `owner`, `primaryType`, `typedDataDigest`, `safeMessageHash`, `signature`, `signedAt`;
+`shared/schemas/safe-signature-share.schema.json` requires one 65-byte signature.
 
 ```
 signer combine --policy <path-to-policy.json> [--out <path>] <share.json>...
 ```
 
-`combine` needs a policy with a `safe` block, at least one share and no key. It rejects unknown
-share fields, checks field formats, and requires the policy's Safe and chain. All shares must
-have the same primary type and attestation digest. It recomputes each Safe message hash, recovers
-the signing address, and requires that address to match both the share's `owner` and the policy's
-owner list. Duplicate owners and fewer than `threshold` distinct owners are rejected.
+`combine` needs Safe policy/shares, not a key. It rejects unknown fields and bad formats, requires
+policy Safe/chain and common primary type/digest, recomputes Safe hashes, and requires recovery
+to the declared owner with policy membership. Duplicate owners or fewer than threshold fail.
 
-The result uses the Safe as `auditor`, retains the underlying attestation's EIP-712 digest, and
-concatenates all supplied signatures in ascending owner-address order with
-`attestation.CombineSafeSignatures`. Safe's raw owner signatures use `V` 27/28; see
-[v1.4.1 signature verification](https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/Safe.sol).
-`signed-result.json` defaults to the first share's directory; `--out` changes it. Its schema
-allows multiple 65-byte chunks, while an EOA result contains one. Both result formats use
-`formatVersion` `1.0` and UTC RFC 3339 `signedAt` timestamps.
+`attestation.CombineSafeSignatures` concatenates all supplied shares in ascending owner order
+with raw V=27/28 ([v1.4.1 signature verification](https://github.com/safe-global/safe-smart-account/blob/v1.4.1/contracts/Safe.sol)).
+The result retains the attestation digest with the Safe as `auditor`, written beside the first
+share or at `--out`. Results accept multiple 65-byte chunks; EOA output has one. Both formats use
+`formatVersion` `1.0` and UTC RFC 3339 `signedAt`.
 
-Combining verifies shares, not their original package. It does not recheck controller, Vault,
-project, profile, amount, nonce or expiry against the package; retain the association with what
-every owner reviewed. On-chain attestation and current Safe authorization checks still apply.
+Combining does not recheck the original package, controller, Vault, project, profile, amount,
+nonce or expiry; retain each share's association with what owners reviewed. On-chain attestation
+and current Safe authorization checks still apply.
 
-`TestVectors_SafeAuditor` reproduces the fixture's attestation digest, Safe domain and message
-hash, exact owner signatures and combined bytes. The fixture's `_comment` records an Anvil run
-against Safe v1.4.1. The Go test and `contracts/test/unit/SafeAuditorVectors.t.sol` verify the
-vector arithmetic and signatures; they do not deploy a Safe. `cmd/signer/safe_e2e_test.go` drives
-the built CLI through two-owner signing, combining and rejection cases without RPC access.
+`TestVectors_SafeAuditor` reproduces the attestation/Safe hashes, exact owner signatures and
+combined bytes from `shared/vectors/safe-auditor.json`. Its `_comment` records an Anvil/Safe v1.4.1
+run. Go and `contracts/test/unit/SafeAuditorVectors.t.sol` verify arithmetic/signatures without
+deploying Safe; `cmd/signer/safe_e2e_test.go` tests CLI two-owner signing, combining and refusals
+without RPC.
 
 ## Building and testing
 
@@ -324,17 +280,15 @@ go vet ./...
 go test ./...
 ```
 
-From the repository root, `make signer-test` runs `go test -race ./...`; `make signer` builds
-`signer/bin/signer`. `make vectors-check` runs
-`go test ./internal/attestation/... -run Vectors` alongside the contracts, server and web checks
-against the shared golden vectors.
+From the repository root, `make signer-test` runs `go test -race ./...`, `make signer` builds
+`signer/bin/signer`, and `make vectors-check` runs `go test ./internal/attestation/... -run Vectors`
+alongside contract/server/web shared-vector checks.
 
-The module is `github.com/rwa-platform/signer`, using Go 1.25. Its direct dependencies are
-`github.com/ethereum/go-ethereum` for crypto, keystores and common types, `golang.org/x/term` for
-hidden password input, and `golang.org/x/crypto` for native Argon2id, plus transitive requirements.
-`x/crypto` is also in go-ethereum's dependency graph. The local JCS and schema implementations
-keep their behavior tied to the platform's canonicalization rules and restricted schema dialect.
+`github.com/rwa-platform/signer` uses Go 1.25. Direct dependencies are `github.com/ethereum/go-ethereum`
+(crypto/keystores/types), `golang.org/x/term` (hidden input) and `golang.org/x/crypto` (Argon2id),
+plus transitive requirements; x/crypto also appears through go-ethereum. Local JCS/schema code
+implements the platform's canonicalization rules and restricted dialect.
 
-Tests cover package size and decompression limits, traversal, symlinks, duplicate entries,
-confirmation, hashes and exact signatures. `cmd/signer/e2e_test.go` builds the real binary and
-signs a generated, consistent package; its rejection cases include a tampered typed-data amount.
+Tests cover compressed/expanded limits, traversal, symlinks, duplicates, confirmation, hashes
+and exact signatures. `cmd/signer/e2e_test.go` builds the CLI, signs a generated valid package
+and rejects tampering, including changed typed-data amounts.

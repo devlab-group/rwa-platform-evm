@@ -34,16 +34,9 @@ func fail(c *gin.Context, status int, code, message string) {
 	c.AbortWithStatusJSON(status, dto.ErrorResponse{Code: code, Message: message})
 }
 
-// failInternal reports an unexpected server-side failure: err is logged in full
-// with a short reference, and the client receives only that reference.
-//
-// Errors that reach a 500 come from the Mongo driver, the chain RPC client and
-// the IPFS client, whose messages can carry host:port pairs, endpoint URLs and
-// collection or index names. Several routes that can fail this way are public
-// (project, config, sales/inventory, redemptions, transactions,
-// compliance/allowed), so echoing err.Error() would expose the deployment's
-// internals. A handler that needs to tell the caller something specific uses
-// failErr with a 4xx.
+// failInternal logs the full error and returns only a short reference, keeping Mongo,
+// RPC and IPFS hosts, URLs, collection and index names private. Use failErr with 4xx
+// for safe details.
 func failInternal(c *gin.Context, err error) {
 	// An oversized request body is a client error, so report it as 413
 	var tooLarge *http.MaxBytesError
@@ -60,10 +53,9 @@ func failInternal(c *gin.Context, err error) {
 	fail(c, http.StatusInternalServerError, CodeInternal, "internal error (reference "+ref+")")
 }
 
-// errorReference returns a short random tag that appears in both the log line
-// and the response, so an operator can find the error behind a reported 500.
-// The tag is not a secret and is not guaranteed unique. If the random read
-// fails it returns the placeholder "unavailable" instead of failing the response.
+// errorReference generates a short random tag linking a client-reported 500 to its log
+// entry. It is neither secret nor guaranteed unique. Failed randomness returns
+// "unavailable" without failing the response.
 func errorReference() string {
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -72,10 +64,9 @@ func errorReference() string {
 	return hex.EncodeToString(b[:])
 }
 
-// failErr reports err at status and code. If err wraps the http.MaxBytesError
-// raised by the reader that auth.MaxRequestBody installs, it reports 413
-// "request_too_large" instead, so every handler enforces the body limit the
-// same way.
+// failErr returns status and code, except wrapped http.MaxBytesError from
+// auth.MaxRequestBody becomes 413 "request_too_large" for consistent body-limit
+// handling
 func failErr(c *gin.Context, status int, code string, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {

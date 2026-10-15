@@ -19,7 +19,7 @@ describe("formatTokenAmount", () => {
     expect(formatTokenAmount("not-a-number")).toBe("not-a-number");
   });
 
-  it("returns an em dash for empty input", () => {
+  it("returns a placeholder for empty input", () => {
     expect(formatTokenAmount("")).toBe("-");
   });
 });
@@ -30,7 +30,7 @@ describe("toMinimalUnits", () => {
   });
 
   it("scales a whole-unit integer to 6-decimal minimal units", () => {
-    // Entering 1 for a 6-decimal token sends 1000000 to the server
+    // 1 whole unit at 6 decimals becomes 1000000
     expect(toMinimalUnits("1", 6)).toBe("1000000");
   });
 
@@ -68,8 +68,7 @@ describe("toMinimalUnits", () => {
   });
 
   it("rejects over-precise input rather than silently rounding (6 decimals)", () => {
-    // parseUnits alone would round "1.2345678" to 1234568; the guard must
-    // reject it so an amount is never silently mis-scaled
+    // Reject excess precision before parseUnits rounds 1.2345678 to 1234568
     expect(() => toMinimalUnits("1.2345678", 6)).toThrow(AmountFormatError);
   });
 
@@ -104,7 +103,7 @@ describe("shortenAddress", () => {
     );
   });
 
-  it("returns an em dash for a missing address", () => {
+  it("returns a placeholder for a missing address", () => {
     expect(shortenAddress(undefined)).toBe("-");
   });
 });

@@ -2,14 +2,7 @@ import { useWalletContext } from "../context/walletContextValue";
 import { clearSession } from "../lib/authSession";
 import { shortenAddress } from "../lib/format";
 
-/**
- * Header wallet control, shown on every screen. Without a connected wallet it
- * is a "Connect wallet" button. With one it shows the shortened address and a
- * Disconnect button.
- *
- * Disconnect also clears the admin JWT: it forgets the wallet locally and signs
- * the admin out.
- */
+/** Connects or shows address/Disconnect; disconnect clears local wallet state and admin JWT */
 export function WalletConnectButton() {
   const wallet = useWalletContext();
 

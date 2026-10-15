@@ -1,10 +1,9 @@
-// Package webui embeds the built admin SPA and serves it same-origin.
-// Client-side routes fall back to index.html for direct navigation and reloads.
+// Package webui embeds the admin SPA for same-origin serving, falling back to
+// index.html for client routes and reloads.
 //
-// The tracked dist/.gitkeep satisfies go:embed's all:dist directive without a
-// web build. Release builds copy web/dist into this module before compilation
-// through make platform or server/e2e/run_e2e.sh. Build output is gitignored;
-// the binary embeds whatever dist/ contains at build time.
+// Tracked dist/.gitkeep satisfies go:embed all:dist without a web build. make platform
+// and server/e2e/run_e2e.sh copy web/dist here before compilation; output is
+// gitignored, and the binary embeds dist/'s build-time contents.
 package webui
 
 import (
@@ -22,7 +21,7 @@ import (
 //go:embed all:dist
 var embedded embed.FS
 
-// FS returns the embedded assets rooted at dist/, so index.html sits at the root
+// FS returns embedded assets rooted at dist/, with index.html at the root
 func FS() fs.FS {
 	sub, err := fs.Sub(embedded, "dist")
 	if err != nil {
@@ -32,20 +31,18 @@ func FS() fs.FS {
 	return sub
 }
 
-// Attach mounts a Gin NoRoute handler that serves the embedded SPA for requests
-// that no registered route matched, so the API routes (/api/v1/**, /healthz and
-// /readyz, registered by internal/api.NewRouter) always take precedence.
-// Unmatched paths under /api/ and unmatched requests other than GET or HEAD get
-// a JSON 404. A path that names a file in the embedded tree is served by
-// http.FileServer, and any other GET or HEAD path serves index.html so
-// react-router resolves client-side routes.
+// Attach serves the embedded SPA with Gin NoRoute; registered API routes (/api/v1/**,
+// /healthz, /readyz from internal/api.NewRouter) take precedence. Unmatched /api/ paths
+// and methods other than GET/HEAD return JSON 404.
+//
+// Existing embedded paths use http.FileServer; other GET/HEAD paths fall back to
+// index.html for react-router navigation.
 func Attach(r *gin.Engine) {
 	attach(r, FS())
 }
 
-// attach implements Attach over any fs.FS, so tests can check the routing (SPA
-// fallback, real file, /api/ 404) against a fixture, because the contents of the
-// embedded dist/ depend on the build
+// attach accepts an fs.FS so fixture tests cover routing, static files and /api/ 404s
+// independently of embedded build contents
 func attach(r *gin.Engine, assets fs.FS) {
 	fileServer := http.FileServer(http.FS(assets))
 
@@ -68,8 +65,7 @@ func attach(r *gin.Engine, assets fs.FS) {
 			}
 		}
 
-		// No file at this path, so it is a client-side route or "/"; serve
-		// index.html for react-router
+		// Serve index.html for "/" or a client route without an embedded path
 		c.Request.URL.Path = "/"
 		fileServer.ServeHTTP(c.Writer, c.Request)
 	})

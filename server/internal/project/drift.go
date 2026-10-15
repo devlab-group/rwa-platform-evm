@@ -12,19 +12,17 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// CheckConfigDrift checks live wiring for an Active project without changing
-// its record or status. Adoption verification runs once; this check detects
-// later divergence. cmd/platform logs findings, writes audit entries and sets
-// the drift metric.
+// CheckConfigDrift detects post-adoption wiring changes for an Active project without
+// updating its record or status. cmd/platform logs findings, attempts audit writes and
+// sets the drift metric.
 //
-// Mutable treasury, auditor and Vault strategy expectations come from
-// ReconcileSecurity; immutable wiring, decimals, profile digest and timeout
-// come from the project record. A Vault strategy swap still reports that
-// purchases and redemptions use different contracts, because the escrow's
-// strategy is immutable. Prices are excluded, and role changes are shown in
-// Security.Roles instead of compared with deploy-time holders.
+// ReconcileSecurity supplies mutable treasury, auditor and Vault strategy expectations;
+// the project record supplies immutable wiring, decimals, profile digest and timeout. A
+// Vault strategy swap is reported because the escrow's immutable strategy then quotes
+// redemptions through a different contract. Prices are excluded; role changes appear in
+// Security.Roles rather than being compared with deploy-time holders.
 //
-// Returns (true, "", nil) when values match or no Active project needs checking.
+// Returns (true, "", nil) on a match or when no Active project needs checking.
 func CheckConfigDrift(ctx context.Context, client blockchain.Client, projects repository.ProjectRepository) (bool, string, error) {
 	p, err := projects.Get(ctx)
 	if err != nil {
@@ -39,9 +37,8 @@ func CheckConfigDrift(ctx context.Context, client blockchain.Client, projects re
 
 	expected := driftExpectations(p)
 	vaultStrategy := common.HexToAddress(expected.Addresses.Strategy)
-	// verifyImmutableConfig checks the escrow's strategy against
-	// Addresses.Strategy, so that field keeps the deployed strategy while the
-	// live one goes in as the Vault's expectation
+	// Keep the deployed Addresses.Strategy for the escrow check; pass the live strategy
+	// separately as the Vault expectation
 	expected.Addresses.Strategy = p.Addresses.Strategy
 
 	ok, reason, err := verifyImmutableConfig(ctx, client, expected, vaultStrategy)
@@ -52,10 +49,8 @@ func CheckConfigDrift(ctx context.Context, client blockchain.Client, projects re
 		return false, reason, nil
 	}
 
-	// After a swap the Vault and the RedemptionEscrow price through different
-	// contracts, because RedemptionEscrow.strategy is immutable. That is not a
-	// wiring fault, but an operator needs to know that purchases and redemptions
-	// are no longer quoted by the same strategy.
+	// Report the pricing split: Vault strategy swaps are valid, but the escrow's immutable
+	// strategy leaves purchases and redemptions quoting through different contracts
 	if vaultStrategy != common.HexToAddress(p.Addresses.Strategy) {
 		return false, fmt.Sprintf("vault.strategy = %s but redemptionEscrow.strategy = %s (immutable): purchases and redemptions are priced by different contracts",
 			vaultStrategy.Hex(), common.HexToAddress(p.Addresses.Strategy).Hex()), nil
@@ -63,11 +58,9 @@ func CheckConfigDrift(ctx context.Context, client blockchain.Client, projects re
 	return true, "", nil
 }
 
-// driftExpectations returns a copy of p that describes the chain as it should be
-// now, not at deployment: the admin-mutable treasury, auditor and strategy take
-// their live projected values, and the prices are cleared so they are not
-// checked. The copy is shallow, but every field it rewrites is a string in a
-// value struct, so p is unchanged.
+// driftExpectations copies p, substitutes projected treasury, auditor and strategy
+// values, and clears price expectations. All changed fields are strings in value
+// structs, so the shallow copy leaves p unchanged.
 func driftExpectations(p *models.Project) *models.Project {
 	q := *p
 	if s := p.Security; s != nil {
@@ -81,10 +74,8 @@ func driftExpectations(p *models.Project) *models.Project {
 			q.Addresses.Strategy = s.Strategy
 		}
 	}
-	// The pricer changes prices legitimately, so they are not drift.
-	// verifyImmutableConfig skips an empty expectation, which excludes them here.
-	// ReconcileSecurity projects the live values into Security, and GET /project
-	// serves them.
+	// Empty expectations exclude legitimate pricer updates from drift checks;
+	// ReconcileSecurity exposes live prices through Security in GET /project
 	q.PurchasePricePerWholeToken = ""
 	q.RedemptionPricePerWholeToken = ""
 	return &q

@@ -19,13 +19,8 @@ func idSet[T any](items []*T, id func(*T) string) map[string]bool {
 	return out
 }
 
-// TestLiveTransactionNarrowingQueries is the live-MongoDB counterpart of the memory
-// package's transaction_narrowing_test. The reconcile tickers query for their work
-// and do not read whole collections, and each filter depends on BSON behavior the
-// in-memory adapter cannot reproduce: $nin over a named string type, a missing
-// (omitempty) field against $gt "", and a status and blockNumber $or. The keyset
-// pagination bug that pageAll catches is the same kind of failure, correct in
-// memory and empty on MongoDB, so these filters are tested here too.
+// TestLiveTransactionNarrowingQueries checks MongoDB $nin, missing-field/$gt and
+// status/blockNumber $or behavior beyond memory's transaction_narrowing_test
 func TestLiveTransactionNarrowingQueries(t *testing.T) {
 	db := liveDB(t)
 	ctx := context.Background()
@@ -63,8 +58,7 @@ func TestLiveTransactionNarrowingQueries(t *testing.T) {
 		}
 	}
 
-	// Replaces is omitempty, so the six non-replacement documents have no such field,
-	// and a missing field must not satisfy $gt ""
+	// Non-replacement documents omit Replaces; missing fields must not satisfy $gt ""
 	replacements, err := repo.ListReplacements(ctx)
 	if err != nil {
 		t.Fatalf("ListReplacements: %v", err)
@@ -90,9 +84,8 @@ func TestLiveTransactionNarrowingQueries(t *testing.T) {
 	}
 }
 
-// TestLiveKYCEventListAppliedWithTx checks the filter of the deep-reorg reopen scan:
-// only Applied events that have a transaction id. TxID is omitempty, so an event
-// without one has no such field.
+// TestLiveKYCEventListAppliedWithTx checks that the reopen scan selects Applied events
+// with TxID, excluding omitted IDs
 func TestLiveKYCEventListAppliedWithTx(t *testing.T) {
 	db := liveDB(t)
 	ctx := context.Background()
@@ -120,9 +113,8 @@ func TestLiveKYCEventListAppliedWithTx(t *testing.T) {
 	}
 }
 
-// TestLiveEnsureIndexesDeclaresNarrowingIndexes runs EnsureIndexes and checks that
-// the two indexes for the narrowing queries exist, since a malformed index spec is a
-// server error that nothing else in the suite would show
+// TestLiveEnsureIndexesDeclaresNarrowingIndexes validates the narrowing-query index
+// specs against MongoDB, including their generated names
 func TestLiveEnsureIndexesDeclaresNarrowingIndexes(t *testing.T) {
 	db := liveDB(t)
 	ctx := context.Background()
@@ -138,8 +130,7 @@ func TestLiveEnsureIndexesDeclaresNarrowingIndexes(t *testing.T) {
 	if err := cur.All(ctx, &specs); err != nil {
 		t.Fatalf("decode indexes: %v", err)
 	}
-	// MongoDB names an index after its key spec, so the name is what to compare, and
-	// nested documents decode to bson.D, not a map
+	// Compare key-derived index names; nested index documents decode as bson.D
 	names := map[string]bool{}
 	for _, spec := range specs {
 		name, _ := spec["name"].(string)

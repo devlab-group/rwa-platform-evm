@@ -8,9 +8,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/memory"
 )
 
-// TestWalletSessionStoresDigestNotToken checks that the stored session id is
-// the token's SHA-256 digest and not the token, so read access to the session
-// collection yields no usable credential
+// TestWalletSessionStoresDigestNotToken checks that session storage contains only the
+// SHA-256 lookup digest, not a usable credential
 func TestWalletSessionStoresDigestNotToken(t *testing.T) {
 	repo := memory.NewWalletSessionRepository()
 	sm := NewSessionManager(repo, time.Minute)

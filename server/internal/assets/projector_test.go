@@ -79,9 +79,8 @@ func TestReconcileMintedIgnoresNonMatchingRecords(t *testing.T) {
 	}
 }
 
-// TestReconcileMintedDemotesOrphanedMint checks that a record already marked
-// Minted returns to Signed, with MintTxHash cleared, when its Minted event later
-// disappears from chainEvents, as when the indexer rolls it back in a reorg
+// TestReconcileMintedDemotesOrphanedMint checks that removing a Minted event, as in a
+// reorg rollback, restores Signed and clears MintTxHash
 func TestReconcileMintedDemotesOrphanedMint(t *testing.T) {
 	records := memory.NewAssetRecordRepository()
 	events := memory.NewChainEventRepository()
@@ -188,9 +187,8 @@ func TestReconcileMintedIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestReconcileAuditorRestoresBaselineWhenOnlyRotationIsRolledBack checks that
-// when the only AuditorChanged event is rolled back, ReconcileAuditor restores
-// the baseline auditor instead of keeping the rotated-to address
+// TestReconcileAuditorRestoresBaselineWhenOnlyRotationIsRolledBack requires removing
+// the only AuditorChanged event to restore the baseline auditor
 func TestReconcileAuditorRestoresBaselineWhenOnlyRotationIsRolledBack(t *testing.T) {
 	events := memory.NewChainEventRepository()
 	ctx := context.Background()

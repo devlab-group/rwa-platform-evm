@@ -10,10 +10,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// TestPurchaseRepositoryListPageWalksAllRecordsOver200 checks paging through
-// PurchaseRepository.ListPage: its sort and the cursor round trip through
-// EncodeKeysetCursor and DecodeKeysetCursor. The KeysetPage helper alone is tested
-// in internal/dal/repository/keyset_test.go.
+// TestPurchaseRepositoryListPageWalksAllRecordsOver200 checks repository sorting and
+// cursor encoding across pages. keyset_test.go covers the helper separately.
 func TestPurchaseRepositoryListPageWalksAllRecordsOver200(t *testing.T) {
 	repo := NewPurchaseRepository()
 	ctx := context.Background()
@@ -58,9 +56,8 @@ func TestPurchaseRepositoryListPageWalksAllRecordsOver200(t *testing.T) {
 	}
 }
 
-// TestPurchaseRepositoryListPageStableUnderConcurrentInsert checks that a cursor
-// from one page still resumes correctly after newer purchases, which sort first,
-// are created. An offset cursor would shift.
+// TestPurchaseRepositoryListPageStableUnderConcurrentInsert checks that newer purchases
+// inserted ahead of the cursor do not shift the next page, unlike offsets
 func TestPurchaseRepositoryListPageStableUnderConcurrentInsert(t *testing.T) {
 	repo := NewPurchaseRepository()
 	ctx := context.Background()
@@ -89,8 +86,7 @@ func TestPurchaseRepositoryListPageStableUnderConcurrentInsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// firstPage covered block numbers 9, 8, 7 and 6, so the second page resumes at 5
-	// whatever was inserted above
+	// After blocks 9, 8, 7 and 6, resume at 5 despite newer inserts
 	if len(secondPage) != 4 || secondPage[0].BlockNumber != 5 {
 		t.Fatalf("second page = %+v, want to resume at BlockNumber 5", secondPage)
 	}
@@ -197,10 +193,8 @@ func TestTransactionRepositoryListPageWalksAllRecordsOver200(t *testing.T) {
 	}
 }
 
-// TestRedemptionRequestRepositoryListPageFiltersByBeneficiary checks that an
-// address filter narrows results to one beneficiary, ignoring case, combines with
-// the status filter, and still pages through the keyset cursor, as in
-// TransactionRepository.ListPage
+// TestRedemptionRequestRepositoryListPageFiltersByBeneficiary checks case-insensitive
+// beneficiary filtering combined with status and keyset pagination, as for transactions
 func TestRedemptionRequestRepositoryListPageFiltersByBeneficiary(t *testing.T) {
 	repo := NewRedemptionRequestRepository()
 	ctx := context.Background()
@@ -224,8 +218,7 @@ func TestRedemptionRequestRepositoryListPageFiltersByBeneficiary(t *testing.T) {
 		}
 	}
 
-	// walk with a small limit so the filter has to hold across pages, with no other
-	// beneficiary included and no id visited twice
+	// Use small pages to check beneficiary filtering and absence of duplicate IDs across the walk
 	count := func(status, address string) int {
 		seen := map[string]bool{}
 		cursor := ""

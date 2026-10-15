@@ -13,13 +13,9 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// getMyWalletStatus implements GET /api/v1/me/wallet-status (operationId
-// getMyWalletStatus).
-// Returns the WalletStatus for the address bound to the presented
-// X-Wallet-Session, and only that address.
-//
-// auth.RequireWalletSession runs ahead of this handler and answers 401 for an
-// invalid session, so no request parameter can select a different address.
+// getMyWalletStatus handles GET /api/v1/me/wallet-status for the X-Wallet-Session
+// address only. auth.RequireWalletSession rejects invalid sessions with 401; request
+// parameters cannot select another wallet.
 func (app *App) getMyWalletStatus(c *gin.Context) {
 	address, ok := auth.WalletSessionAddress(c)
 	if !ok {
@@ -30,10 +26,8 @@ func (app *App) getMyWalletStatus(c *gin.Context) {
 	inv, err := app.Repos.Investors.Get(c.Request.Context(), address)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			// ChallengeService.VerifyOwnership, the only path that issues a
-			// session, upserts the Investor record first, so this happens only
-			// if the record was removed after issuance. Report Unknown rather
-			// than an internal error.
+			// verifyChallenge upserts the investor before issuing a session. If the record is
+			// later removed, return Unknown rather than an internal error.
 			unknown := dto.WalletStatus{Address: address, Status: string(models.ComplianceUnknown), OwnershipVerified: true}
 			c.JSON(http.StatusOK, unknown.WithFrozenTokens(app.currentProject(c)))
 			return
@@ -44,9 +38,8 @@ func (app *App) getMyWalletStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.ToWalletStatus(inv).WithFrozenTokens(app.currentProject(c)))
 }
 
-// currentProject loads the project record for the frozen-amount lookup. It
-// returns nil when the record is missing or unreadable, so the status response
-// omits the frozen amount instead of failing.
+// currentProject loads the frozen-amount projection's project. A missing or unreadable
+// record returns nil, omitting the amount without failing the status response.
 func (app *App) currentProject(c *gin.Context) *models.Project {
 	p, err := app.Repos.Projects.Get(c.Request.Context())
 	if err != nil {
@@ -55,14 +48,9 @@ func (app *App) currentProject(c *gin.Context) *models.Project {
 	return p
 }
 
-// isAddressAllowed implements GET /api/v1/compliance/allowed/{address}
-// (operationId isAddressAllowed).
-// Public transfer preflight that discloses only {allowed}.
-//
-// It reads ComplianceRegistry.isAllowed(address) live through
-// Redemptions.IsBeneficiaryAllowed, the same reader that fills
-// RedemptionResponse.beneficiaryAllowed, rather than the stored Investor
-// record.
+// isAddressAllowed handles public GET /api/v1/compliance/allowed/{address}, returning
+// only {allowed}. Redemptions.IsBeneficiaryAllowed reads ComplianceRegistry live, as
+// for RedemptionResponse, rather than using stored investor status.
 func (app *App) isAddressAllowed(c *gin.Context) {
 	addressParam := c.Param("address")
 	if !common.IsHexAddress(addressParam) {

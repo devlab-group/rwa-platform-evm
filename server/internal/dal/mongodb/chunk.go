@@ -13,14 +13,10 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// chainChunkRepo commits one indexer scan chunk in a single MongoDB transaction
-// with majority write concern. The events, block hashes, pruning and the advanced
-// checkpoint are written together, and the checkpoint advance applies only if the
-// stored version still equals the one the caller built on.
-//
-// MongoDB transactions need a replica set or a sharded cluster, and a standalone
-// mongod rejects them. Unit tests cover the same behavior through the in-memory
-// implementation, since the test harness has no replica set.
+// chainChunkRepo writes events, block hashes, pruning and a version-checked checkpoint
+// in one majority-write MongoDB transaction. Transactions require a replica set or
+// sharded cluster, not standalone mongod. Memory tests cover the versioning contract
+// without testing MongoDB transactions.
 type chainChunkRepo struct {
 	db          *mongo.Database
 	events      *mongo.Collection
@@ -28,9 +24,8 @@ type chainChunkRepo struct {
 	checkpoints *mongo.Collection
 }
 
-// storedCheckpointVersion reads the version of the (chainId, address) checkpoint in
-// the transaction. A missing checkpoint is version 0, the version a first commit
-// builds on.
+// storedCheckpointVersion reads the transactional checkpoint version for (chainId,
+// address), treating absence as initial version 0
 func (r *chainChunkRepo) storedCheckpointVersion(txCtx context.Context, chainID int64, address string) (int, error) {
 	var cur models.IndexerCheckpoint
 	err := r.checkpoints.FindOne(txCtx, bson.M{"chainId": chainID, "address": address}).Decode(&cur)
@@ -102,11 +97,9 @@ func (r *chainChunkRepo) CommitChunk(ctx context.Context, c repository.ChunkComm
 	return committed, nil
 }
 
-// RewindChunk is CommitChunk's counterpart for moving backwards. The delete and the
-// rewound checkpoint are written in one majority-write transaction under the same
-// version check, so a forward commit racing it either fails the check and writes
-// nothing, or wins and makes the rewind fail. See
-// repository.ChainChunkRepository.RewindChunk.
+// RewindChunk deletes events and rewinds the checkpoint in one majority-write
+// transaction. The version check prevents a racing forward commit and rewind from both
+// applying; see repository.ChainChunkRepository.RewindChunk.
 func (r *chainChunkRepo) RewindChunk(ctx context.Context, rw repository.ChunkRewind) (bool, error) {
 	if rw.Checkpoint == nil {
 		return false, repository.ErrNotFound

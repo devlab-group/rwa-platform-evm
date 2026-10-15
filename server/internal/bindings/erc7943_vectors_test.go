@@ -44,9 +44,8 @@ func loadERC7943Vector(t *testing.T) erc7943Vector {
 	return v
 }
 
-// TestERC7943VectorsSelfConsistent recomputes every pinned selector and topic0
-// from its canonical signature, and rebuilds the ERC-165 interface id from the
-// six function selectors, so a hand-edited hex value in the vector cannot pass.
+// TestERC7943VectorsSelfConsistent recomputes pinned selectors, topic0 hashes and the
+// ERC-165 ID from the six function selectors, rejecting inconsistent vector edits
 func TestERC7943VectorsSelfConsistent(t *testing.T) {
 	v := loadERC7943Vector(t)
 

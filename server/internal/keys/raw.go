@@ -14,14 +14,9 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// rawKeyProvider holds a plaintext key in memory for the process lifetime.
-// Reload re-parses the bytes it was constructed with, so it cannot pick up a
-// new key.
-//
-// The provider keeps the decoded scalar in a []byte rather than the hex string
-// so that Close can overwrite it, which an immutable Go string does not allow.
-// The caller's copy of the hex string in Config is not scrubbed and outlives
-// Close.
+// rawKeyProvider retains the original scalar bytes and parsed key. Reload re-parses
+// those bytes, so it cannot rotate to another key. Close wipes both mutable forms but
+// cannot scrub the caller's Config hex string.
 type rawKeyProvider struct {
 	mu   sync.RWMutex
 	raw  []byte

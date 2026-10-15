@@ -1,8 +1,6 @@
-// Command canonicalize prints the SHA-256 digest and CIDv1 of the RFC 8785 (JCS)
-// canonical form of a JSON document, using the same internal/auditpkg code the
-// server uses for Asset Profile and metadata digests. An operator can use it to
-// compute the profileDigest that contracts/script/Deploy.s.sol reads from
-// PROFILE_DIGEST before the server has seen the profile.
+// Command canonicalize prints a JSON document's RFC 8785 JCS SHA-256 and CIDv1 using
+// internal/auditpkg, matching server profile and metadata digests. Use it to compute
+// Deploy.s.sol's PROFILE_DIGEST before profile creation.
 //
 // Usage: go run ./cmd/canonicalize <path-to-json-file>
 package main

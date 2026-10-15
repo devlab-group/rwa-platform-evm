@@ -105,10 +105,9 @@ func TestReconcileCreatesInvestorForOnChainOnlyAccount(t *testing.T) {
 	}
 }
 
-// TestReconcileResetsSubjectWhenLastStatusEventIsOrphaned checks that an
-// investor's Status and ValidUntil are reset to Unknown and 0 once its last
-// StatusChanged event disappears from chainEvents, for example because
-// internal/indexer rolled it back after a reorg
+// TestReconcileResetsSubjectWhenLastStatusEventIsOrphaned checks that deleting an
+// account's last StatusChanged event, as in reorg rollback, restores Unknown and
+// validUntil 0
 func TestReconcileResetsSubjectWhenLastStatusEventIsOrphaned(t *testing.T) {
 	ctx := context.Background()
 	investors := memory.NewInvestorRepository()

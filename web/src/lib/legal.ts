@@ -41,7 +41,7 @@ export const EMPTY_LEGAL_FORM: LegalForm = {
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 
-// Check reference completeness and hash format; the server validates the full descriptor
+// Checks complete document references and hash format; the server validates the descriptor
 function checkRef(label: string, uri: string, sha256: string): string | null {
   if (!uri && !sha256) return null;
   if (!uri || !sha256) return `${label}: give both the URI and the SHA-256.`;
@@ -50,9 +50,7 @@ function checkRef(label: string, uri: string, sha256: string): string | null {
   return null;
 }
 
-/**
- * Builds the optional legal object; a blank wrapper omits legal so profiles without it keep their digest
- */
+/** Blank wrapper omits legal, preserving digests for profiles without it */
 export function buildLegal(f: LegalForm): {
   legal?: LegalDescriptor;
   error?: string;
@@ -92,7 +90,7 @@ export function buildLegal(f: LegalForm): {
   return { legal: legal as unknown as LegalDescriptor };
 }
 
-/** Reads legal from stored profile JSON, returning null when absent or unparseable */
+/** Reads legal from stored profile JSON; absent/unparseable input returns null */
 export function legalFromProfileJson(
   raw: string | undefined,
 ): LegalDescriptor | null {

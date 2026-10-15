@@ -10,9 +10,7 @@ import (
 	"github.com/rwa-platform/server/internal/indexer"
 )
 
-// TestRefuseIfIndexerUnsafe covers the "refuse chain mutations while the
-// indexer is paused" gate: a ReconciliationRequired checkpoint blocks a
-// mutating command unless --allow-unsafe is passed
+// ReconciliationRequired blocks mutations unless --allow-unsafe overrides the gate
 func TestRefuseIfIndexerUnsafe(t *testing.T) {
 	repos := newTestRepos()
 	cfg := config.Config{ChainID: 31337}

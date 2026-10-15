@@ -8,17 +8,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// rwaTokenABIJSON declares the ERC-7943 (uRWA) enforcement events RWAToken
-// emits. Frozen is emitted when an admin sets a holder's absolute frozen amount
-// and when a forced transfer reduces it before moving tokens. ForcedTransfer is
-// emitted with the ordinary ERC-20 Transfer of a seizure. Addresses are indexed
-// and the amount is in log.Data. The signatures and topic0 hashes are pinned in
-// shared/vectors/erc7943-abi.json, and erc7943_vectors_test.go checks this
-// literal against it.
-//
-// The standard's read functions (canSend, canReceive, canTransfer,
-// getFrozenTokens) are not declared because the server derives frozen state by
-// replaying these events.
+// rwaTokenABIJSON declares ERC-7943 Frozen and ForcedTransfer events with indexed
+// addresses and amounts in log.Data. Frozen records absolute amounts set by admins or
+// reduced before forced transfers; seizures also emit ERC-20 Transfer.
+// erc7943_vectors_test.go checks signatures and topic0 against
+// shared/vectors/erc7943-abi.json.
+// The server projects frozen state from events, so canSend, canReceive, canTransfer and
+// getFrozenTokens are omitted.
 const rwaTokenABIJSON = `[
   {"type":"event","name":"Frozen","anonymous":false,"inputs":[
     {"name":"account","type":"address","indexed":true},{"name":"amount","type":"uint256","indexed":false}]},
@@ -30,7 +26,7 @@ const rwaTokenABIJSON = `[
 // RWAToken decodes the token's ERC-7943 enforcement events.
 type RWAToken struct{ ABI abi.ABI }
 
-// NewRWAToken parses the ERC-7943 event ABI once.
+// NewRWAToken parses the ERC-7943 event ABI
 func NewRWAToken() RWAToken { return RWAToken{ABI: mustABI(rwaTokenABIJSON)} }
 
 // EventID returns the keccak256 topic0 for the named event.
@@ -43,9 +39,8 @@ type FrozenEvent struct {
 	Amount  *big.Int
 }
 
-// UnpackFrozen decodes a Frozen log. A log missing its indexed account topic
-// is malformed rather than a holder of the zero address, so it errors out and
-// the indexer dead-letters it instead of projecting a bogus freeze.
+// UnpackFrozen rejects missing account topics so the indexer dead-letters malformed
+// logs instead of projecting zero-address freezes
 func (t RWAToken) UnpackFrozen(data []byte, topics []common.Hash) (FrozenEvent, error) {
 	var partial struct{ Amount *big.Int }
 	if err := t.ABI.UnpackIntoInterface(&partial, "Frozen", data); err != nil {

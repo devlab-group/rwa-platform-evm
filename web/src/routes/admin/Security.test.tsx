@@ -95,12 +95,12 @@ describe("Security current prices", () => {
       expect(screen.getByText(/current purchase price/i)).toBeTruthy(),
     );
 
-    // 2000000 / 5500000 minimal at 6 decimals -> "2" / "5.5" whole units.
+    // Scale 2000000 / 5500000 at 6 decimals to 2 / 5.5
     await waitFor(() =>
       expect(priceValue(/current purchase price/i)).toBe("2"),
     );
     expect(priceValue(/current redemption price/i)).toBe("5.5");
-    // Server supplied quoteDecimals, so no on-chain round trip.
+    // Project.quoteDecimals avoids an on-chain read
     expect(readErc20Decimals).not.toHaveBeenCalled();
   });
 
@@ -129,7 +129,7 @@ describe("Security current prices", () => {
     await waitFor(() =>
       expect(
         within(card.parentElement as HTMLElement).getByText(
-          /no on-chain prices reported/i,
+          /No prices reported/i,
         ),
       ).toBeTruthy(),
     );
@@ -387,7 +387,7 @@ describe("Security accept admin role (incoming admin, not role-gated)", () => {
       .mockResolvedValue({ ...DEPLOYED, roles: {} });
     renderWithWallet(<Security />, { connected: true });
 
-    // Wait for the page to settle (the Status card renders once loaded).
+    // Wait for the loaded Status card
     await screen.findByRole("heading", { name: "Status" });
     expect(
       screen.queryByRole("heading", { name: "Accept admin role" }),
@@ -407,7 +407,7 @@ describe("Security frozen balances (indexed read state)", () => {
         securityStale: true,
         frozenBalances: {
           "0x000000000000000000000000000000000000AAA1": "1500000000000000000",
-          // Beyond float64's exact integer range: must render digit-for-digit.
+          // Preserve digits beyond float64 precision
           "0x000000000000000000000000000000000000BBB2":
             "123456789012345678901234567890",
         },
@@ -587,7 +587,7 @@ describe("Security ERC-7943 enforcement controls", () => {
     });
     const section = heading.closest("section") as HTMLElement;
     expect(
-      within(section).getByText(/does not add to an existing hold/i),
+      within(section).getByText(/replacing the previous hold/i),
     ).toBeInTheDocument();
   });
 
@@ -627,10 +627,10 @@ describe("Security ERC-7943 enforcement controls", () => {
     fireEvent.change(amount, { target: { value: "2" } });
     fireEvent.click(screen.getByRole("button", { name: "Force transfer" }));
 
-    // Nothing is signed until the operator reads the warning and confirms.
+    // Require warning review and confirmation before signing
     expect(
       await screen.findByText(
-        /works while paused and when the holder is blocked or expired/i,
+        /Bypasses pause and blocked\/expired holder status/i,
       ),
     ).toBeInTheDocument();
     expect(sendForcedTransfer).not.toHaveBeenCalled();
@@ -663,7 +663,7 @@ describe("Security ERC-7943 enforcement controls", () => {
       fireEvent.change(amount, { target: { value: "1" } });
       fireEvent.click(screen.getByRole("button", { name: "Force transfer" }));
       expect(
-        await screen.findByText(/cannot be seized from/i),
+        await screen.findByText(/cannot be seizure sources/i),
       ).toBeInTheDocument();
     }
     expect(sendForcedTransfer).not.toHaveBeenCalled();
@@ -720,7 +720,7 @@ describe("Security ERC-7943 enforcement controls", () => {
       within(panel).getByText(/2000000000000000000 minimal units/),
     ).toBeInTheDocument();
 
-    // An edit behind the open panel cannot change what gets sent.
+    // Keep submission bound to reviewed values despite input changes
     expect((recipient as HTMLInputElement).disabled).toBe(true);
     fireEvent.change(recipient, {
       target: { value: "0x000000000000000000000000000000000000dEaD" },
@@ -743,7 +743,7 @@ describe("Security ERC-7943 enforcement controls", () => {
   it("reports a mined-but-reverted seizure as a failure, not a success", async () => {
     vi.mocked(waitForTxReceipt).mockRejectedValueOnce(
       new Error(
-        "Transaction 0xhash was mined but reverted on-chain. Nothing changed.",
+        "Transaction 0xhash was mined but reverted on-chain. Contract state is unchanged.",
       ),
     );
     renderWithWallet(<Security />, { connected: true });
@@ -781,7 +781,7 @@ describe("Security ERC-7943 enforcement controls", () => {
     fireEvent.click(submit);
 
     expect(
-      await screen.findByText(/can never be seized from/i),
+      await screen.findByText(/cannot be a seizure source/i),
     ).toBeInTheDocument();
   });
 

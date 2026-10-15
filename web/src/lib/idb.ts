@@ -1,8 +1,5 @@
-// Minimal promise wrapper over a single IndexedDB key/value object store.
-//
-// The admin JWT (lib/authSession.ts) is stored here so it survives a page
-// reload. Any script on the same origin can read IndexedDB, so the token stays
-// short-lived (the server sets `expiresAt`).
+// IndexedDB persistence for admin JWTs; same-origin scripts can read stored tokens, whose authority
+// expires server-side
 const DB_NAME = "rwa";
 const STORE = "kv";
 const DB_VERSION = 1;

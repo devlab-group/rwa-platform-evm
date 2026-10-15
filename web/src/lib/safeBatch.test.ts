@@ -4,8 +4,7 @@ import { batchChecksum, buildSafeBatch } from "./safeBatch";
 const ZERO = "0x0000000000000000000000000000000000000000";
 
 describe("batchChecksum", () => {
-  // Reference batch and checksum from the test suite of @morpho-labs/gnosis-tx-builder
-  // 2.0.0, an independent implementation of the Transaction Builder's checksum
+  // Independent Transaction Builder checksum vector from @morpho-labs/gnosis-tx-builder 2.0.0 tests
   it("reproduces a reference Transaction Builder checksum", () => {
     const reference = {
       version: "1.0",

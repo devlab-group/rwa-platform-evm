@@ -1,5 +1,5 @@
-// Package keystore loads and creates the password-encrypted signing key, and keeps the
-// unlock audit log and throttle. Passwords and private key material are never logged.
+// Package keystore loads/creates encrypted signing keys and maintains audit/throttle
+// files. AuditEvent callers must exclude passwords and private keys from metadata.
 package keystore
 
 import (
@@ -11,15 +11,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// MaxKeystoreFileBytes bounds the keystore file Load will read. A real keystore of
-// either format is a few KB, so 1 MiB leaves ample room while refusing to read a
-// replaced, corrupted or wrong file of arbitrary size into memory before parsing it
+// MaxKeystoreFileBytes caps accepted keystore size. Load checks Stat and post-read
+// length, but os.ReadFile allocations are not capped if the file grows.
 const MaxKeystoreFileBytes = 1 << 20 // 1 MiB
 
-// Load decrypts a NativeFormat (Argon2id/AES-256-GCM) or Ethereum V3 keystore,
-// selected by its format field, and returns the key and address. Reject group
-// or other permissions and sizes above MaxKeystoreFileBytes before reading;
-// check the format's KDF bounds before derivation. Call Zero after signing.
+// Load decrypts NativeFormat (Argon2id/AES-256-GCM) or V3 and returns key/address. It
+// rejects group/other permissions, checks size before/after reading and bounds KDF work
+// before derivation. Call Zero after signing.
 func Load(path, password string) (*ecdsa.PrivateKey, common.Address, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -35,8 +33,7 @@ func Load(path, password string) (*ecdsa.PrivateKey, common.Address, error) {
 	if err != nil {
 		return nil, common.Address{}, fmt.Errorf("keystore: reading %s: %w", path, err)
 	}
-	// A file can grow between Stat and ReadFile and os.ReadFile has no size cap, so
-	// check the length actually read as well
+	// Detect growth after Stat; os.ReadFile itself has no size cap
 	if len(keyJSON) > MaxKeystoreFileBytes {
 		return nil, common.Address{}, fmt.Errorf("keystore: %s grew to %d bytes while being read, larger than the %d-byte maximum; refusing to use it", path, len(keyJSON), int64(MaxKeystoreFileBytes))
 	}
@@ -48,9 +45,7 @@ func Load(path, password string) (*ecdsa.PrivateKey, common.Address, error) {
 	if err := checkV3KDFStrength(keyJSON); err != nil {
 		return nil, common.Address{}, err
 	}
-	// checkV3KDFStrength bounds the KDF parameters, but go-ethereum's DecryptKey is not
-	// vetted against maliciously malformed V3 files, so recover from a panic and return
-	// an error instead of crashing the process
+	// Recover DecryptKey panics from malformed V3 input even after KDF checks
 	priv, addr, err := decryptV3Recovered(keyJSON, password)
 	if err != nil {
 		return nil, common.Address{}, err
@@ -71,16 +66,13 @@ func decryptV3Recovered(keyJSON []byte, password string) (priv *ecdsa.PrivateKey
 	}
 	priv = key.PrivateKey
 	addr = key.Address
-	// Drop the Key struct's reference to the key; the caller zeroes priv
+	// Release this reference; the caller zeroes priv
 	key.PrivateKey = nil
 	return priv, addr, nil
 }
 
-// checkKeystoreFilePermissions rejects a keystore file with any group or other
-// permission bit set, as cmd/signer's checkPasswordFilePermissions does for
-// --password-file. The file is encrypted, so this is defense in depth: it narrows the
-// set of local accounts that can attempt an offline brute force. It applies to both
-// formats Load accepts.
+// checkKeystoreFilePermissions rejects group/other bits for both formats, like
+// --password-file, reducing local access for offline brute force
 func checkKeystoreFilePermissions(path string, info os.FileInfo) error {
 	if info.Mode().Perm()&0o077 != 0 {
 		return fmt.Errorf("keystore: %s is group- or world-readable (mode %s); refusing to read it; run: chmod 600 %s", path, info.Mode().Perm(), path)
@@ -88,10 +80,8 @@ func checkKeystoreFilePermissions(path string, info os.FileInfo) error {
 	return nil
 }
 
-// Zero clears key's private-scalar backing words before resetting the big.Int.
-// SetInt64(0) alone changes the slice length without clearing its old storage.
-// This removes the primary scalar copy but cannot clear copies retained by
-// the Go runtime, stack growth or libraries.
+// Zero overwrites key.D's backing words before SetInt64(0), which alone only reslices
+// storage. Runtime, stack-growth or library copies may remain.
 func Zero(key *ecdsa.PrivateKey) {
 	if key == nil || key.D == nil {
 		return
@@ -103,9 +93,7 @@ func Zero(key *ecdsa.PrivateKey) {
 	key.D.SetInt64(0)
 }
 
-// ZeroBytes overwrites b in place with zero bytes. As with Zero, it removes the primary
-// in-memory copy of whatever b held, such as a password read from a terminal or file,
-// but cannot reach copies the Go runtime made independently.
+// ZeroBytes overwrites b in place; independent runtime copies may remain, as with Zero
 func ZeroBytes(b []byte) {
 	for i := range b {
 		b[i] = 0

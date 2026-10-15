@@ -12,9 +12,8 @@ import (
 // docs/spec/asset-profile.md ("Numeric rules")
 var safeIntegerBound = new(big.Int).SetInt64(9007199254740991)
 
-// container tracks one open JSON object or array during the token walk, so
-// object pairs and array elements are counted against the separate "Max object
-// keys" and "Max array length" limits in docs/spec/asset-profile.md
+// container tracks an open JSON object or array, counting pairs against MaxObjectKeys
+// and elements against MaxArrayLength; see docs/spec/asset-profile.md
 type container struct {
 	isObject      bool
 	count         int
@@ -83,9 +82,8 @@ func (d *limitDecoder) handle(tok json.Token) error {
 	}
 }
 
-// recordElement counts the token just consumed against its parent container and
-// enforces the matching limit. A scalar or a just-closed nested container is one
-// element of its parent. Only a scalar (isLeaf) can be an object key.
+// recordElement counts a scalar or closed container in its parent, enforcing
+// array-length or object-key limits. Only a scalar (isLeaf) can be an object key.
 func (d *limitDecoder) recordElement(isLeaf bool) error {
 	if len(d.stack) == 0 {
 		return nil // outside any container, nothing to bound

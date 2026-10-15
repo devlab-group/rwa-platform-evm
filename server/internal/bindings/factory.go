@@ -55,12 +55,11 @@ const factoryABIJSON = `[
     {"name":"version","type":"string","indexed":false}]}
 ]`
 
-// Factory encodes calldata for, and decodes events from, IRWAFactory. Its ABI
-// also includes the four deployer-address getters of the concrete RWAFactory
-// contract, which are not part of IRWAFactory.
+// Factory binds IRWAFactory plus concrete RWAFactory's four deployer-address getters,
+// which are outside the interface
 type Factory struct{ ABI abi.ABI }
 
-// NewFactory parses the RWAFactory ABI once.
+// NewFactory parses the RWAFactory ABI
 func NewFactory() Factory { return Factory{ABI: mustABI(factoryABIJSON)} }
 
 // ProjectConfig mirrors IRWAFactory.ProjectConfig.
@@ -99,14 +98,11 @@ func (f Factory) PackDeploy(cfg ProjectConfig) ([]byte, error) {
 	return f.ABI.Pack("deploy", cfg)
 }
 
-// UnpackDeployInput decodes the ProjectConfig from the input calldata of a
-// mined RWAFactory.deploy transaction. The admin's wallet broadcasts the
-// deployment and the server only observes it. The role holders, treasury,
-// auditor and prices do not appear in the ProjectDeployed event, so the server
-// recovers them from the calldata the admin signed and cross-checks them against
-// on-chain state during verification. The first four bytes must be
-// RWAFactory.deploy's selector, and calldata for any other function, such as a
-// deploy wrapped in another call, is rejected.
+// UnpackDeployInput decodes ProjectConfig from RWAFactory.deploy calldata, requiring
+// its four-byte selector and rejecting wrapped or other calls. The admin wallet
+// broadcasts deployment; the server observes it and verifies the calldata's role
+// holders, treasury, auditor and prices against chain state because ProjectDeployed
+// omits them.
 func (f Factory) UnpackDeployInput(calldata []byte) (ProjectConfig, error) {
 	deploy := f.ABI.Methods["deploy"]
 	if len(calldata) < 4 {

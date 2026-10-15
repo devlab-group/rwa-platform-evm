@@ -12,8 +12,8 @@ import {Vault} from "../../src/Vault.sol";
 import {RedemptionEscrow} from "../../src/RedemptionEscrow.sol";
 import {IComplianceRegistry} from "../../src/interfaces/IComplianceRegistry.sol";
 
-/// @notice Checks that Vault.buy and RedemptionEscrow.fundRedemption, both `nonReentrant`,
-///         revert when a malicious quote token reenters mid-`transferFrom`
+/// @notice A quote-token callback during transferFrom triggers nonReentrant in Vault.buy and
+///         RedemptionEscrow.fundRedemption, reverting the outer call
 contract ReentrancyTest is TestBase {
     ReentrantERC20 internal evilQuote;
     address internal evilVault;
@@ -95,7 +95,7 @@ contract ReentrancyTest is TestBase {
     }
 
     function test_fundRedemption_reentrancyReverts() public {
-        // Give investor some RWA to redeem, then request a redemption
+        // Transfer RWA to the investor, then request redemption
         vm.prank(evilVault);
         IERC20(evilToken).transfer(investor, 10 ether);
 

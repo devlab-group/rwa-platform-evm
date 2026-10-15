@@ -157,20 +157,14 @@ contract RedemptionEscrowTest is TestBase {
         escrow.fundRedemption(id);
     }
 
-    // ---- Compliance changes during redemption funding ----
-    // Compliance status is re-checked at fundRedemption's execution point, so the outcome
-    // depends on which transaction, the removal or the funding, lands first. The two orderings
-    // are separate tests: removal before funding reverts
-    // (test_fundRedemption_beneficiaryDeWhitelistedReverts above), and funding before removal
-    // leaves the request Funded and immune to later status changes. Re-approval before a
-    // funding attempt is covered below. A reorg that flips which transaction executes first is
-    // an indexer concern that a Solidity test cannot model, since the EVM sees one final
-    // ordering per block.
+    // Compliance changes during funding
+    // Funding checks beneficiary status at execution. Test both orders: removal before funding
+    // reverts; funding before removal stays Funded without a later compliance recheck at claim.
+    // Re-approval before funding succeeds. These tests model transaction orderings, not indexer
+    // reorg handling.
 
     function test_fundRedemption_thenRemoval_staysFunded() public {
-        // Opposite ordering from test_fundRedemption_beneficiaryDeWhitelistedReverts: funding
-        // executes first (the beneficiary is still allowed) and commits. A later removal
-        // cannot unwind it, so the request stays Funded whatever compliance does afterwards.
+        // Fund while Allowed, then remove eligibility; the request remains Funded
         uint256 id = _request(1 ether);
         vm.prank(treasurer);
         escrow.fundRedemption(id);
@@ -185,9 +179,7 @@ contract RedemptionEscrowTest is TestBase {
     }
 
     function test_fundRedemption_reapprovalBeforeFunding_proceeds() public {
-        // Removal followed by re-approval, both before the funding transaction executes: funding
-        // is evaluated at its own execution point, so it succeeds once the beneficiary is
-        // allowed again and the earlier removal has no lingering effect
+        // Re-approval before funding restores eligibility with no lingering effect from removal
         uint256 id = _request(1 ether);
         vm.prank(complianceOperator);
         compliance.setStatus(investor, IComplianceRegistry.ComplianceStatus.Blocked, 0);
@@ -286,11 +278,9 @@ contract RedemptionEscrowTest is TestBase {
     }
 
     function test_cancelRedemption_succeedsWhilePaused() public {
-        // cancelRedemption has no explicit !paused guard, unlike the other transitions (see
-        // docs/spec/redemption-state-machine.md), because it does not need one: its RWA leg
-        // goes through RWAToken.returnEscrowedRWA, an escrow-only path that bypasses the token's
-        // pause flag. A plain token transfer would revert under ERC20Pausable and trap a
-        // timed-out redemption during a pause, which this test rules out.
+        // Timed-out cancellation uses the escrow-only RWAToken.returnEscrowedRWA pause bypass;
+        // an ordinary transfer would revert while paused. Other transitions require an unpaused
+        // project; see docs/spec/redemption-state-machine.md.
         uint256 id = _request(1 ether);
         vm.warp(block.timestamp + REDEMPTION_TIMEOUT);
         vm.prank(admin);
@@ -306,8 +296,7 @@ contract RedemptionEscrowTest is TestBase {
     }
 
     function test_cancelRedemption_whilePaused_stillRequiresBeneficiaryCompliance() public {
-        // The pause bypass is narrow: it still enforces compliance and skips only the pause
-        // flag
+        // Paused cancellation still requires an Allowed beneficiary
         uint256 id = _request(1 ether);
         vm.warp(block.timestamp + REDEMPTION_TIMEOUT);
         vm.prank(complianceOperator);
@@ -321,9 +310,7 @@ contract RedemptionEscrowTest is TestBase {
     }
 
     function test_cancelRedemption_whilePaused_generalTransfersStillBlocked() public {
-        // The bypass must not open anything beyond its narrow purpose: with the token paused, an
-        // ordinary holder-to-holder transfer must still revert, even right after a cancellation
-        // succeeded through the bypass
+        // Ordinary holder transfers still revert while paused after a successful cancellation
         uint256 id = _request(1 ether);
         vm.warp(block.timestamp + REDEMPTION_TIMEOUT);
         vm.prank(admin);
@@ -359,31 +346,27 @@ contract RedemptionEscrowTest is TestBase {
     }
 
     function test_cancelRedemption_timeoutRecovery_impossibleWhileBlocked_succeedsOnceRestored() public {
-        // Timeout recovery while compliance blocks the beneficiary. If the beneficiary is
-        // removed before funding, both fundRedemption and cancelRedemption revert on the same
-        // compliance check, because RWAToken.returnEscrowedRWA requires the recipient to be
-        // Allowed. This is not a stuck state: the RWA stays escrowed, the issuer cannot claim
-        // it (no quote was ever pulled, since fundRedemption never ran), and once compliance is
-        // restored the same timed-out cancelRedemption call succeeds and returns it. See
-        // "Compliance changes during redemption funding" in
+        // Blocking the beneficiary before funding prevents both funding and timed-out cancellation.
+        // RWA remains escrowed; claim is unavailable because no quote was funded. Restoring compliance
+        // lets the same cancellation succeed. See "Compliance changes during redemption funding" in
         // docs/spec/redemption-state-machine.md.
         uint256 id = _request(1 ether);
         vm.prank(complianceOperator);
         compliance.setStatus(investor, IComplianceRegistry.ComplianceStatus.Blocked, 0);
         vm.warp(block.timestamp + REDEMPTION_TIMEOUT);
 
-        // Funding is impossible...
+        // Funding fails while blocked
         vm.prank(treasurer);
         vm.expectRevert(abi.encodeWithSelector(IRedemptionEscrow.BeneficiaryNotAllowed.selector, investor));
         escrow.fundRedemption(id);
 
-        // ...and so is timeout recovery: the RWA is not lost, only not yet movable
+        // Timed-out cancellation also fails; RWA remains escrowed
         vm.prank(investor);
         vm.expectRevert(abi.encodeWithSelector(IRedemptionEscrow.BeneficiaryNotAllowed.selector, investor));
         escrow.cancelRedemption(id);
         assertEq(uint8(escrow.getRedemption(id).status), uint8(IRedemptionEscrow.RedemptionStatus.Pending));
 
-        // Compliance restores the beneficiary, and recovery is available immediately
+        // Restore compliance, then retry cancellation
         vm.prank(complianceOperator);
         compliance.setStatus(investor, IComplianceRegistry.ComplianceStatus.Allowed, 0);
 
@@ -430,9 +413,8 @@ contract RedemptionEscrowTest is TestBase {
         vm.prank(complianceOperator);
         compliance.setStatus(investor, IComplianceRegistry.ComplianceStatus.Blocked, 0);
 
-        // Must still succeed and pay the recorded, now-blocked beneficiary in full: once a request
-        // is Funded, a later compliance change must not prevent payment of the committed quote,
-        // because claim never re-checks compliance
+        // Platform-compliance removal after funding does not block claim or change its beneficiary;
+        // the recorded recipient receives the full quote
         uint256 before = quoteToken.balanceOf(investor);
         escrow.claimRedemption(id);
         IRedemptionEscrow.RedemptionRequest memory r = escrow.getRedemption(id);
@@ -483,10 +465,8 @@ contract RedemptionEscrowTest is TestBase {
     }
 
     function test_beneficiary_immutableAcrossLifecycle() public {
-        // The beneficiary is set once, in requestRedemption, and every later transition (fund,
-        // reject, cancel, claim) only reads it. IRedemptionEscrow has no function that writes
-        // `RedemptionRequest.beneficiary`, so this structural property is recorded here, like
-        // test_noRoleCanWithdrawFundedQuote below.
+        // requestRedemption sets beneficiary once; later transitions only read it, and the interface
+        // has no setter. Record this structural property here, like test_noRoleCanWithdrawFundedQuote.
         uint256 id = _request(1 ether);
         assertEq(escrow.getRedemption(id).beneficiary, investor);
 
@@ -494,15 +474,14 @@ contract RedemptionEscrowTest is TestBase {
         escrow.fundRedemption(id);
         assertEq(escrow.getRedemption(id).beneficiary, investor);
 
-        escrow.claimRedemption(id); // permissionless, the caller is not the beneficiary
+        escrow.claimRedemption(id); // Permissionless claim by a third party
         assertEq(escrow.getRedemption(id).beneficiary, investor);
         assertEq(quoteToken.balanceOf(investor), escrow.getRedemption(id).quoteAmount);
     }
 
     function test_noRoleCanWithdrawFundedQuote() public {
-        // IRedemptionEscrow has no function that lets a role pull funded quote out other than
-        // claimRedemption paying the recorded beneficiary, so this structural property is
-        // recorded here instead of checked at runtime
+        // The escrow exposes no role-based withdrawal of funded quote; only claim pays the recorded
+        // beneficiary. This records an API property rather than testing it at runtime.
         uint256 id = _request(1 ether);
         vm.prank(treasurer);
         escrow.fundRedemption(id);

@@ -50,8 +50,7 @@ describe("Login (wallet-signature)", () => {
     });
 
     renderWithWallet(<Login />, { connected: true });
-    // The harness connects the wallet on mount, so the sign-in button appears
-    // instead of the connect button
+    // Auto-connect the fake wallet to show Sign in
     const signIn = await screen.findByRole("button", {
       name: /sign in with wallet/i,
     });
@@ -59,7 +58,7 @@ describe("Login (wallet-signature)", () => {
 
     await waitFor(() => expect(getSession()?.token).toBe("admin-jwt"));
     expect(api.createAuthChallenge).toHaveBeenCalledWith({ address: ADMIN });
-    // The wallet signed the challenge message; the signature went to /auth/session.
+    // Sign the challenge and send its signature to /auth/session
     const [sessionBody] = vi.mocked(api.createSession).mock.calls[0];
     expect(sessionBody.address).toBe(ADMIN);
     expect(sessionBody.signature).toBe(wallet.signature);

@@ -4,9 +4,8 @@ pragma solidity ^0.8.24;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /// @title FeeOnTransferERC20
-/// @notice Burns a transfer fee to test exact balance-delta rejection
-/// @dev feeEnabled defaults to true. Tests can disable fees during funding and enable
-///      them afterwards to exercise claimRedemption and withdrawProceeds shortfalls.
+/// @notice Burns transfer fees to test exact balance-delta checks
+/// @dev Fees start enabled; toggle off for funding and on for claimRedemption/withdrawProceeds shortfall tests
 contract FeeOnTransferERC20 is ERC20 {
     uint256 public immutable feeBps;
     bool public feeEnabled = true;

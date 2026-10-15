@@ -36,11 +36,9 @@ type AssetRecord struct {
 	Nonce          string       `json:"nonce" bson:"nonce"`
 	ValidUntil     int64        `json:"validUntil" bson:"validUntil"`
 	MintTxHash     string       `json:"mintTxHash,omitempty" bson:"mintTxHash,omitempty"`
-	// Version is an optimistic-concurrency counter. A conditional update
-	// (UpdateConditional) applies only if the stored Version equals the one the caller
-	// read, and then increments it, so of two concurrent reissues only one succeeds.
-	// It has no omitempty, so a new record stores version 0 explicitly. A missing field
-	// would not match the {version: 0} filter of the first conditional update.
+	// Version enables UpdateConditional to accept only the version read, then increment
+	// it, admitting one concurrent reissue. Store initial 0 explicitly: an absent field
+	// would not match MongoDB's {version: 0} filter.
 	Version   int       `json:"-" bson:"version"`
 	CreatedAt time.Time `json:"createdAt" bson:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt" bson:"updatedAt"`

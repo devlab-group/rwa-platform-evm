@@ -99,7 +99,7 @@ a {
     }
   }
 
-  // Read-only example snippet shown under a hint (e.g. the proofs[] shape).
+  // Read-only hint example, such as proofs[]
   .field__example {
     margin: var(--space-1) 0 0;
     padding: var(--space-2) var(--space-3);
@@ -175,8 +175,7 @@ table {
   font-size: 0.875rem;
 }
 
-// Small layout utilities - kept as classes (not inline `style` props) so the
-// CSP can drop `style-src 'unsafe-inline'` (see index.html).
+// Class-based layout utilities avoid style-src 'unsafe-inline'; see index.html
 .u-mt-4 {
   margin-top: var(--space-4);
 }

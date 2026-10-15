@@ -100,8 +100,8 @@ func TestBuildStatesCancelledPath(t *testing.T) {
 }
 
 func TestBuildStatesIgnoresOutOfOrderTransitions(t *testing.T) {
-	// a Funded event for an id that was never Requested (or is already
-	// terminal) must not create or overwrite state
+	// Funded without Requested, or after a terminal state, must not create or overwrite
+	// state
 	events := []*models.ChainEvent{
 		ev("RedemptionFunded", "4", 5, 0, map[string]any{"funder": "0xBBB", "quoteAmount": "1"}),
 	}
@@ -112,8 +112,7 @@ func TestBuildStatesIgnoresOutOfOrderTransitions(t *testing.T) {
 }
 
 func TestBuildStatesAppliesEventsInBlockOrderRegardlessOfInputOrder(t *testing.T) {
-	// feed events out of order: BuildStates sorts by (blockNumber, logIndex)
-	// before replaying
+	// Unsorted input must replay by (blockNumber, logIndex)
 	events := []*models.ChainEvent{
 		ev("RedemptionCompleted", "5", 30, 0, map[string]any{"beneficiary": "0xAAA", "rwaAmount": "1000", "quoteAmount": "950"}),
 		ev("RedemptionRequested", "5", 10, 0, map[string]any{"beneficiary": "0xAAA", "rwaAmount": "1000", "quoteAmount": "950", "createdAt": uint64(1000)}),
@@ -126,9 +125,7 @@ func TestBuildStatesAppliesEventsInBlockOrderRegardlessOfInputOrder(t *testing.T
 }
 
 func TestBuildStatesRejectedCannotBeReFunded(t *testing.T) {
-	// once Rejected (terminal), a duplicate Funded event for the same id must
-	// not move it back to Funded: the transition table has no edge out of
-	// Rejected
+	// A duplicate Funded event must not move Rejected back to Funded
 	events := []*models.ChainEvent{
 		ev("RedemptionRequested", "6", 10, 0, map[string]any{"beneficiary": "0xAAA", "rwaAmount": "1000", "quoteAmount": "950", "createdAt": uint64(1000)}),
 		ev("RedemptionRejected", "6", 11, 0, map[string]any{"reasonCode": "0xdead", "caller": "0xCCC"}),
@@ -140,11 +137,8 @@ func TestBuildStatesRejectedCannotBeReFunded(t *testing.T) {
 	}
 }
 
-// delayedRedemptionRequestRepo wraps a repository.RedemptionRequestRepository
-// and sleeps briefly around every write that Reconcile's generation swap
-// performs, for the reason given on sales.delayedPurchaseRepo: it widens the
-// window in which a concurrent List() can interleave with a rebuild, so the
-// test below can catch a delete-then-reinsert rebuild.
+// delayedRedemptionRequestRepo delays generation writes to expose delete-first gaps to
+// concurrent List calls, like sales.delayedPurchaseRepo
 type delayedRedemptionRequestRepo struct {
 	repository.RedemptionRequestRepository
 }
@@ -159,9 +153,8 @@ func (d delayedRedemptionRequestRepo) DeleteStaleGeneration(ctx context.Context,
 	return d.RedemptionRequestRepository.DeleteStaleGeneration(ctx, gen)
 }
 
-// TestReconcileNeverExposesEmptyOrPartialRedemptionsToConcurrentReaders mirrors
-// the sales test of the same purpose. The worst case here is a reorg that
-// replaces every seeded redemption request id with a different one.
+// Replace every seeded request ID during a reorg; concurrent reads must not fall below
+// the seeded count, as in the sales test
 func TestReconcileNeverExposesEmptyOrPartialRedemptionsToConcurrentReaders(t *testing.T) {
 	escrowAddr := common.HexToAddress("0x0000000000000000000000000000000000000B")
 	events := memory.NewChainEventRepository()

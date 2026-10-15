@@ -4,14 +4,14 @@ pragma solidity ^0.8.24;
 import {Script, console2} from "forge-std/Script.sol";
 import {TestToken} from "../src/test/TestToken.sol";
 
-/// @notice Deploys USDT TestToken with 6 decimals and mints 1,000,000 units to the deployer
+/// @notice Deploys a six-decimal USDT TestToken and mints 1,000,000 whole tokens to the deployer
 ///
 /// Usage:
 ///   forge script script/DeployTestToken.s.sol --rpc-url <url> --broadcast -vv
 ///
 /// Env vars:
-///   DEPLOYER_PK  Broadcast key. Defaults to public Anvil account 0 on chain 31337;
-///                required elsewhere or RefusingAnvilKeyFallbackOnNonAnvilChain reverts.
+///   DEPLOYER_PK  Broadcast key; defaults to public Anvil account 0 on chain 31337.
+///                Required elsewhere or RefusingAnvilKeyFallbackOnNonAnvilChain reverts.
 contract DeployTestToken is Script {
     // Anvil's default account 0, also the signer of shared/vectors/mint-eip712.json
     uint256 internal constant ANVIL_ACCT0_PK = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
@@ -39,7 +39,7 @@ contract DeployTestToken is Script {
         if (block.chainid == ANVIL_CHAIN_ID) {
             return vm.envOr("DEPLOYER_PK", ANVIL_ACCT0_PK);
         }
-        // Not anvil's default chain id: DEPLOYER_PK must be set explicitly, or fail loudly
+        // Require DEPLOYER_PK outside chain ID 31337
         try vm.envUint("DEPLOYER_PK") returns (uint256 pk) {
             return pk;
         } catch {

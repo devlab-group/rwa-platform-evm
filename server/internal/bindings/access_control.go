@@ -21,16 +21,13 @@ const accessControlABIJSON = `[
     "outputs":[{"name":"","type":"address"}]}
 ]`
 
-// AccessControl encodes calldata for, and decodes results from, OpenZeppelin
-// AccessControl's hasRole and getRoleAdmin plus AccessControlEnumerable's
-// getRoleMemberCount and getRoleMember. Every governance contract hosts its
-// roles through AccessControlEnumerable (docs/spec/roles.md), so one binding
-// works against any of them. The enumerable calls let deployment verification
-// list every holder of a role and reject an unexpected one, which a hasRole
-// check on a known candidate cannot detect.
+// AccessControl binds hasRole, getRoleAdmin, getRoleMemberCount and getRoleMember
+// across the platform's AccessControlEnumerable governance contracts
+// (docs/spec/roles.md). Deployment verification enumerates role holders to detect
+// unexpected members that checking known candidates with hasRole would miss.
 type AccessControl struct{ ABI abi.ABI }
 
-// NewAccessControl parses the shared AccessControl ABI once.
+// NewAccessControl parses the shared AccessControl ABI
 func NewAccessControl() AccessControl { return AccessControl{ABI: mustABI(accessControlABIJSON)} }
 
 // PackHasRole builds calldata for hasRole(bytes32,address).

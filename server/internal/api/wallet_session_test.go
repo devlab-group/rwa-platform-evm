@@ -35,9 +35,8 @@ func TestGetMyWalletStatusRejectsInvalidSessionToken(t *testing.T) {
 	}
 }
 
-// TestGetMyWalletStatusReturnsOwnStatus is the core case: a valid session
-// returns the WalletStatus for the address bound to it (seeded as Allowed) and
-// neither requires nor accepts an admin credential
+// TestGetMyWalletStatusReturnsOwnStatus checks that a valid wallet session returns its
+// own status without an admin JWT
 func TestGetMyWalletStatusReturnsOwnStatus(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -68,9 +67,9 @@ func TestGetMyWalletStatusReturnsOwnStatus(t *testing.T) {
 	}
 }
 
-// TestGetMyWalletStatusUnknownForAddressWithNoRecord covers the fallback for a
-// session whose address has no Investor record. The real flow does not reach it,
-// because VerifyOwnership upserts the Investor first.
+// TestGetMyWalletStatusUnknownForAddressWithNoRecord checks a session whose investor
+// record is missing. Normally verifyChallenge creates the record before issuing the
+// session.
 func TestGetMyWalletStatusUnknownForAddressWithNoRecord(t *testing.T) {
 	env := setupTestApp(t)
 	address := addr("0xFEED")
@@ -92,10 +91,8 @@ func TestGetMyWalletStatusUnknownForAddressWithNoRecord(t *testing.T) {
 	}
 }
 
-// TestIsAddressAllowedIsPublicAndDisclosesOnlyAllowed checks that the endpoint
-// needs no credential and returns only the "allowed" field, never
-// status, validUntil or ownership, which would let an anonymous caller enumerate
-// a third party's compliance state
+// TestIsAddressAllowedIsPublicAndDisclosesOnlyAllowed checks anonymous access to
+// allowed, excluding third-party status, validUntil and ownership
 func TestIsAddressAllowedIsPublicAndDisclosesOnlyAllowed(t *testing.T) {
 	env := setupTestApp(t)
 	account := common.HexToAddress("0x0000000000000000000000000000000000B0B0")
@@ -167,10 +164,9 @@ func TestIsAddressAllowedRejectsBadAddress(t *testing.T) {
 	}
 }
 
-// TestGetMyWalletStatusReportsOwnFrozenAmount checks that a frozen holder can see
-// their own frozen amount on the session-scoped status, so they can tell an
-// enforcement hold from an app fault. Another holder's amount is not shown, and
-// the map of all frozen wallets stays admin-only.
+// TestGetMyWalletStatusReportsOwnFrozenAmount requires session-scoped frozen balances
+// to distinguish enforcement from app faults. Another holder's balance is hidden; the
+// full map remains admin-only.
 func TestGetMyWalletStatusReportsOwnFrozenAmount(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()

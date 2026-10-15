@@ -10,9 +10,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// StatusService submits ComplianceRegistry.setStatus transactions signed with
-// the server's compliance hot key. Actions taken by a multisig go to the same
-// contract outside this service.
+// StatusService relays ComplianceRegistry.setStatus with the compliance hot key.
+// Multisig actions reach the same contract outside this service.
 type StatusService struct {
 	txs      blockchain.TxManager
 	registry bindings.ComplianceRegistry
@@ -20,9 +19,8 @@ type StatusService struct {
 	signer   blockchain.Signer
 }
 
-// NewStatusService constructs a StatusService. signer is a
-// blockchain.StaticKeySigner or a signer from internal/keys (local keystore,
-// Vault or the KMS mock).
+// NewStatusService accepts a blockchain.Signer, including StaticKeySigner and
+// internal/keys backends
 func NewStatusService(txs blockchain.TxManager, contract common.Address, signer blockchain.Signer) *StatusService {
 	return &StatusService{txs: txs, registry: bindings.NewComplianceRegistry(), contract: contract, signer: signer}
 }
@@ -39,10 +37,8 @@ func (s *StatusService) SetStatus(ctx context.Context, idempotencyKey string, ac
 		Signer:         s.signer,
 		To:             s.contract,
 		Data:           data,
-		// setStatus writes state and moves no value, so applying the same
-		// (account, status, validUntil) twice is harmless. That allows
-		// resubmission under the same key after TxReorged or
-		// TxNonceConsumedExternally, which WebhookReconciler relies on.
+		// Repeating the same (account, status, validUntil) writes the same state and moves no
+		// value, enabling same-key retries after TxReorged or TxNonceConsumedExternally
 		AllowReorgRetry: true,
 	})
 }

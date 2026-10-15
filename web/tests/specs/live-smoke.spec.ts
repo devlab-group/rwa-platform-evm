@@ -1,8 +1,6 @@
-// Runs in mocked mode (default) and live mode (BASE_URL set). It assumes no
-// seeded state and checks that every screen renders its heading. The
-// state-dependent specs are mocked-mode only (mockOnly() in
-// tests/fixtures/fixtures.ts), so this is the spec meant to exercise the full
-// server stack in live mode.
+// Heading smoke checks run with mocks by default or against BASE_URL without seeded
+// state. Stateful specs use mockOnly() (tests/fixtures/fixtures.ts); this spec
+// exercises every screen in the live server stack.
 import { expect, requireAdminSession, test } from "../fixtures/fixtures";
 
 const ADMIN_ROUTES = [

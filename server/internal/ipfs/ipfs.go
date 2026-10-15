@@ -1,12 +1,8 @@
-// Package ipfs pins and retrieves public asset metadata. It provides a minimal
-// client for the Kubo HTTP RPC API (add, pin and cat), a local-directory
-// archive and an in-memory fake that implement the same Client interface, and a
-// ReplicationManager that publishes content to a local node and backup
-// destinations and tracks and verifies replication.
-//
-// The platform derives each CID itself from canonical bytes (internal/auditpkg).
-// Content is addressed as CIDv1 with the raw codec and a sha2-256 multihash, and
-// every verification re-hashes retrieved bytes to that CID.
+// Package ipfs stores and retrieves public metadata through Kubo HTTP RPC,
+// local-directory archives and memory fakes. ReplicationManager publishes to
+// local/backup clients and tracks verified copies.
+// Canonical metadata uses auditpkg-derived CIDv1/raw/sha2-256 content addresses;
+// verification re-hashes retrieved bytes against the expected CID.
 package ipfs
 
 import (
@@ -24,8 +20,8 @@ import (
 // Client stores, pins and retrieves content addressed by CIDv1 (raw codec,
 // sha2-256)
 type Client interface {
-	// AddRaw stores data, pins it and returns its CID. Callers should compare
-	// the returned CID with the one they computed from data.
+	// AddRaw stores/pins bytes and returns a CID; callers should compare it with their
+	// independently computed CID
 	AddRaw(ctx context.Context, data []byte) (cid string, err error)
 	// Pin pins cid. FileArchiveClient and FakeClient fail when they do not hold it
 	Pin(ctx context.Context, cid string) error
@@ -33,9 +29,8 @@ type Client interface {
 	Get(ctx context.Context, cid string) ([]byte, error)
 }
 
-// Default timeouts and response-size limit for KuboClient. They stop an
-// unresponsive endpoint from hanging a publication call or the periodic
-// verification loop, and bound how much of a response is read.
+// Default Kubo timeouts bound stalled publication/verification requests, and response
+// limits cap bytes read
 const (
 	DefaultDialTimeout           = 5 * time.Second
 	DefaultTLSHandshakeTimeout   = 5 * time.Second
@@ -48,8 +43,8 @@ const (
 	DefaultMaxResponseBytes = 64 << 20
 )
 
-// KuboClient is a Client backed by a Kubo node's HTTP RPC API. Kubo serves the
-// RPC API on port 5001 by default.
+// KuboClient implements Client through Kubo's HTTP RPC API, normally served on port
+// 5001
 type KuboClient struct {
 	baseURL          string
 	http             *http.Client
@@ -73,9 +68,7 @@ func NewKuboClientWithLimits(baseURL string, overallTimeout time.Duration, maxRe
 	return &KuboClient{baseURL: baseURL, http: &http.Client{Timeout: overallTimeout, Transport: transport}, maxResponseBytes: maxResponseBytes}
 }
 
-// readLimited reads r through a bounded reader and returns an error when the
-// body is longer than k.maxResponseBytes, so an oversized body is never read in
-// full
+// readLimited reads at most maxResponseBytes+1 and rejects oversized bodies
 func (k *KuboClient) readLimited(r io.Reader) ([]byte, error) {
 	b, err := io.ReadAll(io.LimitReader(r, k.maxResponseBytes+1))
 	if err != nil {
@@ -87,16 +80,13 @@ func (k *KuboClient) readLimited(r io.Reader) ([]byte, error) {
 	return b, nil
 }
 
-// maxSingleBlockBytes is the largest content AddRaw stores as one raw leaf. It is
-// the chunk size AddRaw asks Kubo for, 1 MiB, which every Kubo version accepts and
-// which covers auditpkg.MaxDocumentBytes.
+// maxSingleBlockBytes is AddRaw's 1 MiB raw-leaf limit and requested chunk size,
+// matching auditpkg.MaxDocumentBytes
 const maxSingleBlockBytes = 1 << 20
 
-// AddRaw adds data with POST /api/v0/add using cid-version=1, raw-leaves=true,
-// pin=true and chunker=size-1048576, so data up to 1 MiB comes back as a single
-// raw leaf whose CID equals the CIDv1Raw of data. Kubo's default chunker
-// (size-262144) would split larger content into a multi-block DAG with a different
-// root CID, so AddRaw returns an error for data over 1 MiB.
+// AddRaw posts /api/v0/add with cid-version=1, raw-leaves=true, pin=true and
+// chunker=size-1048576. It rejects data over 1 MiB to keep one raw leaf matching
+// CIDv1Raw, rather than a multi-block DAG produced by the default 256 KiB chunker.
 func (k *KuboClient) AddRaw(ctx context.Context, data []byte) (string, error) {
 	if len(data) > maxSingleBlockBytes {
 		return "", fmt.Errorf("ipfs: %d bytes exceeds the %d byte single-block limit", len(data), maxSingleBlockBytes)

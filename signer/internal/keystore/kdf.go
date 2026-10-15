@@ -5,9 +5,8 @@ import (
 	"fmt"
 )
 
-// Minimum KDF parameters for imported Ethereum V3 keystores, checked on every load
-// before key derivation. The floors match OWASP scrypt (N=2^17, r=8, p=1) and
-// PBKDF2-HMAC-SHA256 (600,000 iterations) guidance. New keystores use NativeFormat.
+// V3 KDF floors are checked before derivation, matching OWASP's scrypt (N=2^17, r=8,
+// p=1) and PBKDF2-HMAC-SHA256 (600,000 iterations) guidance; new files use NativeFormat
 const (
 	MinScryptN          = 1 << 17
 	MinScryptR          = 8
@@ -15,8 +14,8 @@ const (
 	MinPBKDF2Iterations = 600_000
 )
 
-// Maximum V3 work factors limit resource use before password authentication.
-// Scrypt also needs a combined memory cap: individual N and r bounds do not bound 128*N*r.
+// V3 ceilings limit work before password authentication; scrypt also caps combined
+// memory at 128*N*r
 const (
 	MaxScryptN           = 1 << 22 // 16x go-ethereum's StandardScryptN
 	MaxScryptR           = 64
@@ -25,8 +24,7 @@ const (
 	MaxPBKDF2Iterations  = 10_000_000
 )
 
-// v3KDFHeader reads KDF parameters without decrypting, so local strength checks
-// can run before go-ethereum derives the key
+// v3KDFHeader reads parameters for strength checks before go-ethereum derives the key
 type v3KDFHeader struct {
 	Crypto struct {
 		KDF       string          `json:"kdf"`
@@ -59,7 +57,7 @@ func checkV3KDFStrength(keyJSON []byte) error {
 		if p.N < MinScryptN || p.R < MinScryptR || p.P < MinScryptP {
 			return fmt.Errorf("keystore: scrypt parameters (N=%d r=%d p=%d) are weaker than the minimum policy (N>=%d r>=%d p>=%d); refusing to unlock a keystore with downgraded KDF parameters; to keep this key, decrypt it with the tool that created it and re-encrypt it with \"signer keystore import\"", p.N, p.R, p.P, MinScryptN, MinScryptR, MinScryptP)
 		}
-		// Scrypt requires a power-of-two N; report malformed values before deriving a key
+		// Reject non-power-of-two scrypt N before derivation
 		if p.N&(p.N-1) != 0 {
 			return fmt.Errorf("keystore: scrypt N=%d is not a power of two; refusing to unlock a keystore with a malformed KDF parameter", p.N)
 		}

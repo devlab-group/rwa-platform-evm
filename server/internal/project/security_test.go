@@ -53,7 +53,7 @@ func activeProject() *models.Project {
 	}
 }
 
-// setup seeds an Active project + an indexer checkpoint and returns the repos.
+// setup seeds an Active project and indexer checkpoint, returning the repositories
 func setup(t *testing.T) *repository.Repositories {
 	t.Helper()
 	repos := memory.New()
@@ -112,8 +112,7 @@ func reconcile(t *testing.T, repos *repository.Repositories) *models.SecuritySta
 	return p.Security
 }
 
-// TestReconcileSecurityBaseline: with no governance events, the projection
-// equals the immutable deploy-config baseline.
+// Without governance events, Security matches the verified deploy baseline
 func TestReconcileSecurityBaseline(t *testing.T) {
 	repos := setup(t)
 	s := reconcile(t, repos)
@@ -141,7 +140,7 @@ func TestReconcileSecurityBaseline(t *testing.T) {
 	}
 }
 
-// TestReconcileSecurityPauseFlips: the latest of Paused/Unpaused wins.
+// The latest Paused/Unpaused event wins
 func TestReconcileSecurityPauseFlips(t *testing.T) {
 	repos := setup(t)
 	addEvent(t, repos, tokenAddr, "Paused", 10, 0, map[string]any{"account": adminA})
@@ -152,15 +151,14 @@ func TestReconcileSecurityPauseFlips(t *testing.T) {
 	if reconcile(t, repos).Paused {
 		t.Fatal("expected unpaused after later Unpaused event")
 	}
-	// A Paused in an EARLIER block than the latest Unpaused must not win.
+	// An earlier Paused must not override a later Unpaused
 	addEvent(t, repos, tokenAddr, "Paused", 9, 0, map[string]any{"account": adminA})
 	if reconcile(t, repos).Paused {
 		t.Fatal("an earlier Paused must not override a later Unpaused")
 	}
 }
 
-// TestReconcileSecurityAuditorTreasuryPrice: single-value authority fields
-// track their latest events.
+// Authority fields and prices follow their latest events
 func TestReconcileSecurityAuditorTreasuryPrice(t *testing.T) {
 	repos := setup(t)
 	newAuditor := addr("0x0000000000000000000000000000000000000a11")
@@ -182,8 +180,8 @@ func TestReconcileSecurityAuditorTreasuryPrice(t *testing.T) {
 	}
 }
 
-// TestReconcileSecurityRoleDeltas: a grant adds a holder and a revoke removes
-// one; the derived single field prefers the still-holding configured address.
+// Grants add holders, revokes remove them, and the single-value field prefers the
+// configured address while it still holds the role
 func TestReconcileSecurityRoleDeltas(t *testing.T) {
 	repos := setup(t)
 	// Rotate the compliance operator: revoke the configured one, grant a new one.
@@ -199,14 +197,13 @@ func TestReconcileSecurityRoleDeltas(t *testing.T) {
 	}
 }
 
-// TestReconcileSecurityAdminMultiContract: DEFAULT_ADMIN_ROLE is held on every
-// contract, so revoking it on ONE contract must NOT drop the admin from the
-// union, which the per-contract fold makes possible
+// Revoking DEFAULT_ADMIN_ROLE on one contract must not remove an admin who still holds
+// it elsewhere from the union
 func TestReconcileSecurityAdminMultiContract(t *testing.T) {
 	repos := setup(t)
-	// A second admin granted on the vault only.
+	// Second admin granted on the Vault only
 	addEvent(t, repos, vaultAddr, "RoleGranted", 10, 0, map[string]any{"role": roleHex(bindings.DefaultAdminRole), "account": newAdminB, "sender": adminA})
-	// The original admin revoked on the vault only (still admin on 5 others).
+	// Original admin revoked on the Vault; still admin on five contracts
 	addEvent(t, repos, vaultAddr, "RoleRevoked", 11, 0, map[string]any{"role": roleHex(bindings.DefaultAdminRole), "account": adminA, "sender": adminA})
 
 	s := reconcile(t, repos)
@@ -214,14 +211,13 @@ func TestReconcileSecurityAdminMultiContract(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("DEFAULT_ADMIN_ROLE = %v, want both admins (adminA still holds on 5 contracts)", got)
 	}
-	// derived Admin still prefers the configured adminA (holds elsewhere).
+	// Admin still prefers adminA, who holds the role elsewhere
 	if s.Admin != adminA {
 		t.Errorf("derived Admin = %s, want configured %s (still holds on other contracts)", s.Admin, adminA)
 	}
 }
 
-// TestReconcileSecurityGrantThenRevokeSameContract: order matters, so a grant
-// followed by a revoke of the same account leaves it absent.
+// A grant followed by a revoke on the same contract leaves no holder
 func TestReconcileSecurityGrantThenRevokeSameContract(t *testing.T) {
 	repos := setup(t)
 	addEvent(t, repos, escrowAddr, "RoleGranted", 10, 0, map[string]any{"role": roleHex(bindings.RedemptionManagerRole), "account": newAdminB, "sender": adminA})
@@ -233,8 +229,7 @@ func TestReconcileSecurityGrantThenRevokeSameContract(t *testing.T) {
 	}
 }
 
-// TestReconcileSecurityReorgRemovesEvent: a reorged-out (Removed) event is
-// ignored, and a full replay re-derives from the baseline, leaving no stale state
+// Ignore Removed events and replay the baseline, leaving no stale state
 func TestReconcileSecurityReorgRemovesEvent(t *testing.T) {
 	repos := setup(t)
 	addEvent(t, repos, tokenAddr, "Paused", 10, 0, map[string]any{"account": adminA})
@@ -250,8 +245,7 @@ func TestReconcileSecurityReorgRemovesEvent(t *testing.T) {
 	}
 }
 
-// TestReconcileSecurityPendingAdminScheduled: a DefaultAdminTransferScheduled
-// with no later accept/cancel surfaces the newAdmin as PendingAdmin.
+// An uncancelled, unaccepted schedule exposes newAdmin as PendingAdmin
 func TestReconcileSecurityPendingAdminScheduled(t *testing.T) {
 	repos := setup(t)
 	addEvent(t, repos, tokenAddr, "DefaultAdminTransferScheduled", 10, 0, map[string]any{"newAdmin": newAdminB})
@@ -262,24 +256,22 @@ func TestReconcileSecurityPendingAdminScheduled(t *testing.T) {
 	}
 }
 
-// TestReconcileSecurityPendingAdminAccepted: once the scheduled newAdmin holds
-// DEFAULT_ADMIN_ROLE on that contract (the accept moves the role, emitting no
-// dedicated event), the transfer is no longer pending there.
+// Holding DEFAULT_ADMIN_ROLE on the scheduled contract signals acceptance without a
+// dedicated event and clears that pending transfer
 func TestReconcileSecurityPendingAdminAccepted(t *testing.T) {
 	repos := setup(t)
 	addEvent(t, repos, tokenAddr, "DefaultAdminTransferScheduled", 10, 0, map[string]any{"newAdmin": newAdminB})
 	if reconcile(t, repos).PendingAdmin != newAdminB {
 		t.Fatal("expected PendingAdmin set after schedule")
 	}
-	// accept: DEFAULT_ADMIN_ROLE granted to newAdminB on the token at a later block.
+	// Accept by granting DEFAULT_ADMIN_ROLE to newAdminB on the token at a later block
 	addEvent(t, repos, tokenAddr, "RoleGranted", 20, 0, map[string]any{"role": roleHex(bindings.DefaultAdminRole), "account": newAdminB, "sender": adminA})
 	if s := reconcile(t, repos); s.PendingAdmin != "" {
 		t.Fatalf("PendingAdmin = %q, want cleared after accept (role moved)", s.PendingAdmin)
 	}
 }
 
-// TestReconcileSecurityPendingAdminCanceled: a later DefaultAdminTransferCanceled
-// supersedes the schedule, clearing PendingAdmin.
+// A later DefaultAdminTransferCanceled clears PendingAdmin
 func TestReconcileSecurityPendingAdminCanceled(t *testing.T) {
 	repos := setup(t)
 	addEvent(t, repos, tokenAddr, "DefaultAdminTransferScheduled", 10, 0, map[string]any{"newAdmin": newAdminB})
@@ -290,15 +282,14 @@ func TestReconcileSecurityPendingAdminCanceled(t *testing.T) {
 	if s := reconcile(t, repos); s.PendingAdmin != "" {
 		t.Fatalf("PendingAdmin = %q, want cleared after cancel", s.PendingAdmin)
 	}
-	// A cancel in an EARLIER block than the latest schedule must not clear it.
+	// An earlier cancellation must not clear a later schedule
 	addEvent(t, repos, tokenAddr, "DefaultAdminTransferScheduled", 12, 0, map[string]any{"newAdmin": newAdminB})
 	if s := reconcile(t, repos); s.PendingAdmin != newAdminB {
 		t.Fatalf("PendingAdmin = %q, want %s (re-scheduled after the cancel)", s.PendingAdmin, newAdminB)
 	}
 }
 
-// TestReconcileSecurityPendingAdminReorged: a reorged-out (Removed) schedule is
-// ignored, so no transfer is reported pending.
+// A Removed schedule leaves no pending transfer
 func TestReconcileSecurityPendingAdminReorged(t *testing.T) {
 	repos := setup(t)
 	addRemovedEvent(t, repos, tokenAddr, "DefaultAdminTransferScheduled", 10, 0, map[string]any{"newAdmin": newAdminB})
@@ -307,8 +298,7 @@ func TestReconcileSecurityPendingAdminReorged(t *testing.T) {
 	}
 }
 
-// TestReconcileSecuritySkipsNonActive: an undeployed/non-Active project is not
-// projected (no Security written).
+// Skip non-Active projects without writing Security
 func TestReconcileSecuritySkipsNonActive(t *testing.T) {
 	repos := memory.New()
 	ctx := context.Background()
@@ -327,15 +317,13 @@ func TestReconcileSecuritySkipsNonActive(t *testing.T) {
 	}
 }
 
-// TestReconcileSecurityStrategySwap: Vault.setStrategy repoints the Vault at
-// a different pricing contract. The projection must follow it: the live
-// address, and the prices from the new contract, not the last ones the old one
-// emitted.
+// After Vault.setStrategy, project the new address and its price events, ignoring the
+// old strategy's updates
 func TestReconcileSecurityStrategySwap(t *testing.T) {
 	repos := setup(t)
 	newStrategy := addr("0x0000000000000000000000000000000000000b11")
 
-	// The old strategy priced up to the swap; the new one prices after it.
+	// Old strategy prices before the swap; new strategy prices after it
 	addEvent(t, repos, strategyAddr, "PurchasePriceUpdated", 10, 0, map[string]any{"newPrice": "1500"})
 	addEvent(t, repos, strategyAddr, "RedemptionPriceUpdated", 10, 1, map[string]any{"newPrice": "1400"})
 	addEvent(t, repos, vaultAddr, "StrategyChanged", 11, 0, map[string]any{"previousStrategy": strategyAddr, "newStrategy": newStrategy})
@@ -351,11 +339,8 @@ func TestReconcileSecurityStrategySwap(t *testing.T) {
 	}
 }
 
-// TestReconcileSecurityStrategySwapDropsUnverifiedBaseline: the deploy-config
-// role baseline was verified against the DEPLOYED strategy only. A swapped-in
-// contract inherits none of it and its authority is exactly what its own role
-// events show, so the configured pricer must not be reported as holding
-// PRICER_ROLE on a contract nobody checked.
+// A replacement strategy inherits no verified deploy-time roles; its own events must
+// establish PRICER_ROLE
 func TestReconcileSecurityStrategySwapDropsUnverifiedBaseline(t *testing.T) {
 	repos := setup(t)
 	newStrategy := addr("0x0000000000000000000000000000000000000b11")
@@ -371,7 +356,7 @@ func TestReconcileSecurityStrategySwapDropsUnverifiedBaseline(t *testing.T) {
 		}
 	}
 
-	// A grant on the NEW strategy is what puts a pricer back.
+	// Only a grant on the new strategy restores a pricer
 	addEvent(t, repos, newStrategy, "RoleGranted", 12, 0, map[string]any{"role": roleHex(bindings.PricerRole), "account": pricer, "sender": adminA})
 	s = reconcile(t, repos)
 	if s.Pricer != pricer {
@@ -379,7 +364,7 @@ func TestReconcileSecurityStrategySwapDropsUnverifiedBaseline(t *testing.T) {
 	}
 }
 
-// ---- ERC-7943 enforcement projection ----
+// ERC-7943 enforcement projection
 
 var (
 	holderA = addr("0x0000000000000000000000000000000000000a01")
@@ -391,8 +376,8 @@ func frozen(t *testing.T, repos *repository.Repositories, block uint64, logIndex
 	addEvent(t, repos, tokenAddr, "Frozen", block, logIndex, map[string]any{"account": account, "amount": amount})
 }
 
-// TestFrozenBalancesFold: absolute overwrites, a zero release, and two holders
-// coexisting, all replayed in (block, logIndex) order rather than insert order.
+// Replay absolute overwrites, zero release and coexisting holders by (block, logIndex),
+// regardless of insertion order
 func TestFrozenBalancesFold(t *testing.T) {
 	repos := setup(t)
 	if s := reconcile(t, repos); s.FrozenBalances != nil {
@@ -404,8 +389,7 @@ func TestFrozenBalancesFold(t *testing.T) {
 		t.Errorf("first freeze = %q, want 100", got)
 	}
 
-	// Out-of-order insertion: block 12 is written before block 11, so a fold
-	// that trusted arrival order would settle on 250 instead of 400.
+	// Insert block 12 before 11; arrival-order folding would yield 250 instead of 400
 	frozen(t, repos, 12, 0, holderA, "400")
 	frozen(t, repos, 11, 0, holderA, "250")
 	frozen(t, repos, 11, 1, holderB, "7")
@@ -417,8 +401,7 @@ func TestFrozenBalancesFold(t *testing.T) {
 		t.Errorf("holderB = %q, want 7", s.FrozenBalances[holderB])
 	}
 
-	// Zero releases the hold and drops the entry entirely, keeping the map
-	// bounded by currently-frozen holders.
+	// Zero removes the holder, bounding the map by currently frozen holders
 	frozen(t, repos, 13, 0, holderA, "0")
 	s = reconcile(t, repos)
 	if _, ok := s.FrozenBalances[holderA]; ok {
@@ -428,7 +411,7 @@ func TestFrozenBalancesFold(t *testing.T) {
 		t.Errorf("frozen balances = %v, want only holderB", s.FrozenBalances)
 	}
 
-	// Releasing the last holder omits the map rather than leaving zeros behind.
+	// Releasing the last holder omits the map
 	frozen(t, repos, 14, 0, holderB, "0")
 	if s := reconcile(t, repos); s.FrozenBalances != nil {
 		t.Errorf("frozen balances = %v, want nil once nothing is frozen", s.FrozenBalances)
@@ -445,8 +428,7 @@ func TestFrozenBalancesPreserveUint256(t *testing.T) {
 	}
 }
 
-// Replay is idempotent and address keys are normalized to EIP-55 regardless of
-// the casing the decoded event carried.
+// Replay is idempotent and normalizes address keys to EIP-55
 func TestFrozenBalancesIdempotentAndNormalized(t *testing.T) {
 	repos := setup(t)
 	frozen(t, repos, 10, 0, strings.ToLower(holderA), "100")
@@ -461,8 +443,7 @@ func TestFrozenBalancesIdempotentAndNormalized(t *testing.T) {
 	}
 }
 
-// A reorged-out freeze must not survive: the fold ignores removed events and
-// falls back to the state the surviving ones describe.
+// Ignore a Removed freeze and restore the surviving history's state
 func TestFrozenBalancesDropReorgedEvents(t *testing.T) {
 	repos := setup(t)
 	frozen(t, repos, 10, 0, holderA, "100")
@@ -481,9 +462,7 @@ func TestFrozenBalancesDropReorgedEvents(t *testing.T) {
 	}
 }
 
-// A Frozen event the projector cannot read is skipped, not fatal: the rest of the
-// security state (pause, roles, auditor, prices) must not go stale because one log
-// is unusable.
+// Skip unreadable Frozen events so pause, roles, auditor and prices keep updating
 func TestFrozenBalancesSkipMalformedEvent(t *testing.T) {
 	repos := setup(t)
 	addEvent(t, repos, tokenAddr, "Frozen", 10, 0, map[string]any{"account": holderA, "amount": "100"})
@@ -502,8 +481,8 @@ func TestFrozenBalancesSkipMalformedEvent(t *testing.T) {
 	}
 }
 
-// The same for an unusable ForcedTransfer: the summary falls back to the last
-// readable seizure, and the rest of the projection is unaffected.
+// Skip unreadable ForcedTransfer events, retaining the last readable summary and
+// updating the rest of Security
 func TestLastForcedTransferSkipsMalformedEvent(t *testing.T) {
 	repos := setup(t)
 	forcedTransfer(t, repos, 20, 0, holderA, holderB, "9")
@@ -518,7 +497,7 @@ func TestLastForcedTransferSkipsMalformedEvent(t *testing.T) {
 		t.Errorf("the rest of the projection went stale: auditor = %s paused = %v", s.Auditor, s.Paused)
 	}
 
-	// With nothing readable at all, the summary is absent rather than fatal.
+	// No readable event leaves the summary absent without failing
 	repos2 := setup(t)
 	addEvent(t, repos2, tokenAddr, "ForcedTransfer", 20, 0,
 		map[string]any{"from": holderA, "to": holderB, "amount": ""})
@@ -533,8 +512,8 @@ func forcedTransfer(t *testing.T, repos *repository.Repositories, block uint64, 
 		map[string]any{"from": from, "to": to, "amount": amount})
 }
 
-// TestLastForcedTransferIsCanonicalLatest: the summary follows (block,
-// logIndex) order, not insert order, and carries the chain coordinates.
+// Use the latest (block, logIndex), regardless of insertion order, and retain its chain
+// coordinates
 func TestLastForcedTransferIsCanonicalLatest(t *testing.T) {
 	repos := setup(t)
 	if s := reconcile(t, repos); s.LastForcedTransfer != nil {
@@ -555,8 +534,8 @@ func TestLastForcedTransferIsCanonicalLatest(t *testing.T) {
 	}
 }
 
-// A reorg that removes the latest seizure restores the previous one, and
-// removing every seizure clears the summary.
+// Removing the latest seizure restores the previous one; removing all clears the
+// summary
 func TestLastForcedTransferReorg(t *testing.T) {
 	repos := setup(t)
 	forcedTransfer(t, repos, 20, 0, holderA, holderB, "9")

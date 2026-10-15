@@ -22,8 +22,7 @@ import (
 
 func init() { gin.SetMode(gin.TestMode) }
 
-// TestRouterHandlerSwapIsAtomic checks that requests served concurrently with a
-// Store see one complete engine's response, never a nil or partly built engine
+// Concurrent requests during a router swap must see one complete engine's response
 func TestRouterHandlerSwapIsAtomic(t *testing.T) {
 	h := &routerHandler{}
 	r1 := gin.New()
@@ -71,9 +70,7 @@ func (f *fakeKeyProvider) Close() error {
 
 var _ keys.Provider = (*fakeKeyProvider)(nil)
 
-// TestProviderRegistryTracksAllGenerations checks that providers added by the
-// initial buildApp call and by a later watchProject rebuild are all closed at
-// shutdown
+// Registry cleanup closes providers from both initial wiring and later rebuilds
 func TestProviderRegistryTracksAllGenerations(t *testing.T) {
 	reg := &providerRegistry{}
 	gen1 := &fakeKeyProvider{}
@@ -91,8 +88,7 @@ func TestProviderRegistryTracksAllGenerations(t *testing.T) {
 	}
 }
 
-// TestAddressesFromProject checks that the deployed contract addresses and the
-// auditor come from the Project record
+// Read deployed addresses and auditor from the Project record
 func TestAddressesFromProject(t *testing.T) {
 	p := &models.Project{
 		Addresses: models.Addresses{
@@ -110,11 +106,8 @@ func TestAddressesFromProject(t *testing.T) {
 	}
 }
 
-// TestLoadProjectAddressesOnlyWhenActive checks that loadProjectAddresses
-// returns the Project record's addresses only when it is Active. A missing
-// record (factory-only boot) or a project that is not yet Active yields the zero
-// set, which keeps address-dependent services disabled until watchProject wires
-// them after activation.
+// Missing or inactive projects disable address-dependent services; watchProject wires
+// them once Active
 func TestLoadProjectAddressesOnlyWhenActive(t *testing.T) {
 	ctx := context.Background()
 
@@ -124,8 +117,7 @@ func TestLoadProjectAddressesOnlyWhenActive(t *testing.T) {
 		t.Fatalf("no project: got addrs=%+v auditor=%q, want zero", addrs, auditor)
 	}
 
-	// A deploying (not-yet-Active) project with addresses already computed:
-	// still gated (zero set) until it reaches Active
+	// Computed addresses remain gated until the project becomes Active
 	full := models.Addresses{
 		Token: "0xT001", Compliance: "0xC001", SupplyController: "0xS001",
 		Vault: "0xV001", RedemptionEscrow: "0xE001", Strategy: "0xST01", QuoteToken: "0xQ001",
@@ -152,9 +144,8 @@ func TestLoadProjectAddressesOnlyWhenActive(t *testing.T) {
 	}
 }
 
-// TestIndexerUnsafe checks the safety state behind /readyz and
-// runIndexDependentTicker: a missing checkpoint (normal at startup) and a normal
-// checkpoint are not unsafe, and a ReconciliationRequired checkpoint is
+// Missing and normal checkpoints are safe; ReconciliationRequired gates readiness and
+// dependent ticks
 func TestIndexerUnsafe(t *testing.T) {
 	repos := memory.New()
 	ctx := context.Background()
@@ -196,9 +187,7 @@ func TestIndexerUnsafe(t *testing.T) {
 	}
 }
 
-// TestRunIndexDependentTickerSkipsWhileUnsafe checks that the wrapper does not
-// call fn while the indexer is ReconciliationRequired and calls it again once
-// safe
+// Skip fn while ReconciliationRequired; resume once safe
 func TestRunIndexDependentTickerSkipsWhileUnsafe(t *testing.T) {
 	repos := memory.New()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -245,11 +234,8 @@ func TestRunIndexDependentTickerSkipsWhileUnsafe(t *testing.T) {
 	cancel()
 }
 
-// TestRunAsReconcilerLeaderSerializesConcurrentReplicas checks that one
-// reconciler leader runs per chain. While another replica, simulated by
-// acquiring the same lease key under a different holder id, holds the lease, fn
-// does not run. Once it is released, the next tick acquires the lease, runs fn
-// and releases the lease again.
+// A held name/chain lease blocks another replica; release allows the next tick to
+// acquire, run fn and release
 func TestRunAsReconcilerLeaderSerializesConcurrentReplicas(t *testing.T) {
 	repos := memory.New()
 	ctx := context.Background()
@@ -275,18 +261,15 @@ func TestRunAsReconcilerLeaderSerializesConcurrentReplicas(t *testing.T) {
 		t.Fatalf("expected fn to run once the lease is free, got %d calls", calls)
 	}
 
-	// The lease is released after fn returns, so a later tick can acquire it
+	// Returning from fn releases the lease for the next tick
 	_, ok, err = repos.NonceLeases.Acquire(ctx, "reconciler:test/leader:31337", "other-replica", time.Minute)
 	if err != nil || !ok {
 		t.Fatalf("expected the lease to be free again after runAsReconcilerLeader returned: ok=%v err=%v", ok, err)
 	}
 }
 
-// TestAddressesFromProjectPrefersLiveStrategy checks that after a
-// Vault.setStrategy the indexer scans Security.Strategy, the live pointer
-// projected from StrategyChanged, instead of Addresses.Strategy, which keeps the
-// deployment baseline. Otherwise a restart would watch the strategy the Vault no
-// longer prices through.
+// Watch Security.Strategy after Vault.setStrategy, including on restart; retain
+// Addresses.Strategy as the deployment baseline
 func TestAddressesFromProjectPrefersLiveStrategy(t *testing.T) {
 	p := &models.Project{
 		Addresses: models.Addresses{Token: "0xT001", Vault: "0xV001", Strategy: "0xST01"},

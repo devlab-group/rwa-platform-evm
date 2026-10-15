@@ -142,12 +142,9 @@ func TestValidate_ArrayConstraints(t *testing.T) {
 	}
 }
 
-// TestCompile_RejectsUnknownKeywordsByAllowlist pins the allowlist behavior: Compile
-// rejects any keyword outside the allowlist instead of ignoring it, including valid
-// Draft 2020-12 keywords this engine does not implement. A denylist would let a schema
-// using multipleOf compile and never enforce it. The allowlist follows
+// Reject unsupported constraints such as multipleOf instead of ignoring them, following
 // docs/spec/profile-schema-dialect.md and
-// shared/vectors/schema-dialect-conformance.json.
+// shared/vectors/schema-dialect-conformance.json
 func TestCompile_RejectsUnknownKeywordsByAllowlist(t *testing.T) {
 	for _, kw := range []string{
 		`"multipleOf":2`,
@@ -167,9 +164,8 @@ func TestCompile_RejectsUnknownKeywordsByAllowlist(t *testing.T) {
 	}
 }
 
-// TestCompile_RejectsRefSiblings: Draft 2020-12 gives $ref siblings independent
-// validation force, which this engine does not implement, so a $ref with any sibling
-// keyword is rejected instead of dropping the sibling
+// Reject all $ref siblings; their Draft 2020-12 validation semantics are not
+// implemented
 func TestCompile_RejectsRefSiblings(t *testing.T) {
 	raw := `{
 		"$defs": {"pos": {"type": "integer", "minimum": 0}},
@@ -181,10 +177,8 @@ func TestCompile_RejectsRefSiblings(t *testing.T) {
 	}
 }
 
-// TestCompile_RejectsDirectRefCycle and TestCompile_RejectsIndirectRefCycle guard the
-// $ref cycle tracking. Without it a self-referential schema would recurse until the
-// process crashed with a stack overflow, so a malicious package could crash the
-// auditor's signer.
+// Reject direct/indirect $ref cycles before recursive compilation can overflow the
+// signer stack
 func TestCompile_RejectsDirectRefCycle(t *testing.T) {
 	raw := `{"$defs": {"a": {"$ref": "#/$defs/a"}}, "$ref": "#/$defs/a"}`
 	if _, err := CompileBytes([]byte(raw)); err == nil {
@@ -205,8 +199,7 @@ func TestCompile_RejectsIndirectRefCycle(t *testing.T) {
 	}
 }
 
-// TestCompile_RejectsExcessiveDepth covers the depth limit for acyclic but very deep
-// schemas, whether through nesting or a long $ref chain
+// Bound acyclic depth through both nested schemas and $ref chains
 func TestCompile_RejectsExcessiveDepth(t *testing.T) {
 	defs := &strings.Builder{}
 	defs.WriteString(`{"$defs":{`)
@@ -228,8 +221,7 @@ func TestCompile_RejectsExcessiveDepth(t *testing.T) {
 	}
 }
 
-// TestValidate_ArchitectureGoldBarExample validates the gold-bar assetSchema example
-// against a conforming and a non-conforming asset record
+// Validate conforming and nonconforming gold-bar example assets
 func TestValidate_ArchitectureGoldBarExample(t *testing.T) {
 	s := mustCompile(t, `{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",

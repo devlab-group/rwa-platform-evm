@@ -12,11 +12,8 @@ function errorMessage(err: unknown): string {
 }
 
 /**
- * Like useAsync, for the cursor-paginated list endpoints. It fetches the first
- * page on mount and when `deps` change, and exposes `totalCount` and `hasMore`
- * from the X-Total-Count and X-Next-Cursor headers so a screen can show how
- * much is loaded. `loadMore()` appends the next page to `data`. The state has
- * useAsync's `{status, data, error}` shape, so it works with AsyncSection.
+ * AsyncSection-compatible cursor pagination: fetch on mount/deps changes, append on loadMore.
+ * Exposes totalCount and hasMore from X-Total-Count and X-Next-Cursor.
  */
 export function usePaginatedList<T>(
   fetchPage: (
@@ -80,8 +77,7 @@ export function usePaginatedList<T>(
       setTotalCount(page.totalCount);
       setNextCursor(page.nextCursor);
     } catch (err) {
-      // Keep the loaded items and cursor so a failed "load more" does not
-      // blank the page; report the failure separately so the operator can retry
+      // Preserve items and cursor on failure; expose the error separately for retry
       setLoadMoreError(errorMessage(err));
     } finally {
       setLoadingMore(false);

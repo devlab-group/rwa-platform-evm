@@ -39,10 +39,9 @@ type CreateRecordRequest struct {
 	Proofs   []ProofRecord
 }
 
-// RecordService creates asset records, builds their .rwa packages, and projects
-// on-chain Minted and AuditorChanged events onto record status and the auditor
-// address. It holds no signing key: the auditor-signed mint is broadcast from
-// the admin's wallet.
+// RecordService creates records and .rwa packages, and projects Minted and
+// AuditorChanged events onto record status and auditor address. It holds no signing
+// key; the admin wallet broadcasts auditor-signed mints.
 type RecordService struct {
 	records        repository.AssetRecordRepository
 	packages       repository.AuditPackageRepository
@@ -91,11 +90,9 @@ func (s *RecordService) currentAuditor() common.Address {
 	return s.auditor
 }
 
-// CreateRecord builds the metadata envelope for req, validates it against
-// profile, stores a Pending asset record with a random nonce, the recordKey and a
-// validUntil 30 days out, and publishes the canonical metadata to IPFS when an
-// IPFS client is configured. It returns repository.ErrAlreadyExists when the
-// recordId is taken.
+// CreateRecord validates req's metadata against profile, then stores a Pending record
+// with a random nonce, recordKey and 30-day validUntil before optional IPFS
+// publication. A duplicate recordId returns repository.ErrAlreadyExists.
 func (s *RecordService) CreateRecord(ctx context.Context, profile *Profile, projectID string, req CreateRecordRequest) (*models.AssetRecord, error) {
 	proofs := req.Proofs
 	if proofs == nil {
@@ -143,9 +140,8 @@ func (s *RecordService) CreateRecord(ctx context.Context, profile *Profile, proj
 		RecordKey: recordKey.Hex(), Nonce: nonce.String(), ValidUntil: now.Add(attestationValidUntilWindow).Unix(),
 		CreatedAt: now, UpdatedAt: now,
 	}
-	// the record is stored before publishing, so a duplicate RecordID fails here
-	// and cannot reach Publish; the replication layer also rejects a changed CID,
-	// see ipfs.ErrPublicationCIDConflict
+	// Reserve before Publish to reject duplicate RecordIDs. The replication layer also
+	// rejects changed CIDs; see ipfs.ErrPublicationCIDConflict.
 	if err := s.records.Create(ctx, record); err != nil {
 		return nil, err
 	}
@@ -169,17 +165,14 @@ func (s *RecordService) CreateRecord(ctx context.Context, profile *Profile, proj
 // ErrRecordNotFound is returned by ReissueRecord when no record has the given id
 var ErrRecordNotFound = errors.New("assets: record not found")
 
-// ErrRecordNotReissuable is returned by ReissueRecord for a record that is not
-// Pending. Reissue recovers a record whose attestation window lapsed before it
-// was minted. Changing the nonce of a Signed or Minted record could strand or
-// double-count an on-chain mint, and Rejected and Draft records cannot mint.
+// ErrRecordNotReissuable rejects non-Pending reissues. Changing Signed or Minted nonces
+// could strand or double-count a mint; Draft and Rejected records cannot mint.
 var ErrRecordNotReissuable = errors.New("assets: record is not Pending; only a Pending record may be reissued")
 
-// ReissueRecord gives a Pending record a new nonce and validUntil and leaves its
-// recordId, metadata, digests, recordKey, amount and unit unchanged, so a record
-// whose attestation window lapsed can be re-attested under the same recordId. A
-// package built earlier and any signature over it use the old nonce and no longer
-// match, so the package must be rebuilt and signed again.
+// ReissueRecord refreshes a Pending record's nonce and validUntil, allowing recovery
+// after expiry. recordId, metadata, digests, recordKey, amount and unit stay unchanged.
+// Earlier packages and signatures contain the old nonce, so rebuild and re-sign to
+// match the updated record.
 func (s *RecordService) ReissueRecord(ctx context.Context, recordID string) (*models.AssetRecord, error) {
 	record, err := s.records.Get(ctx, recordID)
 	if err != nil {
@@ -214,9 +207,8 @@ func (s *RecordService) ReissueRecord(ctx context.Context, recordID string) (*mo
 	return record, nil
 }
 
-// ErrRecordConcurrentlyModified is returned when a version-conditional update
-// of a record lost a race to a concurrent update. The caller should re-read the
-// record before deciding what to do.
+// ErrRecordConcurrentlyModified signals a lost version-conditional update. Re-read the
+// record before deciding how to proceed.
 var ErrRecordConcurrentlyModified = errors.New("assets: record was concurrently modified; re-read and retry")
 
 func toDomainProofs(proofs []ProofRecord) []models.Proof {
@@ -290,12 +282,11 @@ func (s *RecordService) liveFieldsFor(record *models.AssetRecord, profileDigest 
 	}, nil
 }
 
-// BuildPackage builds the .rwa package for record from profileRaw, the
-// project's canonical Asset Profile bytes, and the record's stored canonical
-// metadata. It uses the record's stored recordKey, nonce, validUntil, amount and
-// metadataDigest plus the service's current auditor and vault. Identical record
-// state and auditor therefore give identical bytes, and the package changes if the
-// auditor changes. It stores a models.AuditPackage row describing the build.
+// BuildPackage combines profileRaw and profileDigest with the record's canonical
+// metadata, recordKey, nonce, validUntil, amount and metadataDigest, plus the service's
+// chain ID, controller, current auditor and vault. Identical inputs produce identical
+// .rwa bytes; auditor rotation changes the package. It stores a models.AuditPackage
+// build row.
 func (s *RecordService) BuildPackage(ctx context.Context, record *models.AssetRecord, profileDigest [32]byte, profileRaw []byte) ([]byte, error) {
 	fields, err := s.liveFieldsFor(record, profileDigest)
 	if err != nil {

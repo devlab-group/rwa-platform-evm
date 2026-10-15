@@ -48,9 +48,8 @@ func requestChallenge(t *testing.T, env *testEnv, address string) string {
 	return resp.Message
 }
 
-// TestAdminAuthChallengeSessionFlow covers the wallet-signature to JWT login:
-// the admin requests a challenge, signs it, exchanges the signature for a JWT, and
-// that JWT authorizes an admin-only route
+// TestAdminAuthChallengeSessionFlow checks that signing and exchanging an admin
+// challenge yields a JWT authorizing an admin-only route
 func TestAdminAuthChallengeSessionFlow(t *testing.T) {
 	env := setupTestApp(t)
 

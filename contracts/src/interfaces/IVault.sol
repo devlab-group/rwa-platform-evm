@@ -2,9 +2,8 @@
 pragma solidity ^0.8.24;
 
 /// @title IVault
-/// @notice Holds inventory, sells for one quote token, and withdraws sale proceeds.
-/// @dev Stable interface; see docs/spec/contracts.md. `buy` is the only way RWA leaves the
-///      Vault to a buyer.
+/// @notice Sells RWA inventory for a quote token; withdraws proceeds to treasury
+/// @dev Stable interface; see docs/spec/contracts.md. Inventory sales use buy.
 interface IVault {
     event Purchased(
         address indexed buyer, address indexed recipient, uint256 tokenAmount, uint256 quoteAmount, address strategy

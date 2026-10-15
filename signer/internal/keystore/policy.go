@@ -5,15 +5,12 @@ import (
 	"strings"
 )
 
-// MinPasswordLength is the minimum length, in bytes, of a password for a keystore this
-// signer creates. NIST SP 800-63B recommends weighting length over composition rules,
-// so the policy is a length floor, a distinct-character floor and a small blocklist
-// instead of upper-case, digit or symbol requirements.
+// MinPasswordLength is the byte-length floor for newly created keystores;
+// ValidatePassword also checks distinct characters and a blocklist
 const MinPasswordLength = 12
 
-// commonWeakPasswords is a short blocklist of trivially guessable passwords. It is small
-// because the signer is offline and has no breached-password corpus to check against,
-// but it still rejects the most obvious placeholders.
+// commonWeakPasswords is a small local blocklist, used without an online
+// breached-password lookup
 var commonWeakPasswords = map[string]bool{
 	"password":                     true,
 	"passw0rd1234":                 true,
@@ -24,10 +21,9 @@ var commonWeakPasswords = map[string]bool{
 	"letmein123456":                true,
 }
 
-// ValidatePassword requires MinPasswordLength bytes, six distinct characters
-// and no case-insensitive blocklist match. CreateNative enforces it for keystore
-// create/import; Load does not reject an existing keystore's password. Errors
-// never include the password.
+// ValidatePassword requires MinPasswordLength bytes, six distinct runes and no
+// case-insensitive blocklist match; errors omit the password. CreateNative enforces it
+// for create/import, while Load accepts existing passwords.
 func ValidatePassword(password string) error {
 	if len(password) < MinPasswordLength {
 		return fmt.Errorf("keystore: password must be at least %d bytes (got %d)", MinPasswordLength, len(password))
@@ -41,9 +37,8 @@ func ValidatePassword(password string) error {
 	return nil
 }
 
-// lowEntropy rejects passwords built from a very small alphabet repeated to reach the
-// length floor, such as "aaaaaaaaaaaa" or "ababababbaba", which the length check alone
-// would not catch
+// lowEntropy rejects fewer than six distinct runes, even when repetition meets the
+// length floor
 func lowEntropy(password string) bool {
 	seen := make(map[rune]bool)
 	for _, r := range password {

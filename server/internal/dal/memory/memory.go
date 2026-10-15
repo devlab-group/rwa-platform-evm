@@ -1,8 +1,6 @@
-// Package memory implements every internal/dal/repository interface in memory. It
-// backs unit tests, so business logic can be exercised without a database, and the
-// PERSISTENCE_MODE=memory setting for local runs. Its data is not durable and the
-// platform refuses to start with it in production. MongoDB is the production
-// store.
+// Package memory implements repository interfaces for unit tests and
+// PERSISTENCE_MODE=memory local runs. Data is volatile; production configuration
+// requires MongoDB.
 package memory
 
 import (

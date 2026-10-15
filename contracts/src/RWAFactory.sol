@@ -12,10 +12,8 @@ import {RedemptionEscrowDeployer} from "./factory/RedemptionEscrowDeployer.sol";
 
 /// @title RWAFactory
 /// @notice Deploys and wires a versioned project stack in one transaction
-/// @dev Four stateless helpers hold child creation code to keep runtime bytecode below
-///      EIP-170's 24,576-byte limit; see ComplianceTokenDeployer. delegatecall preserves
-///      the factory as constructor msg.sender for the registry's bootstrap compliance
-///      role and RWAToken's one-time controller and escrow wiring.
+/// @dev Delegatecalls four stateless helpers to preserve factory-owned bootstrap wiring while
+///      splitting creation code below the EIP-170 runtime limit; see ComplianceTokenDeployer
 contract RWAFactory is IRWAFactory {
     string private constant VERSION = "rwa-v2";
 
@@ -62,7 +60,7 @@ contract RWAFactory is IRWAFactory {
         RWAToken(token).setRedemptionEscrow(escrow);
 
         ComplianceRegistry complianceRegistry = ComplianceRegistry(compliance);
-        // Pin Vault + RedemptionEscrow so COMPLIANCE_ROLE can never block them later
+        // Pin Vault and RedemptionEscrow to Allowed with no expiry
         complianceRegistry.setSystemAddresses(vault, escrow);
         complianceRegistry.setStatus(vault, IComplianceRegistry.ComplianceStatus.Allowed, 0);
         complianceRegistry.setStatus(escrow, IComplianceRegistry.ComplianceStatus.Allowed, 0);
@@ -132,9 +130,7 @@ contract RWAFactory is IRWAFactory {
     }
 
     function _delegateDeploy(address target, bytes memory data) private returns (bytes memory) {
-        // `target` is one of four immutable deployer addresses checked nonzero in the
-        // constructor, and `data` is an abi.encodeCall(...) with a fixed selector, so a caller
-        // cannot redirect the delegatecall to another target or function
+        // Project callers cannot change these immutable, nonzero helper targets or fixed selectors
         // slither-disable-next-line controlled-delegatecall
         (bool ok, bytes memory ret) = target.delegatecall(data);
         if (!ok) {

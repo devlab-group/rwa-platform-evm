@@ -55,12 +55,10 @@ func cloneMeta(metadata map[string]any) map[string]any {
 	return m
 }
 
-// RecordIntent appends an audit entry for an operation before its external
-// effect and returns the entry's id. A privileged caller must treat an error as
-// fatal and skip the effect, since the actor and action could not be recorded.
-// After the effect it calls RecordResult with the returned id. The entry is
-// tagged phase="intent", so an intent with no matching result shows an effect
-// that may have been attempted without a recorded outcome.
+// RecordIntent records actor and action before an external effect, returning its entry
+// id. Callers must abort on error; otherwise call RecordResult after the effect.
+// phase="intent" without a matching result marks a possibly attempted effect with no
+// recorded outcome.
 func (l *Logger) RecordIntent(ctx context.Context, category, actor, action, target string, metadata map[string]any) (string, error) {
 	id := uuid.NewString()
 	m := cloneMeta(metadata)
@@ -79,11 +77,10 @@ func (l *Logger) RecordIntent(ctx context.Context, category, actor, action, targ
 	return id, nil
 }
 
-// RecordResult appends the completion entry for an earlier RecordIntent. The
-// entry is tagged phase="result" with the intentId and ok, plus any outcome
-// fields the caller puts in metadata, such as txHash or error. A failure is
-// returned so the caller can log it. It need not fail the operation, because
-// the intent already recorded the actor and action.
+// RecordResult completes RecordIntent with phase="result", intentId, ok and
+// caller-supplied outcome metadata such as txHash or error. Return write failures for
+// logging; callers need not fail the operation because its invocation is already
+// recorded.
 func (l *Logger) RecordResult(ctx context.Context, intentID, category, actor, action, target string, ok bool, metadata map[string]any) error {
 	m := cloneMeta(metadata)
 	m["phase"] = "result"

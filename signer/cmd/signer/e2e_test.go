@@ -293,8 +293,8 @@ const (
 	testProjectID  = "4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61"
 )
 
-// TestE2E_SignGoldenPackage runs the built CLI against a consistent package
-// and checks signed-result.json and its signature
+// Sign a consistent package with the built CLI and verify signed-result.json and its
+// signature
 func TestE2E_SignGoldenPackage(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -362,8 +362,7 @@ func TestE2E_SignGoldenPackage(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsTamperedAmount checks that changing the archived amount
-// without updating manifest hashes prevents signing
+// Refuse an archived amount changed without updating manifest hashes
 func TestE2E_RejectsTamperedAmount(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -430,8 +429,7 @@ func TestE2E_RejectsTamperedAmount(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsCrossProjectPackage rejects disagreement between profile
-// and metadata project IDs
+// Reject mismatched profile and metadata project IDs
 func TestE2E_RejectsCrossProjectPackage(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -466,7 +464,7 @@ func TestE2E_RejectsCrossProjectPackage(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsWrongIssuanceUnit requires metadata issuance.unit to match profile tokenUnit
+// Require metadata issuance.unit to match profile tokenUnit
 func TestE2E_RejectsWrongIssuanceUnit(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -498,7 +496,7 @@ func TestE2E_RejectsWrongIssuanceUnit(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsWorldReadablePasswordFile refuses passwords accessible to other accounts
+// Reject password files accessible to other accounts
 func TestE2E_RejectsWorldReadablePasswordFile(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -532,7 +530,7 @@ func TestE2E_RejectsWorldReadablePasswordFile(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsWeakKDFParams refuses V3 parameters below the policy floor before derivation
+// Reject V3 parameters below the KDF floor before derivation
 func TestE2E_RejectsWeakKDFParams(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -579,8 +577,7 @@ func TestE2E_RejectsWeakKDFParams(t *testing.T) {
 	}
 }
 
-// TestE2E_SignsWithNativeKeystoreFormat signs with rwa-argon2id-v1 through --keystore
-// without a format-selection flag
+// Auto-detect rwa-argon2id-v1 through --keystore
 func TestE2E_SignsWithNativeKeystoreFormat(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -625,8 +622,7 @@ func TestE2E_SignsWithNativeKeystoreFormat(t *testing.T) {
 	}
 }
 
-// TestE2E_NeverExportsPrivateKey checks that the raw private-key hex is absent
-// from stdout, stderr and signed-result.json
+// Keep raw private-key hex out of stdout, stderr and signed-result.json
 func TestE2E_NeverExportsPrivateKey(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -676,8 +672,7 @@ func TestE2E_NeverExportsPrivateKey(t *testing.T) {
 	}
 }
 
-// TestE2E_SignWritesVerifiableAuditTrail verifies the main log and anchor after signing
-// and checks for unlock_success and signed events
+// Verify audit log and anchor after signing, including unlock_success and signed events
 func TestE2E_SignWritesVerifiableAuditTrail(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -714,7 +709,7 @@ func TestE2E_SignWritesVerifiableAuditTrail(t *testing.T) {
 	}
 }
 
-// TestE2E_RefusesToSignWhenAuditLogIsCorrupted prevents signing with a broken audit chain
+// Refuse signing with a broken audit chain
 func TestE2E_RefusesToSignWhenAuditLogIsCorrupted(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -749,8 +744,7 @@ func TestE2E_RefusesToSignWhenAuditLogIsCorrupted(t *testing.T) {
 	}
 }
 
-// TestE2E_ProductionFailsClosedWhenAuditLogCannotBeWritten requires normal signing
-// to fail when audit writes cannot complete
+// Normal signing must fail when audit writes cannot complete
 func TestE2E_ProductionFailsClosedWhenAuditLogCannotBeWritten(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permission bits do not work the same way on windows")
@@ -793,7 +787,7 @@ func TestE2E_ProductionFailsClosedWhenAuditLogCannotBeWritten(t *testing.T) {
 	}
 }
 
-// TestE2E_RequiresPolicyFlag refuses a valid package when --policy is absent
+// Require --policy even for a valid package
 func TestE2E_RequiresPolicyFlag(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -823,7 +817,7 @@ func TestE2E_RequiresPolicyFlag(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsYesWithoutUnsafeTestMode requires explicit test mode to skip confirmation
+// Require --unsafe-test-mode to skip confirmation with --yes
 func TestE2E_RejectsYesWithoutUnsafeTestMode(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -854,8 +848,7 @@ func TestE2E_RejectsYesWithoutUnsafeTestMode(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsPolicyProjectIDMismatch refuses an internally consistent package
-// for a project other than the one pinned by policy
+// Reject an internally consistent package for a project outside policy
 func TestE2E_RejectsPolicyProjectIDMismatch(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -886,8 +879,7 @@ func TestE2E_RejectsPolicyProjectIDMismatch(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsPolicyControllerMismatch requires the policy controller
-// to match typed-data domain.verifyingContract
+// Require policy controller to match domain.verifyingContract
 func TestE2E_RejectsPolicyControllerMismatch(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -918,7 +910,7 @@ func TestE2E_RejectsPolicyControllerMismatch(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsExpiredValidUntil refuses a deadline that has already passed
+// Reject an expired validUntil
 func TestE2E_RejectsExpiredValidUntil(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -953,7 +945,7 @@ func TestE2E_RejectsExpiredValidUntil(t *testing.T) {
 	}
 }
 
-// TestE2E_RejectsFarFutureValidUntil refuses a deadline beyond the policy lifetime
+// Reject validUntil beyond the policy lifetime
 func TestE2E_RejectsFarFutureValidUntil(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -988,8 +980,7 @@ func TestE2E_RejectsFarFutureValidUntil(t *testing.T) {
 	}
 }
 
-// TestE2E_AcceptsExtendedLifetimePolicy accepts a deadline within a longer policy window
-// that would exceed the default 30 days
+// Accept a longer policy window exceeding the default 30 days
 func TestE2E_AcceptsExtendedLifetimePolicy(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -1021,8 +1012,7 @@ func TestE2E_AcceptsExtendedLifetimePolicy(t *testing.T) {
 	}
 }
 
-// TestE2E_KeystoreCreate_WritesUsableKeystore decrypts a newly created keystore
-// and checks that creation does not print the generated private key
+// Decrypt a newly created keystore and verify creation does not print its private key
 func TestE2E_KeystoreCreate_WritesUsableKeystore(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -1118,8 +1108,7 @@ func TestE2E_KeystoreCreate_RefusesToOverwrite(t *testing.T) {
 	}
 }
 
-// TestE2E_KeystoreCreate_RefusesToFollowDanglingSymlink checks that exclusive creation
-// refuses a dangling symlink at --out without writing its target
+// Exclusive creation must reject a dangling --out symlink without writing its target
 func TestE2E_KeystoreCreate_RefusesToFollowDanglingSymlink(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
@@ -1148,8 +1137,7 @@ func TestE2E_KeystoreCreate_RefusesToFollowDanglingSymlink(t *testing.T) {
 	}
 }
 
-// TestE2E_KeystoreImport_RoundTrip checks that importing an owner-only hex key file
-// preserves the key and address after decryption
+// Importing an owner-only hex key file preserves its key and address after decryption
 func TestE2E_KeystoreImport_RoundTrip(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()

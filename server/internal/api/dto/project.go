@@ -6,10 +6,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// BootstrapConfigResponse mirrors components.schemas.BootstrapConfig: the chain
-// id, the factory address the admin's web wallet broadcasts RWAFactory.deploy
-// to, and the operator-configured projectId for the Asset Profile. It is public
-// and exposes only these bootstrap parameters.
+// BootstrapConfigResponse exposes the public chain ID, deployment factory address and
+// operator-configured profile projectId from components.schemas.BootstrapConfig
 type BootstrapConfigResponse struct {
 	ChainID        int64  `json:"chainId"`
 	FactoryAddress string `json:"factoryAddress"`
@@ -35,10 +33,9 @@ type ProjectResponse struct {
 	ProfileDigest string `json:"profileDigest"`
 	// Legal comes from the stored Asset Profile and is omitted when absent
 	Legal *models.LegalDescriptor `json:"legal,omitempty"`
-	// Status is the deployment lifecycle state (Undeployed, Deploying, Verifying,
-	// Active or Failed). VerificationNote carries the reason a deployment Failed
-	// or a non-fatal verification gap on an Active project (see
-	// models.Project.VerificationNote).
+	// Status is Undeployed, Deploying, Verifying, Active or Failed. VerificationNote
+	// explains failure or a non-fatal Active verification gap; see
+	// models.Project.VerificationNote.
 	Status            string    `json:"status,omitempty"`
 	VerificationNote  string    `json:"verificationNote,omitempty"`
 	Addresses         Addresses `json:"addresses"`
@@ -53,37 +50,31 @@ type ProjectResponse struct {
 	BytecodeVerified      bool        `json:"bytecodeVerified"`
 	Roles                 RoleHolders `json:"roles,omitempty"`
 
-	// PurchasePricePerWholeToken and RedemptionPricePerWholeToken are prices in
-	// quote-token minimal units (scale by quoteDecimals for display). Like the
-	// governance fields, they come from the projection in Project.Security and
-	// fall back to the deploy-time values when the projection has none.
+	// Prices use quote-token minimal units; scale by quoteDecimals for display. They come
+	// from Project.Security, falling back to deploy-time values when absent, like the
+	// governance fields below.
 	PurchasePricePerWholeToken   string `json:"purchasePricePerWholeToken,omitempty"`
 	RedemptionPricePerWholeToken string `json:"redemptionPricePerWholeToken,omitempty"`
 
-	// Paused, Auditor, Treasury, RedemptionManager, PendingAdmin, Roles and the
-	// prices above come from the projection in models.Project.Security, which
-	// project.ReconcileSecurity builds from the indexed AccessControl and
-	// governance events, so out-of-band changes appear here.
-	// SecurityAsOfBlock and SecurityAsOfTime report how current that projection
-	// is. SecurityStale is computed from the projection's age and the indexer
-	// checkpoint (see securityStale in package api). Before the first projection,
-	// the response uses the deploy-time values and reports stale.
-	// ERC-7943 enforcement state (frozen wallets, last forced transfer) is not
-	// here because the response is public; see EnforcementResponse, and an
-	// investor reads their own frozen amount from GET /me/wallet-status.
+	// Paused, Auditor, Treasury, RedemptionManager, PendingAdmin, Roles and prices reflect
+	// indexed AccessControl and governance events through project.ReconcileSecurity,
+	// including changes made outside the server. SecurityAsOfBlock and SecurityAsOfTime
+	// show how current the projection is; api.securityStale checks its age and the indexer
+	// checkpoint. Before the first projection, deploy-time values are reported as stale.
+	// ERC-7943 enforcement data is omitted from this public response. Admins use
+	// EnforcementResponse; investors read their own frozen amount through GET
+	// /me/wallet-status.
 	SecurityAsOfBlock uint64 `json:"securityAsOfBlock,omitempty"`
 	SecurityAsOfTime  string `json:"securityAsOfTime,omitempty"`
 	SecurityStale     bool   `json:"securityStale"`
 }
 
-// EnforcementResponse mirrors components.schemas.Enforcement: the ERC-7943
-// state an operator acts on. It is admin-only because it names the wallets the
-// issuer has frozen, which is operational compliance data even though the
-// events are public on-chain.
+// EnforcementResponse mirrors components.schemas.Enforcement. It is admin-only because
+// issuer-frozen wallets are operational compliance data, despite the events being
+// public on-chain.
 type EnforcementResponse struct {
-	// FrozenBalances maps a holder address to the frozen amount held against
-	// it, in token minimal units as a base-10 string. Only currently frozen
-	// holders appear; omitted entirely when nothing is frozen.
+	// FrozenBalances maps currently frozen holder addresses to amounts in token minimal
+	// units, encoded as decimal strings. It is omitted when empty.
 	FrozenBalances map[string]string `json:"frozenBalances,omitempty"`
 	// LastForcedTransfer is the most recent forced transfer, as an audit hint; the
 	// chain holds the authoritative history

@@ -14,18 +14,18 @@ environment: development
 
 http:
   addr: ":8080"
-  # Unauthenticated metrics use a separate, loopback listener by default.
-  # Protect a remote metrics_addr with your own access controls.
+  # Metrics are unauthenticated on a separate listener (loopback by default).
+  # Protect remote metrics_addr access.
   metrics_addr: "127.0.0.1:9090"
-  # Slowloris / slow-client hardening for both listeners.
+  # Timeouts protect both listeners from slow clients
   read_header_timeout: "5s"
   read_timeout: "30s"
   write_timeout: "60s"
   idle_timeout: "120s"
   max_header_bytes: 32768        # 32 KiB
   max_request_body_bytes: 2097152 # 2 MiB; <=0 disables (production requires an override)
-  # Empty trusts no forwarding proxies; client-IP limits use the TCP peer.
-  # Behind a proxy, list its actual addresses or CIDRs.
+  # Empty trusts no proxies; IP limits use the TCP peer.
+  # Behind a proxy, list its addresses or CIDRs.
   trusted_proxies: []
   # trusted_proxies:
   #   - "10.0.0.1"
@@ -39,69 +39,64 @@ http:
 chain:
   rpc_url: "http://127.0.0.1:8545"
   id: 31337
-  confirmations: 3               # 0 treats a tx as final the instant it is mined (rejected in production)
+  confirmations: 3               # 0 confirms transactions when mined (rejected in production)
   fee_mode: "eip1559"            # "eip1559" or "legacy"
   # Optional HTTP(S) explorer base, e.g. "https://sepolia.etherscan.io".
-  # Links append /tx/<hash>; queries, fragments and credentials are rejected.
+  # Appends /tx/<hash>; rejects queries, fragments and credentials.
   explorer_url: ""
-  # Absolute transaction-fee caps (base-10 wei strings; empty means no cap).
-  # Production requires at least one of max_fee_per_gas_wei / max_tx_total_cost_wei.
+  # Fee caps in base-10 wei; empty means uncapped.
+  # Production requires max_fee_per_gas_wei or max_tx_total_cost_wei.
   max_fee_per_gas_wei: ""
   max_tip_per_gas_wei: ""
   max_tx_total_cost_wei: ""
 
-# Bootstrap deployment settings; deployed addresses and auditor come from the
-# indexed DB Project record.
+# Bootstrap settings; deployed addresses and auditor come from the DB Project
 contract:
-  # Deployment entry point; may be empty when serving an existing project.
+  # Deployment entry point; optional for an existing project
   factory_address: ""
-  # Initial scan height before a checkpoint exists; 0 scans from genesis.
+  # Scan start before any checkpoint; 0 means genesis
   start_block: 0
-  # Pin the profile UUID before startup. Setup reads it and creation requires a match.
-  # Empty disables the gate outside production; production requires it.
+  # Pin the profile UUID before startup; Setup reads it and creation must match.
+  # Empty disables matching outside production; production requires it.
   project_id: ""
 
 mongo:
   uri: "mongodb://127.0.0.1:27017"
   db: "rwa_platform"
-  # "mongo" (default) or "memory". "memory" is a local/CI opt-in only and is
-  # refused in production.
+  # "mongo" (default) or development/CI-only "memory"
   persistence_mode: "mongo"
 
 ipfs:
   api_url: "http://127.0.0.1:5001"
-  # At least one backup destination is required in production (an asset
-  # package is not durably published until replication_threshold of the
-  # configured backups have pinned it).
+  # Production requires a backup; durable publication requires replication_threshold
+  # backups to pin and verify the package
   backup_archive_dir: ""         # local reproducible content archive
   backup_kubo_url: ""            # a second, independent Kubo node
   replication_threshold: 1       # must be 1..(configured backup count) in production
 
 security:
-  # SECRET. Signs generic KYC webhooks (kyc.provider "none"). Empty disables
-  # them outside production. If set, must be at least 32 bytes; production
-  # requires it for provider "none" and rejects known placeholders.
+  # SECRET for generic KYC webhooks (kyc.provider "none").
+  # Empty disables them outside production; configured secrets need >=32 bytes.
+  # Production requires it for "none" and rejects known placeholders.
   kyc_webhook_hmac_secret: ""
   idempotency_ttl: "24h"
   wallet_challenge_ttl: "15m"
   wallet_session_ttl: "15m"
-  jwt_ttl: "24h"                 # admin JWT lifetime; a lapsed token costs one wallet re-login
-  # Wallet authorized for API login: sign /auth/challenge to obtain an admin JWT.
+  jwt_ttl: "24h"                 # admin JWT lifetime; expiry requires wallet re-login
+  # Login wallet: sign the /auth/challenge message for an admin JWT.
   # Production requires admin_address and jwt_secret.
   admin_address: ""             # 0x-prefixed wallet address of the single admin
-  # SECRET. HMAC key that signs admin JWTs. Production requires at least 32
-  # bytes and not a known placeholder.
+  # SECRET signing admin JWTs; production requires >=32 bytes and rejects placeholders
   jwt_secret: ""
   rate_limit_rps: 50             # <=0 disables per-IP rate limiting (production requires an override)
   rate_limit_burst: 100
 
 keys:
-  # provider_mode selects the hot-key backend: "raw" (the *_key hex fields
-  # below), "local-keystore", "vault", or "kms-mock". In production, "raw"
-  # with any hot key configured, and "kms-mock", are refused.
+  # Hot-key backend: "raw" (compliance_key), "local-keystore", "vault" or "kms-mock".
+  # Production rejects "kms-mock" and "raw" with a configured compliance_key.
   provider_mode: "raw"
-  # SECRET in raw mode: compliance private key; empty disables status writes.
-  # Admin, mint, treasury and pricing transactions use wallets or Safes.
+  # SECRET raw-mode compliance key; empty disables raw-mode status writes.
+  # Admin, mint, treasury and pricing calls use wallets or Safes.
   compliance_key: ""
   keystore_dir: ""
   keystore_password_file: ""
@@ -113,10 +108,10 @@ keys:
 # Authenticated KYC decisions pass replay, freshness and ownership checks before
 # asynchronous compliance relay. Monitoring signals require officer review.
 kyc:
-  # "none" (default): no server-initiated verification; the KYC webhook accepts
-  #   the generic HMAC shape signed with security.kyc_webhook_hmac_secret.
-  # "sumsub": Sum&Substance.  "onfido": Onfido (Entrust).
-  # Selecting a provider requires that provider's fields below.
+  # "none" (default): generic HMAC webhook only, using
+  # security.kyc_webhook_hmac_secret.
+  # "sumsub": Sum&Substance; "onfido": Onfido (Entrust).
+  # Providers require their credentials below.
   provider: "none"
   sumsub:
     app_token: ""              # SECRET: Sumsub app token
@@ -132,8 +127,8 @@ kyc:
     referrer: ""               # SDK token referrer pattern; default "*://*/*"
 
 tx:
-  # in-process requires one process per hot key; mongo-lease adds shared nonce coordination
-  # and requires persistence_mode: mongo.
+  # in-process needs one process per hot key; mongo-lease shares nonce leases
+  # and requires persistence_mode: mongo
   coordination_mode: "in-process"
   lease_ttl: "30s"
 
@@ -141,8 +136,7 @@ alerts:
   pending_redemption_sla: "48h"
   funded_claim_failure_sla: "24h"
 
-# Emergency escape hatches for the production fail-closed checks.
-# Leave false/omitted unless you have a specific, documented reason.
+# Production emergency overrides; leave false unless the reason is documented
 production_overrides:
   allow_unbounded_request_body: false
   allow_disabled_rate_limit: false

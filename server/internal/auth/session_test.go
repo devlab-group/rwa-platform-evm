@@ -76,11 +76,9 @@ func TestSessionManagerIssueIsIndependentPerCall(t *testing.T) {
 	}
 }
 
-// TestSessionManagerCrossReplicaValidateAndLogout checks the shared-store
-// behavior. Two SessionManagers that share one repository, as replicas share
-// the MongoDB collection, see each other's sessions: a token issued by
-// "replica A" validates on "replica B", and deleting it through the store stops
-// it validating on both.
+// TestSessionManagerCrossReplicaValidateAndLogout shares a repository between two
+// managers, as MongoDB replicas do. Each validates the other's token; deleting it
+// invalidates it on both.
 func TestSessionManagerCrossReplicaValidateAndLogout(t *testing.T) {
 	ctx := context.Background()
 	sharedStore := memory.NewWalletSessionRepository()

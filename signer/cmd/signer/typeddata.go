@@ -11,9 +11,9 @@ import (
 	"github.com/rwa-platform/signer/internal/attestation"
 )
 
-// typedData is the parsed shape of typed-data.json inside a .rwa package, as defined by
-// shared/schemas/typed-data.schema.json. The schema leaves the per-type field rules
-// (recordId and recordKey for a mint, operationId for a burn) to parseTypedData.
+// typedData models typed-data.json under shared/schemas/typed-data.schema.json;
+// parseTypedData enforces mint recordId/recordKey and burn operationId rules left open
+// by that schema
 type typedData struct {
 	PrimaryType string `json:"primaryType"`
 	Domain      struct {

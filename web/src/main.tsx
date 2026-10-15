@@ -19,8 +19,6 @@ createRoot(container).render(
   </StrictMode>,
 );
 
-// Load a persisted admin JWT from IndexedDB in the background. Mounting does
-// not wait for it, so the shell renders at once; when hydration resolves,
-// subscribers are notified and the admin area replaces the login screen. A
-// failed or empty load leaves the app signed out.
+// Hydrate the admin JWT from IndexedDB without delaying the shell. Subscribers refresh
+// the admin area after hydration; a failed or empty load leaves it signed out.
 void hydrateSession();

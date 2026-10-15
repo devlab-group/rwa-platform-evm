@@ -15,7 +15,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// stubView makes contract answer a no-argument view call with value.
+// stubView makes contract answer a no-argument view call with value
 func stubView(t *testing.T, c *perContractClient, contract common.Address, contractABI abi.ABI, method string, value any) {
 	t.Helper()
 	data, err := contractABI.Pack(method)
@@ -41,14 +41,13 @@ func driftProject() *models.Project {
 		Treasury:      "0x0000000000000000000000000000000000C002",
 		Auditor:       "0x0000000000000000000000000000000000C003",
 		ProfileDigest: "0x" + strings.Repeat("11", 32), TokenDecimals: 6, RedemptionTimeout: 1209600,
-		// Deploy-time prices; the pricer moves these legitimately, so the
-		// drift check must not look at them.
+		// Deploy-time prices must not flag legitimate pricer updates as drift
 		PurchasePricePerWholeToken: "1000", RedemptionPricePerWholeToken: "900",
 	}
 }
 
-// stubWiring answers every view that CheckConfigDrift calls with values that
-// match p, the clean baseline a test then breaks in one place
+// stubWiring stubs a matching baseline for every view CheckConfigDrift reads; tests
+// change one value
 func stubWiring(t *testing.T, c *perContractClient, p *models.Project) {
 	t.Helper()
 	tokenABI := bindings.NewERC20().ABI
@@ -94,8 +93,7 @@ func driftRepo(t *testing.T, p *models.Project) repository.ProjectRepository {
 	return repos.Projects
 }
 
-// TestCheckConfigDriftClean: a stack still wired the way the record says is
-// not drift.
+// Matching wiring is not drift
 func TestCheckConfigDriftClean(t *testing.T) {
 	p := driftProject()
 	c := newPerContractClient()
@@ -110,13 +108,12 @@ func TestCheckConfigDriftClean(t *testing.T) {
 	}
 }
 
-// TestCheckConfigDriftDetectsRewiring: a wiring value that changed after
-// adoption is reported
+// Report wiring changed after adoption
 func TestCheckConfigDriftDetectsRewiring(t *testing.T) {
 	p := driftProject()
 	c := newPerContractClient()
 	stubWiring(t, c, p)
-	// The token now points at a different compliance registry.
+	// The token now references another compliance registry
 	stubView(t, c, common.HexToAddress(p.Addresses.Token), bindings.NewERC20().ABI, "compliance",
 		common.HexToAddress("0x00000000000000000000000000000000DEAD01"))
 
@@ -132,9 +129,8 @@ func TestCheckConfigDriftDetectsRewiring(t *testing.T) {
 	}
 }
 
-// TestCheckConfigDriftAcceptsProjectedRotations: setTreasury and setAuditor are
-// ordinary admin actions that ReconcileSecurity tracks. Comparing them with the
-// deploy snapshot would report every legitimate rotation as drift.
+// Accept projected setTreasury/setAuditor rotations; comparing deploy-time values would
+// falsely report drift
 func TestCheckConfigDriftAcceptsProjectedRotations(t *testing.T) {
 	p := driftProject()
 	newTreasury := common.HexToAddress("0x00000000000000000000000000000000BEEF01")
@@ -155,8 +151,7 @@ func TestCheckConfigDriftAcceptsProjectedRotations(t *testing.T) {
 	}
 }
 
-// TestCheckConfigDriftIgnoresPriceMoves: the pricer moving a price is the
-// strategy doing its job, not the stack being rewired.
+// Pricer updates are not wiring drift
 func TestCheckConfigDriftIgnoresPriceMoves(t *testing.T) {
 	p := driftProject()
 	c := newPerContractClient()
@@ -175,10 +170,8 @@ func TestCheckConfigDriftIgnoresPriceMoves(t *testing.T) {
 	}
 }
 
-// TestCheckConfigDriftFlagsVaultEscrowStrategySplit: a strategy swap is
-// legitimate for the Vault, but RedemptionEscrow.strategy is immutable, so
-// purchases and redemptions end up quoted by different contracts and an
-// operator needs to be told
+// Report a Vault strategy swap because the escrow's immutable strategy leaves purchases
+// and redemptions quoted by different contracts
 func TestCheckConfigDriftFlagsVaultEscrowStrategySplit(t *testing.T) {
 	p := driftProject()
 	swapped := common.HexToAddress("0x00000000000000000000000000000000B11B01")
@@ -186,8 +179,7 @@ func TestCheckConfigDriftFlagsVaultEscrowStrategySplit(t *testing.T) {
 
 	c := newPerContractClient()
 	stubWiring(t, c, p)
-	// The Vault prices through the new strategy; the escrow still holds the
-	// deployed one.
+	// The Vault uses the new strategy; the escrow retains the deployed one
 	stubView(t, c, common.HexToAddress(p.Addresses.Vault), bindings.NewVault().ABI, "strategy", swapped)
 
 	ok, reason, err := CheckConfigDrift(context.Background(), c, driftRepo(t, p))
@@ -202,8 +194,7 @@ func TestCheckConfigDriftFlagsVaultEscrowStrategySplit(t *testing.T) {
 	}
 }
 
-// TestCheckConfigDriftSkipsInactiveProject: nothing to compare against
-// before a deployment is adopted, and no record at all is not an error.
+// Skip projects without an adopted deployment, including a missing record
 func TestCheckConfigDriftSkipsInactiveProject(t *testing.T) {
 	repos := memory.New()
 	if ok, _, err := CheckConfigDrift(context.Background(), newPerContractClient(), repos.Projects); err != nil || !ok {

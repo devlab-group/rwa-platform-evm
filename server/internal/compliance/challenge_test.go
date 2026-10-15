@@ -71,9 +71,9 @@ func TestChallengeVerifyRejectsReplay(t *testing.T) {
 	}
 }
 
-// TestChallengeVerifyConcurrentReplaySucceedsOnce has N goroutines Verify the
-// same (nonce, signature) pair at once. Exactly one may succeed and the rest
-// must get ErrChallengeUsed, which requires MarkUsed to be a compare-and-set
+// TestChallengeVerifyConcurrentReplaySucceedsOnce checks concurrent verification of one
+// nonce/signature: exactly one succeeds; others return ErrChallengeUsed through atomic
+// MarkUsed
 func TestChallengeVerifyConcurrentReplaySucceedsOnce(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	addr := crypto.PubkeyToAddress(priv.PublicKey)

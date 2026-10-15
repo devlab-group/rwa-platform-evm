@@ -1,10 +1,9 @@
-// Design tokens as CSS custom properties, so components can be themed without
-// a CSS-in-JS dependency
+// CSS custom properties support theming without CSS-in-JS
 :root {
   --color-bg: #f7f8fa;
   --color-surface: #ffffff;
-  // Contrast against surface and bg is at least 3.27:1 (light) and 3.52:1 (dark),
-  // above the 3:1 that WCAG 1.4.11 requires for input, card and table borders
+  // Border contrast exceeds the WCAG 1.4.11 threshold of 3:1 against both themes'
+  // surface/background colors
   --color-border: #828a98;
   --color-text: #1a1d23;
   --color-text-muted: #5b6270;

@@ -1,12 +1,8 @@
-// Package assets validates Asset Profiles and metadata records, creates asset
-// records and their .rwa packages, and projects indexed SupplyController events
-// onto record status and the live auditor address.
-//
-// The profile and metadata envelopes are checked by Go code that mirrors
-// shared/schemas/asset-profile.schema.json and metadata.schema.json. The
-// operator's assetSchema is first checked against a closed keyword allowlist
-// (schema_guard.go) and then compiled and applied with
-// github.com/santhosh-tekuri/jsonschema (Draft 2020-12).
+// Package assets validates profiles and metadata, creates records and .rwa packages,
+// and projects indexed SupplyController events onto record status and the live auditor.
+// Go envelope checks mirror shared/schemas/asset-profile.schema.json and
+// metadata.schema.json. schema_guard.go restricts assetSchema keywords before
+// github.com/santhosh-tekuri/jsonschema compiles and applies Draft 2020-12 validation.
 package assets
 
 import (
@@ -64,18 +60,16 @@ var profileAllowedTopLevelKeys = map[string]bool{
 	"tokenDecimals": true, "recordIdLabel": true, "displayFields": true, "legal": true, "assetSchema": true,
 }
 
-// lengthInRange counts Unicode code points, as JSON Schema's minLength and maxLength do and as the
-// signer does, so a multi-byte name is not rejected for its UTF-8 byte length
+// lengthInRange counts Unicode code points, matching JSON Schema minLength/maxLength
+// and the signer, rather than UTF-8 bytes
 func lengthInRange(s string, min, max int) bool {
 	n := utf8.RuneCountInString(s)
 	return n >= min && n <= max
 }
 
-// ValidateProfile validates a raw Asset Profile document against
-// shared/schemas/asset-profile.schema.json. Problems are listed in
-// ValidationResult.Errors and not returned as a Go error, matching the
-// validateProfile API, which answers 200 either way. The returned *Profile is
-// nil when the document is invalid.
+// ValidateProfile checks raw against shared/schemas/asset-profile.schema.json. Invalid
+// documents return a nil *Profile and ValidationResult.Errors, not a Go error; the API
+// returns 200 for either validation outcome.
 func ValidateProfile(raw []byte) (ValidationResult, *Profile) {
 	var errs []string
 
@@ -182,9 +176,8 @@ func ValidateProfile(raw []byte) (ValidationResult, *Profile) {
 func compileAssetSchema(raw json.RawMessage) (*jsonschema.Schema, error) {
 	c := jsonschema.NewCompiler()
 	c.Draft = jsonschema.Draft2020
-	// a $ref to another resource fails with an explicit error instead of
-	// depending on which loaders the binary happens to register; a local $ref
-	// starting with '#' never calls LoadURL
+	// Reject external $ref resources regardless of registered loaders. Local references
+	// starting with '#' never call LoadURL.
 	c.LoadURL = func(s string) (io.ReadCloser, error) {
 		return nil, errors.New("remote schema references are forbidden: " + s)
 	}

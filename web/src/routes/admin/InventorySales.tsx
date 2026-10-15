@@ -36,9 +36,8 @@ interface BuyQuote {
 }
 
 /**
- * Shows inventory, pricing, purchase previews and history.
- * Treasury withdrawals submit from a role-holding wallet or export for a Safe;
- * inventory sales require on-chain Vault.buy payment.
+ * Shows inventory, quotes and purchases; withdraw through a role-holding wallet or Safe, sell
+ * through Vault.buy
  */
 export function InventorySales() {
   const inventory = useAsync<Inventory>(
@@ -53,8 +52,8 @@ export function InventorySales() {
 
   const proj = project.status === "success" ? project.data : undefined;
   const chainId = proj?.chainId ?? 0;
-  // Use project RWA decimals and resolve quote decimals from the API or chain.
-  // Display falls back to raw units; submission requires a known scale.
+  // Resolve RWA/quote decimals separately; display may use raw units, submission requires a known
+  // scale
   const rwaDecimals = proj?.decimals;
   const quoteDecimalsState = useAsync<number | null>(async () => {
     if (!proj || !chainId) return null;
@@ -321,8 +320,7 @@ function WithdrawForm({
   const [done, setDone] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Check the entered amount early when quote decimals are available;
-  // submission resolves the scale and validates against the reported balance again
+  // Validate early with known quote decimals; resolve and recheck balance at submission
   const overBalance =
     availableQuote !== undefined &&
     quoteDecimals !== undefined &&
@@ -359,8 +357,7 @@ function WithdrawForm({
       setError(err instanceof Error ? err.message : "Invalid amount.");
       return;
     }
-    // Compare with the reported quote balance before submission or export;
-    // the contract remains authoritative if that snapshot changes
+    // Check reported quote balance before submit/export; the contract enforces live state
     if (
       availableQuote !== undefined &&
       BigInt(minimal) > BigInt(availableQuote)

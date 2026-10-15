@@ -1,18 +1,12 @@
-// Slippage-bound math for the investor buy and redeem flows. Kept apart from
-// format.ts (display only) because these values are submitted on-chain.
+// On-chain slippage bounds for buy/redeem; kept separate from display formatting
 
 /**
- * Upper cap on the slippage tolerance, in basis points, on either side of a
- * trade.
- *
- * On a purchase it bounds the ERC-20 approve() amount, so a mistyped value
- * (e.g. a stray extra digit) cannot approve far more quote token than
- * intended. On a redemption it bounds how low minQuoteOut can go; uncapped,
- * 10000 bps gives minQuoteOut == 0, which accepts any price.
+ * Caps purchase approval and redemption payout reduction in basis points;
+ * 10000 bps would remove the payout floor entirely
  */
 export const MAX_SLIPPAGE_BPS = 5000;
 
-/** Upper bound on quote token spend for a purchase: quote * (1 + slippageBps/10000), rounded up, with slippageBps clamped to 0..MAX_SLIPPAGE_BPS. */
+/** Purchase ceiling: round up quote * (1 + bps/10000); clamp bps to 0..MAX_SLIPPAGE_BPS */
 export function applySlippageCeil(amount: string, slippageBps: number): string {
   const base = BigInt(amount);
   const bps = BigInt(
@@ -21,7 +15,7 @@ export function applySlippageCeil(amount: string, slippageBps: number): string {
   return ((base * (10_000n + bps) + 9_999n) / 10_000n).toString();
 }
 
-/** Lower bound on quote token received for a redemption: quote * (1 - slippageBps/10000), rounded down, with slippageBps clamped to 0..MAX_SLIPPAGE_BPS. */
+/** Redemption floor: round down quote * (1 - bps/10000); clamp bps to 0..MAX_SLIPPAGE_BPS */
 export function applySlippageFloor(
   amount: string,
   slippageBps: number,
@@ -33,7 +27,7 @@ export function applySlippageFloor(
   return ((base * (10_000n - bps)) / 10_000n).toString();
 }
 
-/** Unix-seconds deadline `minutes` from now, for the buy and redemption-request calls. */
+/** Buy/redemption-request deadline in Unix seconds, minutes from now */
 export function deadlineInMinutes(minutes: number): number {
   return Math.floor(Date.now() / 1000) + minutes * 60;
 }

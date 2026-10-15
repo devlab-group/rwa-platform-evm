@@ -12,17 +12,15 @@ import (
 
 func init() { gin.SetMode(gin.TestMode) }
 
-// fixtureFS is a small SPA build for the routing tests, which call attach
-// directly. Only the two tests that check the real embedded dist/ use FS and
-// Attach.
+// fixtureFS supplies routing tests through attach; build-dependent tests exercise the
+// real FS and Attach
 var fixtureFS = fstest.MapFS{
 	"index.html":    {Data: []byte("<html><body>spa shell</body></html>")},
 	"robots.txt":    {Data: []byte("User-agent: *\n")},
 	"assets/app.js": {Data: []byte("console.log('app')")},
 }
 
-// newTestRouter registers a couple of API routes and then attach, as
-// cmd/platform does
+// newTestRouter registers API routes before attach, as cmd/platform does
 func newTestRouter() *gin.Engine {
 	r := gin.New()
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
@@ -109,10 +107,8 @@ func TestNonGetUnmatchedPathIs404NotSPA(t *testing.T) {
 	}
 }
 
-// requireRealIndexHTML skips a test when only the dist/.gitkeep placeholder is
-// embedded, as in a bare checkout where `make platform` or
-// server/e2e/run_e2e.sh has not copied in a build. The tests that use it assert
-// properties of a real build, so without an index.html they skip.
+// requireRealIndexHTML skips build-dependent tests with only dist/.gitkeep; make
+// platform or server/e2e/run_e2e.sh must copy a web build first
 func requireRealIndexHTML(t *testing.T) {
 	t.Helper()
 	f, err := FS().Open("index.html")
@@ -122,8 +118,7 @@ func requireRealIndexHTML(t *testing.T) {
 	_ = f.Close()
 }
 
-// TestRealEmbeddedFSServesIndexHTML checks the real FS and Attach path against
-// whatever build is embedded: a GET / returns 200 with an HTML document
+// The real FS/Attach path must serve HTML with 200 for GET / from the embedded build
 func TestRealEmbeddedFSServesIndexHTML(t *testing.T) {
 	requireRealIndexHTML(t)
 	r := gin.New()
@@ -146,9 +141,8 @@ func TestFSRootedAtDistNotUnderDistPrefix(t *testing.T) {
 	_ = f.Close()
 }
 
-// TestSecurityHeadersOnSPAResponses checks that this package sets the security
-// headers itself, rather than relying on internal/auth's router-wide
-// middleware, on the index.html fallback, a static asset and the /api/ 404
+// Verify this package sets security headers independently of internal/auth middleware
+// for the index fallback, a static asset and /api/ 404
 func TestSecurityHeadersOnSPAResponses(t *testing.T) {
 	r := newTestRouter()
 	for _, path := range []string{"/", "/admin/setup", "/assets/app.js", "/api/v1/does-not-exist"} {

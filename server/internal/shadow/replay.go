@@ -1,9 +1,7 @@
-// Package shadow implements the shadow-replay and soak-test harness. It runs
-// the production indexer against a scripted replay of chain state in an
-// isolated in-memory database. The package has no signing key and cannot submit
-// a transaction, because it never constructs a blockchain.TxManager,
-// keys.Provider or anything else that can sign. See
-// docs/operator/soak-runbook.md for running it for a release-candidate soak.
+// Package shadow runs the production indexer against scripted chain replay in isolated
+// in-memory repositories. It constructs no blockchain.TxManager, keys.Provider or
+// signer and cannot sign or submit transactions. See docs/operator/soak-runbook.md for
+// release-candidate soak runs.
 package shadow
 
 import (
@@ -25,8 +23,7 @@ type LogSpec struct {
 	LogIndex    uint     `json:"logIndex"`
 	Topics      []string `json:"topics"`
 	Data        string   `json:"data,omitempty"`
-	// Decodable, when explicitly false, makes the Runner's decoder reject this
-	// log, which sends it through the indexer's dead-letter path
+	// Decodable=false makes Runner reject the log into the indexer's dead-letter path
 	Decodable *bool `json:"decodable,omitempty"`
 }
 
@@ -46,15 +43,14 @@ func (s LogSpec) decodable() bool {
 	return s.Decodable == nil || *s.Decodable
 }
 
-// HeaderSpec is one scripted block header. A reorg is two steps that set the
-// same Number with different Seeds: indexer.FakeSource derives the header hash
-// from Seed, so the canonical block at that height changes hash
+// HeaderSpec describes a block header; setting the same Number with different Seeds
+// across steps changes FakeSource's derived hash, modeling a reorg
 type HeaderSpec struct {
 	Number uint64 `json:"number"`
 	Seed   byte   `json:"seed"`
 }
 
-// FaultKind names a scripted RPC fault to inject before a step's Poll call.
+// FaultKind names an RPC fault injected before a step's Poll
 type FaultKind string
 
 const (
@@ -65,28 +61,25 @@ const (
 	FaultMalformedNoise FaultKind = "malformed"
 )
 
-// Step is one scripted unit of replay: the chain-state changes to apply before
-// the next Poll, plus whether that Poll is expected to fail
+// Step specifies chain-state changes before the next Poll and whether that Poll should
+// fail
 type Step struct {
 	Description string       `json:"description"`
 	Headers     []HeaderSpec `json:"headers,omitempty"`
-	// RemoveLogsFrom, if set, drops every previously added log at or after this
-	// block number before the step's Logs are added, modeling the old chain's
-	// logs disappearing in a reorg
+	// RemoveLogsFrom drops prior logs at or above this block before adding step.Logs,
+	// modeling reorg removal
 	RemoveLogsFrom *uint64   `json:"removeLogsFrom,omitempty"`
 	Logs           []LogSpec `json:"logs,omitempty"`
 	Head           uint64    `json:"head"`
-	// Fault, if set, is returned as the step's first FilterLogs response (see
-	// indexer.FakeSource.FilterLogsErrors). The indexer's bounded retry is
-	// expected to recover within the same Poll call.
+	// Fault makes the first FilterLogs call fail; the same Poll can recover within the
+	// indexer's retry budget (see FakeSource.FilterLogsErrors)
 	Fault FaultKind `json:"fault,omitempty"`
-	// ExpectPollError marks this step's Poll as expected to fail, for example on
-	// a reorg deeper than the automatic recovery policy. The Runner then treats
-	// a failure as a pass and a success as an error.
+	// ExpectPollError requires Poll to fail, for example on a deep reorg; failure passes
+	// and success becomes a report error
 	ExpectPollError bool `json:"expectPollError,omitempty"`
 }
 
-// Scenario is a complete scripted replay dataset.
+// Scenario is a complete scripted replay dataset
 type Scenario struct {
 	ChainID     int64    `json:"chainId"`
 	Addresses   []string `json:"addresses"`
@@ -95,8 +88,8 @@ type Scenario struct {
 	Steps       []Step   `json:"steps"`
 }
 
-// LoadScenario reads a Scenario from a JSON file. The package has no exporter
-// that records testnet history into this format.
+// LoadScenario reads JSON; this package cannot export recorded testnet history into
+// that format
 func LoadScenario(path string) (*Scenario, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

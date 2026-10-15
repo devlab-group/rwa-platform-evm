@@ -1,5 +1,4 @@
-// UI status derivation. Chain state from api-types is the source of truth; this
-// module adds display labels and splits Funded into Funded and Claimable.
+// Labels chain states and splits Funded into confirming/Claimable for display
 import type { components } from "./api-types";
 
 export type RedemptionChainStatus = NonNullable<
@@ -22,13 +21,8 @@ export type RedemptionDisplayStatus =
   | "Unknown";
 
 /**
- * Maps the on-chain redemption status to a display status. The contract allows
- * a claim as soon as a redemption is Funded, but the indexer's view of the
- * funding transaction is unconfirmed until it reaches the finality threshold.
- * A Funded redemption therefore shows as Claimable only when the server's
- * `claimable` flag is true (Funded and confirmations >=
- * Project.finalityConfirmations). Without that flag, `confirmations` is
- * compared to `finalityConfirmations`, or to FALLBACK_FINALITY_CONFIRMATIONS.
+ * Funded claims have no on-chain confirmation delay; UI finality uses server claimable
+ * first, otherwise confirmations against the project threshold or fallback
  */
 export function redemptionDisplayStatus(
   status: RedemptionChainStatus | undefined,
@@ -71,11 +65,8 @@ export const REDEMPTION_STATUS_LABEL: Record<RedemptionDisplayStatus, string> =
   };
 
 /**
- * Label for every transaction status in the OpenAPI enum. The map is keyed by
- * the generated `TransactionChainStatus` union, so adding an enum value fails
- * typecheck until this map (and `TRANSACTION_TONE`) covers it. For a status
- * outside the union, such as one a newer server adds, use
- * `transactionStatusLabel`, which returns "Unknown".
+ * Typed transaction labels; new statuses also require TRANSACTION_TONE updates.
+ * Use transactionStatusLabel for arbitrary strings.
  */
 export const TRANSACTION_STATUS_LABEL: Record<TransactionChainStatus, string> =
   {
@@ -94,14 +85,10 @@ export const TRANSACTION_STATUS_LABEL: Record<TransactionChainStatus, string> =
 /** Label for a transaction status the client does not recognize */
 export const TRANSACTION_STATUS_UNKNOWN_LABEL = "Unknown";
 
-/**
- * Transaction states that need an operator: the attempt reverted on-chain
- * (`reverted`), the node rejected it before it reached the mempool (`failed`),
- * its block left the canonical chain (`reorged`), whether the node received it
- * is unknown and it must not be blindly resubmitted (`broadcast_unknown`),
- * another transaction used its nonce (`nonce_consumed_externally`), or it
- * exhausted its replacement attempts (`needs_intervention`). `pending`,
- * `mined`, `confirmed` and `replaced` are excluded.
+/*
+ * States needing attention: reverted on-chain, definite pre-mempool rejection, reorged,
+ * unknown broadcast outcome, externally consumed nonce or exhausted replacements.
+ * Pending, mined, confirmed and replaced are excluded; see TRANSACTION_STATUS_LABEL.
  */
 const TRANSACTION_ATTENTION: ReadonlySet<TransactionChainStatus> = new Set([
   "reverted",
@@ -126,22 +113,14 @@ export function transactionStatusLabel(status: string): string {
     : TRANSACTION_STATUS_UNKNOWN_LABEL;
 }
 
-/**
- * True for the statuses in `TRANSACTION_ATTENTION`. An unrecognized status also
- * returns true, since the client cannot tell that it is safe. Transaction lists
- * use it to show a page-level warning instead of relying on one row's badge.
- */
+/** Flags TRANSACTION_ATTENTION states and unknown statuses for page-level warnings */
 export function needsAttention(status: string): boolean {
   return !isKnownTransactionStatus(status) || TRANSACTION_ATTENTION.has(status);
 }
 
 /**
- * True when `fundRedemption` on a Pending redemption would revert because the
- * recorded beneficiary is not currently Allowed. It applies only to Pending
- * requests: `claimRedemption` does not check compliance, so a later status
- * change does not stop payout of a Funded request.
- *
- * `beneficiaryAllowed` is optional in the API; when absent this returns false.
+ * Flags Pending with beneficiaryAllowed === false; missing eligibility is not flagged.
+ * Funded claims skip beneficiary platform-compliance checks.
  */
 export function redemptionBlockedByCompliance(
   status: RedemptionChainStatus | undefined,
@@ -158,10 +137,8 @@ export type ComplianceDisplayStatus =
   "Allowed" | "Expired" | "Blocked" | "NotOnboarded";
 
 /**
- * Returns the compliance status for display, checking expiry at `nowSeconds`.
- * An `Allowed` record keeps that status in storage after a nonzero `validUntil`
- * passes, but the registry's `isAllowed` then returns false, so the display
- * status is `Expired`.
+ * Displays Expired when an Allowed record has passed nonzero validUntil; stored status remains
+ * Allowed
  */
 export function complianceDisplayStatus(
   status: ComplianceChainStatus | undefined,

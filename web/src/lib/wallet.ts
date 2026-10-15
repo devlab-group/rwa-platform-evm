@@ -46,17 +46,14 @@ export function getInjectedProvider(): InjectedProvider | undefined {
   return window.ethereum;
 }
 
-/**
- * Reports a failed expected-chain check.
- * The caller must switch chains and retry; writes do not silently retarget.
- */
+/** Expected-chain mismatch; switch and retry without retargeting the write */
 export class ChainMismatchError extends Error {
   constructor(
     public readonly expectedChainId: number,
     public readonly actualChainId: number,
   ) {
     super(
-      `Wallet is connected to chain ${actualChainId}, but this project requires chain ${expectedChainId}. Switch networks in your wallet and try again.`,
+      `Wallet is connected to chain ${actualChainId}, but this project requires chain ${expectedChainId}. Switch networks in your wallet and retry.`,
     );
     this.name = "ChainMismatchError";
   }
@@ -69,15 +66,12 @@ async function getInjectedChainId(provider: InjectedProvider): Promise<number> {
   return Number(chainIdHex);
 }
 
-/**
- * Reads the injected wallet's chain ID without requesting account access,
- * including during Setup before a project chain is configured
- */
+/** Reads chain ID without account access, including pre-deployment Setup */
 export async function readInjectedChainId(): Promise<number> {
   const provider = getInjectedProvider();
   if (!provider)
     throw new Error(
-      "No injected wallet found (e.g. MetaMask). Connect a wallet on the deployment chain to read the quote token's decimals.",
+      "No injected wallet found (e.g. MetaMask). Connect one on the deployment chain to read quote-token decimals.",
     );
   return getInjectedChainId(provider);
 }
@@ -92,7 +86,7 @@ export async function assertChain(
     throw new ChainMismatchError(expectedChainId, actual);
 }
 
-// projectChain supplies the expected chain while transport uses the injected provider
+// Expected chain for viem's send-time check; RPC uses the injected transport
 function projectChain(chainId: number): Chain {
   return defineChain({
     id: chainId,
@@ -126,10 +120,7 @@ function isChainNotAddedError(err: unknown): boolean {
   return nested === 4902;
 }
 
-/**
- * Requests a switch to expectedChainId. On 4902, add a known network from lib/networks.ts
- * and retry; unknown networks and other errors propagate.
- */
+/** Switch to expectedChainId; on 4902 add an allowlisted chain and retry, propagating other errors */
 export async function requestSwitchChain(
   expectedChainId: number,
 ): Promise<void> {
@@ -144,7 +135,7 @@ export async function requestSwitchChain(
   } catch (err) {
     if (!isChainNotAddedError(err)) throw err;
     const network = findNetwork(expectedChainId);
-    if (!network) throw err; // not something we know how to add
+    if (!network) throw err; // Propagate unsupported-network errors
     await provider.request({
       method: "wallet_addEthereumChain",
       params: [toAddChainParams(network)],
@@ -206,8 +197,8 @@ export async function readErc20Allowance(
 }
 
 /**
- * Reads the Vault purchase quote, from RWA minimal units to quote-token minimal units.
- * The price may change before execution; buy enforces its separate maxQuoteAmount.
+ * Quotes RWA minimal units in quote-token minimal units; execution enforces maxQuoteAmount if price
+ * changes
  */
 export async function readPreviewBuy(
   expectedChainId: number,
@@ -226,10 +217,7 @@ export async function readPreviewBuy(
   });
 }
 
-/**
- * Waits for a successful receipt and throws for a mined revert.
- * Approval-dependent calls must wait for that success before spending.
- */
+/** Waits for a successful receipt; mined reverts throw before approval-dependent spending */
 export async function waitForTxReceipt(hash: Hex): Promise<void> {
   const provider = getInjectedProvider();
   if (!provider) throw new Error("No injected wallet found.");
@@ -243,16 +231,12 @@ export async function waitForTxReceipt(hash: Hex): Promise<void> {
   });
   if (receipt.status !== "success") {
     throw new Error(
-      `Transaction ${hash} was mined but reverted on-chain. Nothing changed.`,
+      `Transaction ${hash} was mined but reverted on-chain. Contract state is unchanged.`,
     );
   }
 }
 
-/**
- * Decodes known token revert data into operator messages.
- * Raw-calldata writes have no attached ABI; unavailable or unlisted data falls back
- * to the wallet message, including user rejection and RPC failures.
- */
+/** Decodes token reverts for raw writes; unknown/unavailable data falls back to wallet/RPC errors */
 export function describeWalletError(err: unknown): string {
   const data = revertData(err);
   if (data) {
@@ -267,7 +251,7 @@ export function describeWalletError(err: unknown): string {
   return err instanceof Error ? err.message : "Transaction failed.";
 }
 
-// revertData searches data fields through at most six cause levels
+// Search data on the error and cause chain, examining up to six objects
 function revertData(err: unknown): Hex | undefined {
   let current: unknown = err;
   for (let depth = 0; current && depth < 6; depth++) {
@@ -293,15 +277,15 @@ function explainTokenError(
   switch (name) {
     case "ERC7943CannotReceive":
     case "RecipientNotAllowed":
-      return `The recipient ${first} is not Allowed in the compliance registry, so the token refused the transfer.`;
+      return `The recipient ${first} is not Allowed in the compliance registry; the transfer was refused.`;
     case "SenderNotAllowed":
       return `${first} is not Allowed in the compliance registry and cannot send.`;
     case "ERC7943InsufficientUnfrozenBalance":
       return `${first} does not have that many unfrozen tokens: ${String(args?.[2])} of their balance is movable (in minimal units).`;
     case "SystemAddressCannotBeFrozen":
-      return `${first} is the Vault or the redemption escrow, which can never be frozen.`;
+      return `${first} is the Vault or redemption escrow, which can never be frozen with a nonzero amount.`;
     case "SystemAddressCannotBeSeized":
-      return `${first} is the Vault or the redemption escrow, which can never be seized from.`;
+      return `${first} is the Vault or redemption escrow, which cannot be a seizure source.`;
     case "ForcedTransferToSelf":
       return "A forced transfer must have different sender and recipient.";
     case "ZeroAddress":
@@ -329,7 +313,7 @@ export async function sendErc20Approve(
     chain,
     transport: custom(provider),
   });
-  // Pass the expected chain so viem checks identity before submission
+  // Setting chain enables viem's live-chain check before sending
   return client.sendTransaction({
     account: owner,
     chain,
@@ -353,8 +337,7 @@ export function erc20ApproveCall(
   };
 }
 
-// sendWrite checks chain identity and submits encoded calldata from the wallet;
-// contracts enforce privileged-call authorization
+// Checks chain and submits local calldata; contracts enforce authorization
 async function sendWrite(
   expectedChainId: number,
   from: Address,
@@ -434,8 +417,8 @@ export async function sendSetStrategyPrice(
 }
 
 /**
- * Submits an admin freeze replacement in absolute RWA minimal units; zero releases it.
- * The contract rejects positive freezes of Vault or RedemptionEscrow.
+ * Replaces absolute frozen RWA minimal units; zero releases, and positive system-address freezes
+ * revert
  */
 export async function sendSetFrozenTokens(
   expectedChainId: number,
@@ -468,8 +451,8 @@ export function setFrozenTokensCall(
 }
 
 /**
- * Submits an admin forced transfer without holder approval, bypassing sender eligibility
- * and pause while requiring a compliant recipient
+ * Admin transfer without holder approval; bypasses sender eligibility, freeze and pause but
+ * requires eligible recipient
  */
 export async function sendForcedTransfer(
   expectedChainId: number,
@@ -586,8 +569,8 @@ export function acceptAdminTransferCall(contract: Address): ContractCall {
 }
 
 /**
- * Submits a TREASURER_ROLE withdrawal to configured treasury in quote-token minimal units;
- * no approval is needed for the Vault's own funds
+ * TREASURER_ROLE withdrawal to configured treasury in quote minimal units; Vault funds need no
+ * approval
  */
 export async function sendWithdrawProceeds(
   expectedChainId: number,
@@ -675,8 +658,8 @@ export function rejectRedemptionCall(
 }
 
 /**
- * Client-built deployment input matching IRWAFactory.ProjectConfig field order.
- * Addresses and bytes32 values use hex; integer widths follow the ABI types.
+ * Browser-built IRWAFactory.ProjectConfig: ABI field order, hex addresses/bytes32 and declared
+ * integer widths
  */
 export interface ProjectConfigInput {
   name: string;
@@ -700,8 +683,8 @@ export interface ProjectConfigInput {
 }
 
 /**
- * Submits permissionless factory deployment from the wallet; config.admin sets authority.
- * The server observes ProjectDeployed without signing or relaying this call.
+ * Permissionless wallet deployment with config.admin authority; server observes ProjectDeployed
+ * without relaying
  */
 export async function sendDeployProject(
   expectedChainId: number,
@@ -721,10 +704,7 @@ export async function sendDeployProject(
   );
 }
 
-/**
- * Client-built mint input matching ISupplyController.MintAttestation.
- * Addresses and bytes32 values use hex; uint fields use bigint.
- */
+/** Browser-built MintAttestation: hex addresses/bytes32 and bigint uint fields */
 export interface MintAttestationInput {
   auditor: Address;
   profileDigest: Hex;
@@ -736,10 +716,7 @@ export interface MintAttestationInput {
   vault: Address;
 }
 
-/**
- * Submits the auditor-authorized mint from the wallet; no caller role is required.
- * The contract checks the attestation and the server projects the Minted event.
- */
+/** Permissionless wallet mint with a valid auditor attestation; server projects Minted */
 export async function sendMint(
   expectedChainId: number,
   from: Address,

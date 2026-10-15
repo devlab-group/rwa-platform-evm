@@ -17,11 +17,9 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// validateProfile implements POST /api/v1/profile/validate (operationId
-// validateProfile).
-// Validates a profile without persisting it and returns the validation result
-// with the derived digest and CID. The route is unauthenticated, so it must stay
-// side-effect free; createProfile persists a profile.
+// validateProfile handles admin-only POST /api/v1/profile/validate. It returns
+// validation results, digest and CID without persisting anything; createProfile owns
+// persistence.
 func (app *App) validateProfile(c *gin.Context) {
 	raw, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -32,10 +30,9 @@ func (app *App) validateProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// createProfile implements POST /api/v1/profile (operationId createProfile).
-// Admin-only, create-once via AssetProfileRepository.Create: a projectId that
-// already has a stored profile gets 409 and the stored profile is never
-// overwritten.
+// createProfile handles admin-only POST /api/v1/profile through
+// AssetProfileRepository.Create. An existing projectId returns 409 without overwriting
+// its profile.
 func (app *App) createProfile(c *gin.Context) {
 	raw, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -110,12 +107,10 @@ type CreateRecordRequestBody struct {
 	Proofs   []assets.ProofRecord `json:"proofs"`
 }
 
-// loadVerifiedProfile loads the project and its stored Asset Profile and checks
-// that the profile's digest equals the project's profileDigest (the digest
-// submitted to RWAFactory.deploy). Record and package operations use it so a
-// replaced profile is never used to build packages or gate minting. The check
-// is skipped while the project's ProfileDigest is empty, before a deployment is
-// recorded.
+// loadVerifiedProfile checks the stored Asset Profile against the project's
+// ProfileDigest submitted to RWAFactory.deploy. Record and package operations reject a
+// substituted profile. Before deployment is recorded, an empty ProfileDigest skips the
+// check.
 func (app *App) loadVerifiedProfile(c *gin.Context) (*models.Project, *models.AssetProfile, bool) {
 	p, err := app.Repos.Projects.Get(c.Request.Context())
 	if err != nil {
@@ -135,10 +130,8 @@ func (app *App) loadVerifiedProfile(c *gin.Context) (*models.Project, *models.As
 	return p, stored, true
 }
 
-// currentProfile loads the project's digest-verified Asset Profile (see
-// loadVerifiedProfile) and re-validates it to rebuild the compiled
-// *assets.Profile the workflow layer needs. It re-validates on every call
-// instead of caching, which is cheap at one profile per deployment.
+// currentProfile loads the digest-verified profile and re-validates it on each call to
+// rebuild the workflow layer's compiled *assets.Profile
 func (app *App) currentProfile(c *gin.Context) (*assets.Profile, string, bool) {
 	p, stored, ok := app.loadVerifiedProfile(c)
 	if !ok {
@@ -152,10 +145,9 @@ func (app *App) currentProfile(c *gin.Context) (*assets.Profile, string, bool) {
 	return profile, p.ProjectID, true
 }
 
-// createRecord implements POST /api/v1/assets/records (operationId
-// createRecord).
-// Admin-only: reserves a mint-eligible asset record (create-once), publishes its
-// metadata, and returns the record the auditor's attestation is built from.
+// createRecord handles admin-only POST /api/v1/assets/records, reserving a
+// mint-eligible record once, publishing metadata and returning the record for auditor
+// attestation
 func (app *App) createRecord(c *gin.Context) {
 	if app.Records == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "asset record workflow is not configured on this server")
@@ -171,8 +163,8 @@ func (app *App) createRecord(c *gin.Context) {
 		return
 	}
 
-	// Persist the audit intent before the record reservation and IPFS publication,
-	// and abort if that fails, so no mint-eligible record exists without an audit trail
+	// Persist intent before record reservation or IPFS publication; abort on failure so
+	// every mint-eligible record has an audit trail
 	actor := caller(c)
 	intentID, err := app.recordAuditIntent(c.Request.Context(), "assets", actor, "assets.createRecord", body.RecordID, map[string]any{"amount": body.Amount})
 	if err != nil {
@@ -191,13 +183,10 @@ func (app *App) createRecord(c *gin.Context) {
 	c.JSON(http.StatusCreated, dto.ToAssetRecordResponse(rec))
 }
 
-// reissueRecord implements POST /api/v1/assets/records/{recordId}/reissue
-// (operationId reissueRecord).
-// Admin-only, audited recovery for a Pending record whose attestation window
-// lapsed before it was signed. It assigns a fresh nonce and validUntil to the
-// same record, so the operator can rebuild the package and the auditor can
-// re-sign. A record that is not Pending (Signed, Minted, Rejected or Draft)
-// gets 409, because rolling its nonce could strand or double-count a mint.
+// reissueRecord handles admin-only, audited POST
+// /api/v1/assets/records/{recordId}/reissue. It refreshes a Pending record's nonce and
+// validUntil for a new package and signature, allowing recovery after expiry. Signed,
+// Minted, Rejected and Draft records return 409; see assets.ErrRecordNotReissuable.
 func (app *App) reissueRecord(c *gin.Context) {
 	if app.Records == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "asset record workflow is not configured on this server")
@@ -237,11 +226,9 @@ func rejectedRecordError(rec *models.AssetRecord) error {
 	return nil
 }
 
-// downloadPackage implements GET /api/v1/assets/records/{recordId}/package
-// (operationId downloadPackage).
-// Admin-only: returns the .rwa zip for one record as application/zip. It holds
-// the manifest, profile, metadata, typed data and any proofs, and is rebuilt
-// deterministically from the stored record.
+// downloadPackage handles admin-only GET /api/v1/assets/records/{recordId}/package. It
+// rebuilds the record's deterministic .rwa archive as application/zip, including
+// manifest, profile, metadata, typed data and proofs.
 func (app *App) downloadPackage(c *gin.Context) {
 	if app.Records == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "asset record workflow is not configured on this server")

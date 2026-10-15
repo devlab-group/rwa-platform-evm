@@ -17,11 +17,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// TestRunDLQRetryTypedDecodeReplaysIntoProjector checks that a DLQ entry whose
-// retained log is a typed contract event is replayed through the platform's
-// address-dispatched decoder (buildIndexer, serverwiring.StrictDecoder) and
-// stored as the typed "Minted" event the projectors consume, not as a generic
-// topic-only event
+// Replay a typed Minted log through buildIndexer/serverwiring.StrictDecoder into the
+// event consumed by projectors
 func TestRunDLQRetryTypedDecodeReplaysIntoProjector(t *testing.T) {
 	repos := newTestRepos()
 	client := blockchain.NewFakeClient()
@@ -58,10 +55,8 @@ func TestRunDLQRetryTypedDecodeReplaysIntoProjector(t *testing.T) {
 	}
 }
 
-// TestRunDLQRetryRefusesGenericDecode checks that a DLQ entry whose log only
-// decodes generically (an unrecognized topic on the configured contract) is not
-// resolved. The strict decoder errors, so indexer.RetryDeadLetter re-records
-// the entry and inserts no generic event.
+// A generic-only log stays unresolved: StrictDecoder errors, RetryDeadLetter re-records
+// failure, and no generic event is inserted
 func TestRunDLQRetryRefusesGenericDecode(t *testing.T) {
 	repos := newTestRepos()
 	client := blockchain.NewFakeClient()
@@ -83,8 +78,8 @@ func TestRunDLQRetryRefusesGenericDecode(t *testing.T) {
 	seedDLQ(t, repos, "dlq-generic", logEntry)
 
 	o := testOpsCtx(repos)
-	// runDLQRetry itself returns nil (the retry ran); the entry simply stays
-	// unresolved because the strict decoder refused it
+	// runDLQRetry returns nil after attempting retry, but StrictDecoder's refusal leaves
+	// the entry unresolved
 	if err := runDLQRetry(o, buildIndexer(cfg, addrs, repos, client), "dlq-generic"); err != nil {
 		t.Fatalf("runDLQRetry: %v", err)
 	}
@@ -101,13 +96,10 @@ func TestRunDLQRetryRefusesGenericDecode(t *testing.T) {
 	}
 }
 
-// TestDLQRetryRefusedWithoutTypedContract checks through dispatch that
-// `dlq retry` is refused before any chain work when no typed contract is
-// configured
+// Refuse `dlq retry` before chain access when no typed contract is configured
 func TestDLQRetryRefusedWithoutTypedContract(t *testing.T) {
 	repos := newTestRepos()
-	// A project record with no typed contract addresses leaves KnownEventNames
-	// empty, so only the generic decoder is available
+	// No configured typed addresses leaves KnownEventNames empty
 	if err := repos.Projects.Upsert(context.Background(), &models.Project{Status: models.ProjectStatusActive}); err != nil {
 		t.Fatal(err)
 	}

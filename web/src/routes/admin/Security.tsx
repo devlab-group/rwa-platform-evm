@@ -97,15 +97,15 @@ function SecurityStalenessNotice({
       as of
       {securityAsOfBlock !== undefined ? ` block ${securityAsOfBlock}` : ""}
       {age ? ` (${age})` : ""}
-      {securityAsOfBlock === undefined && !age ? " an unknown point" : ""}. Not
-      guaranteed current - reload to refresh.
+      {securityAsOfBlock === undefined && !age ? " an unknown point" : ""}. May
+      lag the chain; reload to check the indexed state.
     </p>
   );
 }
 
 /**
- * Shows indexed governance and enforcement snapshots with freshness metadata.
- * Actions submit wallet transactions or export Safe batches according to their route.
+ * Shows indexed governance/enforcement with freshness metadata; submit wallet actions or export
+ * Safe batches
  */
 export function Security() {
   const project = useAsync<ProjectWithSecurityStaleness>(
@@ -114,8 +114,7 @@ export function Security() {
     [],
   );
 
-  // Resolve quote-token decimals from the project or chain; failed resolution
-  // leaves display in raw units rather than using RWA decimals
+  // Resolve quote decimals; use raw display units on failure, not RWA decimals
   const proj = project.status === "success" ? project.data : undefined;
   const chainId = proj?.chainId ?? 0;
   const quoteDecimalsState = useAsync<number | null>(async () => {
@@ -131,7 +130,7 @@ export function Security() {
       ? (quoteDecimalsState.data ?? undefined)
       : undefined;
 
-  // Fetch admin-only enforcement separately and reload it with project state after writes
+  // Load admin-only enforcement separately; reload it and project state after writes
   const enforcement = useAsync<Enforcement>(
     (signal) => api.getEnforcement({ signal }),
     [],
@@ -244,8 +243,8 @@ export function Security() {
             data.purchasePricePerWholeToken === undefined &&
             data.redemptionPricePerWholeToken === undefined ? (
               <p className="field__hint">
-                No on-chain prices reported yet (project not deployed or price
-                not projected).
+                No prices reported: deployment or price projection may be
+                pending.
               </p>
             ) : (
               <dl className="tx-preview__grid">
@@ -378,8 +377,8 @@ export function Security() {
                 </table>
               </TableWrap>
               <p className="field__hint">
-                A frozen amount can exceed the holder&apos;s balance, which
-                withholds tokens they have not received yet.
+                A freeze can exceed the holder&apos;s balance, restricting
+                future receipts too.
               </p>
             </>
           )}
@@ -425,8 +424,8 @@ export function Security() {
             </div>
           </dl>
           <p className="field__hint">
-            The most recent seizure only. Every forced transfer is in the
-            transaction list and on-chain.
+            Latest seizure only; see indexed transactions or on-chain logs for
+            history.
           </p>
         </section>
       ) : null}
@@ -461,7 +460,7 @@ export function Security() {
         </RoleGate>
       </section>
 
-      {/* Pending admins accept before acquiring the role, so this control sits outside RoleGate */}
+      {/* Pending admins accept before holding the role, so acceptance sits outside RoleGate */}
       {proj?.pendingAdmin ? (
         <section className="card">
           <h2>Accept admin role</h2>
@@ -539,7 +538,7 @@ function PauseControls({
         >
           {paused ? "Paused" : "Active"}
         </span>
-        . Pausing stops purchases, ordinary transfers and redemption requests,
+        . Pause stops purchases, ordinary transfers, redemption requests,
         funding, claims and rejection. Timed-out cancellation and admin
         enforcement remain available.
       </p>
@@ -605,7 +604,7 @@ function PriceControls({
         decimals = await resolveQuoteDecimals(project, chainId);
       } catch {
         setError(
-          "Couldn't determine the quote token's decimals - connect your wallet to the project chain and try again.",
+          "Could not read quote-token decimals. Connect your wallet to the project chain and retry.",
         );
         return;
       }
@@ -655,8 +654,8 @@ function PriceControls({
   return (
     <div>
       <p className="field__hint">
-        Prices are per whole token, in whole quote-token units. Each is set on
-        the fixed-price strategy independently.
+        Independent prices per whole token, in whole quote-token units, on the
+        fixed-price strategy.
       </p>
       <div className="field">
         <label htmlFor="new-purchase-price">
@@ -704,7 +703,7 @@ function PriceControls({
   );
 }
 
-// runSequential submits and confirms each target, returning a failure with the completed count
+// Submits/confirms targets sequentially; failure includes the completed count
 async function runSequential(
   targets: Address[],
   send: (target: Address) => Promise<`0x${string}`>,
@@ -724,7 +723,7 @@ async function runSequential(
   return null;
 }
 
-// parseTokenAmount converts using known project decimals or returns a validation error
+// Converts with project decimals or returns a validation error
 function parseTokenAmount(
   value: string,
   decimals: number | undefined,
@@ -744,8 +743,7 @@ function parseTokenAmount(
   }
 }
 
-// isSystemAddress identifies the Vault or escrow for early enforcement feedback;
-// contracts reject positive freezes and seizure sources for these addresses
+// Detect Vault/escrow early; contracts forbid their nonzero freezes and use as seizure sources
 function isSystemAddress(
   value: string,
   addresses: Addresses | undefined,
@@ -762,14 +760,14 @@ function FrontRunningWarning() {
   return (
     <p className="field__hint">
       A holder may see this transaction in the mempool and move tokens first.
-      Pause the project and confirm the pause before freezing or seizing, then
-      unpause. These enforcement calls still work while ordinary transfers are
-      paused. If pausing is too disruptive, use a private relay.
+      Pause the project and confirm before freezing or seizing, then unpause.
+      Enforcement works while ordinary transfers are paused. Use a private relay
+      if pausing is too disruptive.
     </p>
   );
 }
 
-// FreezeControls replaces an absolute frozen amount; it does not add to the prior amount
+// Replaces the absolute freeze rather than adding to it
 function FreezeControls({
   project,
   chainId,
@@ -802,7 +800,7 @@ function FreezeControls({
     }
     if (isSystemAddress(account, addresses)) {
       setError(
-        "The Vault and the redemption escrow can never be frozen - freezing one would stop every buy, claim, and cancel.",
+        "The Vault and redemption escrow can never be frozen with a nonzero amount; their inventory must remain unfrozen.",
       );
       return;
     }
@@ -851,9 +849,8 @@ function FreezeControls({
     <div>
       <p className="field__hint">
         Sets the holder&apos;s <strong>absolute</strong> frozen amount,
-        replacing whatever was frozen before. It does not add to an existing
-        hold. Enter 0 to release everything. Frozen tokens stay in the
-        holder&apos;s wallet; they just cannot be sent.
+        replacing the previous hold. Enter 0 to release it. Tokens stay in the
+        holder&apos;s wallet but cannot be sent.
       </p>
       <FrontRunningWarning />
       <div className="field">
@@ -892,8 +889,8 @@ function FreezeControls({
   );
 }
 
-// ForcedTransferControls requires explicit review before moving another holder's tokens
-// and displays the eligibility, freeze and pause protections the call bypasses
+// Reviews holder-token seizure and explains the sender eligibility, freeze and pause checks it
+// bypasses
 function ForcedTransferControls({
   project,
   chainId,
@@ -908,7 +905,7 @@ function ForcedTransferControls({
   const [holder, setHolder] = useState("");
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
-  // Keep the confirmed transfer bound to the reviewed values, even if inputs change
+  // Bind confirmation to reviewed values
   const [pending, setPending] = useState<{
     holder: Address;
     recipient: Address;
@@ -920,7 +917,7 @@ function ForcedTransferControls({
   const token = project?.addresses?.token;
   const addresses = project?.addresses as Addresses | undefined;
 
-  // validate returns the parsed amount or sets an error and returns null
+  // Parse amount or set an error and return null
   function validate(): bigint | null {
     if (!token || (route.kind === "wallet" && !sender)) {
       setError("Wallet not connected or token address unavailable.");
@@ -936,13 +933,13 @@ function ForcedTransferControls({
     }
     if (isSystemAddress(holder, addresses)) {
       setError(
-        "The Vault and the redemption escrow cannot be seized from - their balances are the unsold float and redemptions that are already funded.",
+        "The Vault and redemption escrow cannot be seizure sources: they hold sale inventory and Pending/Funded redemption tokens.",
       );
       return null;
     }
     if (holder.toLowerCase() === recipient.toLowerCase()) {
       setError(
-        "Sender and recipient must differ - the contract rejects a forced transfer to self.",
+        "Sender and recipient must differ; forced transfers to self revert.",
       );
       return null;
     }
@@ -1009,8 +1006,8 @@ function ForcedTransferControls({
   return (
     <div>
       <p className="field__hint">
-        Moves tokens out of a holder&apos;s wallet without their signature, for
-        a seizure or a court-ordered recovery.
+        Seizes tokens without the holder&apos;s signature, including for
+        court-ordered recovery.
       </p>
       <FrontRunningWarning />
       <div className="field">
@@ -1059,14 +1056,12 @@ function ForcedTransferControls({
             </div>
           </dl>
           <p>
-            <strong>This moves someone else&apos;s tokens.</strong> This works
-            while paused and when the holder is blocked or expired. It reduces
-            their frozen amount if it spends frozen tokens. The recipient must
-            be Allowed or the call reverts.
+            <strong>This moves someone else&apos;s tokens.</strong> Bypasses
+            pause and blocked/expired holder status; reduces the frozen amount
+            if it spends frozen tokens. The recipient must be Allowed.
           </p>
           <p>
-            If the holder may watch the mempool, pause and confirm first. This
-            call works while paused; ordinary transfers stop.
+            Confirm the pause before seizing; see the mempool warning above.
           </p>
           <div className="tx-preview__actions">
             <button
@@ -1146,7 +1141,7 @@ function RoleAdminControls({
     }
     const hashRole = roleHash(role);
     if (route.kind === "safe") {
-      // Export all target calls for atomic execution
+      // Export all targets for atomic Safe execution
       setDone(
         exportSafeBatch(
           chainId,
@@ -1224,7 +1219,7 @@ function RoleAdminControls({
     if (failure) setError(failure);
     else {
       setDone(
-        `Admin transfer to ${newAdmin} begun on ${targets.length} contract(s). The new admin must accept it on each contract after the on-chain delay to complete the transfer.`,
+        `Admin transfer to ${newAdmin} begun on ${targets.length} contract(s). The incoming admin must accept on each after its delay.`,
       );
       onChanged();
     }
@@ -1247,7 +1242,7 @@ function RoleAdminControls({
           ))}
         </select>
         <span className="field__hint">
-          Applied to every contract the role is held on (
+          Targets the configured contracts for this role (
           {roleTargets(role, addresses).length} for this role).
         </span>
       </div>
@@ -1281,9 +1276,8 @@ function RoleAdminControls({
 
       <h3 className="u-mt-5">Transfer admin</h3>
       <p className="field__hint">
-        Begins a two-step DEFAULT_ADMIN transfer on each governance contract.
-        You remain admin until the new admin accepts on that contract after its
-        configured delay.
+        Starts a two-step DEFAULT_ADMIN transfer on each governance contract.
+        You remain admin until the incoming admin accepts there after its delay.
       </p>
       <div className="field">
         <label htmlFor="new-admin">New admin address</label>
@@ -1322,9 +1316,8 @@ function RoleAdminControls({
   );
 }
 
-// AcceptAdminControls completes a pending transfer after its on-chain delay.
-// The matching wallet submits sequentially; a Safe acceptance batch can be exported
-// for its owners when another wallet is connected.
+// Accepts delayed admin transfers sequentially from the incoming wallet, or exports a batch for its
+// Safe owners
 function AcceptAdminControls({
   project,
   chainId,
@@ -1404,8 +1397,8 @@ function AcceptAdminControls({
           <span className="mono" title={pendingAdmin}>
             {pendingAdmin ? shortenAddress(pendingAdmin) : "-"}
           </span>
-          . The incoming admin must accept after the on-chain delay. For a Safe,
-          save a Safe{"{Wallet}"} acceptance batch for its owners to approve and
+          . The incoming admin must accept after the delay. For a Safe, save a
+          Safe{"{Wallet}"} acceptance batch for its owners to approve and
           execute.
         </p>
         <button
@@ -1432,8 +1425,8 @@ function AcceptAdminControls({
   return (
     <div>
       <p className="field__hint">
-        Accept the pending transfer to become DEFAULT_ADMIN on each governance
-        contract. If its configured delay has not elapsed, wait and try again.
+        Become DEFAULT_ADMIN by accepting each pending transfer after its
+        configured delay.
       </p>
       <button
         type="button"

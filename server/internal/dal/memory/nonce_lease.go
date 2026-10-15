@@ -20,9 +20,8 @@ func NewNonceLeaseRepository() *NonceLeaseRepository {
 	return &NonceLeaseRepository{m: map[string]*models.NonceLease{}}
 }
 
-// Acquire grants the lease if it is free or expired, whoever held it (see the
-// interface doc comment). It never deletes an expired entry, because a reset Token
-// would break the fencing guarantee (see models.NonceLease).
+// Acquire grants absent or expired leases, retaining expired records so fencing tokens
+// cannot restart; see models.NonceLease
 func (r *NonceLeaseRepository) Acquire(ctx context.Context, key, holderID string, ttl time.Duration) (uint64, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -51,11 +50,9 @@ func (r *NonceLeaseRepository) Renew(ctx context.Context, key, holderID string, 
 	return true, nil
 }
 
-// Release marks the record expired and does not delete it. A deleted entry would
-// restart the next Acquire's token at 1, and a delayed write from an earlier
-// session of the same holder could then collide with a later session that reused
-// the token. Keeping the record means every later Acquire for the key returns a
-// token greater than any issued before.
+// Release expires rather than deletes the record, preserving increasing tokens.
+// Deletion could reuse a token and let a delayed request from an earlier holder session
+// match a later lease.
 func (r *NonceLeaseRepository) Release(ctx context.Context, key, holderID string, token uint64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

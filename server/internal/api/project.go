@@ -20,11 +20,9 @@ func (app *App) getConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.NewBootstrapConfigResponse(app.ChainID, app.FactoryAddress, app.ProjectID))
 }
 
-// toProjectResponse gathers values outside the project record for dto.ToProjectResponse.
-//
-// FinalityConfirmations is an operational setting from the server configuration.
-// TokenUnit and legal come from the stored AssetProfile; if lookup fails, TokenUnit
-// falls back to the project record and legal is omitted.
+// toProjectResponse supplies dto.ToProjectResponse with configured
+// FinalityConfirmations and the stored profile's TokenUnit and legal data. Failed
+// profile lookup falls back to the project's TokenUnit and omits legal.
 func (app *App) toProjectResponse(ctx context.Context, p *models.Project) dto.ProjectResponse {
 	tokenUnit := p.TokenUnit
 	var legal *models.LegalDescriptor
@@ -43,12 +41,9 @@ func (app *App) toProjectResponse(ctx context.Context, p *models.Project) dto.Pr
 	return dto.ToProjectResponse(p, tokenUnit, legal, app.FinalityConfirmations, stale)
 }
 
-// getEnforcement implements GET /api/v1/project/enforcement (operationId
-// getEnforcement).
-// Admin-only, unlike GET /project. It names the wallets the issuer has frozen
-// and the most recent seizure, which is operational compliance data like the
-// wallet list even though the events are public on-chain. An investor reads
-// their own frozen amount from GET /me/wallet-status.
+// getEnforcement handles admin-only GET /api/v1/project/enforcement. Frozen wallets and
+// the latest seizure are operational compliance data; GET /project is public. Investors
+// read only their own frozen amount through GET /me/wallet-status.
 func (app *App) getEnforcement(c *gin.Context) {
 	p, err := app.Repos.Projects.Get(c.Request.Context())
 	if err != nil {
@@ -60,18 +55,14 @@ func (app *App) getEnforcement(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.ToEnforcementResponse(p, stale))
 }
 
-// securityStalenessWindow is how far the governance projection may lag before
-// /project reports securityStale. It is well above the 15s security-reconcile
-// interval and the 5s indexer poll, so a healthy server reports fresh, while a
-// stalled indexer or stopped projector, either of which freezes
-// SecurityState.AsOfTime, reports stale within a minute.
+// securityStalenessWindow allows for the 15s security-reconcile interval and 5s indexer
+// poll. A stalled indexer or projector freezes SecurityState.AsOfTime, making the
+// response stale within a minute.
 const securityStalenessWindow = 60 * time.Second
 
-// securityStale reports whether the governance projection may be out of date.
-// It is stale when there is no projection or as-of time, when the indexer
-// checkpoint is unreadable or absent, when the checkpoint has
-// ReconciliationRequired set (the indexer is paused), or when the as-of time is
-// more than securityStalenessWindow behind now.
+// securityStale reports stale when the projection or as-of time is absent, the indexer
+// checkpoint is missing or unreadable, ReconciliationRequired indicates a paused
+// indexer, or projection age exceeds securityStalenessWindow
 func securityStale(s *models.SecurityState, cp *models.IndexerCheckpoint, cpErr error, now time.Time) bool {
 	if s == nil || cpErr != nil || cp == nil {
 		return true
@@ -85,9 +76,8 @@ func securityStale(s *models.SecurityState, cp *models.IndexerCheckpoint, cpErr 
 	return now.Sub(s.AsOfTime.UTC()) > securityStalenessWindow
 }
 
-// getProject implements GET /api/v1/project (operationId getProject).
-// Returns the deployment's project record (addresses, lifecycle status and the
-// live governance and price projection), or 404 before one exists.
+// getProject handles public GET /api/v1/project, returning deployment addresses,
+// lifecycle and projected governance/prices, or 404 before the project exists
 func (app *App) getProject(c *gin.Context) {
 	p, err := app.Repos.Projects.Get(c.Request.Context())
 	if err != nil {

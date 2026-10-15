@@ -6,9 +6,9 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// StoredProfileResponse mirrors components.schemas.StoredProfile: the raw
-// stored Asset Profile document plus the server-derived identity fields, so the
-// admin console can repopulate its editor and deploy form after a reload
+// StoredProfileResponse mirrors components.schemas.StoredProfile: stored profile JSON
+// and derived identity fields used to restore the admin editor and deploy form after
+// reload
 type StoredProfileResponse struct {
 	Profile       json.RawMessage `json:"profile"`
 	ProjectID     string          `json:"projectId"`
@@ -18,8 +18,8 @@ type StoredProfileResponse struct {
 	TokenUnit     string          `json:"tokenUnit"`
 }
 
-// ToStoredProfileResponse emits the profile as the stored JSON document, without
-// re-marshalling it, so the bytes match the digest computed at creation
+// ToStoredProfileResponse returns the stored profile JSON without re-marshalling. Its
+// digest covers the JCS canonical form.
 func ToStoredProfileResponse(p *models.AssetProfile) StoredProfileResponse {
 	return StoredProfileResponse{
 		Profile: json.RawMessage(p.ProfileRaw), ProjectID: p.ProjectID, ProfileDigest: p.Digest,
@@ -27,11 +27,10 @@ func ToStoredProfileResponse(p *models.AssetProfile) StoredProfileResponse {
 	}
 }
 
-// AssetRecordResponse mirrors components.schemas.AssetRecord. recordKey, nonce
-// and validUntil let the admin's web wallet rebuild the MintAttestation
-// (recordKey as 0x-hex, nonce as a decimal string, validUntil as Unix seconds)
-// for the auditor to sign and the wallet to submit; the server does not relay
-// the mint
+// AssetRecordResponse mirrors components.schemas.AssetRecord. The admin wallet uses
+// recordKey (0x-hex), nonce (decimal string) and validUntil (Unix seconds) to rebuild
+// MintAttestation for auditor signing and wallet submission; the server does not relay
+// mints.
 type AssetRecordResponse struct {
 	RecordID       string `json:"recordId"`
 	Status         string `json:"status"`

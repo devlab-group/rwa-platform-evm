@@ -12,9 +12,8 @@ import (
 	"github.com/rwa-platform/signer/internal/cid"
 )
 
-// jcsCIDVector mirrors shared/vectors/jcs-cid.json: a golden vector for JCS
-// canonicalization, the SHA-256 digest convention and the CIDv1 raw/sha2-256 encoding,
-// all derived from one input document and shared with the server's tests
+// jcsCIDVector models shared/vectors/jcs-cid.json, shared with server tests: canonical
+// bytes, SHA-256 digest and CIDv1 raw/sha2-256 from one input
 type jcsCIDVector struct {
 	Input              json.RawMessage `json:"input"`
 	CanonicalBytesUTF8 string          `json:"canonicalBytesUtf8"`
@@ -23,9 +22,8 @@ type jcsCIDVector struct {
 	CIDv1              string          `json:"cidv1"`
 }
 
-// TestJCSCIDVector_SharedVectorParity reproduces shared/vectors/jcs-cid.json exactly:
-// the RFC 8785 canonical bytes, the SHA-256 digest and the CIDv1 string, all computed
-// from the vector's raw input
+// From shared/vectors/jcs-cid.json raw input, reproduce exact canonical bytes, SHA-256
+// digest and CIDv1
 func TestJCSCIDVector_SharedVectorParity(t *testing.T) {
 	path, err := filepath.Abs(filepath.Join("..", "..", "..", "shared", "vectors", "jcs-cid.json"))
 	if err != nil {

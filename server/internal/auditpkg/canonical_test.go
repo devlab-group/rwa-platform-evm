@@ -18,10 +18,9 @@ func TestCanonicalizeSortsKeysAndStripsWhitespace(t *testing.T) {
 	}
 }
 
-// TestCanonicalizeUnicodeKeyOrdering checks key sorting for U+00E9, U+20AC and
-// U+FB2A. RFC 8785 sorts keys by UTF-16 code unit, and these are single code
-// units, so code point order and code unit order agree. The surrogate-pair case
-// is left to the jcs library's own tests.
+// TestCanonicalizeUnicodeKeyOrdering covers U+00E9, U+20AC and U+FB2A. Each occupies
+// one UTF-16 unit, so code point and RFC 8785 code-unit ordering agree. The jcs library
+// tests surrogate pairs.
 func TestCanonicalizeUnicodeKeyOrdering(t *testing.T) {
 	in := []byte(`{"` + "€" + `":"euro","` + "é" + `":"eacute","` + "שׁ" + `":"shin"}`)
 	got, err := Canonicalize(in)

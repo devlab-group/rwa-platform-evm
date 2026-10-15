@@ -1,25 +1,21 @@
-// Builds a placeholder ("skeleton") instance from an Asset Profile's
-// `assetSchema`, so the Create-record metadata editor starts from the expected
-// shape instead of an empty `{}`. It follows the server's closed dialect
-// (rwa-profile-assetSchema/1): type, properties, items, $ref, $defs, enum,
-// const and default, and emits a placeholder for every declared property. It
-// is an authoring aid, not a validator; the server validates the submitted
-// metadata against the schema.
+// Builds assetSchema authoring placeholders from type/properties/items, local $ref/$defs
+// and default/const/enum/examples hints. Explicit hints can replace the declared object shape.
+// The server validates the rwa-profile-assetSchema/1 dialect; this helper is not a validator.
 
-/** Matches the server's $ref chain bound (maxRefDepth in assets/schema_guard.go) */
+// Bounds placeholder recursion; the server validates reference chains separately
 const MAX_DEPTH = 32;
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** Decodes one JSON Pointer reference token (RFC 6901: ~1 is "/", ~0 is "~") */
+// Decodes JSON Pointer tokens: ~1 to / and ~0 to ~ (RFC 6901)
 function decodePointerToken(token: string): string {
   return token.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
-// Resolves a local JSON-pointer `$ref` such as "#" or "#/$defs/Foo" against the
-// root schema; the dialect allows only local refs, so any other ref gives undefined
+// Resolve local JSON Pointers (# or #/$defs/Foo) against the root; unsupported references return
+// undefined
 function resolveRef(root: Record<string, unknown>, ref: string): unknown {
   if (ref === "#" || ref === "#/") return root;
   if (!ref.startsWith("#/")) return undefined;
@@ -31,8 +27,7 @@ function resolveRef(root: Record<string, unknown>, ref: string): unknown {
   return node;
 }
 
-// Picks the type to build for; when `type` is an array such as
-// ["string","null"], the first non-null entry wins
+// Choose the first non-null type from an array, falling back to its first string entry
 function pickType(node: Record<string, unknown>): string | undefined {
   const t = node.type;
   if (typeof t === "string") return t;
@@ -76,8 +71,7 @@ function skeletonForSchema(
 
   const type = pickType(node);
 
-  // An object (declared as such, or implied by having `properties`): emit a
-  // placeholder for every declared property so the operator sees the full shape.
+  // Populate declared object properties unless explicit hints supplied a value
   if (type === "object" || (type === undefined && isObject(node.properties))) {
     const props = isObject(node.properties) ? node.properties : {};
     const out: Record<string, unknown> = {};
@@ -108,11 +102,7 @@ function skeletonForSchema(
   }
 }
 
-/**
- * Returns a pretty-printed JSON skeleton for a profile's `assetSchema`, or
- * `undefined` if the schema is not a usable object schema (so the caller can
- * fall back to an empty template).
- */
+/** Returns formatted object-schema placeholders, or undefined so callers can use an empty template */
 export function buildMetadataSkeleton(schema: unknown): string | undefined {
   if (!isObject(schema)) return undefined;
   const value = skeletonForSchema(schema, schema, 0, new Set<string>());

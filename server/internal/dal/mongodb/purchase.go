@@ -34,9 +34,8 @@ func (r *purchaseRepo) DeleteStaleGeneration(ctx context.Context, gen int64) err
 	return err
 }
 
-// ListPage returns one keyset page sorted by (blockNumber, _id) descending. The
-// filter and limit are part of the query (keysetFilter and SetLimit(limit+1)), so
-// the whole collection is not fetched and sliced in the caller.
+// ListPage queries (blockNumber, _id) descending with keysetFilter and limit+1, rather
+// than fetching the collection for caller-side slicing
 func (r *purchaseRepo) ListPage(ctx context.Context, cursor string, limit int) ([]*models.Purchase, string, error) {
 	items, err := findMany[models.Purchase](ctx, r.coll, keysetFilter(cursor, "blockNumber"),
 		options.Find().SetSort(bson.D{{Key: "blockNumber", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(int64(limit+1)))

@@ -11,9 +11,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// failingAuditRepo is an AuditLogRepository that fails Append for a chosen
-// phase: failIntent fails before the intent is durable, failResult fails while
-// writing the result after the effect
+// failingAuditRepo fails Append at the chosen phase: failIntent before durable intent,
+// or failResult after the effect
 type failingAuditRepo struct {
 	failIntent bool
 	failResult bool
@@ -41,9 +40,8 @@ func (r *failingAuditRepo) List(ctx context.Context, category string, limit int)
 	return nil, nil
 }
 
-// TestSetComplianceStatusFailsClosedWhenAuditIntentUndurable covers a database
-// failure before broadcast: if the audit intent cannot be persisted, the
-// compliance transaction is not broadcast and the request returns 500
+// TestSetComplianceStatusFailsClosedWhenAuditIntentUndurable checks that an
+// intent-write failure returns 500 without broadcasting the compliance transaction
 func TestSetComplianceStatusFailsClosedWhenAuditIntentUndurable(t *testing.T) {
 	env := setupTestApp(t)
 	repo := &failingAuditRepo{failIntent: true}
@@ -65,9 +63,8 @@ func TestSetComplianceStatusFailsClosedWhenAuditIntentUndurable(t *testing.T) {
 	}
 }
 
-// TestSetComplianceStatusSucceedsWhenAuditResultFails covers a database failure
-// after broadcast: once the intent is durable and the transaction is broadcast, a
-// failure to write the linked result is only logged and the request succeeds
+// TestSetComplianceStatusSucceedsWhenAuditResultFails checks that a result-write
+// failure after durable intent and broadcast is logged without failing the request
 func TestSetComplianceStatusSucceedsWhenAuditResultFails(t *testing.T) {
 	env := setupTestApp(t)
 	repo := &failingAuditRepo{failResult: true}
@@ -89,9 +86,8 @@ func TestSetComplianceStatusSucceedsWhenAuditResultFails(t *testing.T) {
 	}
 }
 
-// TestReissueRecordFailsClosedWhenAuditIntentUndurable covers a database failure
-// before the effect: if the audit intent cannot be persisted, the reissue does not
-// change the record and the request returns 500
+// TestReissueRecordFailsClosedWhenAuditIntentUndurable checks that an intent-write
+// failure returns 500 without changing the record
 func TestReissueRecordFailsClosedWhenAuditIntentUndurable(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.Audit = auditlog.New(&failingAuditRepo{failIntent: true})

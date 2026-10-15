@@ -7,12 +7,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// erc20ABIJSON declares the read methods the server calls on ERC-20 contracts:
-// balanceOf and decimals for the quote token, and RWAToken's compliance() and
-// supplyController() getters, which deployment verification uses to confirm that
-// the token is wired to the project's own compliance registry and supply
-// controller. It also declares symbol, totalSupply, paused and redemptionEscrow,
-// which have no Pack helpers here.
+// erc20ABIJSON provides quote-token balanceOf/decimals and RWAToken
+// compliance/supplyController reads for deployment wiring checks. It also declares
+// symbol, totalSupply, paused and redemptionEscrow without Pack helpers.
 const erc20ABIJSON = `[
   {"type":"function","name":"balanceOf","stateMutability":"view","inputs":[{"name":"account","type":"address"}],"outputs":[{"name":"","type":"uint256"}]},
   {"type":"function","name":"decimals","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint8"}]},
@@ -27,7 +24,7 @@ const erc20ABIJSON = `[
 // ERC20 encodes calldata for, and decodes results from, the ERC-20 views in erc20ABIJSON
 type ERC20 struct{ ABI abi.ABI }
 
-// NewERC20 parses the ERC-20 read-only ABI once.
+// NewERC20 parses the ERC-20 read-only ABI
 func NewERC20() ERC20 { return ERC20{ABI: mustABI(erc20ABIJSON)} }
 
 // PackBalanceOf builds calldata for balanceOf(address).

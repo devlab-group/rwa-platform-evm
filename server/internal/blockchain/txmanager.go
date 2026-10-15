@@ -29,10 +29,9 @@ const (
 	FeeModeLegacy  FeeMode = "legacy"
 )
 
-// SubmitRequest describes one state-changing transaction to sign and
-// broadcast. Exactly one of PrivateKey or Signer must be set. PrivateKey suits
-// local, dev and test use and is adapted through StaticKeySigner; Signer suits
-// backends from internal/keys, which keep the key out of process memory.
+// SubmitRequest describes a transaction to sign and broadcast. Supply Signer or a
+// local/dev/test PrivateKey, adapted through StaticKeySigner. Signer takes precedence
+// when both are set; internal/keys provides local and remote backends.
 type SubmitRequest struct {
 	IdempotencyKey string
 	Kind           string
@@ -41,14 +40,12 @@ type SubmitRequest struct {
 	To             common.Address
 	Data           []byte
 	Value          *big.Int
-	// AllowReorgRetry lets this Kind's IdempotencyKey be retried after
-	// TxReorged or TxNonceConsumedExternally. Set it only when resubmitting
-	// under a new nonce is safe even if the original attempt later lands, for
-	// example an idempotent state write such as compliance.StatusService's
-	// setStatus. Leave it false for anything that moves value, mints, or has
-	// no on-chain replay guard. When false, Submit refuses the retry, and the
-	// signer cannot submit further transactions until an operator identifies
-	// the canonical transaction at (chainId, sender, nonce) and resolves it.
+	// AllowReorgRetry permits same-key retries after TxReorged or
+	// TxNonceConsumedExternally. Enable only when a new-nonce retry is safe even if the
+	// original later lands, such as an idempotent setStatus. Leave false for value
+	// transfers, mints or operations without replay protection: the signer stays blocked
+	// until an operator identifies and resolves the canonical (chainId, sender, nonce)
+	// transaction.
 	AllowReorgRetry bool
 }
 
@@ -65,24 +62,16 @@ func (req SubmitRequest) signer() (Signer, error) {
 	}
 }
 
-// ErrAmbiguousBroadcast may be returned or wrapped by a Client's
-// SendTransaction to flag that the outcome of the broadcast is unknown, for
-// example when a proxy timed out after forwarding the request to the node.
-// isAmbiguousBroadcast also infers this for common transport failures (context
-// deadline or cancellation, network errors, unexpected EOF) without the Client
-// opting in.
+// ErrAmbiguousBroadcast lets Client.SendTransaction signal an unknown outcome, such as
+// a proxy timeout after forwarding. isAmbiguousBroadcast also recognizes common
+// transport failures.
 var ErrAmbiguousBroadcast = errors.New("blockchain: ambiguous broadcast outcome")
 
-// isAmbiguousBroadcast reports whether a SendTransaction error leaves the
-// outcome unknown. A definite rejection (the node answered with, for example, a
-// nonce, underpricing or insufficient-funds error) means nothing reached the
-// mempool, so the record becomes TxFailed and its idempotency key can be
-// retried. A timeout, connection reset or context deadline may mean the node
-// accepted the transaction and only the acknowledgement was lost. Any
-// transport-layer failure counts as ambiguous: treating an accepted transaction
-// as failed could repeat a privileged operation under a new nonce, while an
-// extra TxBroadcastUnknown resolution for a transaction that really failed is
-// harmless.
+// isAmbiguousBroadcast classifies ErrAmbiguousBroadcast, context
+// cancellation/deadlines, net.Error and EOF errors as unknown outcomes: the node may
+// have accepted the transaction before losing acknowledgement. Other errors are treated
+// as definite rejections and become retryable TxFailed records. Ambiguous outcomes
+// retain TxBroadcastUnknown to avoid repeating an accepted operation under a new nonce.
 func isAmbiguousBroadcast(err error) bool {
 	if err == nil {
 		return false
@@ -103,9 +92,8 @@ func isAmbiguousBroadcast(err error) bool {
 	return false
 }
 
-// encodeSignedTx returns tx's binary encoding as "0x"-prefixed hex (the EIP-2718
-// typed envelope, or plain RLP for a legacy transaction), so the exact signed
-// transaction can be persisted before broadcast
+// encodeSignedTx returns 0x-prefixed transaction bytes for persistence before
+// broadcast: an EIP-2718 envelope or legacy RLP
 func encodeSignedTx(tx *types.Transaction) (string, error) {
 	b, err := tx.MarshalBinary()
 	if err != nil {
@@ -114,9 +102,8 @@ func encodeSignedTx(tx *types.Transaction) (string, error) {
 	return "0x" + common.Bytes2Hex(b), nil
 }
 
-// decodeSignedTx reverses encodeSignedTx and returns the transaction TxManager
-// signed, so a TxBroadcastUnknown record can be rebroadcast byte for byte
-// instead of re-signed, which could change its hash or nonce
+// decodeSignedTx reverses encodeSignedTx for byte-identical rebroadcast of
+// TxBroadcastUnknown, preserving hash, nonce and signature
 func decodeSignedTx(rawHex string) (*types.Transaction, error) {
 	b := common.FromHex(rawHex)
 	if len(b) == 0 {
@@ -137,38 +124,30 @@ type nonceLease struct {
 	ttl      time.Duration
 }
 
-// TxManager serializes nonces per signing key, submits transactions and tracks
-// their lifecycle. config.Config.TxCoordinationMode selects:
-//   - "in-process" (default): keyLocks serializes goroutines within one manager.
-//     Run one platform process per hot key; separate processes can allocate the
-//     same pending nonce and replace or drop each other's transactions.
-//   - "mongo-lease": Submit and Replace also lease chainId+":"+signerAddress
-//     through NonceLeaseRepository across allocation, signing, persistence and
-//     broadcast. The in-process lock still serializes local goroutines. Failure
-//     to acquire the lease stops before allocation; a failed renewal immediately
-//     before persistence stops before saving or broadcasting.
+// TxManager serializes nonces per signer and tracks transactions.
+// config.Config.TxCoordinationMode selects:
+//   - "in-process" (default): local keyLocks only. Run one process per hot key; separate
+//     processes can collide on pending nonces and replace or drop each other's
+//     transactions.
+//   - "mongo-lease": Submit and Replace also hold a NonceLeaseRepository lease on
+//     chainId+":"+signerAddress across allocation, signing, persistence and broadcast.
+//     Acquisition failure stops allocation; pre-persistence renewal failure stops saving
+//     and broadcasting. Local locking remains.
 //
 // See NewTxManagerWithLease and the operator guide's deployment topology.
 type TxManager interface {
 	Submit(ctx context.Context, req SubmitRequest) (*models.Transaction, error)
-	// RefreshStatuses re-checks every non-final transaction's receipt and
-	// advances its lifecycle state (pending, mined, then confirmed, or reverted
-	// or reorged). confirmations is the number of blocks that must follow the
-	// receipt's block before a mined transaction counts as confirmed.
+	// RefreshStatuses reconciles non-final transactions against receipts and chain state.
+	// confirmations counts blocks after the receipt's block.
 	RefreshStatuses(ctx context.Context, confirmations uint64) error
-	// Replace resubmits a still-pending transaction at the same nonce with a
-	// bumped fee. bumpPercent applies to whichever fee fields the original
-	// transaction used. signer must be able to sign for the original
-	// transaction's From address, because the server does not store private
-	// keys. It is the same Signer abstraction that Submit takes.
+	// Replace resubmits a Pending transaction at its nonce with fees raised by
+	// bumpPercent. Its Signer must control the original From address; buildBumpedTx
+	// details fee-mode handling.
 	Replace(ctx context.Context, id string, signer Signer, bumpPercent int64) (*models.Transaction, error)
 }
 
-// FeeCaps are absolute limits on the fees a TxManager will sign. A nil field
-// means no cap for that dimension. buildTx rejects a transaction that would
-// exceed a cap instead of lowering its fee, because a transaction signed at a
-// reduced fee may never confirm, and a stuck nonce is worse for a signer than a
-// failed Submit.
+// FeeCaps limits transaction signing costs; nil disables a dimension. buildTx rejects
+// excessive fees rather than lowering them and risking a stuck nonce.
 type FeeCaps struct {
 	// MaxFeePerGas bounds the EIP-1559 fee cap and the legacy gas price alike.
 	MaxFeePerGas *big.Int
@@ -178,11 +157,9 @@ type FeeCaps struct {
 	MaxTotalCost *big.Int
 }
 
-// DefaultMaxReplacementAttempts is how many times Replace bumps and resubmits
-// the same nonce before it marks the transaction TxNeedsIntervention. A
-// transaction that still has not confirmed after this many bumps points to a
-// problem beyond a low fee, such as an unfunded account or an unhealthy RPC
-// endpoint.
+// DefaultMaxReplacementAttempts caps same-nonce replacement attempts before
+// TxNeedsIntervention. Repeated failure may indicate an unfunded account or unhealthy
+// RPC endpoint rather than a low fee.
 const DefaultMaxReplacementAttempts = 10
 
 type txManager struct {
@@ -191,9 +168,9 @@ type txManager struct {
 	chainID *big.Int
 	feeMode FeeMode
 	feeCaps FeeCaps
-	// maxReplacementAttempts defaults to DefaultMaxReplacementAttempts and can be
-	// set with NewTxManagerWithPolicy; a value of 0 or less means unlimited, so
-	// Replace never marks TxNeedsIntervention on attempt count alone
+	// maxReplacementAttempts defaults to DefaultMaxReplacementAttempts;
+	// NewTxManagerWithPolicy overrides it. Non-positive values disable attempt-count
+	// intervention.
 	maxReplacementAttempts int
 	// lease is nil in "in-process" mode (the default) and non-nil in
 	// "mongo-lease" mode
@@ -231,12 +208,9 @@ func NewTxManagerWithPolicy(client Client, txs repository.TransactionRepository,
 	}
 }
 
-// NewTxManagerWithLease is NewTxManagerWithPolicy with the distributed nonce
-// lease of "mongo-lease" mode (see TxManager). The lease key is
-// chainId+":"+signerAddress, held for ttl. Each process gets a random holder ID.
-// Replicas that share a hot key must share the same leases store, which needs
-// durable shared storage (config PersistenceMode "mongo"), or the lease cannot
-// coordinate them.
+// NewTxManagerWithLease adds mongo-lease coordination to NewTxManagerWithPolicy: a
+// random holder ID and a TTL lease on chainId+":"+signerAddress. Replicas sharing a hot
+// key must use the same durable lease store, configured with PersistenceMode="mongo".
 func NewTxManagerWithLease(client Client, txs repository.TransactionRepository, chainID *big.Int, feeMode FeeMode, feeCaps FeeCaps, maxReplacementAttempts int, leases repository.NonceLeaseRepository, ttl time.Duration) TxManager {
 	m := NewTxManagerWithPolicy(client, txs, chainID, feeMode, feeCaps, maxReplacementAttempts).(*txManager)
 	m.lease = &nonceLease{repo: leases, holderID: uuid.NewString(), ttl: ttl}
@@ -254,13 +228,10 @@ func (m *txManager) lockFor(addr common.Address) *sync.Mutex {
 	return l
 }
 
-// isRetryableStatus reports whether existing's IdempotencyKey can be reused by
-// a new Submit. TxFailed always is: nothing reached the mempool under that
-// attempt, so nothing can still land. TxReorged and TxNonceConsumedExternally
-// are retryable only when existing was submitted with AllowReorgRetry (see
-// SubmitRequest.AllowReorgRetry). Otherwise a reorged transaction may return to
-// the mempool, or the nonce may have been used by an untracked replacement, and
-// resubmitting could repeat the business operation.
+// isRetryableStatus permits same-key Submit retries for TxFailed. TxReorged and
+// TxNonceConsumedExternally require the stored AllowReorgRetry flag: otherwise an
+// original or untracked replacement could still perform the operation. See
+// SubmitRequest.AllowReorgRetry.
 func isRetryableStatus(existing *models.Transaction) bool {
 	switch existing.Status {
 	case models.TxFailed:
@@ -272,22 +243,15 @@ func isRetryableStatus(existing *models.Transaction) bool {
 	}
 }
 
-// Submit builds, signs, persists and broadcasts under the per-signer lock and,
-// in mongo-lease mode, a distributed lease:
-//  1. Reject a signer blocked by needsInterventionTx.
-//  2. Look up the idempotency key under the lock. Retry only isRetryableStatus
-//     records; return others unchanged. TxBroadcastUnknown must retain its nonce
-//     and signature rather than start a second operation.
-//  3. Allocate a nonce, build and sign, fixing the hash and signed bytes.
-//  4. Persist TxBroadcastUnknown with SignedRawTx before broadcast. A storage
-//     failure sends nothing; the unique partial idempotencyKey index blocks a
-//     same-key race at persistence.
-//  5. Broadcast: success becomes TxPending; definite rejection becomes TxFailed
-//     and permits retry; an ambiguous error retains TxBroadcastUnknown.
-//
-// RefreshStatuses resolves unknown outcomes by hash and, if absent, rebroadcasts
-// the persisted bytes with the same nonce and signature. This also recovers a
-// crash between persistence and broadcast.
+// Submit holds the per-signer lock and optional distributed lease. It checks
+// needsInterventionTx, returns non-retryable idempotency records unchanged, then
+// allocates a nonce, builds/signs and persists TxBroadcastUnknown with SignedRawTx
+// before broadcast. Persistence failure sends nothing; repository uniqueness arbitrates
+// same-key creates.
+// Successful broadcast becomes TxPending; classified rejection becomes retryable
+// TxFailed; ambiguous errors retain TxBroadcastUnknown. RefreshStatuses checks the hash
+// and, while the nonce remains available, rebroadcasts identical bytes, recovering
+// persistence-to-broadcast crashes.
 func (m *txManager) Submit(ctx context.Context, req SubmitRequest) (*models.Transaction, error) {
 	signer, err := req.signer()
 	if err != nil {
@@ -302,9 +266,8 @@ func (m *txManager) Submit(ctx context.Context, req SubmitRequest) (*models.Tran
 	lock.Lock()
 	defer lock.Unlock()
 
-	// the lease is taken after the in-process lock, which still serializes
-	// goroutines within this process, and before anything touches from's nonce
-	// sequence; it does nothing in "in-process" mode
+	// Acquire the optional distributed lease after the local lock, before accessing the
+	// signer's nonce sequence
 	leaseToken, releaseLease, err := m.acquireNonceLease(ctx, from)
 	if err != nil {
 		return nil, err
@@ -356,9 +319,8 @@ func (m *txManager) Submit(ctx context.Context, req SubmitRequest) (*models.Tran
 		return nil, err
 	}
 
-	// Confirm this replica still holds the lease right before the persist step
-	// (a no-op in "in-process" mode). If another replica has taken over since
-	// this lease expired, Renew fails and nothing is persisted or broadcast
+	// Renew before persistence; a lost lease must stop saving and broadcasting. In-process
+	// mode is a no-op.
 	if err := m.renewNonceLease(ctx, from, leaseToken); err != nil {
 		return nil, err
 	}
@@ -368,8 +330,7 @@ func (m *txManager) Submit(ctx context.Context, req SubmitRequest) (*models.Tran
 	var priorAttempts []models.TxAttempt
 	if existing != nil {
 		id = existing.ID // a retry updates the same record instead of creating a second one for the key
-		// the record's Nonce, TxHash and SignedRawTx are about to be replaced, so
-		// keep the earlier attempt in Attempts
+		// Archive the earlier Nonce, TxHash and SignedRawTx in Attempts before replacing them
 		priorAttempts = append(append([]models.TxAttempt{}, existing.Attempts...), models.TxAttempt{
 			Nonce: existing.Nonce, TxHash: existing.TxHash, SignedRawTx: existing.SignedRawTx,
 			Status: existing.Status, RecordedAt: existing.UpdatedAt,
@@ -410,9 +371,8 @@ func (m *txManager) Submit(ctx context.Context, req SubmitRequest) (*models.Tran
 
 	if err := m.client.SendTransaction(ctx, signedTx); err != nil {
 		if isAmbiguousBroadcast(err) {
-			// the record is already TxBroadcastUnknown from the persist above and
-			// RefreshStatuses resolves it; this is not a definite failure, so a
-			// same-key retry stays blocked
+			// Retain TxBroadcastUnknown for RefreshStatuses; same-key Submit must not start
+			// another operation
 			return nil, fmt.Errorf("blockchain: SendTransaction (broadcast outcome unknown): %w", err)
 		}
 		record.Status = models.TxFailed
@@ -429,10 +389,9 @@ func (m *txManager) Submit(ctx context.Context, req SubmitRequest) (*models.Tran
 	return record, nil
 }
 
-// ErrLeaseUnavailable is returned by Submit and Replace in "mongo-lease" mode
-// when this replica could not acquire the signer's distributed nonce lease or
-// lost it. Nothing was allocated, signed or broadcast, so the caller can retry
-// instead of treating it as a rejection of the business operation.
+// ErrLeaseUnavailable signals a held or lost mongo-lease. Acquisition failure precedes
+// allocation; renewal failure may follow signing but stops persistence and broadcast.
+// Callers may retry the coordination failure.
 var ErrLeaseUnavailable = errors.New("blockchain: distributed nonce lease unavailable")
 
 // leaseKey returns the distributed lease key for from, chainId:address
@@ -440,10 +399,9 @@ func (m *txManager) leaseKey(from common.Address) string {
 	return m.chainID.String() + ":" + from.Hex()
 }
 
-// acquireNonceLease acquires the distributed lease for from in "mongo-lease"
-// mode. In "in-process" mode (m.lease == nil) it succeeds with token 0 and does
-// nothing. release is never nil and is safe to call even when nothing was
-// acquired, so callers can `defer release()` after a successful call.
+// acquireNonceLease obtains from's distributed lease. In-process mode returns token 0
+// without acquiring anything. release is always callable, including after failed
+// acquisition.
 func (m *txManager) acquireNonceLease(ctx context.Context, from common.Address) (token uint64, release func(), err error) {
 	noop := func() {}
 	if m.lease == nil {
@@ -458,9 +416,8 @@ func (m *txManager) acquireNonceLease(ctx context.Context, from common.Address) 
 		return 0, noop, fmt.Errorf("%w: signer %s's nonce lease is held by another replica", ErrLeaseUnavailable, from.Hex())
 	}
 	release = func() {
-		// best effort, and not tied to ctx, which may already be done on an
-		// error path: a caller whose context was canceled should still release
-		// the lease instead of making other replicas wait out the TTL
+		// Release best-effort on a fresh context so caller cancellation does not leave
+		// replicas waiting for TTL expiry
 		relCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = m.lease.repo.Release(relCtx, key, m.lease.holderID, token)
@@ -468,10 +425,8 @@ func (m *txManager) acquireNonceLease(ctx context.Context, from common.Address) 
 	return token, release, nil
 }
 
-// renewNonceLease confirms that this replica still holds from's lease with
-// exactly token, just before the persist step of Submit and Replace. It does
-// nothing in "in-process" mode. If another replica has taken over since this
-// lease expired, Renew fails and the caller must not persist or broadcast
+// renewNonceLease checks the holder and token before Submit/Replace persistence.
+// Failure must stop saving and broadcasting; in-process mode is a no-op.
 func (m *txManager) renewNonceLease(ctx context.Context, from common.Address, token uint64) error {
 	if m.lease == nil {
 		return nil
@@ -486,13 +441,10 @@ func (m *txManager) renewNonceLease(ctx context.Context, from common.Address, to
 	return nil
 }
 
-// needsInterventionTx returns a transaction that blocks from from submitting,
-// or nil. That is a TxNeedsIntervention record, or a TxReorged or
-// TxNonceConsumedExternally record whose Kind did not set AllowReorgRetry: its
-// canonical transaction at (chainId, sender, nonce) has not been identified, so
-// it blocks the signer until an operator resolves it. A record with
-// AllowReorgRetry is not a blocker, since its reconciler is expected to resubmit
-// it under the same idempotency key (see isRetryableStatus).
+// needsInterventionTx returns a signer blocker or nil. TxNeedsIntervention always
+// blocks; TxReorged and TxNonceConsumedExternally block unless AllowReorgRetry permits
+// same-key recovery. Otherwise an operator must identify and resolve the canonical
+// (chainId, sender, nonce) transaction.
 func (m *txManager) needsInterventionTx(ctx context.Context, from common.Address) (*models.Transaction, error) {
 	stuck, err := m.txs.ListByStatuses(ctx, models.TxNeedsIntervention, models.TxReorged, models.TxNonceConsumedExternally)
 	if err != nil {
@@ -514,22 +466,14 @@ func (m *txManager) needsInterventionTx(ctx context.Context, from common.Address
 	return nil, nil
 }
 
-// allocateNonce returns the next nonce to sign with: the maximum of the node's
-// pending nonce (eth_getTransactionCount at "pending", which counts the node's
-// pending transactions), its latest nonce (mined transactions only), and one
-// past the highest nonce among this manager's own records that still hold their
-// nonce.
-//
-// The three can disagree. A lagging node can report a pending nonce below the
-// latest one, which would give "nonce too low" if trusted, and this manager's
-// own broadcast but unmined records commit nonces that a node's pending view
-// may not show. Taking the maximum never reuses a nonce. Reuse would either
-// replace the earlier transaction (when the fee is bumped enough) or be
-// rejected by the node as underpriced or already known. The cost is a possible
-// gap in the sequence when a signal is inflated. A persistently inflated
-// pending count from a misbehaving node is not something Submit can resolve; it
-// surfaces through RefreshStatuses' nonce-consumed-externally check (see
-// handleMissingReceipt) and the TxNeedsIntervention path.
+// allocateNonce takes the maximum of node pending/latest nonces and one past the
+// highest stored nonce still held for the signer. This handles lagging pending views
+// and local broadcasts absent from the node's mempool view, avoiding collisions with
+// those records.
+// Inflated signals can leave nonce gaps that Submit cannot repair. Reusing a held nonce
+// could replace the earlier transaction or trigger underpriced/already-known rejection;
+// external consumption and stuck transactions are handled separately by RefreshStatuses
+// and operator intervention.
 func (m *txManager) allocateNonce(ctx context.Context, from common.Address) (uint64, error) {
 	pending, err := m.client.PendingNonceAt(ctx, from)
 	if err != nil {
@@ -564,11 +508,9 @@ func (m *txManager) allocateNonce(ctx context.Context, from common.Address) (uin
 	return next, nil
 }
 
-// buildTx builds an unsigned EIP-1559 (type 2) or legacy transaction according
-// to feeMode, falling back to legacy when the latest header has no BaseFee (the
-// chain has not activated EIP-1559). The gas limit is the estimate plus
-// gasLimitBufferPercent. An EIP-1559 fee cap is twice the latest base fee plus
-// the suggested tip.
+// buildTx builds unsigned EIP-1559 or legacy transactions, falling back to legacy if
+// BaseFee is absent. Gas uses the estimate plus gasLimitBufferPercent; the EIP-1559 fee
+// cap is twice BaseFee plus the suggested tip.
 func (m *txManager) buildTx(ctx context.Context, from, to common.Address, data []byte, value *big.Int, nonce uint64) (*types.Transaction, error) {
 	gasLimit, err := m.client.EstimateGas(ctx, ethereum.CallMsg{From: from, To: &to, Data: data, Value: value})
 	if err != nil {
@@ -630,9 +572,8 @@ func (m *txManager) buildTx(ctx context.Context, from, to common.Address, data [
 	}), nil
 }
 
-// checkFeeCaps checks MaxFeePerGas against perGasFee (the EIP-1559 fee cap or
-// the legacy gas price) and MaxTotalCost against gasLimit*perGasFee + value. It
-// returns an error instead of lowering the fee (see FeeCaps).
+// checkFeeCaps rejects perGasFee above MaxFeePerGas or gasLimit*perGasFee+value above
+// MaxTotalCost. perGasFee is the EIP-1559 cap or legacy gas price; see FeeCaps.
 func (m *txManager) checkFeeCaps(perGasFee *big.Int, gasLimit uint64, value *big.Int) error {
 	if m.feeCaps.MaxFeePerGas != nil && perGasFee.Cmp(m.feeCaps.MaxFeePerGas) > 0 {
 		return fmt.Errorf("blockchain: computed fee %s per gas exceeds configured MaxFeePerGas %s", perGasFee, m.feeCaps.MaxFeePerGas)
@@ -646,16 +587,14 @@ func (m *txManager) checkFeeCaps(perGasFee *big.Int, gasLimit uint64, value *big
 	return nil
 }
 
-// postConfirmationReorgWindow is how many blocks past the confirmations
-// threshold RefreshStatuses keeps rechecking a Confirmed transaction for a
-// reorg. After that the transaction is final and costs no further receipt and
-// header lookups. The window is fixed, not configurable.
+// postConfirmationReorgWindow fixes the extra blocks after confirmation during which
+// RefreshStatuses checks Confirmed transactions for reorgs. Final records need no
+// further receipt/header lookups.
 const postConfirmationReorgWindow = 256
 
-// RefreshStatuses re-checks every transaction that is not yet final, including
-// Confirmed ones still inside the reorg window, and advances or corrects its
-// status. It also resolves TxBroadcastUnknown records left by Submit or Replace
-// and repairs an interrupted Replace.
+// RefreshStatuses repairs replacement links, resolves TxBroadcastUnknown from
+// Submit/Replace and updates non-final records, including Confirmed transactions within
+// the reorg window
 func (m *txManager) RefreshStatuses(ctx context.Context, confirmations uint64) error {
 	if err := m.reconcileReplacements(ctx); err != nil {
 		return err
@@ -665,9 +604,8 @@ func (m *txManager) RefreshStatuses(ctx context.Context, confirmations uint64) e
 	if err != nil {
 		return err
 	}
-	// ask the repository only for records isFinal would keep, so old finalized
-	// records are not read back; the bound is 0 on a young chain, and isFinal
-	// still decides each record
+	// Exclude old finalized records at the repository; young chains use bound 0, and
+	// isFinal still checks each result
 	var confirmedFrom uint64
 	if cutoff := confirmations + postConfirmationReorgWindow; currentBlock > cutoff {
 		confirmedFrom = currentBlock - cutoff
@@ -678,9 +616,8 @@ func (m *txManager) RefreshStatuses(ctx context.Context, confirmations uint64) e
 	}
 
 	for _, tx := range all {
-		// event-derived records (txindex.ReconcileStackTransactions) belong to
-		// that projector: they have no signed payload or nonce, and it alone
-		// maintains their status from indexed events
+		// txindex.ReconcileStackTransactions owns event-derived records and their statuses;
+		// skip them here because they lack a signed payload and meaningful nonce
 		if models.IsEventDerived(tx) {
 			continue
 		}
@@ -694,9 +631,8 @@ func (m *txManager) RefreshStatuses(ctx context.Context, confirmations uint64) e
 	return nil
 }
 
-// isFinal reports whether tx needs no further work from RefreshStatuses.
-// TxReplaced and TxFailed are terminal. TxConfirmed becomes final once the chain
-// is confirmations plus postConfirmationReorgWindow blocks past its block.
+// isFinal accepts TxReplaced and TxFailed immediately, and TxConfirmed once
+// confirmations+postConfirmationReorgWindow blocks follow its block
 func (m *txManager) isFinal(tx *models.Transaction, currentBlock, confirmations uint64) bool {
 	switch tx.Status {
 	case models.TxReplaced, models.TxFailed:
@@ -725,9 +661,8 @@ func (m *txManager) refreshOne(ctx context.Context, tx *models.Transaction, curr
 func (m *txManager) handleMissingReceipt(ctx context.Context, tx *models.Transaction) error {
 	switch tx.Status {
 	case models.TxBroadcastUnknown, models.TxPending:
-		// if the account's mined nonce has passed this transaction's nonce
-		// while no receipt exists for its own hash, a different transaction
-		// took the nonce, and this one can never confirm
+		// A mined nonce beyond this attempt, without its receipt, is treated as external
+		// nonce consumption
 		consumed, err := m.nonceConsumedExternally(ctx, tx)
 		if err != nil {
 			return err
@@ -742,18 +677,15 @@ func (m *txManager) handleMissingReceipt(ctx context.Context, tx *models.Transac
 		}
 		return nil // TxPending: still simply unmined, nothing to do
 	case models.TxMined, models.TxConfirmed, models.TxReverted, models.TxReorged:
-		// these statuses are set only after a receipt was observed, so the
-		// receipt has disappeared: its block, or its inclusion in it, is no
-		// longer on the canonical chain
+		// A previously observed receipt is missing; mark the transaction reorged
 		return m.markReorged(ctx, tx)
 	default:
 		return nil
 	}
 }
 
-// nonceConsumedExternally reports whether tx.From's mined nonce has passed
-// tx.Nonce although no receipt exists for tx's own hash, meaning an unknown
-// transaction used the nonce
+// nonceConsumedExternally checks whether tx.From's mined nonce exceeds tx.Nonce after a
+// missing receipt
 func (m *txManager) nonceConsumedExternally(ctx context.Context, tx *models.Transaction) (bool, error) {
 	latest, err := m.client.NonceAt(ctx, common.HexToAddress(tx.From), nil)
 	if err != nil {
@@ -773,11 +705,9 @@ func (m *txManager) markNonceConsumedExternally(ctx context.Context, tx *models.
 	return m.txs.Update(ctx, tx)
 }
 
-// rebroadcastUnknown resubmits tx's persisted signed bytes unchanged. It ignores
-// the SendTransaction error: a rejection most likely means the node already has
-// the transaction (for example "already known" or "nonce too low" because the
-// earlier attempt landed). Only a receipt, or its continued absence, resolves
-// TxBroadcastUnknown.
+// rebroadcastUnknown resends persisted bytes unchanged and ignores send errors,
+// including already-known or nonce-too-low responses. RefreshStatuses resolves the
+// outcome from receipts or a mined nonce beyond this attempt.
 func (m *txManager) rebroadcastUnknown(ctx context.Context, tx *models.Transaction) error {
 	signedTx, err := decodeSignedTx(tx.SignedRawTx)
 	if err != nil {
@@ -790,8 +720,7 @@ func (m *txManager) rebroadcastUnknown(ctx context.Context, tx *models.Transacti
 // handleReceipt advances tx's status from a receipt, after checking that the
 // receipt's block is still canonical
 func (m *txManager) handleReceipt(ctx context.Context, tx *models.Transaction, receipt *types.Receipt, currentBlock, confirmations uint64) error {
-	// a zero BlockHash means there is nothing to verify against (only a
-	// hand-built test receipt lacks one), so skip the canonical check
+	// Skip canonical comparison when BlockHash is zero, as in hand-built test receipts
 	if receipt.BlockHash != (common.Hash{}) {
 		canonical, err := m.isCanonicalBlock(ctx, receipt.BlockNumber, receipt.BlockHash)
 		if err != nil {
@@ -820,9 +749,8 @@ func (m *txManager) handleReceipt(ctx context.Context, tx *models.Transaction, r
 	return nil
 }
 
-// isCanonicalBlock reports whether wantHash is the hash of the header the node
-// currently returns at number. After a reorg the node returns a different
-// block, with a different hash, at the same height.
+// isCanonicalBlock compares wantHash with the node's header at number, detecting
+// replacement blocks at the same height
 func (m *txManager) isCanonicalBlock(ctx context.Context, number *big.Int, wantHash common.Hash) (bool, error) {
 	header, err := m.client.HeaderByNumber(ctx, number)
 	if err != nil {
@@ -844,10 +772,8 @@ func (m *txManager) markReorged(ctx context.Context, tx *models.Transaction) err
 	return m.txs.Update(ctx, tx)
 }
 
-// markNeedsIntervention sets tx to TxNeedsIntervention because it used up its
-// replacement-attempt limit, and returns an error saying so. Replace signs and
-// broadcasts nothing in that case; see needsInterventionTx for how Submit
-// reacts.
+// markNeedsIntervention records exhausted replacement attempts and returns an error.
+// Replace signs and broadcasts nothing; needsInterventionTx then blocks Submit.
 func (m *txManager) markNeedsIntervention(ctx context.Context, tx *models.Transaction) error {
 	tx.Status = models.TxNeedsIntervention
 	tx.UpdatedAt = time.Now().UTC()
@@ -857,16 +783,10 @@ func (m *txManager) markNeedsIntervention(ctx context.Context, tx *models.Transa
 	return fmt.Errorf("blockchain: transaction %s exhausted its replacement-attempt limit (%d); marked for operator intervention", tx.ID, m.maxReplacementAttempts)
 }
 
-// reconcileReplacements repairs an interrupted Replace. If the process crashed
-// after persisting the replacement record but before marking the original
-// Replaced, the original would look like the live transaction for its nonce
-// while a newer record for the same nonce exists. Every replacement record
-// carries Replaces, so the repair needs no other state and is safe to run on
-// every tick.
-//
-// A replacement whose own Status is TxFailed never reached the mempool, and
-// Replace has already reverted the original to TxPending in the same call.
-// Such a record is skipped, so it cannot mark a live original Replaced.
+// reconcileReplacements uses Replaces to restore original Replaced/ReplacedBy links
+// after interrupted persistence. It is safe to repeat each tick. Skip TxFailed
+// replacements: their send was rejected or abandoned, and Replace attempts to restore
+// the original to Pending; linking them would displace a live original.
 func (m *txManager) reconcileReplacements(ctx context.Context) error {
 	all, err := m.txs.ListReplacements(ctx)
 	if err != nil {
@@ -896,18 +816,13 @@ func (m *txManager) reconcileReplacements(ctx context.Context) error {
 	return nil
 }
 
-// Replace resubmits id at the same nonce with a bumped fee. signer may use any
-// backend but must control the original From address.
-//
-// Acquire the signer's in-process lock and distributed lease before loading the
-// record. Updates to the original use UpdateConditional with its read version,
-// rejecting a stale writer even if an earlier lease renewal succeeded.
-//
-// Build and sign the replacement, checking fee caps after the bump. Persist its
-// signed bytes and the original's Replaced/ReplacedBy link before SendTransaction.
-// If a crash interrupts linking, reconcileReplacements repairs it during
-// RefreshStatuses. An interrupted or ambiguous broadcast leaves TxBroadcastUnknown;
-// refresh looks up the hash and rebroadcasts the same bytes if absent.
+// Replace requires the original From's Signer and reuses its nonce. It takes the local
+// lock and optional lease before loading, then builds/signs with bumped fees and
+// rechecks caps.
+// It persists replacement bytes and conditionally links the original by version before
+// broadcast, rejecting stale writers even after lease renewal. RefreshStatuses repairs
+// interrupted links and resolves TxBroadcastUnknown by receipt lookup or identical
+// rebroadcast.
 func (m *txManager) Replace(ctx context.Context, id string, signer Signer, bumpPercent int64) (*models.Transaction, error) {
 	if signer == nil {
 		return nil, errors.New("blockchain: Replace requires the original signing capability")
@@ -930,8 +845,7 @@ func (m *txManager) Replace(ctx context.Context, id string, signer Signer, bumpP
 	}
 	defer releaseLease()
 
-	// loaded only after the lock and lease are held, so its status,
-	// replacement count and version are current
+	// Load status, replacement count and version under the lock and optional lease
 	old, err := m.txs.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -942,8 +856,7 @@ func (m *txManager) Replace(ctx context.Context, id string, signer Signer, bumpP
 	if from.Hex() != old.From {
 		return nil, fmt.Errorf("blockchain: replacement signer %s does not match original sender %s", from.Hex(), old.From)
 	}
-	// past the replacement-attempt limit the transaction needs an operator;
-	// checked before any signing or broadcasting for this attempt
+	// Check the attempt limit before signing or broadcasting
 	if m.maxReplacementAttempts > 0 && old.ReplacementCount+1 > m.maxReplacementAttempts {
 		return nil, m.markNeedsIntervention(ctx, old)
 	}
@@ -956,10 +869,8 @@ func (m *txManager) Replace(ctx context.Context, id string, signer Signer, bumpP
 		value = big.NewInt(0)
 	}
 
-	// decode the original signed attempt so buildBumpedTx can bump from the
-	// larger of its fees and the current suggestion, which keeps the replacement
-	// from being underpriced after fees fall; without SignedRawTx it bumps the
-	// current suggestion alone
+	// Decode the original to bump from the larger of its fees and fresh suggestions, even
+	// after fees fall. Missing or undecodable SignedRawTx leaves only fresh suggestions.
 	var origTx *types.Transaction
 	if old.SignedRawTx != "" {
 		if decoded, derr := decodeSignedTx(old.SignedRawTx); derr == nil {
@@ -1011,15 +922,12 @@ func (m *txManager) Replace(ctx context.Context, id string, signer Signer, bumpP
 	old.ReplacedBy = newRecord.ID
 	old.UpdatedAt = now
 	if ok, err := m.txs.UpdateConditional(ctx, old, oldVersion); err != nil {
-		// newRecord is already saved and still has to be broadcast;
-		// reconcileReplacements restores the missing link on the next
-		// RefreshStatuses run through newRecord.Replaces
+		// The replacement is durable; RefreshStatuses repairs the missing link through
+		// Replaces and resumes broadcast recovery
 		return nil, fmt.Errorf("blockchain: mark original transaction replaced: %w", err)
 	} else if !ok {
-		// someone else changed old between our read and this write, most likely
-		// another replica's Replace for the same original after this lease
-		// expired. Do not broadcast newRecord, which would race that replacement
-		// for the same nonce; abandon the attempt
+		// A concurrent writer changed the original. Abandon this replacement without
+		// broadcast to avoid competing for its nonce.
 		failedAt := time.Now().UTC()
 		newRecord.Status = models.TxFailed
 		newRecord.UpdatedAt = failedAt
@@ -1032,13 +940,10 @@ func (m *txManager) Replace(ctx context.Context, id string, signer Signer, bumpP
 			// the record is already TxBroadcastUnknown and RefreshStatuses resolves it
 			return nil, fmt.Errorf("blockchain: SendTransaction (replacement, outcome unknown): %w", err)
 		}
-		// a definite rejection: nothing is live under this replacement. Mark it
-		// Failed and restore the original to Pending with ReplacedBy cleared, so
-		// a later Replace retries the original. The attempt still counts toward
-		// ReplacementCount, because the limit bounds attempts made and a
-		// misconfigured bump would otherwise retry forever. The revert is
-		// conditional on the version this call just wrote, so it cannot overwrite
-		// a third writer.
+		// Treat the send as rejected: mark the replacement Failed and attempt to restore the
+		// original to Pending with ReplacedBy cleared. Keep ReplacementCount so repeated bad
+		// bumps exhaust the limit. The version-conditional revert cannot overwrite a newer
+		// writer.
 		failedAt := time.Now().UTC()
 		newRecord.Status = models.TxFailed
 		newRecord.UpdatedAt = failedAt
@@ -1048,9 +953,8 @@ func (m *txManager) Replace(ctx context.Context, id string, signer Signer, bumpP
 		old.ReplacementCount = newRecord.ReplacementCount
 		old.UpdatedAt = failedAt
 		if ok, uerr := m.txs.UpdateConditional(ctx, old, oldVersion+1); uerr == nil && !ok {
-			// someone else already moved old past our TxReplaced write, so leave
-			// their state alone; reconcileReplacements skips the Failed
-			// replacement whether or not this revert lands
+			// Preserve the concurrent writer's state. reconcileReplacements skips the Failed
+			// replacement even if this revert fails.
 		}
 		return nil, fmt.Errorf("blockchain: SendTransaction (replacement): %w", err)
 	}
@@ -1063,12 +967,9 @@ func (m *txManager) Replace(ctx context.Context, id string, signer Signer, bumpP
 	return newRecord, nil
 }
 
-// replacementMinBumpPercent is the fee increase over the replaced transaction
-// that geth requires by default (--txpool.pricebump 10) before it accepts a
-// replacement; below that it rejects it as underpriced. Geth applies it to both
-// the fee cap and the tip cap. bumpFeeField uses it as a floor, so a smaller
-// caller-supplied bumpPercent still yields an acceptable replacement on a node
-// with the default.
+// replacementMinBumpPercent matches geth's default --txpool.pricebump 10, applied to
+// fee and tip caps. bumpFeeField enforces this floor over the original even when
+// callers request a smaller bump.
 const replacementMinBumpPercent = 10
 
 // ceilPercent returns ceil(v * (100+pct) / 100).
@@ -1078,16 +979,10 @@ func ceilPercent(v *big.Int, pct int64) *big.Int {
 	return out.Div(out, big.NewInt(100))
 }
 
-// bumpFeeField computes one replacement fee field. It raises the larger of the
-// original attempt's value and the current network suggestion by bumpPercent,
-// rounding up, then enforces replacementMinBumpPercent over the original and
-// makes the result exceed the original by at least 1 wei. That avoids three
-// ways a plain bump yields a rejected replacement: bumping only a fresh quote
-// can land below the original after fees fall, rounding down can return the
-// original value, and a caller-supplied bumpPercent under the node's minimum
-// (for example 5) is still rejected. original may be nil when there is no
-// decodable earlier attempt, in which case only the current suggestion is
-// bumped.
+// bumpFeeField rounds up a bumpPercent increase over max(original, current), then
+// enforces replacementMinBumpPercent and at least 1 wei above original. These guards
+// handle falling suggestions, integer rounding and below-minimum caller bumps. A nil
+// original bumps only the current suggestion.
 func bumpFeeField(original, current *big.Int, bumpPercent int64) *big.Int {
 	base := new(big.Int)
 	if current != nil {
@@ -1111,19 +1006,15 @@ func bumpFeeField(original, current *big.Int, bumpPercent int64) *big.Int {
 	return bumped
 }
 
-// buildBumpedTx rebuilds a transaction at the same nonce with fees raised by
-// bumpPercent, using buildTx's fee-mode selection, and rechecks the fee caps
-// against the bumped values, since buildTx saw only the unbumped fee. orig is
-// the decoded original signed attempt (may be nil); each fee field is bumped
-// from the larger of the original and current values.
+// buildBumpedTx reuses the nonce and buildTx's fee-mode selection, bumps each fee from
+// max(original, current), then rechecks caps against bumped values. orig may be nil;
+// original fees apply only when transaction types match.
 func (m *txManager) buildBumpedTx(ctx context.Context, from, to common.Address, data []byte, value *big.Int, nonce uint64, bumpPercent int64, orig *types.Transaction) (*types.Transaction, error) {
 	base, err := m.buildTx(ctx, from, to, data, value, nonce)
 	if err != nil {
 		return nil, err
 	}
-	// use the original's fees only when it has the same transaction type as the
-	// rebuild, because a dynamic-fee original has no legacy gas price to compare
-	// with, and the reverse
+	// Compare original fees only when its transaction type matches the rebuild
 	origSameMode := orig != nil && orig.Type() == base.Type()
 	switch base.Type() {
 	case types.DynamicFeeTxType:
@@ -1134,8 +1025,8 @@ func (m *txManager) buildBumpedTx(ctx context.Context, from, to common.Address, 
 		}
 		tipCap := bumpFeeField(origTip, base.GasTipCap(), bumpPercent)
 		feeCap := bumpFeeField(origFeeCap, base.GasFeeCap(), bumpPercent)
-		// EIP-1559 requires the fee cap to be at least the tip cap, and a fallen
-		// base fee could leave the bumped tip above the bumped fee cap
+		// Keep the EIP-1559 fee cap at least as high as the tip cap, including after BaseFee
+		// falls
 		if feeCap.Cmp(tipCap) < 0 {
 			feeCap = new(big.Int).Set(tipCap)
 		}

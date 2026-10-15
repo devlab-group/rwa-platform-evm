@@ -1,18 +1,15 @@
-// Command reindex drops chain_events for the project's contracts,
-// indexer_checkpoints, indexer_block_hashes, purchases and redemption_requests.
-// The running platform rebuilds them through its reconcile loops; this command
-// does not run those loops. Asset profiles, investor OwnershipVerified flags,
-// audit logs and idempotency records remain intact.
+// Command reindex deletes chain_events for stored child addresses, the chain's shared
+// indexer checkpoint/hash history, purchases and redemption_requests. Factory events,
+// Asset Profiles, investor OwnershipVerified flags, audit logs and idempotency records
+// remain.
 //
-// Use it for a recovery rehearsal or after restoring read models that may lag
-// the chain. server/ops/reindex_rehearsal.sh compares collection counts before
-// and after; internal/indexer's TestReindexRehearsalReconstructsIdenticalReadModel
-// tests reconstruction on a fake chain.
+// A running platform rebuilds indexed data; reindex does not scan. Use
+// server/ops/reindex_rehearsal.sh for before/after counts or internal/indexer's
+// TestReindexRehearsalReconstructsIdenticalReadModel for a fake-chain check.
 //
 // Usage: go run ./cmd/reindex --config <path> [--yes]
 //
-// Reads the platform's YAML configuration and asks for confirmation before
-// dropping read models unless --yes is set.
+// Reads platform's YAML config and requires confirmation unless --yes is set.
 package main
 
 import (
@@ -58,10 +55,8 @@ func main() {
 	db := client.Database(cfg.MongoDB)
 	repos := mongodb.New(db)
 
-	// The deployed addresses live in the Project record, not config. The
-	// project has six contracts that emit indexed events (the token and strategy
-	// included), so drop chain_events for all of them. Events from the factory
-	// are not dropped.
+	// Delete child events at the token, compliance, supply controller, Vault, escrow and
+	// strategy addresses stored in Project.Addresses; retain factory events
 	p, err := repos.Projects.Get(ctx)
 	if err != nil {
 		log.Fatalf("reindex: loading project record (contract addresses come from the database, not config): %v", err)
@@ -111,8 +106,7 @@ func main() {
 	if _, err := db.Collection("indexer_checkpoints").DeleteMany(ctx, bson.M{"chainId": cfg.ChainID, "address": indexer.CheckpointAddress}); err != nil {
 		log.Fatalf("reindex: resetting indexer checkpoint: %v", err)
 	}
-	// The per-block hash history from before the reindex does not match the
-	// rebuilt read model
+	// Discard block-hash history alongside the checkpoint for the rescan
 	if _, err := db.Collection("indexer_block_hashes").DeleteMany(ctx, bson.M{"chainId": cfg.ChainID}); err != nil {
 		log.Fatalf("reindex: resetting indexer block hash history: %v", err)
 	}
@@ -128,9 +122,8 @@ func main() {
 	fmt.Println("the configured start block. Use server/ops/reindex_rehearsal.sh to wait for and verify that.")
 }
 
-// snapshotCounts returns a before and after document count for the operator.
-// server/ops/reindex_rehearsal.sh waits for and compares the counts against a
-// running platform server.
+// snapshotCounts reads current collection counts, using -1 on errors; the external
+// rehearsal script polls before/after counts while platform rebuilds
 func snapshotCounts(ctx context.Context, db *mongo.Database) map[string]int64 {
 	counts := map[string]int64{}
 	for _, coll := range []string{"chain_events", "purchases", "redemption_requests"} {

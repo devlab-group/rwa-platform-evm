@@ -1,15 +1,10 @@
-// Resolves the decimals used to convert a human-entered amount to minimal units,
-// or a minimal-unit amount back to whole units, for a token. Used with
-// toMinimalUnits and formatTokenAmount in lib/format.ts.
+// Resolves RWA/quote decimals for lib/format.ts whole/minimal-unit conversion
 import type { components } from "./api-types";
 import { readErc20Decimals } from "./wallet";
 
 type Project = components["schemas"]["Project"];
 
-/**
- * RWA token decimals: Project.decimals when the response has it, else an
- * on-chain ERC-20 decimals() read.
- */
+/** Uses Project.decimals or falls back to ERC-20 decimals() */
 export async function resolveRwaDecimals(
   project: Project | undefined,
   chainId: number,
@@ -23,11 +18,8 @@ export async function resolveRwaDecimals(
 }
 
 /**
- * Quote-token decimals: Project.quoteDecimals when the response has it (the
- * server reads it on-chain once at project setup), else an on-chain ERC-20
- * decimals() read of addresses.quoteToken. The quote token is a separate token
- * whose decimals can differ from the RWA token's, so it is never scaled with
- * Project.decimals.
+ * Uses cached Project.quoteDecimals or ERC-20 decimals() on addresses.quoteToken;
+ * quote scaling is independent of RWA Project.decimals
  */
 export async function resolveQuoteDecimals(
   project: Project | undefined,

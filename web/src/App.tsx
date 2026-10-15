@@ -2,10 +2,9 @@ import { lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppLayout } from "./components/AppLayout";
 
-// Each screen loads through React.lazy and a dynamic import(), so the initial
-// bundle holds the shell and the first requested screen. lazy() needs a default
-// export, so each named export is re-wrapped. AppLayout holds the one Suspense
-// boundary, around the shared <Outlet/>.
+// React.lazy loads each screen through a dynamic import, keeping the initial bundle to
+// the shell and requested screen. Wrap named exports as defaults for lazy(); AppLayout
+// supplies one Suspense boundary around Outlet.
 const Setup = lazy(() =>
   import("./routes/admin/Setup").then((m) => ({ default: m.Setup })),
 );

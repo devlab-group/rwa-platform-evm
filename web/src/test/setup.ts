@@ -1,12 +1,10 @@
 import "@testing-library/jest-dom/vitest";
-// jsdom has no IndexedDB; fake-indexeddb/auto installs an in-memory one, so
-// tests run the real admin-JWT storage path (lib/idb.ts, lib/authSession.ts)
+// fake-indexeddb/auto lets jsdom test real admin-session persistence
 import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach } from "vitest";
 
 afterEach(() => {
-  // Start each test with an empty IndexedDB; fake-indexeddb/auto otherwise
-  // keeps one database for the whole file
+  // Reset IndexedDB between tests; fake-indexeddb otherwise shares it within a file
   globalThis.indexedDB = new IDBFactory();
 });

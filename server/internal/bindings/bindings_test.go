@@ -172,11 +172,8 @@ func TestRedemptionEscrowGetRedemptionRoundTrip(t *testing.T) {
 	}
 }
 
-// TestRedemptionEscrowRequestedEventDecode checks that rwaAmount decodes into
-// RWAAmount. go-ethereum maps an untagged field by ToCamelCase("rwaAmount"),
-// which is "RwaAmount", so the decoding struct needs an explicit `abi:` tag;
-// without it UnpackIntoInterface fails with "abi: field rwaAmount can't be
-// found in the given value".
+// TestRedemptionEscrowRequestedEventDecode checks the abi tag needed to map rwaAmount
+// to RWAAmount; go-ethereum otherwise expects RwaAmount
 func TestRedemptionEscrowRequestedEventDecode(t *testing.T) {
 	r := NewRedemptionEscrow()
 	event := r.ABI.Events["RedemptionRequested"]

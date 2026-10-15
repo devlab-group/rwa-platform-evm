@@ -6,9 +6,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// List endpoints cap each response at maxListLimit items, windowed by the
-// `cursor` and `limit` query parameters. A caller that sends neither gets the
-// first defaultListLimit items, never the whole collection.
+// List endpoints use cursor and limit, defaulting to defaultListLimit items and capping
+// responses at maxListLimit
 const (
 	// defaultListLimit is applied when the caller passes no `limit`
 	defaultListLimit = 50
@@ -17,11 +16,9 @@ const (
 	maxListLimit = 200
 )
 
-// paginationParams parses the `limit` and `cursor` query parameters of the
-// fetch-then-slice list endpoints. cursor is a decimal offset into the list's
-// fixed sort order, so the same cursor names the same boundary across requests
-// while the underlying data is unchanged. Invalid values fall back to the
-// defaults.
+// paginationParams parses limit and a decimal-offset cursor for fetch-then-slice
+// endpoints. Offsets remain stable while the sorted data is unchanged. Invalid values
+// use defaults.
 func paginationParams(c *gin.Context) (offset, limit int) {
 	limit = defaultListLimit
 	if v := c.Query("limit"); v != "" {
@@ -60,10 +57,9 @@ func paginateWindow(total, offset, limit int) (start, end int, nextCursor string
 	return start, end, nextCursor
 }
 
-// setPaginationHeaders writes the pagination headers shared by every list
-// endpoint. The body is a plain JSON array; a client that wants every page
-// follows X-Next-Cursor until it is absent. A negative total means the count is
-// not available, and X-Total-Count is omitted.
+// setPaginationHeaders accompanies plain-array list responses. Clients follow
+// X-Next-Cursor until absent. A negative total omits X-Total-Count because the count is
+// unavailable.
 func setPaginationHeaders(c *gin.Context, total, returned int, nextCursor string) {
 	if total >= 0 {
 		c.Header("X-Total-Count", strconv.Itoa(total))
@@ -74,11 +70,9 @@ func setPaginationHeaders(c *gin.Context, total, returned int, nextCursor string
 	}
 }
 
-// cursorLimitParams parses `limit` like paginationParams but passes `cursor`
-// through as an opaque keyset token for a repository ListPage call. It serves
-// the endpoints backed by ListPage (purchases, redemptions, wallets, asset
-// records, transactions), whose newest-first data changes between requests;
-// the fetch-then-slice endpoints use paginationParams.
+// cursorLimitParams parses limit and passes cursor unchanged as a repository keyset
+// token for purchases, redemptions, wallets, asset records and transactions.
+// Fetch-then-slice endpoints use paginationParams.
 func cursorLimitParams(c *gin.Context) (cursor string, limit int) {
 	limit = defaultListLimit
 	if v := c.Query("limit"); v != "" {
@@ -92,7 +86,6 @@ func cursorLimitParams(c *gin.Context) (cursor string, limit int) {
 	return c.Query("cursor"), limit
 }
 
-// maxAuditLogFetch caps listAuditLogs' most-recent-N fetch. The audit log
-// repository's List takes only a limit and no offset, so the handler fetches
-// offset+limit entries, capped here.
+// maxAuditLogFetch caps listAuditLogs' offset+limit fetch because the repository
+// supports a limit but no offset
 const maxAuditLogFetch = 2000

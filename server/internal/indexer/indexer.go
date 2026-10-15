@@ -1,7 +1,6 @@
-// Package indexer ingests contract event logs into models.ChainEvent records
-// keyed by (chainId, address, txHash, logIndex), tracks a scan checkpoint, and
-// rolls back on reorg. Read models such as redemptions are rebuilt only from
-// these persisted events.
+// Package indexer stores contract logs as ChainEvents keyed by (chainId, address,
+// txHash, logIndex), checkpoints progress and rolls back reorgs. Read models rebuild
+// from these persisted events.
 package indexer
 
 import (
@@ -22,63 +21,49 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// CheckpointAddress is the synthetic IndexerCheckpoint.Address under which the
-// indexer stores its single checkpoint. It scans every configured address in one
-// combined FilterLogs query, so all addresses share one scan position.
+// CheckpointAddress is the shared synthetic checkpoint for all addresses scanned by one
+// combined FilterLogs query
 const CheckpointAddress = "ALL"
 
-// DefaultRollbackWindow is how many blocks a detected reorg rolls back by when no
-// block hash history is configured (see WithBlockHashRepository). The rollback
-// re-baselines the checkpoint hash from a fresh chain read, so a reorg deeper
-// than the window leaves stale events below it and is not rediscovered. Use
-// WithBlockHashRepository to find the true common ancestor.
+// DefaultRollbackWindow limits fallback rollback without block-hash history.
+// Re-baselining hides forks deeper than that window, leaving stale events below it.
+// WithBlockHashRepository enables common-ancestor recovery.
 const DefaultRollbackWindow = 10
 
-// ChainSource is the subset of blockchain.Client that the indexer needs. FakeSource
-// implements it for tests, so reorg handling can be tested without a live chain.
+// ChainSource exposes the indexer's RPC subset; FakeSource supports reorg tests without
+// a live chain
 type ChainSource interface {
 	BlockNumber(ctx context.Context) (uint64, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
 	FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error)
 }
 
-// EventDecoder turns a raw log into a named event with decoded fields. When no
-// decoder is given, the indexer names each event by its topic0 and keeps the raw
-// data, which is enough to test ingestion and rollback. Deployments supply a
-// decoder built from internal/bindings so read models can use Name and Data.
+// EventDecoder produces event Name/Data from logs. A nil decoder retains raw data named
+// by topic0 for ingestion tests; deployments use bindings-based decoding for read
+// models.
 type EventDecoder func(log types.Log) (name string, data map[string]any, err error)
 
-// DefaultMaxRetainedHistory is how many blocks of per-block hash history (see
-// repository.BlockHashRepository) the indexer keeps. The history lets it walk
-// back to a common ancestor on a reorg deeper than the rollback window.
+// DefaultMaxRetainedHistory bounds stored per-block hashes for ancestor searches beyond
+// the fallback rollback window
 const DefaultMaxRetainedHistory = 256
 
-// DefaultMaxAutoReorgDepth bounds how deep a reorg the indexer resolves
-// automatically. A common ancestor found within this many blocks of the
-// checkpoint is rolled back to. If none can be verified within that depth, Poll
-// returns ErrReconciliationRequired and stops advancing until an operator calls
-// ResetToTrustedCheckpoint. The limit is independent of maxHistory: history
-// retention bounds storage, while this bounds unattended rollback.
+// DefaultMaxAutoReorgDepth limits ancestor search independently of history retention.
+// With block-hash history configured, unresolved forks pause Poll until
+// ResetToTrustedCheckpoint; reaching a trusted start within policy permits rebuilding.
 const DefaultMaxAutoReorgDepth = 100
 
-// ErrReconciliationRequired is returned by Poll when a detected reorg's common
-// ancestor cannot be verified within maxAutoReorgDepth blocks of the checkpoint.
-// The indexer leaves persisted events and the checkpoint position unchanged and
-// keeps returning this error on every Poll until ResetToTrustedCheckpoint is
-// called with a block that the operator has verified out of band.
+// ErrReconciliationRequired pauses Poll when history-based recovery cannot verify an
+// ancestor within policy. Indexed events remain; subsequent polls stop until an
+// operator verifies and sets a trusted checkpoint.
 var ErrReconciliationRequired = errors.New("indexer: reorg exceeds automatic recovery policy; reconciliation required")
 
-// DefaultMaxLogRange is the maximum number of blocks one FilterLogs call spans.
-// Many RPC providers cap the block range of an eth_getLogs request, so the range
-// is configurable. The default keeps a routine poll on a live chain to one request
-// in the common case. 0 means unbounded: a single request for the whole range, for
-// a provider known to have no limit.
+// DefaultMaxLogRange caps blocks per FilterLogs request for provider range limits.
+// WithMaxLogRange overrides it; 0 requests the full remaining range.
 const DefaultMaxLogRange = 2000
 
-// DefaultMaxRangeRetries is how many attempts scanChunk makes against a transient
-// FilterLogs failure, with exponential backoff, before returning the error from
-// Poll. Range-too-large and timeout errors shrink the range instead and do not use
-// up attempts (see scanChunk).
+// DefaultMaxRangeRetries bounds scanChunk's retry loop. Ordinary failures back off;
+// range-too-large/timeouts shrink multi-block spans immediately, skipping backoff and
+// the immediate exhaustion check while still incrementing the loop's attempt counter.
 const DefaultMaxRangeRetries = 5
 
 // initialRangeBackoff and maxRangeBackoff bound the exponential backoff between
@@ -118,11 +103,9 @@ func WithRollbackWindow(blocks uint64) Option {
 	return func(idx *Indexer) { idx.rollbackWindow = blocks }
 }
 
-// WithBlockHashRepository enables deep-reorg protection. Every committed chunk
-// records block hashes, and a detected reorg walks back through that history to
-// find the common ancestor. Without this option, rollback uses a fixed window
-// (see DefaultRollbackWindow), which cannot tell whether the fork is deeper than
-// the window.
+// WithBlockHashRepository records retained hashes for ancestor searches during reorg
+// recovery. Without it, fixed-window rollback cannot detect deeper divergence; see
+// DefaultRollbackWindow.
 func WithBlockHashRepository(repo repository.BlockHashRepository) Option {
 	return func(idx *Indexer) { idx.blockHashes = repo }
 }
@@ -132,14 +115,11 @@ func WithMaxRetainedHistory(blocks uint64) Option {
 	return func(idx *Indexer) { idx.maxHistory = blocks }
 }
 
-// WithChunkCommitter writes chunk events, block hashes, pruning and checkpoint
-// advance through repo.CommitChunk in one transaction. A checkpoint version
-// check prevents replicas from overwriting a newer checkpoint. Rollbacks and
-// ResetToTrustedCheckpoint use repo.RewindChunk with the same version check.
-// Without this option, separate writes require a single writer.
-//
-// Setting ReconciliationRequired after an unresolved deep reorg bypasses the
-// version check: pausing must succeed even if a concurrent checkpoint changes.
+// WithChunkCommitter groups events, hashes, pruning and checkpoint advance through
+// CommitChunk. Rollbacks/resets use RewindChunk; both check checkpoint versions.
+// Without it, separate writes require one writer.
+// An unresolved deep reorg sets ReconciliationRequired through plain Set, outside
+// version checking, to pause even after concurrent checkpoint changes.
 func WithChunkCommitter(repo repository.ChainChunkRepository) Option {
 	return func(idx *Indexer) { idx.chunks = repo }
 }
@@ -159,10 +139,9 @@ func WithMaxRangeRetries(attempts int) Option {
 	return func(idx *Indexer) { idx.maxRangeRetries = attempts }
 }
 
-// WithDeadLetterQueue enables the dead-letter policy: a log that cannot be decoded
-// is recorded to repo and Poll continues past it (see handleDecodeFailure).
-// Without this option a decode failure aborts Poll, and every later log in the
-// same FilterLogs response waits behind it.
+// WithDeadLetterQueue records decode failures and continues scanning. Without it, one
+// decode failure aborts Poll, delaying later logs in the response; see
+// handleDecodeFailure.
 func WithDeadLetterQueue(repo repository.DeadLetterRepository) Option {
 	return func(idx *Indexer) { idx.dlq = repo }
 }
@@ -172,12 +151,9 @@ func withSleepFunc(sleep func(time.Duration)) Option {
 	return func(idx *Indexer) { idx.sleep = sleep }
 }
 
-// New constructs an Indexer for chainID scanning addresses, starting from
-// startBlock when no checkpoint exists. startBlock is also the trusted start
-// (deployment) block: no event this indexer persisted predates it, so the
-// common-ancestor walk-back never needs to go below it and rebuilding from it is
-// a safe baseline regardless of maxAutoReorgDepth. A nil decoder falls back to a
-// topic0-only decode.
+// New configures chainID, addresses and startBlock for initial scans and trusted
+// rebuilds. Choose a trusted deployment baseline: recovery may rebuild from it within
+// policy. A nil decoder names raw data by topic0.
 func New(source ChainSource, checkpoints repository.IndexerCheckpointRepository, events repository.ChainEventRepository, chainID int64, addresses []common.Address, startBlock uint64, decode EventDecoder, opts ...Option) *Indexer {
 	if decode == nil {
 		decode = defaultDecode
@@ -205,16 +181,11 @@ func defaultDecode(log types.Log) (string, map[string]any, error) {
 	return name, map[string]any{"data": "0x" + common.Bytes2Hex(log.Data)}, nil
 }
 
-// Poll performs one scan cycle: it rolls back a reorg if the checkpointed block's
-// hash no longer matches the chain, then ingests new logs up to the current head
-// one bounded chunk at a time. It is safe to call repeatedly, for example on a
-// timer, because ingestion skips events that already exist (ChainEventRepository.
-// Exists).
-//
-// If an earlier Poll set ReconciliationRequired on the checkpoint (a reorg deeper
-// than the automatic recovery policy), Poll returns ErrReconciliationRequired
-// without reading chain state, so read models do not advance past an unresolved
-// divergence. ResetToTrustedCheckpoint clears the state.
+// Poll checks checkpoint hash/head regression for reorgs, then scans toward the
+// observed head in bounded chunks. Duplicate events are skipped, allowing repeated
+// timer calls.
+// A checkpoint flagged ReconciliationRequired returns ErrReconciliationRequired before
+// chain reads; ResetToTrustedCheckpoint clears the pause.
 func (idx *Indexer) Poll(ctx context.Context) error {
 	cp, existed, err := idx.loadCheckpoint(ctx)
 	if err != nil {
@@ -224,11 +195,8 @@ func (idx *Indexer) Poll(ctx context.Context) error {
 		return fmt.Errorf("%w: chain %d paused at block %d, call ResetToTrustedCheckpoint after out-of-band verification", ErrReconciliationRequired, idx.chainID, cp.LastBlock)
 	}
 
-	// Read the current head before comparing it with the checkpoint. Reading the
-	// checkpoint's header first would make an RPC whose head fell below the
-	// checkpoint (a failover to a lagging node, or a reorg that shortened the chain)
-	// fail HeaderByNumber(cp.LastBlock) on every poll instead of being handled as a
-	// reorg
+	// Read head first so regression below cp.LastBlock triggers rollback rather than
+	// repeated HeaderByNumber failures against a missing height
 	currentBlock, err := idx.source.BlockNumber(ctx)
 	if err != nil {
 		return fmt.Errorf("indexer: BlockNumber: %w", err)
@@ -236,12 +204,12 @@ func (idx *Indexer) Poll(ctx context.Context) error {
 
 	if existed && cp.LastBlock > 0 && cp.LastBlockHash != "" {
 		if currentBlock < cp.LastBlock {
-			// head regression: cp.LastBlock does not exist on this source, so treat it as a
-			// reorg and walk back from the lower head
+			// The checkpoint exceeds this source's head; search for an ancestor from the lower
+			// head
 			cp, err = idx.rollback(ctx, cp, currentBlock)
 			if err != nil {
-				// same clean stop as a lost version race on a forward commit: another replica
-				// moved the checkpoint, so this rollback was computed against stale state
+				// A competing replica moved the checkpoint; stop cleanly and recompute rollback on
+				// the next poll
 				if errors.Is(err, errCheckpointVersionConflict) {
 					return nil
 				}
@@ -266,8 +234,8 @@ func (idx *Indexer) Poll(ctx context.Context) error {
 		}
 	}
 
-	// a fresh indexer persists a baseline checkpoint even when there is nothing to
-	// scan, so later polls have a stored hash to compare against
+	// Persist a fresh baseline even without new scan work, giving later polls a checkpoint
+	// hash to compare
 	if existed && currentBlock <= cp.LastBlock {
 		return nil
 	}
@@ -280,16 +248,10 @@ func (idx *Indexer) Poll(ctx context.Context) error {
 		fromBlock = currentBlock
 	}
 
-	// Scan and commit one bounded, hash-validated chunk at a time. Accumulating the
-	// whole [fromBlock,currentBlock] range and writing a checkpoint at the end would
-	// let a reorg that races the scan commit fork-A events under a fork-B checkpoint
-	// hash, because the checkpoint mismatch check at the start of Poll only catches
-	// a reorg that finished before the poll began. scanAndCommitChunk instead reads
-	// the chunk's boundary header before and after scanning and compares every log's
-	// BlockHash with the canonical header at its height, discarding and retrying the
-	// whole chunk if anything disagrees. Chunking also frees memory between chunks
-	// and lets a restart resume after the last committed chunk during a large
-	// backfill.
+	// Validate and commit bounded chunks to catch reorgs racing the scan, beyond Poll's
+	// initial checkpoint check. scanAndCommitChunk compares boundary headers and per-log
+	// canonical hashes, retrying mismatches before ingestion. Chunking bounds memory and
+	// lets backfills resume after the last committed chunk.
 	for fromBlock <= currentBlock {
 		chunkTo := currentBlock
 		if idx.maxLogRange > 0 && fromBlock+idx.maxLogRange-1 < currentBlock {
@@ -297,8 +259,8 @@ func (idx *Indexer) Poll(ctx context.Context) error {
 		}
 		nextFrom, err := idx.scanAndCommitChunk(ctx, fromBlock, chunkTo, currentBlock, cp)
 		if err != nil {
-			// another indexer replica advanced the checkpoint under this atomic commit:
-			// stop this poll cleanly, and the next poll reads the new checkpoint and continues
+			// Stop after a checkpoint-version conflict; the next Poll reads the winning
+			// replica's progress
 			if errors.Is(err, errCheckpointVersionConflict) {
 				return nil
 			}
@@ -309,20 +271,14 @@ func (idx *Indexer) Poll(ctx context.Context) error {
 	return nil
 }
 
-// errCheckpointVersionConflict is returned internally when a commit or rewind
-// lost the checkpoint-version check to a concurrent indexer replica. Poll treats
-// it as a clean stop and never returns it to the caller.
+// errCheckpointVersionConflict marks a lost commit/rewind race. Poll treats it as a
+// clean stop rather than returning it.
 var errCheckpointVersionConflict = errors.New("indexer: checkpoint advanced by a concurrent writer")
 
-// scanAndCommitChunk validates [from,wantTo] as a coherent chain snapshot and, only
-// if validation succeeds, commits it: it ingests every log, records block hashes
-// within the retention window and advances the checkpoint to the chunk's actual
-// upper bound, all through commitChunk. A failed validation therefore retries one
-// bounded chunk. currentBlock is the chain head this Poll observed, which can be
-// above the chunk's upper bound. It anchors the block hash retention window to
-// the true head instead of the chunk end during a multi-chunk backfill.
-//
-// It returns the next fromBlock to scan, the committed upper bound plus one.
+// scanAndCommitChunk checks boundary headers and log BlockHashes before commitChunk
+// stores the accepted range. Mismatches retry that bounded chunk. currentBlock anchors
+// retention to this poll's head, rather than the possibly lower actual chunk end.
+// Return the committed upper bound+1.
 func (idx *Indexer) scanAndCommitChunk(ctx context.Context, from, wantTo, currentBlock uint64, cp *models.IndexerCheckpoint) (uint64, error) {
 	backoff := initialRangeBackoff
 	for attempt := 1; ; attempt++ {
@@ -337,18 +293,15 @@ func (idx *Indexer) scanAndCommitChunk(ctx context.Context, from, wantTo, curren
 			return 0, err
 		}
 
-		// re-read the boundary after scanning and retry the range if it changed. A reorg
-		// during the FilterLogs call itself changes the boundary hash. The re-read covers
-		// the upper bound scanChunk actually reached, which can be below wantTo
+		// Recheck scanChunk's actual upper boundary for reorgs; range shrinking may make it
+		// lower than wantTo
 		afterHeader, err := idx.source.HeaderByNumber(ctx, new(big.Int).SetUint64(actualTo))
 		if err != nil {
 			return 0, fmt.Errorf("indexer: fetch chunk boundary header at %d: %w", actualTo, err)
 		}
 		valid := actualTo == wantTo && afterHeader.Hash() == beforeHeader.Hash()
-		// when actualTo differs from wantTo, scanChunk shrank the range because of an
-		// oversized-response or timeout error, not a reorg. The boundary comparison is
-		// meaningless for a boundary that was not held constant, so accept it and rely on
-		// the per-log validation below
+		// Shrinking changed the boundary, so before/after hashes are incomparable. Rely on
+		// per-log canonical validation for this attempt.
 		if actualTo != wantTo {
 			valid = true
 		}
@@ -356,9 +309,8 @@ func (idx *Indexer) scanAndCommitChunk(ctx context.Context, from, wantTo, curren
 		var validated []types.Log
 		var headerCache map[uint64]common.Hash
 		if valid {
-			// validate every returned log's BlockHash against the canonical header at its
-			// block number before committing, which catches a reorg inside the range even if
-			// the boundary hash converges by actualTo
+			// Check each log's canonical BlockHash to detect interior changes even when the
+			// boundary hash matches
 			validated, headerCache, valid, err = idx.validateLogsAgainstCanonical(ctx, logs, actualTo, afterHeader.Hash())
 			if err != nil {
 				return 0, err
@@ -372,9 +324,8 @@ func (idx *Indexer) scanAndCommitChunk(ctx context.Context, from, wantTo, curren
 			return actualTo + 1, nil
 		}
 
-		// the chain moved mid-scan, or a log disagreed with the canonical header just
-		// re-read: discard this attempt (nothing was ingested) and retry the same range
-		// fresh, bounded like any other transient failure
+		// Discard mismatched chunks before ingestion and retry the same range with bounded
+		// backoff
 		if attempt >= idx.maxRangeRetries {
 			return 0, fmt.Errorf("indexer: chunk [%d,%d] could not be validated as a coherent snapshot after %d attempt(s); possible sustained reorg racing the scan", from, wantTo, attempt)
 		}
@@ -386,17 +337,10 @@ func (idx *Indexer) scanAndCommitChunk(ctx context.Context, from, wantTo, curren
 	}
 }
 
-// validateLogsAgainstCanonical confirms that every log's BlockHash matches the
-// canonical header at its own block number and returns the logs that pass, with
-// ok=true. Logs the RPC node flagged Removed are dropped, since the node is
-// reporting that their block is no longer canonical. toHash, the hash of the
-// chunk's upper bound, seeds the returned header cache so commitChunk can reuse
-// it.
-//
-// If any log disagrees, ok=false and the caller discards the whole attempt (see
-// scanAndCommitChunk) instead of committing the logs that matched. A mismatch
-// means a reorg may still be in progress across the range, and committing part of
-// it would mix forks.
+// validateLogsAgainstCanonical drops Removed logs and checks remaining BlockHashes
+// against canonical headers. A mismatch returns ok=false, discarding the whole attempt
+// to avoid mixing forks. On success, return accepted logs and a header cache seeded by
+// toHash for commitChunk.
 func (idx *Indexer) validateLogsAgainstCanonical(ctx context.Context, logs []types.Log, to uint64, toHash common.Hash) (validated []types.Log, headerCache map[uint64]common.Hash, ok bool, err error) {
 	headerCache = map[uint64]common.Hash{to: toHash}
 	validated = make([]types.Log, 0, len(logs))
@@ -421,20 +365,14 @@ func (idx *Indexer) validateLogsAgainstCanonical(ctx context.Context, logs []typ
 	return validated, headerCache, true, nil
 }
 
-// commitChunk persists everything scanAndCommitChunk validated for [from,to]: the
-// decoded events, block hashes within the retention window (reusing headerCache
-// where possible), history pruning, and the checkpoint advance to (to, toHash).
-//
-// With a ChainChunkRepository (WithChunkCommitter), these land in one atomic
-// CommitChunk call, and the checkpoint advance is conditional on cp.Version so a
-// concurrent replica cannot overwrite a newer checkpoint with an older one. cp is
-// advanced in place on success. Without a committer the writes are separate,
-// which is correct only for a single writer. currentBlock is the head of the
-// overall poll, not this chunk's `to`, and anchors the retention window.
+// commitChunk stores decoded events, retained block hashes, pruning and (to, toHash)
+// checkpoint progress, reusing headerCache. currentBlock anchors retention to the
+// poll's head.
+// With a committer, CommitChunk checks cp.Version and updates cp in place on success.
+// Without it, writes are separate and require one writer.
 func (idx *Indexer) commitChunk(ctx context.Context, from, to, currentBlock uint64, toHash string, logs []types.Log, headerCache map[uint64]common.Hash, cp *models.IndexerCheckpoint) error {
-	// decode, and record decode failures in the DLQ, before the atomic commit: a DLQ
-	// write is separate from the transactional event set. Events that already exist
-	// are skipped, so the commit carries only new rows
+	// Decode and write DLQ failures before the chunk transaction. Existing events are
+	// skipped; only new rows enter the commit.
 	events, err := idx.prepareChunkEvents(ctx, logs)
 	if err != nil {
 		return err
@@ -517,10 +455,9 @@ func (idx *Indexer) commitChunk(ctx context.Context, from, to, currentBlock uint
 	return nil
 }
 
-// prepareChunkEvents decodes every log that is not yet ingested into a
-// models.ChainEvent. A decode failure goes to the DLQ, outside any atomic chunk
-// commit. Logs that already exist are skipped, so the result is exactly the new
-// rows to persist.
+// prepareChunkEvents skips stored logs and decodes new ones into ChainEvents. Decode
+// failures follow DLQ policy outside the chunk transaction; return only new rows to
+// persist.
 func (idx *Indexer) prepareChunkEvents(ctx context.Context, logs []types.Log) ([]*models.ChainEvent, error) {
 	var events []*models.ChainEvent
 	for _, log := range logs {
@@ -544,9 +481,8 @@ func (idx *Indexer) prepareChunkEvents(ctx context.Context, logs []types.Log) ([
 	return events, nil
 }
 
-// scanChunk fetches [from,to] with retries and returns the logs and the highest
-// block the successful request covered, which is `to` unless a range-too-large or
-// timeout error shrank the range first
+// scanChunk retries FilterLogs for [from,to], returning logs and the actual upper bound
+// after any size/timeout shrink
 func (idx *Indexer) scanChunk(ctx context.Context, from, to uint64) ([]types.Log, uint64, error) {
 	backoff := initialRangeBackoff
 	for attempt := 1; ; attempt++ {
@@ -558,12 +494,11 @@ func (idx *Indexer) scanChunk(ctx context.Context, from, to uint64) ([]types.Log
 		if err == nil {
 			return logs, to, nil
 		}
-		// shrink the range on timeouts as well as explicit provider size errors, since a
-		// provider timeout often depends on response size and retrying the same span
-		// would only exhaust the retry budget
+		// Shrink on timeouts as well as size errors; repeating an overloaded span may exhaust
+		// retries
 		if (isRangeTooLargeError(err) || isTimeoutError(err)) && to > from {
-			// not a transient failure: halve the span and retry the same fromBlock at once,
-			// without using up a backoff attempt
+			// Halve the span and retry immediately without backoff; the loop still increments
+			// attempt
 			newSpan := (to - from + 1) / 2
 			if newSpan < 1 {
 				newSpan = 1
@@ -582,10 +517,8 @@ func (idx *Indexer) scanChunk(ctx context.Context, from, to uint64) ([]types.Log
 	}
 }
 
-// isRangeTooLargeError reports whether a FilterLogs error is the RPC provider
-// rejecting the requested block range or response size, so the caller can shrink
-// the range. JSON-RPC defines no standard error code for this and providers word
-// it differently, so it matches common message fragments.
+// isRangeTooLargeError recognizes provider range/response-size errors by common message
+// fragments, allowing range shrinking without a shared error code
 func isRangeTooLargeError(err error) bool {
 	if err == nil {
 		return false
@@ -609,10 +542,8 @@ func isRangeTooLargeError(err error) bool {
 	return false
 }
 
-// isTimeoutError reports whether a FilterLogs error is a deadline or timeout, so
-// the caller can shrink the range as it does for a size error. It checks
-// context.DeadlineExceeded, net.Error timeouts and common message wording,
-// including "context canceled".
+// isTimeoutError enables range shrinking for context.DeadlineExceeded, net.Error
+// timeouts and common timeout wording, including "context canceled"
 func isTimeoutError(err error) bool {
 	if err == nil {
 		return false
@@ -633,9 +564,8 @@ func isTimeoutError(err error) bool {
 	return false
 }
 
-// loadCheckpoint returns the persisted checkpoint and whether one existed. A
-// missing checkpoint (the first poll) is distinct from one stored at the zero
-// value, so Poll can tell "nothing persisted yet" from "persisted at genesis".
+// loadCheckpoint distinguishes an absent first-poll checkpoint from one explicitly
+// stored at genesis
 func (idx *Indexer) loadCheckpoint(ctx context.Context) (*models.IndexerCheckpoint, bool, error) {
 	cp, err := idx.checkpoints.Get(ctx, idx.chainID, CheckpointAddress)
 	if err == nil {
@@ -657,9 +587,8 @@ func buildEvent(chainID int64, log types.Log, name string, data map[string]any) 
 	}
 }
 
-// handleDecodeFailure applies the DLQ policy: an undecodable log is persisted to
-// the DLQ instead of being dropped, and scanning continues. Without a DLQ it
-// returns an error that aborts Poll (see WithDeadLetterQueue).
+// handleDecodeFailure records to the DLQ and continues after success; without a DLQ, or
+// if recording fails, it aborts Poll
 func (idx *Indexer) handleDecodeFailure(ctx context.Context, log types.Log, cause error) error {
 	if idx.dlq == nil {
 		return fmt.Errorf("indexer: decode log %s#%d: %w", log.TxHash.Hex(), log.Index, cause)
@@ -667,21 +596,18 @@ func (idx *Indexer) handleDecodeFailure(ctx context.Context, log types.Log, caus
 	if err := idx.recordDeadLetter(ctx, log, cause); err != nil {
 		return err
 	}
-	// the failure is recorded for triage through RetryDeadLetter, so Poll continues
-	// past this log and the checkpoint still advances. The event is deferred and
-	// visible, not lost
+	// Successful DLQ recording defers the event for operator retry while allowing
+	// checkpoint advance
 	return nil
 }
 
-// deadLetterID identifies one failed log deterministically, so repeated failures
-// across polls update one DeadLetterRepository entry (bumping RetryCount) instead
-// of growing the queue
+// deadLetterID consolidates repeat failures into one entry with increasing RetryCount
 func deadLetterID(chainID int64, log types.Log) string {
 	return fmt.Sprintf("%d:%s:%d", chainID, log.TxHash.Hex(), log.Index)
 }
 
-// recordDeadLetter persists log's failure to the DLQ together with the full log,
-// so an operator retry does not need to query a chain that may have reorged since
+// recordDeadLetter retains the full log and failure for retry without refetching
+// potentially reorged log bytes
 func (idx *Indexer) recordDeadLetter(ctx context.Context, log types.Log, cause error) error {
 	sig := ""
 	if len(log.Topics) > 0 {
@@ -705,10 +631,10 @@ func (idx *Indexer) recordDeadLetter(ctx context.Context, log types.Log, cause e
 	return nil
 }
 
-// RetryDeadLetter decodes and ingests the log retained in a DLQ entry again. On
-// success the entry is marked Resolved. On a repeated decode failure the entry is
-// re-recorded (bumping RetryCount) and the error is returned. If the log's block
-// is no longer canonical, the entry is dismissed as orphaned without ingesting.
+// RetryDeadLetter reuses retained log bytes after checking the canonical block hash.
+// Success ingests and resolves; orphaned logs are dismissed without ingestion. Repeated
+// decode failure updates the DLQ and returns the recording result, nil if recording
+// succeeds.
 func (idx *Indexer) RetryDeadLetter(ctx context.Context, id string) error {
 	if idx.dlq == nil {
 		return errors.New("indexer: no dead letter queue configured")
@@ -722,10 +648,8 @@ func (idx *Indexer) RetryDeadLetter(ctx context.Context, id string) error {
 		return fmt.Errorf("indexer: DLQ entry %s: decode retained source data: %w", id, err)
 	}
 
-	// a DLQ entry can stay unresolved for a long time, and the block it came from may
-	// no longer be canonical. Require the canonical header's hash to equal the
-	// retained log's BlockHash and dismiss an orphan instead of ingesting it, which
-	// would bring back an event from an abandoned fork
+	// Check the retained BlockHash before retrying old entries, dismissing orphaned logs
+	// instead of reintroducing abandoned-fork events
 	header, err := idx.source.HeaderByNumber(ctx, new(big.Int).SetUint64(log.BlockNumber))
 	if err != nil {
 		return fmt.Errorf("indexer: DLQ entry %s: fetch canonical header at %d: %w", id, log.BlockNumber, err)
@@ -760,17 +684,11 @@ func (idx *Indexer) RetryDeadLetter(ctx context.Context, id string) error {
 	return idx.dlq.Resolve(ctx, id)
 }
 
-// rollback deletes every event from the block after the common ancestor onward,
-// for every monitored address, and moves the checkpoint back to that ancestor,
-// re-baselining LastBlockHash from a fresh chain read. searchFrom is the highest
-// block the ancestor search considers: cp.LastBlock after a hash mismatch, or the
-// lower current head after a head regression, when cp.LastBlock may not exist on
-// the source.
-//
-// If findCommonAncestor returns ErrReconciliationRequired, rollback deletes no
-// events and does not move the checkpoint. It only sets ReconciliationRequired on
-// the stored checkpoint, so every later Poll stops at the same unresolved state
-// instead of trusting an unverified point.
+// rollback finds an ancestor, deletes watched events after it and rewinds the
+// checkpoint with its fresh hash. searchFrom is cp.LastBlock after a hash mismatch, or
+// the lower head after regression.
+// If recovery needs reconciliation, keep events and flag the checkpoint to pause future
+// polls instead of trusting an unverified baseline.
 func (idx *Indexer) rollback(ctx context.Context, cp *models.IndexerCheckpoint, searchFrom uint64) (*models.IndexerCheckpoint, error) {
 	ancestor, ancestorHash, err := idx.findCommonAncestor(ctx, cp, searchFrom)
 	if err != nil {
@@ -791,14 +709,9 @@ func (idx *Indexer) rollback(ctx context.Context, cp *models.IndexerCheckpoint, 
 	return idx.rewind(ctx, cp, newCp, ancestor+1, "rollback")
 }
 
-// rewind deletes events at or above deleteFrom and stores newCp for a reorg
-// rollback or trusted reset. With a chunk committer, deletion and checkpoint
-// update are one version-checked transaction, preventing a concurrent forward
-// commit from leaving fork events above the rewound checkpoint.
-//
-// A conflict returns errCheckpointVersionConflict. Poll stops cleanly, then
-// rechecks the advanced checkpoint on its next run. Without a chunk committer,
-// the separate writes require a single writer.
+// rewind deletes events from deleteFrom and stores newCp. A chunk committer makes both
+// version-checked; conflicts return errCheckpointVersionConflict for Poll to stop and
+// re-read. Separate-write fallback requires one writer.
 func (idx *Indexer) rewind(ctx context.Context, cp, newCp *models.IndexerCheckpoint, deleteFrom uint64, what string) (*models.IndexerCheckpoint, error) {
 	if idx.chunks != nil {
 		expected := 0
@@ -835,14 +748,10 @@ func (idx *Indexer) rewind(ctx context.Context, cp, newCp *models.IndexerCheckpo
 	return newCp, nil
 }
 
-// findCommonAncestor walks retained hashes at or below searchFrom to find the
-// highest block matching a fresh chain read. It stops at the larger of startBlock
-// and cp.LastBlock - maxAutoReorgDepth.
-//
-// Reaching the trusted startBlock permits rebuilding: no persisted event predates
-// it. Reaching the depth limit first returns ErrReconciliationRequired because
-// the fork may extend beyond the verified range. Without WithBlockHashRepository,
-// use the fixed-window rollback.
+// findCommonAncestor compares retained and fresh hashes above max(startBlock,
+// cp.LastBlock-maxAutoReorgDepth). Reaching the trusted-start floor permits rebuilding;
+// reaching the depth floor first requires reconciliation. Without hash history, use
+// fixed-window rollback.
 func (idx *Indexer) findCommonAncestor(ctx context.Context, cp *models.IndexerCheckpoint, searchFrom uint64) (uint64, string, error) {
 	if idx.blockHashes == nil {
 		return idx.rollbackToFixedWindow(ctx, searchFrom)
@@ -857,9 +766,8 @@ func (idx *Indexer) findCommonAncestor(ctx context.Context, cp *models.IndexerCh
 	if trustedFloor > policyFloor {
 		policyFloor = trustedFloor
 	}
-	// autoRecoverable depends on which floor is higher, not on where the search
-	// started: reaching the trusted start block is safe because it is the deployment
-	// boundary, while reaching the depth limit before it is not
+	// Only the trusted-start floor permits rebuilding without a matched ancestor; a higher
+	// depth floor requires reconciliation
 	autoRecoverable := trustedFloor >= depthFloor
 
 	for candidate := searchFrom; candidate > policyFloor; candidate-- {
@@ -876,8 +784,7 @@ func (idx *Indexer) findCommonAncestor(ctx context.Context, cp *models.IndexerCh
 		case !errors.Is(err, repository.ErrNotFound):
 			return 0, "", fmt.Errorf("indexer: load retained hash at %d: %w", candidate, err)
 		}
-		// err was ErrNotFound (no retained hash at this height) or the stored hash did not
-		// match (still inside the fork): keep walking
+		// Missing retained hash or fork mismatch: continue searching earlier heights
 	}
 
 	if !autoRecoverable {
@@ -899,10 +806,9 @@ func (idx *Indexer) findCommonAncestor(ctx context.Context, cp *models.IndexerCh
 	return rebuildAt, header.Hash().Hex(), nil
 }
 
-// rollbackToFixedWindow is the fallback for an Indexer built without
-// WithBlockHashRepository: it rolls back a fixed window from searchFrom (not
-// necessarily cp.LastBlock, see rollback), never below startBlock, and
-// re-baselines unconditionally. See DefaultRollbackWindow for its limitation.
+// rollbackToFixedWindow re-baselines from searchFrom minus rollbackWindow, floored at
+// startBlock. It needs no hash history; see DefaultRollbackWindow for the deep-fork
+// limitation.
 func (idx *Indexer) rollbackToFixedWindow(ctx context.Context, searchFrom uint64) (uint64, string, error) {
 	var rollbackTo uint64
 	if searchFrom > idx.rollbackWindow {
@@ -921,13 +827,10 @@ func (idx *Indexer) rollbackToFixedWindow(ctx context.Context, searchFrom uint64
 	return rollbackTo, header.Hash().Hex(), nil
 }
 
-// ResetToTrustedCheckpoint recovers from ErrReconciliationRequired by making
-// trustedBlock, which the operator has verified out of band (for example against a
-// block explorer or another trusted node), the new baseline. It deletes every
-// monitored address's events after trustedBlock as an automatic rollback would,
-// re-baselines the checkpoint at trustedBlock with a hash read fresh from the
-// chain, and clears ReconciliationRequired so Poll resumes. It is safe to call
-// when the indexer is not flagged, for example to force a resync.
+// ResetToTrustedCheckpoint sets an operator-verified baseline, deletes watched events
+// after trustedBlock and clears ReconciliationRequired. Nonzero blocks get a fresh
+// chain hash. It can also force resync when no pause is set; verify the block out of
+// band first.
 func (idx *Indexer) ResetToTrustedCheckpoint(ctx context.Context, trustedBlock uint64) error {
 	var hash string
 	if trustedBlock > 0 {
@@ -937,10 +840,9 @@ func (idx *Indexer) ResetToTrustedCheckpoint(ctx context.Context, trustedBlock u
 		}
 		hash = header.Hash().Hex()
 	}
-	// the rewind checks the checkpoint version this reset was computed against, so a
-	// running replica that advances the checkpoint mid-reset makes the reset fail
-	// instead of leaving that replica's events above the rewound checkpoint. An absent
-	// checkpoint reads as version 0, the baseline of a fresh indexer's first commit
+	// Version-check this reset against the loaded checkpoint, treating absence as 0. A
+	// competing advance must make reset fail instead of stranding its events above the
+	// rewind.
 	cur, err := idx.checkpoints.Get(ctx, idx.chainID, CheckpointAddress)
 	if err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return fmt.Errorf("indexer: read checkpoint before reset: %w", err)

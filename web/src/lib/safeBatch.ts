@@ -69,10 +69,7 @@ export function buildSafeBatch({
   return batch;
 }
 
-/**
- * Downloads a checksummed batch and returns a status message.
- * The filename includes the chain ID; verify the Safe and chain before importing.
- */
+/** Downloads a checksummed batch; verify its chain and selected Safe before importing */
 export function exportSafeBatch(
   chainId: number,
   safe: Address,
@@ -95,5 +92,5 @@ export function exportSafeBatch(
   link.download = fileName;
   link.click();
   URL.revokeObjectURL(url);
-  return `Saved ${fileName} (${calls.length} transaction(s) for Safe ${safe} on chain ${chainId}). Import it in Safe{Wallet}'s Transaction Builder, check it there, and have the Safe's owners sign and execute it.`;
+  return `Saved ${fileName} (${calls.length} transaction(s) for Safe ${safe} on chain ${chainId}). Review it in Safe{Wallet}'s Transaction Builder, then have the owners sign and execute it.`;
 }

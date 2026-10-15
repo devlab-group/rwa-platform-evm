@@ -23,11 +23,9 @@ func (app *App) getInventory(c *gin.Context) {
 	c.JSON(http.StatusOK, inv)
 }
 
-// listPurchases implements GET /api/v1/sales/purchases (operationId
-// listPurchases).
-// Admin-only, keyset-paginated page of the indexed purchase history. The query
-// is bounded to one page by PurchaseRepository.ListPage, and X-Total-Count is
-// omitted because counting would scan the whole collection.
+// listPurchases handles admin-only GET /api/v1/sales/purchases.
+// PurchaseRepository.ListPage bounds the keyset query; X-Total-Count is omitted to
+// avoid a collection-wide count.
 func (app *App) listPurchases(c *gin.Context) {
 	if app.Sales == nil {
 		fail(c, http.StatusNotImplemented, CodeNotImplemented, "sales is not configured on this server")

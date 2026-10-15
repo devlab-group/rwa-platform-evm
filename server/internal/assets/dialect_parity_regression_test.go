@@ -5,10 +5,9 @@ import (
 	"testing"
 )
 
-// TestDialectRejectsUnusedDefsMember checks that `{"$defs":{"unused":{"multipleOf":2}}}`
-// is rejected. Every $defs member must satisfy the dialect even when no $ref
-// reaches it, so guardAssetSchema walks all of them. A validator that checked
-// only referenced entries would let a disallowed keyword through.
+// TestDialectRejectsUnusedDefsMember rejects {"$defs":{"unused":{"multipleOf":2}}}.
+// guardAssetSchema must check every definition, including unreferenced ones, for
+// forbidden keywords.
 func TestDialectRejectsUnusedDefsMember(t *testing.T) {
 	err := guardAssetSchema([]byte(`{"$defs":{"unused":{"multipleOf":2}}}`))
 	if err == nil {
@@ -19,11 +18,8 @@ func TestDialectRejectsUnusedDefsMember(t *testing.T) {
 	}
 }
 
-// TestEmptyTypeArrayRejected checks that `{"type":[]}` is rejected. A validator
-// can treat an empty type array as "any type" and accept every instance.
-// guardAssetSchema accepts an empty array, because validateTypeValue has no error
-// path for zero elements, so the rejection comes from the jsonschema compiler in
-// compileAssetSchema. The test fails if a library upgrade starts accepting it.
+// TestEmptyTypeArrayRejected keeps {"type":[]} invalid across library upgrades. The
+// guard permits it, but compileAssetSchema must reject it rather than allow any type.
 func TestEmptyTypeArrayRejected(t *testing.T) {
 	raw := []byte(`{"type":[]}`)
 	if err := guardAssetSchema(raw); err != nil {

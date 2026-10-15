@@ -1,6 +1,4 @@
-// Test-only helper, never in the app bundle. react-refresh's "only export
-// components" rule exists for dev HMR and does not apply, so this file also
-// exports render and install helpers.
+// Test-only render/install helpers intentionally export beyond components
 /* eslint-disable react-refresh/only-export-components */
 import { render, type RenderResult } from "@testing-library/react";
 import { useEffect, type ReactElement } from "react";
@@ -16,11 +14,7 @@ export interface FakeWalletOptions {
   signature?: string;
   /** When set, personal_sign rejects with this, for example a user-rejection error */
   signRejection?: unknown;
-  /**
-   * Chains the wallet does not know yet. wallet_switchEthereumChain to one of
-   * them rejects with code 4902 until wallet_addEthereumChain adds it, which
-   * exercises the add-chain fallback in lib/wallet.ts.
-   */
+  /** Unknown chains reject switching with 4902 until added, exercising the add-chain fallback */
   notAddedChains?: number[];
 }
 
@@ -28,11 +22,8 @@ const DEFAULT_ACCOUNT = "0x1111111111111111111111111111111111111111";
 const DEFAULT_SIGNATURE = `0x${"ab".repeat(65)}`;
 
 /**
- * Installs a fake EIP-1193 provider on `window.ethereum` that a viem client
- * (lib/wallet.ts) can drive. It answers eth_accounts, eth_requestAccounts,
- * eth_chainId and personal_sign. The returned handle exposes the request spy
- * and lets a test change the account or chain to exercise WalletProvider's
- * listeners.
+ * EIP-1193 fake for real viem clients; exposes request spy and account/chain events for
+ * WalletProvider tests
  */
 export function installFakeWallet(opts: FakeWalletOptions = {}) {
   const account = opts.account ?? DEFAULT_ACCOUNT;
@@ -73,7 +64,7 @@ export function installFakeWallet(opts: FakeWalletOptions = {}) {
         }
         case "wallet_addEthereumChain": {
           const target = Number((params?.[0] as { chainId: string }).chainId);
-          notAdded.delete(target); // now known to the wallet
+          notAdded.delete(target); // Chain is now known
           return null;
         }
         default:
@@ -110,7 +101,7 @@ export function installFakeWallet(opts: FakeWalletOptions = {}) {
     emitAccountsChanged(accounts: string[]) {
       emit("accountsChanged", accounts);
     },
-    /** Simulates the wallet switching networks without the app, as when the user picks a network in the wallet */
+    // Simulates a network change made in the wallet
     emitChainChanged(chainId: number) {
       currentChainId = chainId;
       emit("chainChanged", `0x${chainId.toString(16)}`);
@@ -121,7 +112,7 @@ export function installFakeWallet(opts: FakeWalletOptions = {}) {
   };
 }
 
-/** Calls the context's connect() once on mount so a test starts with a connected wallet. Renders nothing */
+// Connects once on mount for tests; renders nothing
 function ConnectOnMount() {
   const { connect } = useWalletContext();
   useEffect(() => {
@@ -131,8 +122,8 @@ function ConnectOnMount() {
 }
 
 /**
- * Renders `ui` inside a WalletProvider. Pass `{ connected: true }` to connect
- * the fake wallet on mount; call installFakeWallet() first.
+ * Wraps ui in WalletProvider; connected: true auto-connects the fake installed by
+ * installFakeWallet()
  */
 export function renderWithWallet(
   ui: ReactElement,

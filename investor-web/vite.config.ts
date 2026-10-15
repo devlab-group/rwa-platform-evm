@@ -2,10 +2,8 @@ import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
 /**
- * The static host serves the forked app's own assets from one origin; the
- * platform server does not serve this SPA. Wallet RPC uses the extension channel,
- * outside fetch/XHR connect-src. Send CSP as an HTTP header too: browsers ignore
- * frame-ancestors in meta tags; 'none' is recommended.
+ * The static host serves this SPA; wallet RPC uses the extension channel outside connect-src.
+ * Send CSP as an HTTP header too: meta ignores frame-ancestors; recommend 'none'.
  */
 const BASE_CSP: Record<string, string[]> = {
   "default-src": ["'self'"],
@@ -22,42 +20,22 @@ const BASE_CSP: Record<string, string[]> = {
 };
 
 /**
- * The one exception to "same-origin only": a KYC provider's web SDK, which
- * loads code from and sends captures to the provider. Widening the policy for a
- * provider a deployment doesn't use only adds attack surface, so it is opt-in
- * per build via `VITE_KYC_PROVIDER`. With it unset, the default and the right
- * setting for a deployment without a KYC provider, the policy stays at
- * BASE_CSP.
- *
- * - Sumsub runs in an iframe: `@sumsub/websdk` creates an `<iframe>` at
- *   `<baseUrl>/websdk/websdk.html` (`/idensic/websdk.html` for legacy-version
- *   tokens; baseUrl defaults to `https://in.sumsub.com` and can come from the
- *   token) and talks to it over postMessage, so `frame-src` carries the load.
- *   The iframe asks for camera, microphone and geolocation through its `allow`
- *   attribute, so the serving host must not send a Permissions-Policy that
- *   denies them. Sumsub's web SDK docs give
- *   `camera=(self "https://api.sumsub.com"), microphone=(self "https://api.sumsub.com")`
- *   as an example.
- * - Onfido runs in this origin: `onfido-sdk-ui` is a thin loader that
- *   dynamically imports `https://sdk.onfido.com/<version>/Onfido.js`, and that
- *   SDK makes its own API calls and handles camera capture. Its hosts can't be
- *   read from node_modules because the bundle is fetched at runtime, so the
- *   entries below follow Onfido's CSP guide
- *   (documentation.identity.entrust.com/sdk/sdk-csp-guide/), which lists the
- *   four regional API hosts. Drop the regions your account doesn't use.
- *
- * The `img-src`, `media-src` and `worker-src` entries are not in Onfido's
- * guide. They cover in-browser camera capture so the document and selfie steps
- * don't fail. The guide says it covers only the most common CSP issues, so run
- * a full capture flow under Content-Security-Policy-Report-Only before
- * enforcing this policy.
+ * VITE_KYC_PROVIDER opts a build into SDK hosts; unset keeps BASE_CSP.
+ * Sumsub's packaged SDK embeds a token-selected iframe (default https://in.sumsub.com):
+ * <baseUrl>/websdk/websdk.html, or /idensic/websdk.html for legacy tokens. It uses
+ * postMessage and requests camera, microphone and geolocation; host Permissions-Policy
+ * must permit the capture permissions. Sumsub's example is
+ * camera=(self "https://api.sumsub.com"), microphone=(self "https://api.sumsub.com").
+ * Onfido's loader imports https://sdk.onfido.com/<version>/Onfido.js at runtime.
+ * The host list follows documentation.identity.entrust.com/sdk/sdk-csp-guide/;
+ * remove unused API regions. img-src, media-src and worker-src are capture additions
+ * outside that guide. Test a full capture flow under Content-Security-Policy-Report-Only
+ * before enforcement; the guide covers common issues, not an exhaustive policy.
  */
 const KYC_CSP: Record<string, Record<string, string[]>> = {
   sumsub: {
-    // Sumsub's web SDK docs list no CSP hosts, and the iframe origin can come
-    // from the access token, so this is a wildcard rather than a single host.
-    // The packaged SDK code makes no network requests of its own, so the
-    // connect-src entry is a precaution
+    // Token-selected iframe origins require a Sumsub wildcard; connect-src is precautionary
+    // for the packaged iframe loader
     "frame-src": ["https://*.sumsub.com"],
     "connect-src": ["https://*.sumsub.com"],
   },
@@ -80,9 +58,8 @@ const KYC_CSP: Record<string, Record<string, string[]>> = {
 };
 
 /**
- * Serializes BASE_CSP with the named provider's additions merged in. A
- * directive the provider adds to drops `'none'` instead of appending to it,
- * because `'none'` next to other sources contradicts them.
+ * Merges provider sources into BASE_CSP, removing 'none' from extended directives before
+ * serializing
  */
 function buildCsp(provider: string | undefined): string {
   const extra = provider ? KYC_CSP[provider] : undefined;
@@ -108,9 +85,8 @@ function buildCsp(provider: string | undefined): string {
 }
 
 /**
- * Inject CSP into built index.html. Skip vite dev because HMR needs WebSockets
- * and the React plugin adds an inline script. Preview and static hosts serve
- * the tagged build; hosts should also send a CSP header for frame-ancestors.
+ * Injects CSP into builds; dev HMR needs WebSockets and React's inline script.
+ * Preview/static hosts serve the tagged output; add an HTTP header for frame-ancestors.
  */
 function injectCsp(csp: string): Plugin {
   return {

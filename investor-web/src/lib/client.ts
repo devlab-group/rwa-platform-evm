@@ -1,7 +1,5 @@
-// Hand-written fetch wrapper typed against the OpenAPI schema. api-types.ts is
-// a generated copy of the platform's api/openapi.yaml, shipped as-is and not
-// edited by hand; extend this file instead. Only the public and
-// X-Wallet-Session endpoints an investor needs are wrapped.
+// Investor fetch wrapper for public and X-Wallet-Session endpoints.
+// Extend this file; regenerate api-types.ts from api/openapi.yaml.
 import type { components, operations } from "./api-types";
 
 const DEFAULT_BASE_URL = "";
@@ -13,7 +11,7 @@ function baseUrl(): string {
 
 export type ApiErrorBody = components["schemas"]["Error"];
 
-/** Thrown for any non-2xx response. Carries the parsed error body when present. */
+/** Non-2xx response with its parsed error body, when available */
 export class ApiError extends Error {
   readonly status: number;
   readonly body: ApiErrorBody | undefined;
@@ -34,7 +32,7 @@ type JsonContent<T> = T extends { content: { "application/json": infer J } }
     ? C
     : never;
 
-/** Union of the 2xx JSON response bodies declared for an operation. */
+// Declared 200/201/202/204 JSON bodies, falling back to raw content maps
 type OpResponse<Op> = Op extends { responses: infer R }
   ? R extends Record<PropertyKey, unknown>
     ? JsonContent<R[Extract<keyof R, SuccessStatus>]>
@@ -59,14 +57,12 @@ type OpQueryParams<Op> = Op extends {
   ? Q
   : never;
 
-/** Element type of an array-typed operation response (the list endpoints). */
+// Element of an array response
 type ArrayItem<T> = T extends (infer U)[] ? U : never;
 
 /**
- * A page of a cursor-paginated list endpoint. `totalCount` is absent when the
- * server omits X-Total-Count; treat that as unknown, not zero. `nextCursor` is
- * set only when the server sent X-Next-Cursor, i.e. another page exists; pass
- * it back as `cursor` to fetch it.
+ * Cursor page: absent totalCount means unknown, not zero. Pass nextCursor as cursor
+ * for another page; it comes from X-Next-Cursor.
  */
 export interface PageResult<T> {
   items: T[];
@@ -79,12 +75,12 @@ interface RequestOptions<Op> {
   path?: OpPathParams<Op>;
   query?: OpQueryParams<Op>;
   body?: OpBody<Op>;
-  /** X-Wallet-Session token for the endpoints scoped to one wallet (see lib/walletSession.ts). */
+  // Wallet-scoped X-Wallet-Session token; see lib/walletSession.ts
   walletSessionToken?: string;
   signal?: AbortSignal;
 }
 
-/** Caller-facing options for a paginated list wrapper: signal + limit/cursor, plus any endpoint-specific filter. */
+// Pagination signal, limit/cursor and endpoint filters
 type PageOptions<Op, Extra extends object = object> = Pick<
   RequestOptions<Op>,
   "signal"
@@ -119,10 +115,8 @@ function appendQuery(
 }
 
 /**
- * The only credential this app sends: the X-Wallet-Session token minted at
- * challenge-verify. It is bound to one address and authorizes only that
- * address's own wallet status and KYC start. Every other endpoint used here is
- * public, and no admin bearer token is ever sent.
+ * Sends X-Wallet-Session only for own-wallet status and KYC start;
+ * other wrapped endpoints are public and no admin bearer token is sent
  */
 function authHeaders(walletSessionToken?: string): Record<string, string> {
   return walletSessionToken ? { "X-Wallet-Session": walletSessionToken } : {};
@@ -168,19 +162,12 @@ async function request<Op>(
 
   if (res.status === 204) return undefined as OpResponse<Op>;
 
-  // Every non-204 success response in api/openapi.yaml is application/json. An
-  // unexpected body (e.g. an SPA-fallback HTML page from a misconfigured proxy)
-  // surfaces as the SyntaxError from res.json() instead of being returned as
-  // `undefined`, which would look like a successful response.
+  // Parse non-204 successes as JSON; malformed bodies such as SPA-fallback HTML reject
+  // instead of returning undefined
   return (await res.json()) as OpResponse<Op>;
 }
 
-/**
- * Like `request`, but for the cursor-paginated list endpoints: also reads the
- * X-Total-Count, X-Page-Size and X-Next-Cursor response headers, so callers can
- * show a total or "more available" indicator and fetch further pages instead of
- * silently stopping at the server's default page size.
- */
+// Reads list items plus X-Total-Count, X-Page-Size and X-Next-Cursor for pagination
 async function requestPage<Op>(
   pathTemplate: string,
   options: RequestOptions<Op> = {},
@@ -214,7 +201,7 @@ async function requestPage<Op>(
   };
 }
 
-// Endpoint wrappers, one per operationId in api/openapi.yaml
+// Wrappers named after the supported OpenAPI operationIds
 
 export const api = {
   getProject: (
@@ -237,7 +224,7 @@ export const api = {
       },
     ),
 
-  /** The session wallet's own status, read through its X-Wallet-Session token. */
+  // Reads the session wallet's own status
   getMyWalletStatus: (
     walletSessionToken: string,
     opts: Pick<RequestOptions<operations["getMyWalletStatus"]>, "signal"> = {},
@@ -249,11 +236,8 @@ export const api = {
     ),
 
   /**
-   * Opens a verification with the server's configured KYC provider for the
-   * session wallet and returns what the provider's web SDK needs (token, and
-   * for Onfido the workflow run ref). The server takes the wallet address from
-   * the session, so nothing is sent. Throws ApiError 501 when no provider is
-   * configured or the configured one has no server-initiated flow.
+   * Starts KYC for the session wallet; returns the SDK token and, for Onfido, workflow ref.
+   * Sends no address body. ApiError 501 means no configured server-initiated flow.
    */
   startKYC: (
     walletSessionToken: string,
@@ -264,7 +248,7 @@ export const api = {
       walletSessionToken,
     }),
 
-  /** Public, unauthenticated transfer-recipient eligibility preflight. */
+  // Public transfer-recipient eligibility preflight
   isAddressAllowed: (
     address: string,
     opts: Pick<RequestOptions<operations["isAddressAllowed"]>, "signal"> = {},

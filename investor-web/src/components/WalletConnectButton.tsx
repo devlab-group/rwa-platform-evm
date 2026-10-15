@@ -3,11 +3,8 @@ import { shortenAddress } from "../lib/format";
 import { clearWalletSession } from "../lib/walletSession";
 
 /**
- * Header wallet control: a "Connect wallet" button when no wallet is connected,
- * otherwise the shortened address and a Disconnect button.
- *
- * Disconnecting forgets the wallet locally and removes that address's stored
- * X-Wallet-Session, so the next connect needs a new challenge and signature.
+ * Connects or shows address/Disconnect; disconnect clears local wallet state and
+ * X-Wallet-Session, requiring a new ownership challenge on reconnect
  */
 export function WalletConnectButton() {
   const wallet = useWalletContext();

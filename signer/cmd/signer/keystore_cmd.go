@@ -12,10 +12,9 @@ import (
 	"github.com/rwa-platform/signer/internal/keystore"
 )
 
-// usageKeystore prints the help for "signer keystore create" and "import". Both write
-// the signer's NativeFormat (Argon2id and AES-256-GCM, see internal/keystore/native.go),
-// enforce keystore.ValidatePassword on the new password, and never print the private
-// key. There is no "keystore export" subcommand.
+// usageKeystore documents create/import, which write NativeFormat
+// (Argon2id/AES-256-GCM) and enforce keystore.ValidatePassword without printing private
+// keys; no export subcommand exists
 func usageKeystore() {
 	fmt.Fprintln(os.Stderr, `Usage: signer keystore create --out <path> [flags]
        signer keystore import --privkey-file <path> --out <path> [flags]
@@ -111,9 +110,8 @@ func runKeystoreImport(args []string) error {
 	if err != nil {
 		return err
 	}
-	// Import the key only from an owner-only file, the same policy as --password-file,
-	// never from a CLI argument, which would expose it in process listings and shell
-	// history
+	// Read private keys from owner-only files, like --password-file; CLI arguments expose
+	// them in process listings and shell history
 	if err := checkPasswordFilePermissions(f.privkeyFile); err != nil {
 		return fmt.Errorf("--privkey-file: %w", err)
 	}
@@ -132,10 +130,8 @@ func runKeystoreImport(args []string) error {
 	return writeNewKeystore(priv, f)
 }
 
-// writeNewKeystore prompts for (or reads from --password-file) the new
-// keystore's password, enforces keystore.ValidatePassword on it, and
-// writes priv encrypted with keystore.CreateNative to f.out. It never
-// prints priv or the password.
+// writeNewKeystore reads a password, enforces keystore.ValidatePassword, encrypts priv
+// with CreateNative and writes f.out without printing secrets
 func writeNewKeystore(priv *ecdsa.PrivateKey, f keystoreCreateFlags) error {
 	password, err := readNewPassword(f.passwordFile)
 	if err != nil {
@@ -143,8 +139,7 @@ func writeNewKeystore(priv *ecdsa.PrivateKey, f keystoreCreateFlags) error {
 	}
 	defer keystore.ZeroBytes(password)
 
-	// keystore.CreateNative validates too, but checking here gives a clean error before
-	// any Argon2id work
+	// Validate before CreateNative for a clear error before Argon2id work
 	if err := keystore.ValidatePassword(string(password)); err != nil {
 		return err
 	}
@@ -162,10 +157,9 @@ func writeNewKeystore(priv *ecdsa.PrivateKey, f keystoreCreateFlags) error {
 	return nil
 }
 
-// createKeystoreFileExclusive creates out with O_CREATE|O_EXCL, checks it is
-// regular, sets mode 0600 and syncs data to disk. Existing entries, including
-// dangling symlinks, are refused. Atomic exclusive creation avoids the redirection
-// race of checking the path before writing.
+// createKeystoreFileExclusive uses O_CREATE|O_EXCL to reject existing entries,
+// including dangling symlinks, without a check-then-write race. It requires a regular
+// file, sets 0600 and syncs data.
 func createKeystoreFileExclusive(out string, data []byte) error {
 	f, err := os.OpenFile(out, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -174,7 +168,7 @@ func createKeystoreFileExclusive(out string, data []byte) error {
 		}
 		return fmt.Errorf("creating %s: %w", out, err)
 	}
-	// Defense in depth; O_EXCL already guarantees this open created a new file
+	// O_EXCL already ensures a new file; verify its type too
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
@@ -191,7 +185,7 @@ func createKeystoreFileExclusive(out string, data []byte) error {
 		os.Remove(out)
 		return fmt.Errorf("writing %s: %w", out, err)
 	}
-	// The mode passed to OpenFile is subject to the umask, so set 0600 explicitly
+	// Set 0600 explicitly because umask affects OpenFile's mode
 	if err := f.Chmod(0o600); err != nil {
 		f.Close()
 		os.Remove(out)
@@ -208,9 +202,8 @@ func createKeystoreFileExclusive(out string, data []byte) error {
 	return nil
 }
 
-// readNewPassword reads the password for a new keystore from --password-file, or
-// prompts twice and requires both entries to match, because a typo would lock the
-// operator out of a key nobody else can recover
+// readNewPassword reads --password-file or requires two matching prompt entries to
+// avoid locking the operator out through a typo
 func readNewPassword(passwordFile string) ([]byte, error) {
 	if passwordFile != "" {
 		if err := checkPasswordFilePermissions(passwordFile); err != nil {

@@ -1,11 +1,10 @@
-// Allowlisted network labels and EIP-3085 parameters for the switcher.
-// Add entries here to support another chain. rpcUrls is input to
-// wallet_addEthereumChain; the wallet dials it while app RPC uses the injected provider.
+// Allowlisted labels and EIP-3085 parameters; add supported chains here.
+// Wallets use rpcUrls when adding chains; app RPC uses the injected provider.
 export interface AllowedNetwork {
   chainId: number;
-  /** Short label shown in the switcher and by networkLabel(). */
+  // Switcher and networkLabel() label
   label: string;
-  /** wallet_addEthereumChain params (EIP-3085). */
+  // EIP-3085 wallet_addEthereumChain parameters
   chainName: string;
   nativeCurrency: { name: string; symbol: string; decimals: number };
   rpcUrls: string[];
@@ -24,8 +23,7 @@ export const ALLOWED_NETWORKS: AllowedNetwork[] = [
     label: "Ethereum",
     chainName: "Ethereum Mainnet",
     nativeCurrency: ETH,
-    // Wallets already include Ethereum mainnet, so add-chain is not expected
-    // for it; the params keep the entries uniform
+    // Keep mainnet add-chain parameters for uniform entries; wallets typically know it already
     rpcUrls: ["https://cloudflare-eth.com"],
     blockExplorerUrls: ["https://etherscan.io"],
   },
@@ -39,18 +37,18 @@ export const ALLOWED_NETWORKS: AllowedNetwork[] = [
   },
 ];
 
-/** The allow-listed network for `chainId`, or undefined if it isn't offered. */
+/** Returns the allowlisted network or undefined */
 export function findNetwork(chainId: number): AllowedNetwork | undefined {
   return ALLOWED_NETWORKS.find((n) => n.chainId === chainId);
 }
 
-/** Human label for a chainId: the allow-listed label, or "Unsupported network". */
+/** Returns the network label or "Unsupported network" */
 export function networkLabel(chainId: number | null): string {
   if (chainId === null) return "Unsupported network";
   return findNetwork(chainId)?.label ?? "Unsupported network";
 }
 
-/** EIP-3085 request params for wallet_addEthereumChain. */
+/** Builds EIP-3085 wallet_addEthereumChain parameters */
 export function toAddChainParams(network: AllowedNetwork): {
   chainId: string;
   chainName: string;

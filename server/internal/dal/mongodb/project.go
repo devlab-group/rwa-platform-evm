@@ -8,10 +8,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// projectDocID is the fixed _id of the project document. Using ProjectID as the _id
-// would let two concurrent deploys with different ProjectIDs create two documents,
-// because only application code enforced one project. With a fixed _id, the unique
-// index on _id makes it a database guarantee.
+// projectDocID fixes MongoDB's project _id so its unique index enforces one document
+// even when concurrent deployments have different ProjectIDs
 const projectDocID = "singleton"
 
 // projectRepo stores the single project document, one per deployment, under

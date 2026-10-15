@@ -21,16 +21,13 @@ export function AppLayout() {
   const location = useLocation();
   const isAdmin = location.pathname.startsWith("/admin");
   const session = useAuthSession();
-  // Every screen needs a live admin session; the check is scoped to /admin
-  // paths so any other URL still renders the shell
+  // Require a live admin session for /admin paths; other paths still render the shell
   const requiresLogin = isAdmin && !session;
   const mainRef = useRef<HTMLElement>(null);
   const isFirstRender = useRef(true);
 
-  // A client-side route change is a DOM swap, not a page load, and React Router
-  // does not move focus, so a screen reader user would get no signal. Move
-  // focus to <main> on route changes, but not on the first render, so a fresh
-  // load still starts at the top of the document with the skip link first.
+  // Focus main after route changes for screen readers; React Router does not move focus.
+  // Skip the first render to preserve initial skip-link navigation.
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false;
@@ -48,8 +45,7 @@ export function AppLayout() {
       <nav className="app-nav" aria-label="Primary">
         <div className="app-nav__brand">RWA Platform</div>
 
-        {/* Wallet controls on every screen. The network switcher appears
-            beside them once a wallet is connected. */}
+        {/* Shared wallet controls; show the network switcher when connected */}
         <WalletConnectButton />
         <NetworkSwitcher />
 

@@ -8,11 +8,8 @@ import type {
 type SnsError = Parameters<ErrorHandler>[0];
 
 /**
- * Events that mean the applicant has handed their documents to Sumsub and the
- * widget has nothing further to ask. There is no single "done" event:
- * `onApplicantSubmitted` fires on a first submission, `onApplicantResubmitted`
- * on a re-submission, and the review-complete events when the review finishes
- * while the widget is still open.
+ * Submission, resubmission and review-completion events move the widget to waiting;
+ * the event names below cover the supported completion signals
  */
 const SUBMITTED_EVENTS: ReadonlySet<string> = new Set([
   "idCheck.onApplicantSubmitted",
@@ -23,11 +20,8 @@ const SUBMITTED_EVENTS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Treats any `reviewStatus` other than `init` as submitted. `init` means the
- * applicant is still filling in the form; the other values (pending, queued,
- * prechecked, completed, onHold) mean Sumsub already has a submission. This
- * covers a returning applicant whose status event arrives without a submit
- * event.
+ * Treats string reviewStatus values other than init as submitted, including pending,
+ * queued, prechecked, completed and onHold, for returning applicants without a submit event
  */
 function isSubmittedStatus(payload: AnyEventPayload): boolean {
   return (
@@ -38,28 +32,19 @@ function isSubmittedStatus(payload: AnyEventPayload): boolean {
 }
 
 interface Props {
-  /** Access token from POST /api/v1/compliance/kyc/start. */
+  // Access token from POST /api/v1/compliance/kyc/start
   accessToken: string;
-  /**
-   * Called when Sumsub reports the token expired mid-flow; must resolve to a
-   * new token (another /kyc/start round trip).
-   */
+  // Must fetch a new token from /kyc/start when Sumsub reports expiry
   onTokenExpired: () => Promise<string>;
-  /** The applicant is done with the widget; the outcome now arrives by webhook. */
+  // Reports submission; the decision arrives by webhook
   onSubmitted: () => void;
   onError: (message: string) => void;
 }
 
 /**
- * Sumsub's React widget, mounted with a server-issued access token.
- *
- * Nothing here decides the compliance outcome: the applicant's documents go
- * straight to Sumsub, Sumsub calls the server's webhook, and the server sets
- * the wallet to Allowed on-chain. `onSubmitted` only moves this browser to a
- * "waiting for approval" state.
- *
- * The underlying component tears the widget down in componentWillUnmount, so
- * unmounting this one cleans up.
+ * Mounts Sumsub with a server-issued token; onSubmitted starts the waiting state.
+ * KycVerificationSection handles status polling after the server processes the webhook.
+ * The SDK component tears down the widget on unmount.
  */
 export function SumsubVerification({
   accessToken,

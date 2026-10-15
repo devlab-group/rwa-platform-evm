@@ -2,25 +2,21 @@ package models
 
 import "time"
 
-// AuditPackage records the values a .rwa package was built from for a record
-// (collection: audit_packages). The package bytes are not stored. RecordService.BuildPackage
-// rebuilds them from the record and the current auditor, and auditpkg.BuildPackage
-// returns identical bytes for identical inputs. Each build replaces this row, so it
-// describes the latest build.
+// AuditPackage stores the latest record's build metadata in audit_packages, not archive
+// bytes. RecordService.BuildPackage rebuilds from stored inputs and the live auditor;
+// identical inputs produce identical bytes. Each build replaces this row.
 type AuditPackage struct {
 	RecordID      string `json:"recordId" bson:"_id"`
 	PackageSHA256 string `json:"packageSha256" bson:"packageSha256"`
 	Size          int64  `json:"size" bson:"size"`
 	// RecordVersion is the AssetRecord.Version the package was built from
 	RecordVersion int `json:"recordVersion" bson:"recordVersion"`
-	// CID is the content CID of the metadata the package attests to, equal to
-	// AssetRecord.CID at build time
+	// CID is AssetRecord.CID at build time, identifying the attested metadata
 	CID string `json:"cid" bson:"cid"`
-	// Frozen is stored but no code sets or reads it, so it is always false
+	// Frozen is persisted but unused by package workflows; builds leave it false
 	Frozen bool `json:"frozen" bson:"frozen"`
-	// Auditor through Vault are the eip712.MintAttestation fields that BuildPackage
-	// embeds in typed-data.json. Digests and addresses are 0x-prefixed hex, and
-	// amounts are decimal strings, as in AssetRecord.
+	// Auditor through Vault mirror MintAttestation fields in typed-data.json:
+	// digests/addresses use 0x-hex; amounts use decimal strings
 	Auditor         string    `json:"auditor" bson:"auditor"`
 	ProfileDigest   string    `json:"profileDigest" bson:"profileDigest"`
 	MetadataDigest  string    `json:"metadataDigest" bson:"metadataDigest"`

@@ -63,15 +63,9 @@ func TestGetInventory(t *testing.T) {
 	}
 }
 
-// TestGetInventoryPricesFromTheVaultsCurrentStrategy checks that inventory
-// prices follow the Vault's current strategy. Vault.setStrategy is callable by
-// the admin, so the strategy recorded at deploy time can stop being the one the
-// Vault prices through.
-//
-// The assertion is on the call target, not the returned numbers: the fake
-// client keys its canned responses by calldata alone, so both strategies answer
-// purchasePricePerWholeToken() identically and only the address the read went
-// to tells them apart.
+// After setStrategy, assert reads target the Vault's live strategy: FakeClient's
+// calldata-only keys return identical purchasePricePerWholeToken values for both
+// addresses
 func TestGetInventoryPricesFromTheVaultsCurrentStrategy(t *testing.T) {
 	vaultAddr := common.HexToAddress("0x0000000000000000000000000000000000000A")
 	quoteAddr := common.HexToAddress("0x0000000000000000000000000000000000000B")

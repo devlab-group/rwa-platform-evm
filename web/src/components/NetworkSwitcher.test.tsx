@@ -72,20 +72,20 @@ describe("NetworkSwitcher", () => {
 
     fireEvent.change(select, { target: { value: String(LOCAL) } });
 
-    // The switch was requested for the target chain,
+    // Request the target chain
     await waitFor(() =>
       expect(callsFor(wallet, "wallet_switchEthereumChain")).toContainEqual(
         expect.objectContaining({ params: [{ chainId: LOCAL_HEX }] }),
       ),
     );
-    // no add-chain call was needed because the wallet knew the chain,
+    // Skip add-chain for a known network
     expect(callsFor(wallet, "wallet_addEthereumChain")).toHaveLength(0);
-    // and the displayed network follows the chainChanged event
+    // Update the network display on chainChanged
     await waitFor(() => expect(select).toHaveValue(String(LOCAL)));
   });
 
   it("adds an unknown chain (4902) then retries the switch (Local anvil)", async () => {
-    // The wallet is on mainnet and does not know the Local chain yet
+    // Mainnet wallet does not yet know Local
     wallet = installFakeWallet({
       chainId: ETH_MAINNET,
       notAddedChains: [LOCAL],
@@ -113,7 +113,7 @@ describe("NetworkSwitcher", () => {
     expect(addParams.chainName).toBe("Local (Anvil)");
     expect(addParams.rpcUrls).toEqual(["http://localhost:8545"]);
 
-    // The switch was issued again after the add, and the display shows Local
+    // Switch again after adding, then display Local
     expect(
       callsFor(wallet, "wallet_switchEthereumChain").length,
     ).toBeGreaterThanOrEqual(2);

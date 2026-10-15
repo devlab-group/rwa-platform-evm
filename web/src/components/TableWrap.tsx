@@ -1,9 +1,6 @@
 import type { ReactNode } from "react";
 
-/**
- * Labelled, focusable region for keyboard scrolling when a table overflows
- * horizontally (axe rule scrollable-region-focusable)
- */
+/** Labelled, focusable region for horizontal table scrolling (axe scrollable-region-focusable) */
 export function TableWrap({
   label,
   children,

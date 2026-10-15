@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 /// @title IRWAFactory
-/// @notice Deploys and wires one versioned project stack.
-/// @dev Stable interface; see docs/spec/contracts.md section "RWAFactory".
+/// @notice Deploys and wires a versioned project stack
+/// @dev Stable interface; see docs/spec/contracts.md, "RWAFactory"
 interface IRWAFactory {
     struct ProjectConfig {
         // Token

@@ -9,8 +9,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// operandFor returns the $gt or $lt operand from the first $or clause of a keyset
-// filter, the strictly-past-this-sort-value comparison
+// operandFor extracts the first $or branch's $gt/$lt operand for sort-value assertions
 func operandFor(t *testing.T, filter bson.M, sortField, op string) any {
 	t.Helper()
 	clauses, ok := filter["$or"].(bson.A)
@@ -32,15 +31,10 @@ func operandFor(t *testing.T, filter bson.M, sortField, op string) any {
 	return v
 }
 
-// TestKeysetFilterDirDateEmitsDateOperand checks that the keyset filter for a Date
-// field has a time.Time operand. asset_records.createdAt and
-// transactions.submittedAt are stored from time.Time, so they are BSON Dates.
-// MongoDB comparisons match only the same BSON type, so an int64 operand matches
-// no documents and every page after the first is empty.
-//
-// This can be checked only on the filter here. The repository unit tests use
-// internal/dal/memory, where both sides are int64, and the live tests in this
-// package cover the query against MongoDB.
+// TestKeysetFilterDirDateEmitsDateOperand requires time.Time operands for
+// asset_records.createdAt and transactions.submittedAt (BSON Dates). Memory tests
+// cannot expose BSON type mismatches; live tests cover queries. See
+// keysetFilterDirDate.
 func TestKeysetFilterDirDateEmitsDateOperand(t *testing.T) {
 	want := time.Date(2026, 7, 25, 12, 34, 56, 789_000_000, time.UTC)
 	cursor := repository.EncodeKeysetCursor(repository.KeysetCursor{SortValue: want.UnixNano(), ID: "rec-1"})
@@ -73,9 +67,8 @@ func TestKeysetFilterDirKeepsNumericOperand(t *testing.T) {
 	}
 }
 
-// TestKeysetFilterNoCursorIsUnfiltered checks that an absent or malformed cursor
-// gives an empty filter in every variant. A comparison against a zero sort value
-// would drop the whole first page for the Date variant, where zero is 1970.
+// TestKeysetFilterNoCursorIsUnfiltered checks that absent or malformed cursors impose
+// no boundary in numeric or Date filters
 func TestKeysetFilterNoCursorIsUnfiltered(t *testing.T) {
 	for _, filter := range []bson.M{
 		keysetFilterDirDate("", "createdAt", false),

@@ -92,8 +92,7 @@ describe("TransactionStatusBadge", () => {
     expect(screen.getByText(/Reverted/)).toHaveTextContent("failed on-chain");
   });
 
-  // Covers every transaction status: label text, tone class, data-status
-  // attribute, and whether the row is marked as needing attention
+  // Checks label, tone, data-status and attention marker for each transaction status
   const CASES: Array<{
     status: string;
     label: string;

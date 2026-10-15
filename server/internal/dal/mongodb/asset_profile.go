@@ -26,9 +26,7 @@ func (r *assetProfileRepo) Upsert(ctx context.Context, p *models.AssetProfile) e
 	return upsertByID(ctx, r.coll, p.ProjectID, p)
 }
 
-// Create inserts and never upserts. The unique index on _id (the ProjectID) makes a
-// second concurrent create for the same projectId fail at the database, as in
-// idempotencyRepo.Reserve.
+// Create inserts without upsert; ProjectID's unique _id rejects concurrent duplicate profiles
 func (r *assetProfileRepo) Create(ctx context.Context, p *models.AssetProfile) error {
 	return createDoc(ctx, r.coll, p)
 }

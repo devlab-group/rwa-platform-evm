@@ -12,21 +12,14 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// nonceLeaseRepo persists nonce_leases (see models.NonceLease).
-//
-// The collection has no TTL index, and no code deletes expired documents. Deleting
-// one would reset the token that Acquire computes from the stored one, and the
-// token must only increase. The collection stays small, with one document per hot
-// key.
+// nonceLeaseRepo persists models.NonceLease without TTL cleanup or deletion, preserving
+// increasing fencing tokens with one document per hot key
 type nonceLeaseRepo struct{ coll *mongo.Collection }
 
-// Acquire uses the same atomic filter as idempotencyRepo.Reserve. The filter
-// matches no document, for a new key, or an expired one. An aggregation-pipeline
-// update computes the new token from the stored one in the same operation
-// ($ifNull($token, 0) + 1), which a plain $set cannot do without a separate read.
-// A live document under _id=key does not match, so the upsert tries to insert, the
-// _id collides and it fails with a duplicate key error, which is reported as not
-// acquired.
+// Acquire conditionally upserts absent or expired leases by _id. Its pipeline computes
+// $ifNull($token, 0)+1 atomically without a separate read. A live lease causes an _id
+// collision, reported as not acquired, matching idempotencyRepo.Reserve's contention
+// pattern.
 func (r *nonceLeaseRepo) Acquire(ctx context.Context, key, holderID string, ttl time.Duration) (uint64, bool, error) {
 	now := time.Now().UTC()
 	filter := bson.M{"_id": key, "expiresAt": bson.M{"$lt": now}}
@@ -61,10 +54,8 @@ func (r *nonceLeaseRepo) Renew(ctx context.Context, key, holderID string, token 
 	return res.MatchedCount > 0, nil
 }
 
-// Release sets the document's expiry to now and does not delete it. A deleted
-// document would restart Acquire's token counter at 1, and a delayed write from an
-// earlier session of the same holder could then collide with a later session that
-// reused a token.
+// Release expires the lease without deleting it, preserving increasing tokens and
+// rejecting stale holder/token pairs
 func (r *nonceLeaseRepo) Release(ctx context.Context, key, holderID string, token uint64) error {
 	now := time.Now().UTC()
 	res, err := r.coll.UpdateOne(ctx, bson.M{"_id": key, "holderId": holderID, "token": token},

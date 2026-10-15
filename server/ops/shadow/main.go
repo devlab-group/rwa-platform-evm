@@ -1,17 +1,14 @@
-// Command shadow runs the shadow-replay and soak-test harness
-// (server/internal/shadow) against a scripted replay dataset. It never dials a
-// live chain, opens a database connection or constructs anything that can sign
-// a transaction. It imports only server/internal/shadow, which uses
-// server/internal/indexer and the in-memory repositories, and so does not link
-// in server/internal/keys or blockchain's TxManager and signer.
+// Command shadow runs internal/shadow's scripted replay and resource sampling
+// with the indexer and in-memory repositories. It makes no live chain or database
+// connections and constructs no signer; dependencies exclude internal/keys and
+// internal/blockchain.
 //
-// Usage:
+// Usage (from server/):
 //
-//	go run ./ops/shadow -scenario testdata/scenario.json
-//	go run ./ops/shadow -scenario testdata/scenario.json -idle 72h -sample 5m
+//	go run ./ops/shadow -scenario ops/shadow/testdata/scenario.json
+//	go run ./ops/shadow -scenario ops/shadow/testdata/scenario.json -idle 72h -sample 5m
 //
-// See docs/operator/soak-runbook.md for the release-candidate soak procedure
-// and the failure criteria to apply to the output.
+// See docs/operator/soak-runbook.md for release-candidate procedures and failure criteria.
 package main
 
 import (
@@ -69,10 +66,8 @@ func run(ctx context.Context, scenarioPath string, idle, sampleEvery time.Durati
 	return writeReport(report, reportPath)
 }
 
-// idleUntil samples resource usage every sampleEvery for idle and appends the
-// samples to report.ResourceSnapshots, so a long soak yields a resource timeline
-// beyond the scripted steps. It applies no chain activity and does not poll the
-// indexer.
+// idleUntil appends resource samples to report.ResourceSnapshots every sampleEvery
+// during idle, extending the replay timeline without chain activity or indexer polls
 func idleUntil(ctx context.Context, idle, sampleEvery time.Duration, report *shadow.Report) {
 	deadline := time.Now().Add(idle)
 	ticker := time.NewTicker(sampleEvery)

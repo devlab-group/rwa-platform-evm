@@ -66,11 +66,11 @@ func onfidoBaseURL(region string) (string, error) {
 
 func (p *onfidoProvider) Name() string { return "onfido" }
 
-// StartVerification creates an applicant, workflow run and SDK token.
-// The caller binds the returned workflow Ref to the wallet for webhook resolution.
+// StartVerification creates an applicant, workflow and SDK token; the caller binds
+// returned workflow Ref to the wallet
 func (p *onfidoProvider) StartVerification(ctx context.Context, address string) (Session, error) {
-	// Use a placeholder name and wallet address for dashboard traceability;
-	// verification captures the applicant's identity
+	// Use placeholder identity plus wallet address for dashboard tracing; verification
+	// captures the applicant's identity
 	var applicant struct {
 		ID string `json:"id"`
 	}

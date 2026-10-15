@@ -64,10 +64,7 @@ func TestLoadNative_WrongPasswordFails(t *testing.T) {
 	}
 }
 
-// TestLoadNative_RejectsDowngradedKDFParams checks that a native keystore whose
-// kdfparams were edited below the policy floor is refused before any decryption. An
-// attacker without the password but able to modify the file could do this to make
-// brute forcing cheaper.
+// Reject native KDF parameters below the policy floor before deriving or decrypting
 func TestLoadNative_RejectsDowngradedKDFParams(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	data, err := CreateNative(priv, testNativePassword)
@@ -104,10 +101,9 @@ func TestIsNativeFormat(t *testing.T) {
 	}
 }
 
-// --- maximum KDF parameters and exact-length validation ---
+// KDF ceilings and exact-length checks
 
-// tamperedNativeFile round-trips a fresh native keystore through JSON so the test can
-// mutate specific fields before Load sees the result
+// tamperedNativeFile JSON-round-trips a fresh file so tests can edit fields before Load
 func tamperedNativeFile(t *testing.T, mutate func(*nativeKeyFile)) string {
 	t.Helper()
 	priv, err := crypto.GenerateKey()

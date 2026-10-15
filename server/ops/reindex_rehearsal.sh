@@ -1,18 +1,11 @@
 #!/usr/bin/env bash
-# Chain reindex rehearsal: shows that a running deployment can rebuild its
-# event-derived read models from the chain alone. It runs `go run ./cmd/reindex`,
-# which drops the read models, and compares collection counts before and after. It
-# polls until the already running platform server's background reconcile loops
-# (tickers of 5 to 15 seconds, see startBackgroundLoops in cmd/platform/main.go)
-# bring the counts back.
+# Run go run ./cmd/reindex, then poll until collection counts match their pre-drop
+# values. A platform server must already be running against the same MongoDB and chain;
+# its 5-to-15-second reconcile loops rebuild the data (cmd/platform/main.go).
 #
-# A platform server must already be running against the same MongoDB and chain.
-# reindex only drops data and does not scan the chain. The running server's loops do
-# that, as they would after any incident that left the read models behind the chain.
-# reindex reads the contract addresses from the Project record in the database.
-#
-# internal/indexer's TestReindexRehearsalReconstructsIdenticalReadModel runs the same
-# rehearsal against a fake chain without any infrastructure.
+# reindex reads addresses from the DB Project and only drops data; it never scans. See
+# internal/indexer's TestReindexRehearsalReconstructsIdenticalReadModel for the
+# fake-chain equivalent.
 #
 # Usage: MONGO_URI=... MONGO_DB=... CHAIN_ID=... bash ops/reindex_rehearsal.sh
 set -euo pipefail

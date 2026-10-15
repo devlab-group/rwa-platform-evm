@@ -205,8 +205,8 @@ func runSign(args []string) error {
 		return fmt.Errorf("metadata.json: asset does not conform to the project's Asset Profile: %w", err)
 	}
 
-	// Bind the profile and metadata to the same project and unit;
-	// the contract verifies hashes and signatures, not JSON semantics
+	// Bind project and unit across profile/metadata; the contract checks hashes and
+	// signatures, not JSON semantics
 	if meta.ProjectID != prof.ProjectID {
 		return fmt.Errorf("metadata.json projectId %q does not match profile.json projectId %q", meta.ProjectID, prof.ProjectID)
 	}
@@ -285,8 +285,8 @@ func runSign(args []string) error {
 		return fmt.Errorf("typed-data auditor %s does not match policy auditor %s", td.Message.Auditor, pol.Auditor)
 	}
 
-	// Bound expiry relative to both now and metadata.createdAt so a forged
-	// future creation time cannot extend the policy window
+	// Bound expiry by both now and metadata.createdAt; a future creation time must not
+	// extend policy lifetime
 	createdAt, err := time.Parse(time.RFC3339, meta.CreatedAt)
 	if err != nil {
 		// Keep this conversion checked even though metadata.Validate requires RFC3339
@@ -429,8 +429,9 @@ func runSign(args []string) error {
 	return nil
 }
 
-// runCombine verifies Safe owner shares and combines them into signed-result.json.
-// It checks policy membership, hashes and signatures without a key or the original package.
+// runCombine verifies Safe shares against policy chain, Safe, owners and threshold,
+// then writes signed-result.json. It checks common digests, message hashes and
+// signature recovery without a key, package or expiry revalidation.
 func runCombine(args []string) error {
 	fs := flag.NewFlagSet("combine", flag.ContinueOnError)
 	policyPath := fs.String("policy", "", "REQUIRED: policy file naming the auditor Safe, its owners and threshold")
@@ -518,8 +519,8 @@ func runCombine(args []string) error {
 	return nil
 }
 
-// signDigest uses the selected keystore or hardware adapter to sign digest
-// and returns the signature and signing key address
+// signDigest signs through the selected keystore or hardware adapter, returning
+// signature and key address
 func signDigest(digest common.Hash, f signFlags) ([]byte, common.Address, error) {
 	if f.hardware != "" {
 		hw, err := hardware.Open(hardware.DeviceKind(f.hardware))
@@ -581,8 +582,8 @@ func signDigest(digest common.Hash, f signFlags) ([]byte, common.Address, error)
 
 	priv, addr, err := keystore.Load(f.keystorePath, password)
 	if err != nil {
-		// Attempt to record every Load failure, including permission and KDF refusals.
-		// Bookkeeping errors warn because the unlock has already failed.
+		// Record Load failures, including permission/KDF refusals, for throttle and audit
+		// tracking; bookkeeping failures warn because unlock already failed
 		if throttleErr := keystore.RecordUnlockFailure(f.keystorePath); throttleErr != nil {
 			fmt.Fprintln(os.Stderr, "signer: WARNING: failed to record unlock failure for throttling:", throttleErr)
 		}
@@ -644,14 +645,14 @@ func readPassword(stdin *os.File) ([]byte, error) {
 	return readPasswordPrompt(stdin, newStdinLineReader(stdin), "Keystore password: ")
 }
 
-// newStdinLineReader creates the shared reader for piped password prompts.
-// Reuse it across prompts so read-ahead does not discard a later input line.
+// newStdinLineReader shares buffered stdin across password prompts so read-ahead
+// preserves later input lines
 func newStdinLineReader(stdin *os.File) *bufio.Reader {
 	return bufio.NewReader(stdin)
 }
 
-// readPasswordPrompt hides terminal input or reads a line from the shared
-// buffer for piped stdin, where term.ReadPassword is unavailable
+// readPasswordPrompt hides terminal input or reads piped stdin through the shared
+// buffer
 func readPasswordPrompt(stdin *os.File, br *bufio.Reader, prompt string) ([]byte, error) {
 	fmt.Fprint(os.Stdout, prompt)
 	if term.IsTerminal(int(stdin.Fd())) {

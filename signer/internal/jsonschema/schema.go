@@ -1,17 +1,10 @@
-// Package jsonschema compiles and validates the operator assetSchema dialect,
-// "rwa-profile-assetSchema/1", defined in docs/spec/profile-schema-dialect.md.
+// Package jsonschema implements "rwa-profile-assetSchema/1"
+// (docs/spec/profile-schema-dialect.md). allowedKeywords lists permitted schema-node
+// keys; other keys fail compilation to avoid silently ignored constraints.
 //
-// Validation keywords: type, properties, required, additionalProperties, items,
-// $ref, enum, const, minLength, maxLength, pattern, minimum, maximum,
-// exclusiveMinimum, exclusiveMaximum, minItems, maxItems and uniqueItems.
-// Accepted annotations and containers: title, description, default, examples,
-// $comment, $defs, $id, $schema, deprecated, readOnly and writeOnly.
-//
-// Compile rejects other keywords rather than ignoring constraints the server's
-// Draft 2020-12 engine might enforce differently. The allowlist applies to schema
-// objects; enum, const, default and examples contain opaque data. Local $ref
-// pointers cannot have sibling keywords, including annotations, because this
-// dialect does not implement Draft 2020-12 sibling semantics.
+// Values in enum, const, default and examples are opaque data. Local $ref nodes permit
+// no siblings, including annotations, because this dialect omits Draft 2020-12 sibling
+// semantics.
 package jsonschema
 
 import (
@@ -26,18 +19,16 @@ import (
 	"github.com/rwa-platform/signer/internal/canonical"
 )
 
-// allowedKeywords is the set of keywords Compile accepts anywhere in a schema document,
-// matching the allowlist in docs/spec/profile-schema-dialect.md. Any other key is
-// rejected, even a valid Draft 2020-12 keyword this engine does not implement (see the
-// package comment)
+// allowedKeywords lists the dialect's permitted schema-node keys; opaque data values
+// are outside this allowlist
 var allowedKeywords = map[string]bool{
-	// Annotations and the $defs container, which have no validation effect of their own
+	// Annotations and definition containers; no assertions of their own
 	"$schema": true, "$id": true, "$comment": true, "$defs": true,
 	"title": true, "description": true, "default": true, "examples": true,
 	"deprecated": true, "readOnly": true, "writeOnly": true,
-	// Reference.
+	// Reference
 	"$ref": true,
-	// Applicators/assertions this engine implements.
+	// Implemented applicators and assertions
 	"type": true, "properties": true, "required": true, "additionalProperties": true,
 	"items": true, "enum": true, "const": true,
 	"minLength": true, "maxLength": true, "pattern": true,
@@ -45,17 +36,15 @@ var allowedKeywords = map[string]bool{
 	"minItems": true, "maxItems": true, "uniqueItems": true,
 }
 
-// maxSchemaDepth bounds recursive schema compilation, nested sub-schemas and $ref
-// chains alike (they share one counter), so a pathologically deep schema cannot exhaust
-// the stack
+// maxSchemaDepth bounds shared recursion through nested schemas and $ref chains to
+// protect the stack
 const maxSchemaDepth = 100
 
-// maxSchemaNodes bounds the total number of schema nodes one Compile call processes,
-// independent of depth, so a wide, shallow schema or a $ref graph with many distinct
-// acyclic paths cannot cause unbounded work
+// maxSchemaNodes caps nodes processed per Compile, limiting wide schemas and repeated
+// acyclic $ref paths independently of depth
 const maxSchemaNodes = 10000
 
-// Schema is a compiled node of the supported keyword subset.
+// Schema is a compiled node of the supported dialect
 type Schema struct {
 	types                []string // empty means "any type"
 	properties           map[string]*Schema
@@ -78,8 +67,8 @@ type Schema struct {
 	uniqueItems          bool
 }
 
-// Compile compiles an already-parsed schema document (so the duplicate-key and UTF-8
-// checks have run) into a Schema. It rejects every keyword outside the allowlist.
+// Compile builds a Schema from parsed canonical.Value input, rejecting unsupported
+// schema-node keywords; CompileBytes handles JSON parsing checks
 func Compile(root canonical.Value) (*Schema, error) {
 	c := &compiler{root: root, visiting: make(map[string]bool)}
 	return c.compile(root, "#", 0)
@@ -96,12 +85,10 @@ func CompileBytes(raw []byte) (*Schema, error) {
 
 type compiler struct {
 	root canonical.Value
-	// visiting holds the local $ref pointers being resolved on the current path, keyed
-	// by the ref string. A pointer entering the set twice means the schema is cyclic,
-	// directly or through other $refs, and is rejected instead of recursed into forever.
+	// visiting tracks $ref strings on the current path; revisiting one rejects direct or
+	// indirect cycles
 	visiting map[string]bool
-	// nodes counts every schema node compiled so far in this Compile call, bounding
-	// total work independent of depth
+	// nodes counts processed schema nodes across this Compile, independently of depth
 	nodes int
 }
 
@@ -156,9 +143,8 @@ func (c *compiler) compile(v canonical.Value, path string, depth int) (*Schema, 
 		case string:
 			s.types = []string{t}
 		case []canonical.Value:
-			// An empty array would leave s.types nil, which means any type, the same as
-			// omitting type. The server's Draft 2020-12 compiler rejects {"type":[]}, so
-			// reject it here too or the two would disagree on the schema.
+			// Reject empty type arrays, as the server does; otherwise nil s.types would
+			// incorrectly allow any type
 			if len(t) == 0 {
 				return nil, fmt.Errorf("jsonschema: %s.type: type array must not be empty", path)
 			}
@@ -186,9 +172,8 @@ func (c *compiler) compile(v canonical.Value, path string, depth int) (*Schema, 
 		}
 	}
 
-	// Compile every $defs member, including unused definitions, to reject unsupported
-	// keywords and self-reference consistently with the server. Discard the result:
-	// $defs supplies the pool for $ref, not an instance-validation branch.
+	// Check unused $defs too for unsupported keywords/cycles. Discard compiled results:
+	// definitions supply $ref targets, not instance-validation branches.
 	if defsVal, present := obj.Get("$defs"); present {
 		defsObj, ok := defsVal.(*canonical.Object)
 		if !ok {
@@ -346,7 +331,7 @@ func (c *compiler) compile(v canonical.Value, path string, depth int) (*Schema, 
 		s.uniqueItems = b
 	}
 
-	// Annotations (title, description, default and the like) have no validation effect
+	// Annotations have no validation effect
 
 	return s, nil
 }
@@ -444,7 +429,8 @@ func typeOf(v canonical.Value) string {
 func isIntegerLiteral(n json.Number) bool {
 	s := n.String()
 	if strings.ContainsAny(s, ".eE") {
-		// Still an integer if it round-trips through big.Float with a zero fractional part
+		// Fractions/exponents still represent integers when big.Float converts them exactly
+		// to big.Int
 		f, ok := new(big.Float).SetString(s)
 		if !ok {
 			return false

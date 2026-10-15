@@ -48,8 +48,7 @@ describe("waitForTxReceipt", () => {
     await expect(waitForTxReceipt(HASH)).resolves.toBeUndefined();
   });
 
-  // A reverted transaction still produces a receipt, so without the status
-  // check the console would announce a seizure the chain refused.
+  // A mined revert still has a receipt; check status before announcing a successful seizure
   it("throws for a mined-but-reverted transaction", async () => {
     installReceiptProvider("0x0");
     await expect(waitForTxReceipt(HASH)).rejects.toThrow(/reverted on-chain/i);
@@ -58,7 +57,7 @@ describe("waitForTxReceipt", () => {
 
 describe("describeWalletError", () => {
   it.each([
-    ["SystemAddressCannotBeSeized", /can never be seized from/i],
+    ["SystemAddressCannotBeSeized", /cannot be a seizure source/i],
     ["SystemAddressCannotBeFrozen", /can never be frozen/i],
     ["RecipientNotAllowed", /not Allowed in the compliance registry/i],
   ])("names %s from the revert payload", (errorName, expected) => {

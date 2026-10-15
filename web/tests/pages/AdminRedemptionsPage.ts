@@ -9,10 +9,9 @@ export class AdminRedemptionsPage {
   }
 
   /**
-   * Connects the admin wallet with the header button. Fund and reject need the
-   * connected wallet to hold TREASURER_ROLE and REDEMPTION_MANAGER_ROLE (the
-   * mock grants the admin both). The seeded session does not connect a wallet,
-   * so specs that fund or reject connect first.
+   * Connect through the header before funding or rejecting: the seeded session does not
+   * connect a wallet. The mock admin has TREASURER_ROLE and REDEMPTION_MANAGER_ROLE for
+   * these calls.
    */
   async connectWallet(): Promise<void> {
     await this.page.getByRole("button", { name: "Connect wallet" }).click();

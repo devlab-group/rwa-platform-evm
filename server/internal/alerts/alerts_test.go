@@ -25,9 +25,8 @@ func TestEvaluatePendingRedemptionSLA(t *testing.T) {
 
 	got := EvaluatePendingRedemptionSLA(requests, threshold, now)
 
-	// The old-pending (72h) and exactly-at-threshold (48h) records fire, so the
-	// boundary itself alerts. The fresh-pending record and the two non-Pending
-	// records do not, whatever their age.
+	// Pending records aged 72h or exactly 48h alert. Fresh Pending records and both
+	// non-Pending states do not, regardless of age.
 	if len(got) != 2 {
 		t.Fatalf("got %d alerts, want 2: %+v", len(got), got)
 	}
