@@ -72,12 +72,16 @@ Admin routes then require `auth.RequireRole(auth.RoleAdmin)`. The four writes `P
 `POST /compliance/status`, `POST /assets/records` and `POST /assets/records/{recordId}/reissue`
 also require `auth.Idempotency` before their handlers.
 
-For admin login, public `POST /auth/challenge` issues a single-use message; `POST /auth/session`
-recovers its `personal_sign` signer, requires the configured `admin_address` and issues an HS256
-JWT. Both endpoints retain a per-IP limiter even when global limiting is off. Authentication
-reads `Authorization: Bearer <jwt>`: a valid token grants `RoleAdmin` with its wallet principal;
-otherwise it grants `RoleReadOnly`. `RequireRole` rejects unauthorized access. JWTs are stateless;
-logout is client-side. V1 has one configured admin wallet and one issued admin role.
+Public `POST /auth/challenge` returns an expiring, single-use `personal_sign` message and
+random nonce. Distinct nonces let challenges coexist. `POST /auth/session` takes
+`{address, nonce, signature}`, recovers the signer, requires the configured `admin_address`
+and issues an HS256 JWT. Both endpoints keep per-IP limits when global limiting is off.
+
+Requests send `Authorization: Bearer <jwt>`. A valid JWT with the configured `admin_address`
+as subject (case-insensitive) grants `RoleAdmin` and the wallet principal; other requests
+get `RoleReadOnly`. Restart after rotating `admin_address` to reject the previous admin's
+JWTs. `RequireRole` gates protected routes. JWTs are stateless; logout is client-side.
+V1 has one configured admin wallet and one issued admin role.
 
 Investor ownership verification at `POST /api/v1/compliance/challenge/verify` instead issues a
 wallet-scoped `X-Wallet-Session`. It gates `GET /api/v1/me/wallet-status` and

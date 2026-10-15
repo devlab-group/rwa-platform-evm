@@ -92,8 +92,7 @@ type ForcedTransferState struct {
 
 // SecurityState projects pause, auditor, treasury, prices and roles from Pausable,
 // AccessControl, Vault, SupplyController and Strategy events. project.ReconcileSecurity
-// records checkpoint progress in AsOfBlock/AsOfTime for the API's securityStale
-// calculation.
+// records checkpoint progress in AsOfBlock/AsOfTime for the API's securityStale calculation.
 type SecurityState struct {
 	Paused             bool   `json:"paused" bson:"paused"`
 	Auditor            string `json:"auditor" bson:"auditor"`
@@ -116,6 +115,8 @@ type SecurityState struct {
 	PurchasePricePerWholeToken   string              `json:"purchasePricePerWholeToken,omitempty" bson:"purchasePricePerWholeToken,omitempty"`
 	RedemptionPricePerWholeToken string              `json:"redemptionPricePerWholeToken,omitempty" bson:"redemptionPricePerWholeToken,omitempty"`
 	Roles                        map[string][]string `json:"roles,omitempty" bson:"roles,omitempty"`
+	// RolesByContract maps contract labels to roles and sorted, checksummed holders; Roles is their union
+	RolesByContract map[string]map[string][]string `json:"rolesByContract,omitempty" bson:"rolesByContract,omitempty"`
 	// FrozenBalances maps checksummed holders to decimal-string frozen amounts in token
 	// minimal units, preserving uint256 precision. Frozen amount 0 removes a holder; an
 	// empty map is nil.

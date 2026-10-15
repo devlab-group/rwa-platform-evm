@@ -50,9 +50,10 @@ Purchases use on-chain `Vault.buy`.
 - `lib/abis.ts`/`lib/wallet.ts` encode deployment, mint, role changes, pause, prices, admin
   transfer, freeze/seizure, withdrawal, redemption fund/reject and funding approval locally.
   Inputs include server configuration/indexed state; verify the review panel and wallet prompt.
-- `roles.ts` and `RoleGate.tsx` route the UI; contracts enforce authorization. Safe selection
-  uses projected role holders without verifying Safe bytecode. Batches in `safeBatch.ts` need
-  their owners' review and execution.
+- `roles.ts`/`RoleGate.tsx` check holders on every target contract when `rolesByContract` and
+  a target list are supplied; otherwise they use the union `roles`. Contracts enforce
+  authorization. Safe selection does not verify bytecode; owners must review and execute
+  exported `safeBatch.ts` batches.
 - Deployment and forced transfer have review panels; `ConfirmStep.tsx` reviews server-key
   compliance actions. Other wallet forms submit directly to the wallet approval prompt.
 - Redemption views retain the pending/funded payment disclaimer (`tests/specs/status-states.spec.ts`).

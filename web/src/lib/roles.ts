@@ -88,6 +88,27 @@ function resolveAddresses(
   return out;
 }
 
+/** Address field names accepted by holdersOnAll */
+export type ContractLabel = keyof Addresses;
+
+/**
+ * Case-insensitive intersection of role holders across contracts. Without either map or list,
+ * returns the union; an empty list returns none.
+ */
+export function holdersOnAll(
+  roles: RoleHolders | undefined,
+  rolesByContract: Record<string, RoleHolders> | undefined,
+  role: string,
+  contracts: readonly ContractLabel[] | undefined,
+): string[] {
+  if (!rolesByContract || !contracts) return roles?.[role] ?? [];
+  const lists = contracts.map((c) => rolesByContract[c]?.[role] ?? []);
+  if (lists.length === 0) return [];
+  return lists[0].filter((h) =>
+    lists.every((l) => l.some((x) => x.toLowerCase() === h.toLowerCase())),
+  );
+}
+
 /** Whether `address` is one of the holders of `role` in the project's role map. */
 export function hasRole(
   roles: RoleHolders | undefined,
@@ -101,11 +122,17 @@ export function hasRole(
   return holders.some((h) => h.toLowerCase() === target);
 }
 
-/** Checks the connected wallet against projected holders; false without roles, wallet or provider */
+/** Checks wallet membership in the holdersOnAll result */
 export function useHasRole(
   roles: RoleHolders | undefined,
   role: string,
+  rolesByContract?: Record<string, RoleHolders>,
+  contracts?: readonly ContractLabel[],
 ): boolean {
   const ctx = useContext(WalletContext);
-  return hasRole(roles, role, ctx?.address ?? null);
+  return hasRole(
+    { [role]: holdersOnAll(roles, rolesByContract, role, contracts) },
+    role,
+    ctx?.address ?? null,
+  );
 }

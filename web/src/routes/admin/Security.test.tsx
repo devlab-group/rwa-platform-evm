@@ -190,6 +190,30 @@ describe("Security admin actions (role-gated, connected wallet broadcasts)", () 
     ).toBeNull();
   });
 
+  it("gates admin actions by target contract", async () => {
+    // Token-only admin can edit PAUSER_ROLE; transferring admin needs all governance contracts
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({
+        ...DEPLOYED,
+        roles: { DEFAULT_ADMIN_ROLE: [ADMIN] },
+        rolesByContract: {
+          token: { DEFAULT_ADMIN_ROLE: [ADMIN] },
+          vault: {
+            DEFAULT_ADMIN_ROLE: ["0x00000000000000000000000000000000000000a1"],
+          },
+        },
+      });
+    renderWithWallet(<Security />, { connected: true });
+
+    expect(
+      await screen.findByRole("button", { name: "Grant role" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Begin admin transfer" }),
+    ).toBeNull();
+  });
+
   it("broadcasts RWAToken pause() when the wallet holds PAUSER_ROLE", async () => {
     vi.mocked(api.getProject)
       .mockReset()

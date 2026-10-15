@@ -554,3 +554,35 @@ func TestLastForcedTransferReorg(t *testing.T) {
 		t.Errorf("summary = %+v, want nil once every seizure was reorged out", s.LastForcedTransfer)
 	}
 }
+
+// Check distinct contract holders and their union for UI role checks
+func TestReconcileSecurityRolesByContractDivergent(t *testing.T) {
+	repos := setup(t)
+	// Change admin and add a treasurer on the Vault only
+	addEvent(t, repos, vaultAddr, "RoleGranted", 10, 0, map[string]any{"role": roleHex(bindings.DefaultAdminRole), "account": newAdminB, "sender": adminA})
+	addEvent(t, repos, vaultAddr, "RoleRevoked", 10, 1, map[string]any{"role": roleHex(bindings.DefaultAdminRole), "account": adminA, "sender": adminA})
+	addEvent(t, repos, vaultAddr, "RoleGranted", 11, 0, map[string]any{"role": roleHex(bindings.TreasurerRole), "account": newCompOpC, "sender": adminA})
+
+	s := reconcile(t, repos)
+	by := s.RolesByContract
+	if got := by["vault"]["DEFAULT_ADMIN_ROLE"]; len(got) != 1 || got[0] != newAdminB {
+		t.Errorf("vault admins = %v, want [%s]", got, newAdminB)
+	}
+	for _, label := range []string{"token", "compliance", "supplyController", "redemptionEscrow", "strategy"} {
+		if got := by[label]["DEFAULT_ADMIN_ROLE"]; len(got) != 1 || got[0] != adminA {
+			t.Errorf("%s admins = %v, want [%s]", label, got, adminA)
+		}
+	}
+	if got := by["vault"]["TREASURER_ROLE"]; len(got) != 2 {
+		t.Errorf("vault treasurers = %v, want two", got)
+	}
+	if got := by["redemptionEscrow"]["TREASURER_ROLE"]; len(got) != 1 || got[0] != treasurer {
+		t.Errorf("escrow treasurers = %v, want [%s]", got, treasurer)
+	}
+	if got := s.Roles["TREASURER_ROLE"]; len(got) != 2 {
+		t.Errorf("union TREASURER_ROLE = %v, want two", got)
+	}
+	if got := s.Roles["DEFAULT_ADMIN_ROLE"]; len(got) != 2 {
+		t.Errorf("union DEFAULT_ADMIN_ROLE = %v, want two", got)
+	}
+}

@@ -200,6 +200,7 @@ export function Redemptions() {
           quoteDecimals={quoteDecimals}
           addresses={proj?.addresses}
           roles={proj?.roles}
+          rolesByContract={proj?.rolesByContract}
           onChanged={redemptions.reload}
           onClose={() => setSelectedId(null)}
         />
@@ -215,6 +216,7 @@ function RedemptionDetail({
   quoteDecimals,
   addresses,
   roles,
+  rolesByContract,
   onChanged,
   onClose,
 }: {
@@ -224,6 +226,7 @@ function RedemptionDetail({
   quoteDecimals: number | undefined;
   addresses: Addresses | undefined;
   roles: RoleHolders | undefined;
+  rolesByContract: Record<string, RoleHolders> | undefined;
   onChanged: () => void;
   onClose: () => void;
 }) {
@@ -422,6 +425,8 @@ function RedemptionDetail({
         {/* Route fund/reject through their role holder's wallet or Safe */}
         <RoleGate
           roles={roles}
+          rolesByContract={rolesByContract}
+          contracts={["redemptionEscrow"]}
           role={ROLES.treasurer}
           action="fund redemptions"
         >
@@ -460,6 +465,8 @@ function RedemptionDetail({
         </RoleGate>
         <RoleGate
           roles={roles}
+          rolesByContract={rolesByContract}
+          contracts={["redemptionEscrow"]}
           role={ROLES.redemptionManager}
           action="reject redemptions"
         >

@@ -4,6 +4,7 @@ import {
   adminTransferTargets,
   DEFAULT_ADMIN_ROLE_HASH,
   hasRole,
+  holdersOnAll,
   roleHash,
   roleTargets,
   ROLES,
@@ -124,6 +125,44 @@ describe("roleTargets / adminTransferTargets", () => {
       ADDRESSES.vault,
       ADDRESSES.redemptionEscrow,
       ADDRESSES.strategy,
+    ]);
+  });
+});
+
+describe("holdersOnAll", () => {
+  const A = "0x00000000000000000000000000000000000000a1";
+  const B = "0x00000000000000000000000000000000000000b2";
+  const byContract = {
+    token: { DEFAULT_ADMIN_ROLE: [A, B] },
+    vault: { DEFAULT_ADMIN_ROLE: [B.toUpperCase().replace("0X", "0x")] },
+    redemptionEscrow: { DEFAULT_ADMIN_ROLE: [A, B] },
+  };
+  const union = { DEFAULT_ADMIN_ROLE: [A, B] };
+
+  it("intersects holders across target contracts", () => {
+    expect(
+      holdersOnAll(union, byContract, ROLES.admin, [
+        "token",
+        "vault",
+        "redemptionEscrow",
+      ]),
+    ).toEqual([B]);
+    expect(holdersOnAll(union, byContract, ROLES.admin, ["token"])).toEqual([
+      A,
+      B,
+    ]);
+  });
+
+  it("returns none if a target contract has no holders", () => {
+    expect(
+      holdersOnAll(union, byContract, ROLES.admin, ["token", "compliance"]),
+    ).toEqual([]);
+  });
+
+  it("uses union holders without a contract map", () => {
+    expect(holdersOnAll(union, undefined, ROLES.admin, ["vault"])).toEqual([
+      A,
+      B,
     ]);
   });
 });

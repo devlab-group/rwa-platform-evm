@@ -64,7 +64,7 @@ func TestAuthenticateAndRequireRole(t *testing.T) {
 	}
 
 	r := gin.New()
-	r.Use(Authenticate(testJWTSecret))
+	r.Use(Authenticate(testJWTSecret, adminAddr))
 	r.POST("/admin-only", RequireRole(RoleAdmin), func(c *gin.Context) { c.Status(http.StatusOK) })
 	r.GET("/public", func(c *gin.Context) { c.Status(http.StatusOK) })
 
@@ -367,7 +367,7 @@ func TestIdempotencyRequireRoleBeforeMiddlewareBlocksUnauthorizedReplay(t *testi
 
 	store := memory.NewIdempotencyRepository()
 	r := gin.New()
-	r.Use(Authenticate(testJWTSecret))
+	r.Use(Authenticate(testJWTSecret, adminAddr))
 	// Same order as internal/api/api.go: RequireRole, then Idempotency
 	r.POST("/x", RequireRole(RoleAdmin), Idempotency(store, time.Hour), func(c *gin.Context) {
 		c.JSON(http.StatusAccepted, gin.H{"ok": true})
@@ -572,5 +572,38 @@ func TestRateLimitBlocksAfterBurst(t *testing.T) {
 	}
 	if codes[2] != http.StatusTooManyRequests {
 		t.Errorf("expected 3rd request to be rate-limited, got %v", codes)
+	}
+}
+
+// TestAuthenticateBindsTokenToConfiguredAdmin checks that JWT subjects must match the configured
+// admin to receive RoleAdmin
+func TestAuthenticateBindsTokenToConfiguredAdmin(t *testing.T) {
+	const oldAdmin = "0x1111111111111111111111111111111111111111"
+	const newAdmin = "0x3333333333333333333333333333333333333333"
+	token, _, err := IssueAdminJWT(testJWTSecret, oldAdmin, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := func(configured string) int {
+		r := gin.New()
+		r.Use(Authenticate(testJWTSecret, configured))
+		r.GET("/x", RequireRole(RoleAdmin), func(c *gin.Context) { c.Status(http.StatusOK) })
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/x", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+	if got := status(oldAdmin); got != http.StatusOK {
+		t.Errorf("configured admin: status = %d, want 200", got)
+	}
+	if got := status(strings.ToUpper(oldAdmin[:2]) + oldAdmin[2:]); got != http.StatusOK {
+		t.Errorf("case-different admin: status = %d, want 200", got)
+	}
+	if got := status(newAdmin); got != http.StatusForbidden {
+		t.Errorf("rotated admin: status = %d, want 403", got)
+	}
+	if got := status(""); got != http.StatusForbidden {
+		t.Errorf("no configured admin: status = %d, want 403", got)
 	}
 }

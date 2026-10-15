@@ -49,6 +49,8 @@ type ProjectResponse struct {
 	FinalityConfirmations uint64      `json:"finalityConfirmations"`
 	BytecodeVerified      bool        `json:"bytecodeVerified"`
 	Roles                 RoleHolders `json:"roles,omitempty"`
+	// RolesByContract exposes projected holders per contract; omitted before projection or when empty
+	RolesByContract map[string]RoleHolders `json:"rolesByContract,omitempty"`
 
 	// Prices use quote-token minimal units; scale by quoteDecimals for display. They come
 	// from Project.Security, falling back to deploy-time values when absent, like the
@@ -169,6 +171,12 @@ func ToProjectResponse(p *models.Project, tokenUnit string, legal *models.LegalD
 		resp.RedemptionManager = s.RedemptionManager
 		resp.PendingAdmin = s.PendingAdmin
 		resp.Roles = RoleHolders(s.Roles)
+		if len(s.RolesByContract) > 0 {
+			resp.RolesByContract = make(map[string]RoleHolders, len(s.RolesByContract))
+			for label, byRole := range s.RolesByContract {
+				resp.RolesByContract[label] = RoleHolders(byRole)
+			}
+		}
 		// A price the projection does not carry keeps its deploy-time value
 		if s.PurchasePricePerWholeToken != "" {
 			resp.PurchasePricePerWholeToken = s.PurchasePricePerWholeToken

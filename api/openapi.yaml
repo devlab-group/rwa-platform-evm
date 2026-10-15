@@ -409,7 +409,8 @@ paths:
       operationId: createAuthChallenge
       summary: "Request an admin-login wallet challenge (step 1)"
       description: >
-        Public admin-login entry: send the wallet address for a single-use, expiring personal_sign challenge.
+        Public admin login: request a single-use, expiring personal_sign challenge for a wallet address.
+        Distinct nonces let challenges coexist.
       security: []
       requestBody:
         required: true
@@ -427,8 +428,10 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [message, expiresAt]
+                required: [address, nonce, message, expiresAt]
                 properties:
+                  address: { type: string, description: "Challenge wallet address, normalized to EIP-55" }
+                  nonce: { type: string, description: "Challenge ID required by POST /auth/session" }
                   message: { type: string, description: "Exact message the wallet must personal_sign" }
                   expiresAt: { type: integer, description: "Single-use challenge expiry in Unix seconds" }
         "429": { $ref: "#/components/responses/Error" }
@@ -448,9 +451,10 @@ paths:
           application/json:
             schema:
               type: object
-              required: [address, signature]
+              required: [address, nonce, signature]
               properties:
                 address: { type: string, description: "Challenge-signing wallet address" }
+                nonce: { type: string, description: "Nonce from POST /auth/challenge, bound to address" }
                 signature: { type: string, description: "personal_sign signature (0x-hex, 65 bytes)" }
       responses:
         "200": { description: Authenticated; JWT issued., content: { application/json: { schema: { $ref: "#/components/schemas/AuthSession" } } } }
@@ -586,6 +590,13 @@ components:
             Platform-defined role holders enumerated on each project contract through AccessControlEnumerable
             and checked against deployment allowlists. After governance projection, follows role events; see
             securityStale.
+        rolesByContract:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/RoleHolders"
+          description: >
+            Role holders by contract label: token, compliance, supplyController, vault, redemptionEscrow,
+            strategy. Holders may differ across contracts; omitted before projection.
         securityAsOfBlock:
           type: integer
           description: >

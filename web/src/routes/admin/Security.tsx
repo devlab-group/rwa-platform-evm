@@ -14,8 +14,10 @@ import {
   toMinimalUnits,
 } from "../../lib/format";
 import {
+  ADMIN_CONTRACT_FIELDS,
   adminTransferTargets,
   GRANTABLE_ROLES,
+  ROLE_TARGET_FIELDS,
   ROLES,
   roleHash,
   roleTargets,
@@ -225,6 +227,8 @@ export function Security() {
         <h2>Pause / unpause trading</h2>
         <RoleGate
           roles={proj?.roles}
+          rolesByContract={proj?.rolesByContract}
+          contracts={["token"]}
           role={ROLES.pauser}
           action="pause or unpause trading"
         >
@@ -278,7 +282,13 @@ export function Security() {
 
       <section className="card">
         <h2>Update prices</h2>
-        <RoleGate roles={proj?.roles} role={ROLES.pricer} action="set prices">
+        <RoleGate
+          roles={proj?.roles}
+          rolesByContract={proj?.rolesByContract}
+          contracts={["strategy"]}
+          role={ROLES.pricer}
+          action="set prices"
+        >
           <PriceControls
             project={proj}
             chainId={chainId}
@@ -328,17 +338,11 @@ export function Security() {
 
       <section className="card">
         <h2>Manage roles &amp; admin</h2>
-        <RoleGate
-          roles={proj?.roles}
-          role={ROLES.admin}
-          action="change role holders or transfer admin"
-        >
-          <RoleAdminControls
-            project={proj}
-            chainId={chainId}
-            onChanged={project.reload}
-          />
-        </RoleGate>
+        <RoleAdminControls
+          project={proj}
+          chainId={chainId}
+          onChanged={project.reload}
+        />
       </section>
 
       <section className="card">
@@ -434,6 +438,8 @@ export function Security() {
         <h2>Freeze tokens</h2>
         <RoleGate
           roles={proj?.roles}
+          rolesByContract={proj?.rolesByContract}
+          contracts={["token"]}
           role={ROLES.admin}
           action="freeze a holder's tokens"
         >
@@ -449,6 +455,8 @@ export function Security() {
         <h2>Forced transfer</h2>
         <RoleGate
           roles={proj?.roles}
+          rolesByContract={proj?.rolesByContract}
+          contracts={["token"]}
           role={ROLES.admin}
           action="seize tokens from a holder"
         >
@@ -1102,6 +1110,7 @@ function ForcedTransferControls({
   );
 }
 
+// Gate role edits on that role's target contracts; gate admin transfer on all governance contracts
 function RoleAdminControls({
   project,
   chainId,
@@ -1111,10 +1120,86 @@ function RoleAdminControls({
   chainId: number;
   onChanged: () => void;
 }) {
+  const [role, setRole] = useState<string>(GRANTABLE_ROLES[0]);
+  const addresses = project?.addresses as Addresses | undefined;
+  const gate = {
+    roles: project?.roles,
+    rolesByContract: project?.rolesByContract,
+    role: ROLES.admin,
+  };
+  return (
+    <div>
+      <h3>Grant or revoke a role</h3>
+      <div className="field">
+        <label htmlFor="role-select">Role</label>
+        <select
+          id="role-select"
+          value={role}
+          onChange={(e) => setRole(e.target.value)}
+        >
+          {GRANTABLE_ROLES.map((r) => (
+            <option key={r} value={r}>
+              {r}
+            </option>
+          ))}
+        </select>
+        <span className="field__hint">
+          Configured target contracts ({roleTargets(role, addresses).length}{" "}
+          total).
+        </span>
+      </div>
+      <RoleGate
+        {...gate}
+        contracts={ROLE_TARGET_FIELDS[role]}
+        action="grant or revoke this role"
+      >
+        <RoleAdminForm
+          part="role"
+          role={role}
+          project={project}
+          chainId={chainId}
+          onChanged={onChanged}
+        />
+      </RoleGate>
+
+      <h3 className="u-mt-5">Transfer admin</h3>
+      <p className="field__hint">
+        Starts a two-step DEFAULT_ADMIN transfer on each governance contract.
+        You remain admin until the incoming admin accepts there after its delay.
+      </p>
+      <RoleGate
+        {...gate}
+        contracts={ADMIN_CONTRACT_FIELDS}
+        action="transfer admin"
+      >
+        <RoleAdminForm
+          part="transfer"
+          role={role}
+          project={project}
+          chainId={chainId}
+          onChanged={onChanged}
+        />
+      </RoleGate>
+    </div>
+  );
+}
+
+function RoleAdminForm({
+  part,
+  role,
+  project,
+  chainId,
+  onChanged,
+}: {
+  part: "role" | "transfer";
+  role: string;
+  project: Project | undefined;
+  chainId: number;
+  onChanged: () => void;
+}) {
   const from = useSender();
   const route = useTxRoute();
   const addresses = project?.addresses as Addresses | undefined;
-  const [role, setRole] = useState<string>(GRANTABLE_ROLES[0]);
   const [account, setAccount] = useState("");
   const [newAdmin, setNewAdmin] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1227,75 +1312,57 @@ function RoleAdminControls({
 
   return (
     <div>
-      <h3>Grant or revoke a role</h3>
-      <div className="field">
-        <label htmlFor="role-select">Role</label>
-        <select
-          id="role-select"
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-        >
-          {GRANTABLE_ROLES.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-        <span className="field__hint">
-          Targets the configured contracts for this role (
-          {roleTargets(role, addresses).length} for this role).
-        </span>
-      </div>
-      <div className="field">
-        <label htmlFor="role-account">Account address</label>
-        <input
-          id="role-account"
-          className="mono"
-          value={account}
-          onChange={(e) => setAccount(e.target.value)}
-        />
-      </div>
-      <div className="tx-preview__actions">
-        <button
-          type="button"
-          className="button button--primary"
-          onClick={() => handleRoleChange("grant")}
-          disabled={busy || !account}
-        >
-          Grant role
-        </button>
-        <button
-          type="button"
-          className="button button--danger"
-          onClick={() => handleRoleChange("revoke")}
-          disabled={busy || !account}
-        >
-          Revoke role
-        </button>
-      </div>
-
-      <h3 className="u-mt-5">Transfer admin</h3>
-      <p className="field__hint">
-        Starts a two-step DEFAULT_ADMIN transfer on each governance contract.
-        You remain admin until the incoming admin accepts there after its delay.
-      </p>
-      <div className="field">
-        <label htmlFor="new-admin">New admin address</label>
-        <input
-          id="new-admin"
-          className="mono"
-          value={newAdmin}
-          onChange={(e) => setNewAdmin(e.target.value)}
-        />
-      </div>
-      <button
-        type="button"
-        className="button button--danger"
-        onClick={handleTransferAdmin}
-        disabled={busy || !newAdmin}
-      >
-        Begin admin transfer
-      </button>
+      {part === "role" ? (
+        <>
+          <div className="field">
+            <label htmlFor="role-account">Account address</label>
+            <input
+              id="role-account"
+              className="mono"
+              value={account}
+              onChange={(e) => setAccount(e.target.value)}
+            />
+          </div>
+          <div className="tx-preview__actions">
+            <button
+              type="button"
+              className="button button--primary"
+              onClick={() => handleRoleChange("grant")}
+              disabled={busy || !account}
+            >
+              Grant role
+            </button>
+            <button
+              type="button"
+              className="button button--danger"
+              onClick={() => handleRoleChange("revoke")}
+              disabled={busy || !account}
+            >
+              Revoke role
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="field">
+            <label htmlFor="new-admin">New admin address</label>
+            <input
+              id="new-admin"
+              className="mono"
+              value={newAdmin}
+              onChange={(e) => setNewAdmin(e.target.value)}
+            />
+          </div>
+          <button
+            type="button"
+            className="button button--danger"
+            onClick={handleTransferAdmin}
+            disabled={busy || !newAdmin}
+          >
+            Begin admin transfer
+          </button>
+        </>
+      )}
 
       {progress && (
         <p role="status" className="u-mt-4">

@@ -461,7 +461,7 @@ export interface paths {
     put?: never;
     /**
      * Request an admin-login wallet challenge (step 1)
-     * @description Public admin-login entry: send the wallet address for a single-use, expiring personal_sign challenge.
+     * @description Public admin login: request a single-use, expiring personal_sign challenge for a wallet address. Distinct nonces let challenges coexist.
      */
     post: operations["createAuthChallenge"];
     delete?: never;
@@ -537,6 +537,10 @@ export interface components {
       bytecodeVerified?: boolean;
       /** @description Platform-defined role holders enumerated on each project contract through AccessControlEnumerable and checked against deployment allowlists. After governance projection, follows role events; see securityStale. */
       roles?: components["schemas"]["RoleHolders"];
+      /** @description Role holders by contract label: token, compliance, supplyController, vault, redemptionEscrow, strategy. Holders may differ across contracts; omitted before projection. */
+      rolesByContract?: {
+        [key: string]: components["schemas"]["RoleHolders"];
+      };
       /** @description Last indexed block reflected by authority fields (paused, auditor, treasury, roles); omitted before projection. */
       securityAsOfBlock?: number;
       /**
@@ -1613,6 +1617,10 @@ export interface operations {
         };
         content: {
           "application/json": {
+            /** @description Challenge wallet address, normalized to EIP-55 */
+            address: string;
+            /** @description Challenge ID required by POST /auth/session */
+            nonce: string;
             /** @description Exact message the wallet must personal_sign */
             message: string;
             /** @description Single-use challenge expiry in Unix seconds */
@@ -1635,6 +1643,8 @@ export interface operations {
         "application/json": {
           /** @description Challenge-signing wallet address */
           address: string;
+          /** @description Nonce from POST /auth/challenge, bound to address */
+          nonce: string;
           /** @description personal_sign signature (0x-hex, 65 bytes) */
           signature: string;
         };

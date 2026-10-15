@@ -231,19 +231,17 @@ type WalletSessionRepository interface {
 	Delete(ctx context.Context, token string) error
 }
 
-// AdminChallengeRepository stores auth.AdminChallengeService's address-keyed,
-// single-use login challenges. MongoDB sharing lets any server replica verify a
-// challenge; see models.AdminChallenge.
+// AdminChallengeRepository stores nonce-keyed admin login challenges. MongoDB storage lets replicas
+// verify shared challenges; see models.AdminChallenge.
 type AdminChallengeRepository interface {
-	// Upsert replaces the address's active challenge, used or not, because verification
-	// supplies no nonce to choose among messages
-	Upsert(ctx context.Context, c *models.AdminChallenge) error
+	// Insert stores a challenge under its nonce
+	Insert(ctx context.Context, c *models.AdminChallenge) error
 	// Get checks ExpiresAt directly, returning ErrNotFound for absent or expired
 	// challenges rather than waiting for TTL cleanup
-	Get(ctx context.Context, address string) (*models.AdminChallenge, error)
-	// MarkUsed atomically consumes an unused address challenge. Return ErrAlreadyExists if
-	// used or ErrNotFound if absent, allowing one successful consumption.
-	MarkUsed(ctx context.Context, address string) error
+	Get(ctx context.Context, nonce string) (*models.AdminChallenge, error)
+	// MarkUsed consumes an unused challenge atomically; returns ErrAlreadyExists if used or
+	// ErrNotFound if absent
+	MarkUsed(ctx context.Context, nonce string) error
 }
 
 // AuditLogRepository persists append-only operational audit entries

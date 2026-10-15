@@ -85,6 +85,7 @@ security:
   jwt_ttl: "24h"                 # admin JWT lifetime; expiry requires wallet re-login
   # Login wallet: sign the /auth/challenge message for an admin JWT.
   # Production requires admin_address and jwt_secret.
+  # Restart after rotating admin_address to reject the previous admin's JWTs
   admin_address: ""             # 0x-prefixed wallet address of the single admin
   # SECRET signing admin JWTs; production requires >=32 bytes and rejects placeholders
   jwt_secret: ""

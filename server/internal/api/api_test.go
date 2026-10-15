@@ -796,7 +796,7 @@ func TestAuthSessionHasItsOwnRateLimitIndependentOfGlobal(t *testing.T) {
 	var last *httptest.ResponseRecorder
 	throttled := false
 	for i := 0; i < sessionLoginBurst+5; i++ {
-		last = doJSON(t, env.router, http.MethodPost, "/auth/session", map[string]string{"address": env.adminAddr.Hex(), "signature": "0x00"}, nil)
+		last = doJSON(t, env.router, http.MethodPost, "/auth/session", map[string]string{"address": env.adminAddr.Hex(), "nonce": "n", "signature": "0x00"}, nil)
 		if last.Code == http.StatusTooManyRequests {
 			throttled = true
 			break

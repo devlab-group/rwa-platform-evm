@@ -26,12 +26,15 @@ func (app *App) createAuthChallenge(c *gin.Context) {
 		failErr(c, http.StatusBadRequest, CodeBadRequest, err)
 		return
 	}
-	message, expiresAt, err := app.AdminChallenges.Create(c.Request.Context(), body.Address)
+	nonce, message, expiresAt, err := app.AdminChallenges.Create(c.Request.Context(), body.Address)
 	if err != nil {
 		failErr(c, http.StatusBadRequest, CodeBadRequest, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": message, "expiresAt": expiresAt.Unix()})
+	c.JSON(http.StatusOK, gin.H{
+		"address": common.HexToAddress(body.Address).Hex(), "nonce": nonce,
+		"message": message, "expiresAt": expiresAt.Unix(),
+	})
 }
 
 // createSession handles public POST /auth/session, exchanging a challenge signature
@@ -44,6 +47,7 @@ func (app *App) createSession(c *gin.Context) {
 	}
 	var body struct {
 		Address   string `json:"address" binding:"required"`
+		Nonce     string `json:"nonce" binding:"required"`
 		Signature string `json:"signature" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -59,7 +63,7 @@ func (app *App) createSession(c *gin.Context) {
 	// Verify checks expiry, single use and the signer. Unknown or expired challenges,
 	// replays, bad signatures, address mismatches and non-admin signers all receive the
 	// same 401.
-	recovered, err := app.AdminChallenges.Verify(c.Request.Context(), body.Address, sigBytes)
+	recovered, err := app.AdminChallenges.Verify(c.Request.Context(), body.Address, body.Nonce, sigBytes)
 	if err != nil || !strings.EqualFold(recovered.Hex(), common.HexToAddress(app.AdminAddress).Hex()) {
 		fail(c, http.StatusUnauthorized, CodeUnauthorized, "invalid credentials")
 		return

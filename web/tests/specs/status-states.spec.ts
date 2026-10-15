@@ -129,7 +129,7 @@ test.describe("Distinct UI states", () => {
     // including after the wallet broadcast completes, may promise payment
     const redemptions = new AdminRedemptionsPage(page);
     await redemptions.goto();
-    await expect(page.getByText(/never guaranteed until claimed/)).toBeVisible();
+    await expect(page.getByText(/do not guarantee\s+payment/)).toBeVisible();
     await expect(page.locator("body")).not.toContainText(AFFIRMATIVE_GUARANTEE);
 
     await redemptions.connectWallet();

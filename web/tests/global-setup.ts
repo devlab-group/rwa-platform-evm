@@ -18,10 +18,13 @@ export default async function globalSetup(): Promise<void> {
     if (!challenge.ok()) {
       throw new Error(`POST /auth/challenge failed: ${challenge.status()}`);
     }
-    const { message } = (await challenge.json()) as { message: string };
+    const { nonce, message } = (await challenge.json()) as {
+      nonce: string;
+      message: string;
+    };
     const signature = await account.signMessage({ message });
     const session = await api.post("/auth/session", {
-      data: { address: account.address, signature },
+      data: { address: account.address, nonce, signature },
     });
     if (!session.ok()) {
       throw new Error(`POST /auth/session failed: ${session.status()}`);

@@ -355,13 +355,9 @@ export async function installMockApi(
     });
   });
 
-  // --- auth (wallet-signature admin login) ------------------------------
-  // These routes sit outside `/api/v1/**` (see api/openapi.yaml), so they need
-  // their own registration. POST /auth/challenge returns a message to sign, and
-  // POST /auth/session takes {address, signature} and returns an admin JWT.
-  // Most specs never call them, because tests/fixtures/fixtures.ts seeds a
-  // session through `window.__RWA_E2E_SESSION__`; tests/specs/auth-session.spec.ts
-  // disables that seed to run the real flow.
+  // Admin auth routes are outside /api/v1/** and need separate mocks. Challenge returns a message
+  // and nonce; session exchanges {address, nonce, signature} for a JWT. fixtures.ts seeds
+  // window.__RWA_E2E_SESSION__ by default; auth-session.spec.ts disables it to test login.
   await page.route("**/auth/challenge", async (route: Route) => {
     const req = route.request();
     if (req.method() !== "POST") return route.fallback();
@@ -370,6 +366,8 @@ export async function installMockApi(
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
+        address: body.address ?? "",
+        nonce: "mock-nonce",
         message: `Sign in to RWA Platform as ${body.address ?? ""} (nonce: mock-nonce)`,
         expiresAt: Math.floor(Date.now() / 1000) + 300,
       }),
@@ -389,11 +387,15 @@ export async function installMockApi(
     if (method === "POST") {
       const body = req.postDataJSON() as {
         address?: string;
+        nonce?: string;
         signature?: string;
       };
-      if (!body.address || !body.signature) {
+      if (!body.address || !body.nonce || !body.signature) {
         return json(
-          { code: "unauthorized", message: "missing address or signature" },
+          {
+            code: "unauthorized",
+            message: "missing address, nonce or signature",
+          },
           401,
         );
       }

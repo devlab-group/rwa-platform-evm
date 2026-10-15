@@ -130,6 +130,8 @@ export function InventorySales() {
         <h2>Treasury withdrawal</h2>
         <RoleGate
           roles={proj?.roles}
+          rolesByContract={proj?.rolesByContract}
+          contracts={["vault"]}
           role={ROLES.treasurer}
           action="withdraw treasury proceeds"
         >

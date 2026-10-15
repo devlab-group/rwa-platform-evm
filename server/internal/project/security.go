@@ -131,6 +131,7 @@ func foldSecurity(ctx context.Context, chainEvents repository.ChainEventReposito
 		return nil, err
 	}
 	state.Roles = unionRoles(perContract)
+	state.RolesByContract = rolesByContract(perContract, p.Addresses, state.Strategy)
 	// derive selects stable single-value role fields from current holders
 	state.Admin = derive(p.Admin, unionHolders(perContract, "DEFAULT_ADMIN_ROLE", a.Token, a.Compliance, a.SupplyController, a.Vault, a.RedemptionEscrow, state.Strategy))
 	state.ComplianceOperator = derive(p.ComplianceOperator, unionHolders(perContract, "COMPLIANCE_ROLE", a.Compliance))
@@ -421,6 +422,36 @@ func unionRoles(perContract map[string]map[string]map[string]bool) map[string][]
 		return nil
 	}
 	return roles
+}
+
+// rolesByContract groups holders by contract label for UI role checks; omits contracts without
+// holders
+func rolesByContract(perContract map[string]map[string]map[string]bool, a models.Addresses, strategy string) map[string]map[string][]string {
+	out := map[string]map[string][]string{}
+	for label, addr := range map[string]string{
+		"token": a.Token, "compliance": a.Compliance, "supplyController": a.SupplyController,
+		"vault": a.Vault, "redemptionEscrow": a.RedemptionEscrow, "strategy": strategy,
+	} {
+		if addr == "" {
+			continue
+		}
+		for role, holders := range perContract[strings.ToLower(addr)] {
+			if len(holders) == 0 {
+				continue
+			}
+			if out[label] == nil {
+				out[label] = map[string][]string{}
+			}
+			for h := range holders {
+				out[label][role] = append(out[label][role], h)
+			}
+			sort.Strings(out[label][role])
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // unionHolders returns the sorted union of holders of role across addrs

@@ -585,6 +585,7 @@ func packForcedTransfer(from, to common.Address, amount *big.Int) []byte {
 // must control the server's configured admin address
 func authenticateAdmin(api *apiClient, key *ecdsa.PrivateKey, addr common.Address) (string, error) {
 	var ch struct {
+		Nonce     string `json:"nonce"`
 		Message   string `json:"message"`
 		ExpiresAt int64  `json:"expiresAt"`
 	}
@@ -601,7 +602,7 @@ func authenticateAdmin(api *apiClient, key *ecdsa.PrivateKey, addr common.Addres
 		Address string `json:"address"`
 	}
 	if err := api.postJSON("/auth/session", "", map[string]string{
-		"address": addr.Hex(), "signature": "0x" + hex.EncodeToString(sig),
+		"address": addr.Hex(), "nonce": ch.Nonce, "signature": "0x" + hex.EncodeToString(sig),
 	}, &sess, ""); err != nil {
 		return "", fmt.Errorf("session: %w", err)
 	}

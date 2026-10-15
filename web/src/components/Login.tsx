@@ -19,12 +19,13 @@ export function Login() {
     setSubmitting(true);
     setError(undefined);
     try {
-      const { message } = await api.createAuthChallenge({
+      const { nonce, message } = await api.createAuthChallenge({
         address: wallet.address,
       });
       const signature = await wallet.signMessage(message);
       const result = await api.createSession({
         address: wallet.address,
+        nonce,
         signature,
       });
       setSession({

@@ -134,7 +134,7 @@ func NewRouter(app *App) *gin.Engine {
 	if app.RateLimitRPS > 0 {
 		r.Use(auth.RateLimit(app.RateLimitRPS, app.RateLimitBurst))
 	}
-	r.Use(auth.Authenticate(app.JWTSecret))
+	r.Use(auth.Authenticate(app.JWTSecret, app.AdminAddress))
 
 	idem := auth.Idempotency(app.Repos.Idempotency, app.IdempotencyTTL)
 

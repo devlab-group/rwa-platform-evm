@@ -27,25 +27,26 @@ func personalSign(t *testing.T, msg string, key *ecdsa.PrivateKey) string {
 	return "0x" + hex.EncodeToString(sig)
 }
 
-// requestChallenge runs POST /auth/challenge for address and returns the message
-// the wallet must sign
-func requestChallenge(t *testing.T, env *testEnv, address string) string {
+// requestChallenge returns the nonce and personal_sign message from POST /auth/challenge
+func requestChallenge(t *testing.T, env *testEnv, address string) (nonce, message string) {
 	t.Helper()
 	w := doJSON(t, env.router, http.MethodPost, "/auth/challenge", map[string]string{"address": address}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("challenge status = %d, body=%s", w.Code, w.Body.String())
 	}
 	var resp struct {
+		Address   string `json:"address"`
+		Nonce     string `json:"nonce"`
 		Message   string `json:"message"`
 		ExpiresAt int64  `json:"expiresAt"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.Message == "" || resp.ExpiresAt == 0 {
+	if resp.Message == "" || resp.Nonce == "" || resp.ExpiresAt == 0 || resp.Address == "" {
 		t.Fatalf("bad challenge response: %+v", resp)
 	}
-	return resp.Message
+	return resp.Nonce, resp.Message
 }
 
 // TestAdminAuthChallengeSessionFlow checks that signing and exchanging an admin
@@ -53,11 +54,11 @@ func requestChallenge(t *testing.T, env *testEnv, address string) string {
 func TestAdminAuthChallengeSessionFlow(t *testing.T) {
 	env := setupTestApp(t)
 
-	msg := requestChallenge(t, env, env.adminAddr.Hex())
+	nonce, msg := requestChallenge(t, env, env.adminAddr.Hex())
 	sig := personalSign(t, msg, env.adminKey)
 
 	w := doJSON(t, env.router, http.MethodPost, "/auth/session",
-		map[string]string{"address": env.adminAddr.Hex(), "signature": sig}, nil)
+		map[string]string{"address": env.adminAddr.Hex(), "nonce": nonce, "signature": sig}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("session status = %d, body=%s", w.Code, w.Body.String())
 	}
@@ -78,7 +79,7 @@ func TestAdminAuthChallengeSessionFlow(t *testing.T) {
 
 	// Replaying the used challenge signature fails, because challenges are single-use
 	replay := doJSON(t, env.router, http.MethodPost, "/auth/session",
-		map[string]string{"address": env.adminAddr.Hex(), "signature": sig}, nil)
+		map[string]string{"address": env.adminAddr.Hex(), "nonce": nonce, "signature": sig}, nil)
 	if replay.Code != http.StatusUnauthorized {
 		t.Fatalf("replay status = %d, want 401 (single-use challenge)", replay.Code)
 	}
@@ -91,11 +92,11 @@ func TestAdminAuthRejectsNonAdminSigner(t *testing.T) {
 	otherKey, _ := crypto.GenerateKey()
 	otherAddr := crypto.PubkeyToAddress(otherKey.PublicKey)
 
-	msg := requestChallenge(t, env, otherAddr.Hex())
+	nonce, msg := requestChallenge(t, env, otherAddr.Hex())
 	sig := personalSign(t, msg, otherKey)
 
 	w := doJSON(t, env.router, http.MethodPost, "/auth/session",
-		map[string]string{"address": otherAddr.Hex(), "signature": sig}, nil)
+		map[string]string{"address": otherAddr.Hex(), "nonce": nonce, "signature": sig}, nil)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("non-admin signer status = %d, want 401", w.Code)
 	}
@@ -108,12 +109,12 @@ func TestAdminAuthRejectsWrongSignature(t *testing.T) {
 	env := setupTestApp(t)
 	wrongKey, _ := crypto.GenerateKey()
 
-	msg := requestChallenge(t, env, env.adminAddr.Hex())
+	nonce, msg := requestChallenge(t, env, env.adminAddr.Hex())
 	// Sign the admin's challenge with the wrong key
 	sig := personalSign(t, msg, wrongKey)
 
 	w := doJSON(t, env.router, http.MethodPost, "/auth/session",
-		map[string]string{"address": env.adminAddr.Hex(), "signature": sig}, nil)
+		map[string]string{"address": env.adminAddr.Hex(), "nonce": nonce, "signature": sig}, nil)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong-signature status = %d, want 401", w.Code)
 	}
@@ -122,7 +123,7 @@ func TestAdminAuthRejectsWrongSignature(t *testing.T) {
 	// still complete login with it
 	good := personalSign(t, msg, env.adminKey)
 	ok := doJSON(t, env.router, http.MethodPost, "/auth/session",
-		map[string]string{"address": env.adminAddr.Hex(), "signature": good}, nil)
+		map[string]string{"address": env.adminAddr.Hex(), "nonce": nonce, "signature": good}, nil)
 	if ok.Code != http.StatusOK {
 		t.Fatalf("admin login after a wrong-signature attempt status = %d, want 200 (challenge must survive)", ok.Code)
 	}
@@ -164,5 +165,44 @@ func TestAuditAttributesJWTAuthenticatedActionCorrectly(t *testing.T) {
 	}
 	if found.Actor != env.adminAddr.Hex() {
 		t.Fatalf("Actor = %q, want the admin address %q", found.Actor, env.adminAddr.Hex())
+	}
+}
+
+// TestAdminAuthSessionRequiresMatchingNonce checks address-bound, single-use nonces and coexisting
+// challenges at /auth/session
+func TestAdminAuthSessionRequiresMatchingNonce(t *testing.T) {
+	env := setupTestApp(t)
+	addr := env.adminAddr.Hex()
+	session := func(body map[string]string) int {
+		return doJSON(t, env.router, http.MethodPost, "/auth/session", body, nil).Code
+	}
+
+	n1, m1 := requestChallenge(t, env, addr)
+	n2, m2 := requestChallenge(t, env, addr)
+	sig1, sig2 := personalSign(t, m1, env.adminKey), personalSign(t, m2, env.adminKey)
+
+	if c := session(map[string]string{"address": addr, "signature": sig1}); c != http.StatusBadRequest {
+		t.Fatalf("missing nonce status = %d, want 400", c)
+	}
+	if c := session(map[string]string{"address": addr, "nonce": "unknown", "signature": sig1}); c != http.StatusUnauthorized {
+		t.Fatalf("unknown nonce status = %d, want 401", c)
+	}
+	// Both outstanding challenges remain usable
+	if c := session(map[string]string{"address": addr, "nonce": n1, "signature": sig1}); c != http.StatusOK {
+		t.Fatalf("first outstanding challenge status = %d, want 200", c)
+	}
+	if c := session(map[string]string{"address": addr, "nonce": n2, "signature": sig2}); c != http.StatusOK {
+		t.Fatalf("second outstanding challenge status = %d, want 200", c)
+	}
+	if c := session(map[string]string{"address": addr, "nonce": n1, "signature": sig1}); c != http.StatusUnauthorized {
+		t.Fatalf("reused nonce status = %d, want 401", c)
+	}
+
+	// A nonce for another wallet cannot authenticate the admin
+	otherKey, _ := crypto.GenerateKey()
+	otherAddr := crypto.PubkeyToAddress(otherKey.PublicKey).Hex()
+	n3, m3 := requestChallenge(t, env, otherAddr)
+	if c := session(map[string]string{"address": addr, "nonce": n3, "signature": personalSign(t, m3, env.adminKey)}); c != http.StatusUnauthorized {
+		t.Fatalf("other-address nonce status = %d, want 401", c)
 	}
 }

@@ -9,6 +9,7 @@ package auth
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -36,18 +37,18 @@ const contextPrincipalKey = "auth.principal"
 // authorization.
 const anonymousPrincipal = "anonymous"
 
-// Authenticate verifies Authorization: Bearer <jwt> against jwtSecret. Valid tokens set
-// RoleAdmin and the wallet principal; missing or invalid tokens retain RoleReadOnly for
-// public access. RequireRole gates protected routes. An empty secret leaves every
-// request RoleReadOnly.
-func Authenticate(jwtSecret []byte) gin.HandlerFunc {
+// Authenticate validates bearer JWTs with jwtSecret and matches subjects to adminAddress
+// case-insensitively. Accepted tokens set RoleAdmin and the wallet principal; other requests stay
+// RoleReadOnly/anonymous. Empty jwtSecret or adminAddress disables admin authentication. Rotating
+// to another admin address rejects the previous admin's tokens; RequireRole gates protected routes.
+func Authenticate(jwtSecret []byte, adminAddress string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role := RoleReadOnly
 		principal := anonymousPrincipal
 
-		if len(jwtSecret) > 0 {
+		if len(jwtSecret) > 0 && adminAddress != "" {
 			if tok := BearerToken(c); tok != "" {
-				if addr, err := ParseAdminJWT(jwtSecret, tok); err == nil {
+				if addr, err := ParseAdminJWT(jwtSecret, tok); err == nil && strings.EqualFold(addr, adminAddress) {
 					role = RoleAdmin
 					// The wallet address is not secret, so it serves as the principal
 					principal = addr
