@@ -18,10 +18,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// TestCheckChainIDRejectsWrongChain covers the wrong-chain guard: the
-// exact condition every chain-touching opsctl command (and the platform's own
-// connectChain) passes through must reject an endpoint reporting a chain ID
-// other than the configured one.
+// Reject an RPC endpoint reporting the wrong chain ID
 func TestCheckChainIDRejectsWrongChain(t *testing.T) {
 	client := blockchain.NewFakeClient()
 	client.ChainIDValue = big.NewInt(1) // mainnet, not the configured 31337
@@ -29,7 +26,7 @@ func TestCheckChainIDRejectsWrongChain(t *testing.T) {
 	if err := CheckChainID(context.Background(), client, 31337); !errors.Is(err, ErrWrongChain) {
 		t.Fatalf("CheckChainID = %v, want ErrWrongChain", err)
 	}
-	// Matching chain passes.
+	// Matching chain passes
 	client.ChainIDValue = big.NewInt(31337)
 	if err := CheckChainID(context.Background(), client, 31337); err != nil {
 		t.Fatalf("CheckChainID on the correct chain: %v", err)
@@ -40,7 +37,7 @@ func controllerAddrs(addr common.Address) models.Addresses {
 	return models.Addresses{SupplyController: addr.Hex()}
 }
 
-// mintedLog builds a canonical SupplyController Minted log at addr.
+// mintedLog builds a canonical SupplyController Minted log at addr
 func mintedLog(t *testing.T, addr common.Address) types.Log {
 	t.Helper()
 	controller := bindings.NewSupplyController()
@@ -61,8 +58,7 @@ func mintedLog(t *testing.T, addr common.Address) types.Log {
 	}
 }
 
-// TestStrictDecoderTypedEventPasses: a real typed event from a
-// configured contract decodes to its name, so a DLQ retry can resolve it.
+// A typed event from a configured contract can resolve a DLQ retry
 func TestStrictDecoderTypedEventPasses(t *testing.T) {
 	addr := common.HexToAddress("0x00000000000000000000000000000000000c0d10")
 	dec := StrictDecoder(controllerAddrs(addr), "")
@@ -75,30 +71,26 @@ func TestStrictDecoderTypedEventPasses(t *testing.T) {
 	}
 }
 
-// TestStrictDecoderRefusesGeneric is the core guard: a log that only
-// decodes generically (unrecognized topic on a configured address, or any log
-// on an UNconfigured address) returns ErrGenericDecode, so opsctl's DLQ retry
-// will NOT resolve it with a meaningless generic event.
+// Reject unrecognized topics on configured contracts and logs from unconfigured
+// addresses with ErrGenericDecode, leaving DLQ entries unresolved
 func TestStrictDecoderRefusesGeneric(t *testing.T) {
 	addr := common.HexToAddress("0x00000000000000000000000000000000000c0d10")
 	dec := StrictDecoder(controllerAddrs(addr), "")
 
-	// Unrecognized topic on the configured controller address.
+	// Unrecognized topic on the configured controller address
 	unknownTopic := types.Log{Address: addr, Topics: []common.Hash{common.HexToHash("0xdeadbeef")}}
 	if _, _, err := dec(unknownTopic); !errors.Is(err, ErrGenericDecode) {
 		t.Fatalf("unrecognized topic: err = %v, want ErrGenericDecode", err)
 	}
 
-	// A log from an address no configured contract owns.
+	// Log from an unconfigured address
 	otherAddr := common.HexToAddress("0x00000000000000000000000000000000000bad00")
 	if _, _, err := dec(mintedLog(t, otherAddr)); !errors.Is(err, ErrGenericDecode) {
 		t.Fatalf("log from unconfigured address: err = %v, want ErrGenericDecode", err)
 	}
 }
 
-// TestTokenDecoderRoutesEnforcementAndGovernance: the token address must
-// reach BOTH its own ERC-7943 decoder and the shared governance fallback, so a
-// freeze and a pause indexed from the same contract are each typed.
+// Token logs use both decoders: ERC-7943 for freeze and governance fallback for pause
 func TestTokenDecoderRoutesEnforcementAndGovernance(t *testing.T) {
 	tokenAddr := common.HexToAddress("0x00000000000000000000000000000000000f0f0f")
 	dec := BuildDecoder(models.Addresses{Token: tokenAddr.Hex()}, "")
@@ -122,7 +114,7 @@ func TestTokenDecoderRoutesEnforcementAndGovernance(t *testing.T) {
 		t.Fatalf("Frozen decoded as %q %+v", name, data)
 	}
 
-	// Pause still falls through to the governance decoder.
+	// Pause still falls through to the governance decoder
 	g := bindings.NewGovernance()
 	acct, err := g.ABI.Events["Paused"].Inputs.NonIndexed().Pack(holder)
 	if err != nil {
@@ -139,9 +131,7 @@ func TestTokenDecoderRoutesEnforcementAndGovernance(t *testing.T) {
 	}
 }
 
-// TestKnownEventNamesEmptyWhenNoContract: with no typed
-// contract configured, only the generic decoder is available — which is what
-// opsctl uses to refuse `dlq retry` outright.
+// No typed contracts yields an empty name set, so opsctl refuses `dlq retry`
 func TestKnownEventNamesEmptyWhenNoContract(t *testing.T) {
 	if len(KnownEventNames(models.Addresses{}, "")) != 0 {
 		t.Fatal("expected no known event names with no contract configured")
@@ -153,11 +143,8 @@ func TestKnownEventNamesEmptyWhenNoContract(t *testing.T) {
 	}
 }
 
-// TestNewTxManagerMongoLeaseRefusesWhenLeaseHeld covers the concurrent
-// CLI/server replacement guard: a manager built for mongo-lease mode (as
-// opsctl's `tx replace` now builds it) must refuse to replace while another
-// replica holds the signer's nonce lease, instead of racing it on the same
-// nonce.
+// The mongo-lease manager used by opsctl tx replace must reject replacement while
+// another replica holds the signer lease
 func TestNewTxManagerMongoLeaseRefusesWhenLeaseHeld(t *testing.T) {
 	repos := memory.New()
 	client := blockchain.NewFakeClient()
@@ -172,14 +159,14 @@ func TestNewTxManagerMongoLeaseRefusesWhenLeaseHeld(t *testing.T) {
 	cfg := config.Config{ChainID: 31337, TxCoordinationMode: "mongo-lease", TxLeaseTTL: time.Minute, FeeMode: "legacy"}
 	mgr := NewTxManager(cfg, client, repos)
 
-	// Submit an original while the lease is free.
+	// Submit an original while the lease is free
 	original, err := mgr.Submit(ctx, blockchain.SubmitRequest{PrivateKey: priv, To: common.HexToAddress("0x00000000000000000000000000000000000000AA")})
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 
-	// Simulate a live server replica holding this signer's nonce lease (the
-	// key format is chainId+":"+signerAddress — see blockchain.txManager.leaseKey).
+	// Simulate a replica's signer nonce lease, keyed by chainId+":"+signerAddress
+	// (blockchain.txManager.leaseKey)
 	leaseKey := "31337:" + from.Hex()
 	if _, ok, err := repos.NonceLeases.Acquire(ctx, leaseKey, "other-replica", time.Minute); err != nil || !ok {
 		t.Fatalf("pre-acquire lease as another replica: ok=%v err=%v", ok, err)

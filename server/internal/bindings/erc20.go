@@ -7,13 +7,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// erc20ABIJSON covers the read methods the server needs: quote-token
-// balance display and decimals for formatting, plus IRWAToken's own
-// compliance()/supplyController()/paused() getters, used to
-// verify a deployed RWAToken is actually wired to the SAME compliance
-// registry and supply controller the rest of verify.go checked, not just
-// that all six addresses independently look plausible. mint/burn are never
-// invoked by the server (only SupplyController may call them).
+// erc20ABIJSON provides quote-token balanceOf/decimals and RWAToken
+// compliance/supplyController reads for deployment wiring checks. It also declares
+// symbol, totalSupply, paused and redemptionEscrow without Pack helpers.
 const erc20ABIJSON = `[
   {"type":"function","name":"balanceOf","stateMutability":"view","inputs":[{"name":"account","type":"address"}],"outputs":[{"name":"","type":"uint256"}]},
   {"type":"function","name":"decimals","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint8"}]},
@@ -25,10 +21,10 @@ const erc20ABIJSON = `[
   {"type":"function","name":"redemptionEscrow","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"address"}]}
 ]`
 
-// ERC20 encodes calldata / decodes reads for the standard ERC-20 view surface.
+// ERC20 encodes calldata for, and decodes results from, the ERC-20 views in erc20ABIJSON
 type ERC20 struct{ ABI abi.ABI }
 
-// NewERC20 parses the ERC-20 read-only ABI once.
+// NewERC20 parses the ERC-20 read-only ABI
 func NewERC20() ERC20 { return ERC20{ABI: mustABI(erc20ABIJSON)} }
 
 // PackBalanceOf builds calldata for balanceOf(address).

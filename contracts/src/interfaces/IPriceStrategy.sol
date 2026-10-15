@@ -2,9 +2,9 @@
 pragma solidity ^0.8.24;
 
 /// @title IPriceStrategy
-/// @notice Quotes purchase cost and redemption proceeds for an RWA amount.
-/// @dev Stable interface. Quotes are in quote-token smallest units.
-///      Purchase rounds UP (vault never underpaid); redemption rounds DOWN.
+/// @notice Quotes purchase cost and redemption proceeds for an RWA amount
+/// @dev Stable interface; quote-token smallest units, rounded up for purchases to avoid
+///      underpayment and down for redemptions
 interface IPriceStrategy {
     function quotePurchase(uint256 tokenAmount) external view returns (uint256 quoteAmount);
 

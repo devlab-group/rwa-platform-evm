@@ -25,8 +25,8 @@ func (s *stubIPFS) AddRaw(ctx context.Context, data []byte) (string, error) {
 	return "bafkstub", nil
 }
 
-// stubDurabilityIPFS additionally implements Publish (keyed by record id), the
-// path CreateRecord prefers.
+// stubDurabilityIPFS also implements Publish, keyed by record id, which
+// CreateRecord uses when available
 type stubDurabilityIPFS struct {
 	stubIPFS
 	published map[string]bool
@@ -79,9 +79,8 @@ func TestCreateRecordPersistsPendingRecord(t *testing.T) {
 	}
 }
 
-// TestBuildPackageDeterministicRebuild confirms BuildPackage rebuilds the same
-// bytes for the same record state (the mint is signed/broadcast from the
-// wallet; this is a best-effort evidence rebuild).
+// TestBuildPackageDeterministicRebuild checks that BuildPackage returns the same
+// bytes for the same record state
 func TestBuildPackageDeterministicRebuild(t *testing.T) {
 	_, profile := mustProfileAndDigest(t)
 	auditorKey, _ := crypto.GenerateKey()
@@ -131,7 +130,7 @@ func TestReissueRecordRotatesNonceAndExpiryPreservingIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRecord: %v", err)
 	}
-	// Simulate a record whose attestation window lapsed before it was minted.
+	// the attestation window lapsed before the record was minted
 	rec.ValidUntil = time.Now().Add(-time.Hour).Unix()
 	if err := records.Update(context.Background(), rec); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -213,10 +212,9 @@ func mustProfileAndDigest(t *testing.T) ([32]byte, *Profile) {
 	return profile.Digest, profile
 }
 
-// TestCreateRecordReservesRecordBeforePublish checks that a duplicate create
-// for an existing RecordID (even with different metadata) must fail at
-// the create-once record reservation and never reach the publish step, so it
-// cannot overwrite the durable-publication row bound to the original record.
+// TestCreateRecordReservesRecordBeforePublish checks that a duplicate RecordID, even
+// with different metadata, fails before Publish and preserves the original publication
+// row
 func TestCreateRecordReservesRecordBeforePublish(t *testing.T) {
 	_, profile := mustProfileAndDigest(t)
 	auditorKey, _ := crypto.GenerateKey()

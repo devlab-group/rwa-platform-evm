@@ -8,24 +8,20 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// adminJWTRole is the single role V1 issues (single-admin model): the one
-// configured admin wallet is admin everywhere. Carried as a claim so a token
-// minted for anything else (were the issuer ever extended) is rejected by
-// ParseAdminJWT rather than silently trusted as admin.
+// adminJWTRole is the configured admin wallet's sole issued role. ParseAdminJWT rejects
+// other role claims.
 const adminJWTRole = "admin"
 
-// adminClaims is the admin JWT payload: the standard registered claims (we
-// set Subject=admin address, IssuedAt, ExpiresAt) plus an explicit Role so a
-// token's authority is self-describing and verified, not inferred.
+// adminClaims is the admin JWT payload: the registered claims sub (admin
+// address), iat and exp, plus a role claim
 type adminClaims struct {
 	Role string `json:"role"`
 	jwt.RegisteredClaims
 }
 
-// IssueAdminJWT mints an HMAC-SHA256 JWT for the admin wallet `address`,
-// signed with `secret`, expiring after `ttl`. Claims: sub=address,
-// role="admin", iat=now, exp=now+ttl. Returns the compact token and its
-// absolute expiry (the same value the API surfaces as AuthSession.expiresAt).
+// IssueAdminJWT signs an HS256 token with secret and returns its expiry, exposed by the
+// API as AuthSession.expiresAt. Claims are sub=address, role="admin", iat=now and
+// exp=now+ttl.
 func IssueAdminJWT(secret []byte, address string, ttl time.Duration) (token string, expiresAt time.Time, err error) {
 	if len(secret) == 0 {
 		return "", time.Time{}, errors.New("auth: JWT secret is not configured")
@@ -47,12 +43,9 @@ func IssueAdminJWT(secret []byte, address string, ttl time.Duration) (token stri
 	return signed, expiresAt, nil
 }
 
-// ParseAdminJWT verifies token against secret and returns the admin address
-// (the `sub` claim) for a valid, unexpired, HMAC-SHA256 admin token. It
-// rejects any other signing method (so an `alg:none` or asymmetric-key
-// confusion attack can't forge a token), a wrong signature, an expired token,
-// or a token whose role is not "admin". The registered exp/iat claims are
-// enforced by the parser (see the WithExpirationRequired option).
+// ParseAdminJWT returns sub after requiring HS256, a valid signature, a present
+// unexpired exp, role="admin" and non-empty sub. It rejects alg="none" and
+// asymmetric-key methods; iat is unchecked.
 func ParseAdminJWT(secret []byte, token string) (address string, err error) {
 	if len(secret) == 0 {
 		return "", errors.New("auth: JWT secret is not configured")

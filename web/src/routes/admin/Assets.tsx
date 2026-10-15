@@ -20,13 +20,17 @@ import {
   waitForTxReceipt,
   type MintAttestationInput,
 } from "../../lib/wallet";
+import { TableWrap } from "../../components/TableWrap";
+import { parseSignedResult } from "../../lib/signedResult";
+import { BurnForm, BurnsSection } from "./Burns";
 
 type AssetRecord = components["schemas"]["AssetRecord"];
 type SignedResult = components["schemas"]["SignedResult"];
+type Burn = components["schemas"]["Burn"];
 type Project = components["schemas"]["Project"];
 type StoredProfile = components["schemas"]["StoredProfile"];
 
-/** Empty-object fallback for the Metadata editor when no profile/schema is available. */
+// Empty metadata when no profile schema is available
 const EMPTY_METADATA = "{\n  \n}";
 
 const RECORD_TONE: Record<NonNullable<AssetRecord["status"]>, string> = {
@@ -38,28 +42,24 @@ const RECORD_TONE: Record<NonNullable<AssetRecord["status"]>, string> = {
 };
 
 /**
- * Assets: metadata form + proofs, validation, IPFS status, audit package
- * download, auditor signature upload, and the resulting mint/burn relay.
- *
- * As on Setup, the metadata (`asset`) and `proofs` payloads are schema-driven
- * per project but untyped in the OpenAPI contract, so they're edited as JSON
- * here rather than via a generated form.
+ * Creates records/packages and submits signed mints; project-specific metadata/proofs use JSON
+ * editors
  */
 export function Assets() {
+  const burns = usePaginatedList<Burn>(
+    (cursor, signal) => api.listBurns({ signal, cursor }),
+    [],
+  );
   const records = usePaginatedList<AssetRecord>(
     (cursor, signal) => api.listRecords({ signal, cursor }),
     [],
   );
-  // A record's `amount` is an RWA token amount; Project.decimals scales it
-  // between the whole units the operator reads/enters and the minimal units the
-  // record is stored and auditor-signed in.
+  // Use project decimals for displayed whole units and signed minimal units
   const project = useAsync<Project>((signal) => api.getProject({ signal }), []);
   const rwaDecimals =
     project.status === "success" ? project.data.decimals : undefined;
 
-  // The record metadata is validated against the project's Asset Profile
-  // `assetSchema`, so load the profile and pre-fill the Metadata editor with a
-  // skeleton built from that schema (404 → none yet → empty template fallback).
+  // Seed metadata from the profile schema, falling back to an empty object
   const profile = useAsync<StoredProfile | null>(
     (signal) => loadProfile(signal),
     [],
@@ -75,10 +75,7 @@ export function Assets() {
       (profile.data.profile as Record<string, unknown>)?.recordIdLabel) ||
     undefined;
 
-  // The signer policy pins the offline signer to this project's UUID — the same
-  // UUID string generated at Setup and stored in the profile's raw doc, NOT the
-  // bytes32 profileDigest/keccak. The signer compares it against profile.json
-  // inside the .rwa package.
+  // Pin policy to the profile UUID, separate from its digest
   const projectUuid =
     profile.status === "success" &&
     profile.data &&
@@ -92,8 +89,8 @@ export function Assets() {
       <header className="app-main__header">
         <h1>Assets</h1>
         <p>
-          Metadata records, IPFS packages, auditor signatures, and mint/burn
-          relay.
+          Create records, download audit packages and mint with auditor
+          signatures.
         </p>
       </header>
 
@@ -114,9 +111,9 @@ export function Assets() {
         <p className="field__hint">
           This is the <code className="mono">--policy policy.json</code> file
           the auditor needs for <code className="mono">signer sign</code>. It
-          pins the chain, contracts, auditor, and project the auditor may sign
-          for — the signer refuses anything that disagrees. Download it and hand
-          it to the auditor alongside the .rwa package.
+          restricts signing to the specified chain, contracts, auditor and
+          project. Give it to the auditor with the .rwa package; the signer
+          rejects mismatches.
         </p>
         <SignerPolicySection
           project={project.status === "success" ? project.data : undefined}
@@ -134,7 +131,7 @@ export function Assets() {
         >
           {(data) => (
             <>
-              <div className="table-wrap">
+              <TableWrap label="Records">
                 <table>
                   <thead>
                     <tr>
@@ -153,11 +150,18 @@ export function Assets() {
                         key={r.recordId}
                         record={r}
                         rwaDecimals={rwaDecimals}
+                        remaining={
+                          burns.status === "success"
+                            ? burns.data.find((b) => b.recordId === r.recordId)
+                                ?.remaining
+                            : undefined
+                        }
+                        onBurnCreated={burns.reload}
                       />
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableWrap>
               <PaginationFooter
                 loadedCount={data.length}
                 totalCount={records.totalCount}
@@ -172,11 +176,28 @@ export function Assets() {
       </section>
 
       <section className="card">
+        <h2>Burns</h2>
+        <p className="field__hint">
+          Retire supply against a Minted record: create a burn above, download
+          its package for the auditor, then upload the signed result and confirm
+          the wallet transaction.
+        </p>
+        <BurnsSection
+          burns={burns}
+          project={project.status === "success" ? project.data : undefined}
+          rwaDecimals={rwaDecimals}
+          onBurned={() => {
+            burns.reload();
+            records.reload();
+          }}
+        />
+      </section>
+
+      <section className="card">
         <h2>Auditor signature upload &amp; mint</h2>
         <p className="field__hint">
-          Uploading a valid auditor signature broadcasts SupplyController.mint
-          from your connected wallet; the server observes the on-chain Minted
-          event and advances the record.
+          Upload the auditor signature to submit SupplyController.mint from your
+          wallet. The server updates the record after observing Minted.
         </p>
         <SignatureUploadForm
           project={project.status === "success" ? project.data : undefined}
@@ -188,7 +209,7 @@ export function Assets() {
   );
 }
 
-/** Triggers a client-side download of `policy` as policy.json (public config — no wallet needed). */
+// Download the public deployment policy without a wallet
 function downloadSignerPolicy(policy: SignerPolicy): void {
   const blob = new Blob([JSON.stringify(policy, null, 2)], {
     type: "application/json",
@@ -218,9 +239,8 @@ function SignerPolicySection({
   if (!policy) {
     return (
       <p className="field__hint">
-        Deploy the project and create the asset profile first — the signer
-        policy needs the deployed contract addresses, auditor, profile digest,
-        and project ID.
+        Create the Asset Profile and deploy first. The policy needs contract
+        addresses, auditor, profile digest and project ID.
       </p>
     );
   }
@@ -255,7 +275,7 @@ function SignerPolicySection({
   );
 }
 
-/** Fetches the stored Asset Profile, mapping the admin-only 404 (none yet) to null. */
+// Treat the admin profile endpoint's 404 as an absent profile
 async function loadProfile(signal: AbortSignal): Promise<StoredProfile | null> {
   try {
     return await api.getProfile({ signal });
@@ -268,16 +288,19 @@ async function loadProfile(signal: AbortSignal): Promise<StoredProfile | null> {
 function RecordRow({
   record,
   rwaDecimals,
+  remaining,
+  onBurnCreated,
 }: {
   record: AssetRecord;
   rwaDecimals: number | undefined;
+  remaining: string | undefined;
+  onBurnCreated: () => void;
 }) {
+  const [burning, setBurning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
 
-  // A plain `<a href>` can't attach the operator's bearer session, so the
-  // protected package endpoint 403s. Fetch it authenticated instead and hand
-  // the browser a Blob URL to download.
+  // Download the protected package with bearer authentication through a Blob URL
   async function handleDownload() {
     if (!record.recordId) return;
     setError(null);
@@ -303,39 +326,67 @@ function RecordRow({
   }
 
   return (
-    <tr>
-      <td className="mono">{record.recordId}</td>
-      <td>
-        {record.status && (
-          <span className={`badge ${RECORD_TONE[record.status]}`}>
-            {record.status}
-          </span>
-        )}
-      </td>
-      <td>{formatTokenAmount(record.amount ?? "", rwaDecimals)}</td>
-      <td className="mono">{record.metadataDigest ?? "—"}</td>
-      <td className="mono">{record.cid ?? "—"}</td>
-      <td>{formatIsoTimestamp(record.createdAt)}</td>
-      <td>
-        {record.recordId && (
-          <>
-            <button
-              type="button"
-              className="button button--secondary"
-              onClick={handleDownload}
-              disabled={downloading}
-            >
-              {downloading ? "Downloading…" : "Download .rwa"}
-            </button>
-            {error && (
-              <p className="async-state--error" role="alert">
-                {error}
-              </p>
-            )}
-          </>
-        )}
-      </td>
-    </tr>
+    <>
+      <tr>
+        <td className="mono">{record.recordId}</td>
+        <td>
+          {record.status && (
+            <span className={`badge ${RECORD_TONE[record.status]}`}>
+              {record.status}
+            </span>
+          )}
+        </td>
+        <td>{formatTokenAmount(record.amount ?? "", rwaDecimals)}</td>
+        <td className="mono">{record.metadataDigest ?? "-"}</td>
+        <td className="mono">{record.cid ?? "-"}</td>
+        <td>{formatIsoTimestamp(record.createdAt)}</td>
+        <td>
+          {record.recordId && (
+            <>
+              <button
+                type="button"
+                className="button button--secondary"
+                onClick={handleDownload}
+                disabled={downloading}
+              >
+                {downloading ? "Downloading…" : "Download .rwa"}
+              </button>
+              {record.status === "Minted" && (
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  aria-expanded={burning}
+                  aria-label={`Burn ${record.recordId}`}
+                  onClick={() => setBurning((v) => !v)}
+                >
+                  Burn
+                </button>
+              )}
+              {error && (
+                <p className="async-state--error" role="alert">
+                  {error}
+                </p>
+              )}
+            </>
+          )}
+        </td>
+      </tr>
+      {burning && (
+        <tr>
+          <td colSpan={7}>
+            <BurnForm
+              record={record}
+              rwaDecimals={rwaDecimals}
+              remaining={remaining}
+              onCreated={() => {
+                setBurning(false);
+                onBurnCreated();
+              }}
+            />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -355,9 +406,9 @@ function CreateRecordForm({
 }: {
   onCreated: () => void;
   rwaDecimals: number | undefined;
-  /** Metadata placeholder derived from the profile's assetSchema (undefined while loading / no profile). */
+  // Schema-derived metadata template, undefined until a profile is available
   metadataSkeleton: string | undefined;
-  /** The profile's recordIdLabel (e.g. "Serial number"), used to make the Record ID hint concrete. */
+  // Profile label for the record identifier, such as "Serial number"
   recordIdLabel: string | undefined;
 }) {
   const [recordId, setRecordId] = useState("");
@@ -370,9 +421,7 @@ function CreateRecordForm({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // The profile (and thus the schema skeleton) loads after this form mounts.
-  // Seed the Metadata editor once it arrives, but never clobber edits the
-  // operator has already started making.
+  // Apply the loaded skeleton only before editing starts
   useEffect(() => {
     if (metadataSkeleton && !assetEdited) setAssetJson(metadataSkeleton);
   }, [metadataSkeleton, assetEdited]);
@@ -380,7 +429,7 @@ function CreateRecordForm({
   async function handleCreate() {
     setError(null);
     if (rwaDecimals === undefined) {
-      setError("Token decimals not available yet — project still loading.");
+      setError("Token decimals not available yet - project still loading.");
       return;
     }
     let asset: unknown;
@@ -392,8 +441,7 @@ function CreateRecordForm({
       setError("Asset metadata and proofs must be valid JSON.");
       return;
     }
-    // Human whole units -> the RWA token's minimal units, the form in which the
-    // record is stored and auditor-signed.
+    // Convert to record minimal units before auditor signing
     let minimalAmount: string;
     try {
       minimalAmount = toMinimalUnits(amount, rwaDecimals);
@@ -436,9 +484,8 @@ function CreateRecordForm({
         />
         <span className="field__hint" id="recordId-hint">
           A unique identifier for this asset record
-          {recordIdLabel ? ` — the ${recordIdLabel.toLowerCase()}` : ""} (your
-          own reference, e.g. a serial/deed/invoice number). Immutable once
-          created.
+          {recordIdLabel ? ` - the ${recordIdLabel.toLowerCase()}` : ""} (e.g.
+          serial, deed or invoice number). Immutable after creation.
         </span>
       </div>
       <div className="field">
@@ -450,9 +497,8 @@ function CreateRecordForm({
           aria-describedby="amount-hint"
         />
         <span className="field__hint" id="amount-hint">
-          How many whole tokens this record represents (e.g. 100.5). Converted
-          to the token&apos;s minimal units on submit using the project&apos;s
-          decimals.
+          Whole tokens represented (e.g. 100.5), converted to minimal units
+          using the project&apos;s decimals.
         </span>
       </div>
       <div className="field">
@@ -469,9 +515,8 @@ function CreateRecordForm({
           aria-describedby="assetJson-hint"
         />
         <span className="field__hint" id="assetJson-hint">
-          The asset&apos;s metadata, matching this project&apos;s Asset Profile
-          schema. Pre-filled with the schema&apos;s fields — replace the
-          placeholder values. Validated against the schema server-side.
+          Metadata matching the Asset Profile schema. Replace the placeholders;
+          the server validates it.
         </span>
       </div>
       <div className="field">
@@ -485,14 +530,14 @@ function CreateRecordForm({
           aria-describedby="proofsJson-hint"
         />
         <span className="field__hint" id="proofsJson-hint">
-          Optional references to off-chain evidence (custody attestations,
-          appraisals, audit certificates). A JSON array of{" "}
+          Optional evidence references (custody attestations, appraisals, audit
+          certificates), as a JSON array of{" "}
           <code className="mono">{"{ type, sha256, uri? }"}</code> entries:{" "}
           <strong>type</strong> is your own label, <strong>sha256</strong> is
-          the document&apos;s SHA-256 as 64 lowercase hex chars (no{" "}
-          <code className="mono">0x</code>), <strong>uri</strong> (optional) is
-          where it&apos;s hosted. Leave as <code className="mono">[]</code> if
-          there are none. Example:
+          the document&apos;s SHA-256: 64 lowercase hex characters (no{" "}
+          <code className="mono">0x</code>), <strong>uri</strong> is an optional
+          document location. Use <code className="mono">[]</code> for no
+          evidence. Example:
         </span>
         <pre className="field__example mono">{PROOFS_EXAMPLE}</pre>
       </div>
@@ -513,51 +558,6 @@ function CreateRecordForm({
   );
 }
 
-/** The fields a signed-result.json must carry (shared/schemas/signed-result.schema.json). */
-const SIGNED_RESULT_FIELDS = [
-  "formatVersion",
-  "auditor",
-  "primaryType",
-  "typedDataDigest",
-  "signature",
-  "signedAt",
-] as const;
-
-/**
- * Parses signed-result.json text into a SignedResult, checking every required
- * field is present and a non-empty string. The server re-validates
- * authoritatively (signature recovery, digest, enum, format) before relaying —
- * this only catches an obviously wrong file before the round trip.
- */
-function parseSignedResult(text: string): SignedResult {
-  let obj: unknown;
-  try {
-    obj = JSON.parse(text);
-  } catch {
-    throw new Error("The selected file is not valid JSON.");
-  }
-  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
-    throw new Error("signed-result.json must be a JSON object.");
-  }
-  const rec = obj as Record<string, unknown>;
-  const missing = SIGNED_RESULT_FIELDS.filter(
-    (k) => typeof rec[k] !== "string" || rec[k] === "",
-  );
-  if (missing.length > 0) {
-    throw new Error(
-      `Not a signed-result.json — missing field(s): ${missing.join(", ")}.`,
-    );
-  }
-  return {
-    formatVersion: String(rec.formatVersion),
-    auditor: String(rec.auditor),
-    primaryType: String(rec.primaryType),
-    typedDataDigest: String(rec.typedDataDigest),
-    signature: String(rec.signature),
-    signedAt: String(rec.signedAt),
-  };
-}
-
 function SignatureUploadForm({
   project,
   records,
@@ -569,10 +569,7 @@ function SignatureUploadForm({
 }) {
   const wallet = useWalletContext();
   const [recordId, setRecordId] = useState("");
-  // The whole SignedResult is read from the uploaded signed-result.json rather
-  // than hand-typed field by field — the auditor's signer produces that file
-  // (shared/schemas/signed-result.schema.json), so re-entering its contents by
-  // hand is error-prone and pointless.
+  // Load the complete signer output to avoid transcription errors
   const [signed, setSigned] = useState<SignedResult | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -599,18 +596,15 @@ function SignatureUploadForm({
     setError(null);
     setTxHash(null);
 
-    // The MintAttestation is assembled from the record (recordKey/nonce/
-    // validUntil/metadataDigest/amount, now exposed on GET /assets/records) and
-    // the project (auditor/profileDigest/vault/supplyController/chainId). Both
-    // must be loaded and the record must carry its attestation fields.
+    // Build the attestation from loaded record and project fields
     if (!project) {
-      setError("Project not loaded yet — try again in a moment.");
+      setError("Project not loaded yet - try again in a moment.");
       return;
     }
     const record = records.find((r) => r.recordId === recordId);
     if (!record) {
       setError(
-        "No loaded record matches that ID. Check the ID (it must match a record above; load more records if it's on a later page).",
+        "No loaded record matches this ID. Check the records above or load another page.",
       );
       return;
     }
@@ -618,7 +612,7 @@ function SignatureUploadForm({
     const vault = project.addresses?.vault;
     if (!supplyController || !vault || project.chainId === undefined) {
       setError(
-        "Project is not fully deployed (missing SupplyController/Vault address or chain).",
+        "Deployment is incomplete: SupplyController, Vault or chain is missing.",
       );
       return;
     }
@@ -630,17 +624,15 @@ function SignatureUploadForm({
       record.amount === undefined
     ) {
       setError(
-        "This record is missing its attestation fields (recordKey/nonce/validUntil/metadata/amount).",
+        "Record attestation fields are missing: recordKey/nonce/validUntil/metadata/amount.",
       );
       return;
     }
     if (!project.auditor || !project.profileDigest) {
-      setError("Project is missing its auditor or profile digest.");
+      setError("Project auditor or profile digest is missing.");
       return;
     }
-    // The signed-result.json must be from the project's auditor — a mismatch
-    // would revert on-chain (the SupplyController checks the recovered signer),
-    // so surface it clearly before broadcasting.
+    // Check auditor address before broadcast; the contract verifies EOA/Safe signatures
     if (signed.auditor.toLowerCase() !== project.auditor.toLowerCase()) {
       setError(
         `Signed by ${signed.auditor}, but this project's auditor is ${project.auditor}. Wrong signed-result.json.`,
@@ -659,8 +651,7 @@ function SignatureUploadForm({
       vault: vault as Address,
     };
 
-    // The mint is broadcast from the connected wallet; the admin is normally
-    // already connected from login, connect on demand if not.
+    // Connect a wallet if login has not already connected one
     let from = wallet.address;
     if (!from) {
       try {
@@ -682,8 +673,7 @@ function SignatureUploadForm({
       );
       await waitForTxReceipt(hash);
       setTxHash(hash);
-      // The server's ReconcileMinted flips the record to Minted once it observes
-      // the on-chain Minted event; reload so the row reflects it.
+      // Reload while the server projects Minted
       onMinted();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Mint transaction failed.");
@@ -703,9 +693,9 @@ function SignatureUploadForm({
           aria-describedby="sigRecordId-hint"
         />
         <span className="field__hint" id="sigRecordId-hint">
-          The record this attestation mints — must match a record above (the ID
-          the .rwa package was built for). Its recordKey, nonce, validUntil,
-          metadata digest, and amount are read from that record.
+          Enter the ID used for the .rwa package; it must match a loaded record
+          above. Its recordKey, nonce, validUntil, metadata digest and amount
+          supply the attestation.
         </span>
       </div>
       <div className="field">
@@ -718,33 +708,35 @@ function SignatureUploadForm({
           aria-describedby="signedResultFile-hint"
         />
         <span className="field__hint" id="signedResultFile-hint">
-          Upload the <code className="mono">signed-result.json</code> the
-          auditor produced from the .rwa package. Its signature is bound into
-          the on-chain MintAttestation and verified on-chain; its auditor
-          address is cross-checked against the project&apos;s auditor before
-          broadcasting.
+          Upload the <code className="mono">signed-result.json</code> produced
+          by the auditor from the .rwa package. For a Safe auditor, use the
+          output of <code className="mono">signer combine</code> from
+          owners&apos; shares. The console checks the project auditor address;
+          the contract verifies the MintAttestation signature.
         </span>
       </div>
 
       {signed && (
-        <dl className="tx-preview__grid" role="status">
-          <div className="tx-preview__row">
-            <dt>File</dt>
-            <dd>{fileName}</dd>
-          </div>
-          <div className="tx-preview__row">
-            <dt>Auditor</dt>
-            <dd className="mono">{signed.auditor}</dd>
-          </div>
-          <div className="tx-preview__row">
-            <dt>Attestation</dt>
-            <dd>{signed.primaryType}</dd>
-          </div>
-          <div className="tx-preview__row">
-            <dt>Signed at</dt>
-            <dd>{signed.signedAt}</dd>
-          </div>
-        </dl>
+        <div role="status">
+          <dl className="tx-preview__grid">
+            <div className="tx-preview__row">
+              <dt>File</dt>
+              <dd>{fileName}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Auditor</dt>
+              <dd className="mono">{signed.auditor}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Attestation</dt>
+              <dd>{signed.primaryType}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Signed at</dt>
+              <dd>{signed.signedAt}</dd>
+            </div>
+          </dl>
+        </div>
       )}
 
       <button
@@ -763,7 +755,7 @@ function SignatureUploadForm({
       {txHash && (
         <p role="status">
           Mint broadcast. Transaction: <span className="mono">{txHash}</span>.
-          The record flips to Minted once the server observes it.
+          The server marks the record Minted after observing the event.
         </p>
       )}
     </div>

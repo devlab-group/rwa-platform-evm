@@ -1,24 +1,19 @@
-// Admin auth is now wallet-signature based: the connected wallet signs a
-// challenge from POST /auth/challenge and the signature is exchanged at
-// POST /auth/session for an admin JWT persisted in IndexedDB (see
-// src/lib/authSession.ts, src/components/Login.tsx). Every other admin spec
-// relies on the `api` fixture's default session bootstrap (see
-// tests/fixtures/fixtures.ts) so page objects' goto() needn't drive the login
-// form; this spec opts out (`skipAuthBootstrap`) to exercise the real
-// connect → sign → verify, logout, and 401-forces-relogin flows end to end.
-import { expect, test } from "../fixtures/fixtures";
+// Admin login: the connected wallet signs a challenge from POST /auth/challenge,
+// and POST /auth/session exchanges the signature for an admin JWT stored in
+// IndexedDB (src/lib/authSession.ts, src/components/Login.tsx). Other admin
+// specs use the `api` fixture's seeded session (tests/fixtures/fixtures.ts);
+// this spec sets `skipAuthBootstrap` to run the real connect, sign and verify,
+// logout, and 401 flows.
+import { expect, mockOnly, test } from "../fixtures/fixtures";
 
-/**
- * Drives the real login: connect the wallet (the Login screen's own connect
- * button, shown while disconnected), then sign the challenge. Connection is
- * never silent — the admin must connect first.
- */
+// Drives the real login: connect with the Login screen's own button, then sign
+// the challenge
 async function connectAndSignIn(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: "Connect wallet to sign in" }).click();
   await page.getByRole("button", { name: "Sign in with wallet" }).click();
 }
 
-/** Reads the persisted admin JWT out of IndexedDB (lib/idb.ts: db "rwa", store "kv"). */
+// Reads the stored admin JWT from IndexedDB (lib/idb.ts: database "rwa", store "kv")
 async function readPersistedToken(page: import("@playwright/test").Page) {
   return page.evaluate(
     () =>
@@ -38,6 +33,9 @@ async function readPersistedToken(page: import("@playwright/test").Page) {
 }
 
 test.describe("Admin wallet-signature session", () => {
+  // Drives the mock wallet and mock API, which live runs do not install
+  mockOnly();
+
   test.use({ skipAuthBootstrap: true });
 
   test("an unauthenticated admin route shows the login form, not the screen", async ({ page }) => {
@@ -55,7 +53,7 @@ test.describe("Admin wallet-signature session", () => {
     const requestPromise = page.waitForRequest(
       (r) => r.url().endsWith("/auth/session") && r.method() === "POST",
     );
-    // Connect the wallet, then sign the challenge → personal_sign → session.
+    // Connect the wallet, then sign the challenge with personal_sign
     await connectAndSignIn(page);
     const request = await requestPromise;
     const body = request.postDataJSON() as { address: string; signature: string };
@@ -65,8 +63,7 @@ test.describe("Admin wallet-signature session", () => {
     await expect(page.getByRole("heading", { name: "Setup", exact: true })).toBeVisible();
     await expect(page.getByText(/Signed in as/)).toBeVisible();
 
-    // The JWT is deliberately persisted in IndexedDB (the user accepted browser
-    // storage for it) — but never in localStorage or sessionStorage.
+    // The JWT is stored in IndexedDB, never in localStorage or sessionStorage
     expect(await readPersistedToken(page)).toContain("mock-jwt");
     const storageDump = await page.evaluate(() => ({
       local: { ...window.localStorage },
@@ -82,8 +79,8 @@ test.describe("Admin wallet-signature session", () => {
     await connectAndSignIn(page);
     await expect(page.getByRole("heading", { name: "Setup", exact: true })).toBeVisible();
 
-    // A hard reload loses the in-memory mirror; hydrateSession() must restore
-    // the token from IndexedDB so the admin stays signed in without re-signing.
+    // A reload empties the in-memory mirror; hydrateSession() must restore the
+    // token from IndexedDB so the admin stays signed in
     await page.reload();
     await expect(page.getByRole("heading", { name: "Setup", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Admin sign-in" })).toHaveCount(0);
@@ -97,7 +94,7 @@ test.describe("Admin wallet-signature session", () => {
     await page.getByRole("button", { name: "Log out" }).click();
 
     await expect(page.getByRole("heading", { name: "Admin sign-in" })).toBeVisible();
-    // Logout drops the persisted token too.
+    // Logout also deletes the stored token
     expect(await readPersistedToken(page)).toBeNull();
   });
 
@@ -106,7 +103,7 @@ test.describe("Admin wallet-signature session", () => {
     await connectAndSignIn(page);
     await expect(page.getByRole("heading", { name: "Setup", exact: true })).toBeVisible();
 
-    // Simulate an expired/revoked JWT on the next admin API read.
+    // Simulate an expired or rejected JWT on the next admin API read
     await page.route("**/api/v1/project", (route) =>
       route.fulfill({
         status: 401,
@@ -115,8 +112,8 @@ test.describe("Admin wallet-signature session", () => {
       }),
     );
 
-    // Client-side navigation (NavLink) — no full reload — so this exercises the
-    // 401 handler itself rather than re-triggering the login gate via reload.
+    // Navigate client-side, without a reload, so the 401 handler runs instead of
+    // a fresh page load showing the login gate
     await page.getByRole("link", { name: "Security" }).click();
 
     await expect(page.getByRole("heading", { name: "Admin sign-in" })).toBeVisible();
@@ -124,7 +121,7 @@ test.describe("Admin wallet-signature session", () => {
 
   test("a wallet that isn't the admin is rejected with an inline error and no session", async ({ page }) => {
     await page.goto("/admin/setup");
-    // Simulate "not the project admin" by making the exchange itself 401.
+    // Simulate a non-admin wallet by making the exchange return 401
     await page.route("**/auth/session", (route) => {
       if (route.request().method() !== "POST") return route.fallback();
       return route.fulfill({

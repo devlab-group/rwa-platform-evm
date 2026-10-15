@@ -32,9 +32,8 @@ func (r *AssetRecordRepository) List(ctx context.Context) ([]*models.AssetRecord
 	return out, nil
 }
 
-// ListPage returns one bounded page — see the interface doc
-// comment. Ascending-CreatedAt-first, matching assetRecordRepo's mongodb
-// sort.
+// ListPage returns one page in ascending CreatedAt order, as in
+// mongodb.assetRecordRepo
 func (r *AssetRecordRepository) ListPage(ctx context.Context, cursor string, limit int) ([]*models.AssetRecord, string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -89,8 +88,8 @@ func (r *AssetRecordRepository) Update(ctx context.Context, rec *models.AssetRec
 	return nil
 }
 
-// UpdateConditional is the storage-level CAS — see the interface
-// doc comment. The mutex makes the version check and write atomic.
+// UpdateConditional is the conditional update in the interface doc comment. The
+// mutex makes the version check and the write atomic.
 func (r *AssetRecordRepository) UpdateConditional(ctx context.Context, rec *models.AssetRecord, expectedVersion int) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

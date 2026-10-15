@@ -13,19 +13,10 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// chainChunkRepo commits one indexer scan chunk atomically:
-// validated events, retained block hashes, pruning, and the advanced
-// checkpoint all land in a single Mongo transaction with majority write
-// concern, and the checkpoint advance is conditional on the stored version
-// still matching what the caller layered on. Before this the indexer wrote
-// each of those through separate calls, so a crash or write failure
-// mid-commit could leave orphaned fork events behind a still-old checkpoint.
-//
-// A transaction requires a replica set / mongos; a standalone mongod rejects
-// it. Production deployments run a replica set, so this is
-// the correct primitive there; unit tests exercise the atomic semantics
-// against the interface-identical in-memory implementation instead (there is
-// no local replica set in the `go test` harness).
+// chainChunkRepo writes events, block hashes, pruning and a version-checked checkpoint
+// in one majority-write MongoDB transaction. Transactions require a replica set or
+// sharded cluster, not standalone mongod. Memory tests cover the versioning contract
+// without testing MongoDB transactions.
 type chainChunkRepo struct {
 	db          *mongo.Database
 	events      *mongo.Collection
@@ -33,9 +24,8 @@ type chainChunkRepo struct {
 	checkpoints *mongo.Collection
 }
 
-// storedCheckpointVersion reads the current version of the (chainId,address)
-// checkpoint inside a transaction. An absent checkpoint is version 0, the same
-// starting point a fresh indexer layers its first commit on.
+// storedCheckpointVersion reads the transactional checkpoint version for (chainId,
+// address), treating absence as initial version 0
 func (r *chainChunkRepo) storedCheckpointVersion(txCtx context.Context, chainID int64, address string) (int, error) {
 	var cur models.IndexerCheckpoint
 	err := r.checkpoints.FindOne(txCtx, bson.M{"chainId": chainID, "address": address}).Decode(&cur)
@@ -61,16 +51,16 @@ func (r *chainChunkRepo) CommitChunk(ctx context.Context, c repository.ChunkComm
 
 	committed := false
 	_, err = session.WithTransaction(ctx, func(txCtx context.Context) (any, error) {
-		committed = false // reset on every (possibly retried) transaction attempt
+		committed = false // WithTransaction can run the callback more than once, so reset per attempt
 
-		// Conditional checkpoint advance: only commit if the stored
-		// checkpoint's version still equals what this chunk layered on.
+		// commit only if the stored checkpoint version still equals the one this
+		// chunk was built on
 		curVersion, findErr := r.storedCheckpointVersion(txCtx, c.Checkpoint.ChainID, c.Checkpoint.Address)
 		if findErr != nil {
 			return nil, findErr
 		}
 		if curVersion != c.ExpectedCheckpointVersion {
-			return nil, nil // lost the race; committed stays false, nothing written
+			return nil, nil // lost the race: nothing is written and committed stays false
 		}
 
 		for _, e := range c.Events {
@@ -107,11 +97,9 @@ func (r *chainChunkRepo) CommitChunk(ctx context.Context, c repository.ChunkComm
 	return committed, nil
 }
 
-// RewindChunk is CommitChunk's backwards counterpart — the delete and the
-// rewound checkpoint land in one majority-write transaction under the same
-// version fence, so a forward commit racing the rewind either loses the fence
-// (and writes nothing) or wins it (and makes the rewind lose), never lands
-// half-buried in between. See repository.ChainChunkRepository.RewindChunk.
+// RewindChunk deletes events and rewinds the checkpoint in one majority-write
+// transaction. The version check prevents a racing forward commit and rewind from both
+// applying; see repository.ChainChunkRepository.RewindChunk.
 func (r *chainChunkRepo) RewindChunk(ctx context.Context, rw repository.ChunkRewind) (bool, error) {
 	if rw.Checkpoint == nil {
 		return false, repository.ErrNotFound
@@ -124,14 +112,14 @@ func (r *chainChunkRepo) RewindChunk(ctx context.Context, rw repository.ChunkRew
 
 	committed := false
 	_, err = session.WithTransaction(ctx, func(txCtx context.Context) (any, error) {
-		committed = false // reset on every (possibly retried) transaction attempt
+		committed = false // WithTransaction can run the callback more than once, so reset per attempt
 
 		curVersion, findErr := r.storedCheckpointVersion(txCtx, rw.Checkpoint.ChainID, rw.Checkpoint.Address)
 		if findErr != nil {
 			return nil, findErr
 		}
 		if curVersion != rw.ExpectedCheckpointVersion {
-			return nil, nil // lost the race; committed stays false, nothing written
+			return nil, nil // lost the race: nothing is written and committed stays false
 		}
 
 		for _, addr := range rw.Addresses {

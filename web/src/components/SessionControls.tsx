@@ -3,12 +3,8 @@ import { clearSession } from "../lib/authSession";
 import { shortenAddress } from "../lib/format";
 
 /**
- * Admin-session indicator + log out, shown in the admin nav. The session is a
- * wallet-signature-minted JWT (see components/Login.tsx); there is no
- * server-side revocation, so logging out simply drops the token client-side.
- * This leaves the wallet itself connected (use the header Disconnect button to
- * drop the wallet too) so an operator can step down from admin without losing
- * their wallet connection.
+ * Shows admin JWT status and Log out; Login handles authentication. Logout clears the
+ * local token without revocation or wallet disconnect; Header Disconnect clears both.
  */
 export function SessionControls() {
   const session = useAuthSession();

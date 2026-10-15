@@ -16,32 +16,14 @@ import (
 	"github.com/rwa-platform/server/internal/indexer"
 )
 
-// ReconcileSecurity makes the DB Project record the live source of truth for
-// on-chain governance authority by folding indexed
-// chain events into models.Project.Security, instead of leaving those fields
-// frozen at the deploy/verification snapshot. It projects the token's
-// Paused/Unpaused, the SupplyController's AuditorChanged, the Vault's
-// TreasuryChanged, the Strategy's price updates, every contract's
-// AccessControl RoleGranted/RoleRevoked, and the two-step admin transfer's
-// DefaultAdminTransferScheduled/Canceled into a single live SecurityState.
+// ReconcileSecurity rebuilds models.Project.Security from the verified deploy baseline
+// and surviving chain_events, never the previous projection. It folds pause,
+// auditor/treasury rotations, strategy/prices, freezes/forced transfers, roles and
+// admin-transfer schedules/cancellations.
 //
-// Like the other read-model reconcilers (assets.ReconcileMinted/
-// ReconcileAuditor), it is a FULL REPLAY over whatever chain_events currently
-// holds, not an append-only delta feed: the indexer deletes reorged-out rows
-// (indexer.Indexer.rollback), so re-deriving from scratch every tick is what
-// makes an out-of-band pause/rotation/role change AND its later reorg both
-// reflected correctly. The baseline it folds onto is the IMMUTABLE deploy
-// config already on the Project record (Auditor/Treasury/prices and the
-// configured role holders Admin/ComplianceOperator/Pricer/Treasurer/
-// RedemptionManager) — verified to match the chain at deploy — never the
-// previously-projected Security (which would make the baseline drift). Because
-// the seed is the post-deploy state and grants/revokes are applied as set
-// operations, folding is idempotent whether or not the indexer captured the
-// deploy transaction's own construction events.
-//
-// Safe to call repeatedly and before any deployment: a non-Active project has
-// no verified addresses to project onto, so it returns nil and the API keeps
-// showing the deploy-config snapshot.
+// Replay reflects indexer rollbacks; role set operations work with or without indexed
+// deploy-time grants. Repeated calls are safe; missing or non-Active projects and
+// projects without a token are skipped.
 func ReconcileSecurity(ctx context.Context, projects repository.ProjectRepository, chainEvents repository.ChainEventRepository, checkpoints repository.IndexerCheckpointRepository, chainID int64) error {
 	p, err := projects.Get(ctx)
 	if err != nil {
@@ -59,10 +41,8 @@ func ReconcileSecurity(ctx context.Context, projects repository.ProjectRepositor
 		return err
 	}
 
-	// AsOfBlock/AsOfTime record how current the indexer's canonical view is:
-	// the fold consumed every event chain_events holds, so the projection is
-	// current up to the indexer checkpoint at this moment. The API turns the
-	// gap between this and "now" into the securityStale signal.
+	// Stamp freshness from the checkpoint read after folding events; these reads are not
+	// one snapshot. The API uses the age for securityStale.
 	if cp, cerr := checkpoints.Get(ctx, chainID, indexer.CheckpointAddress); cerr == nil {
 		state.AsOfBlock = cp.LastBlock
 		state.AsOfTime = cp.UpdatedAt
@@ -78,13 +58,12 @@ func ReconcileSecurity(ctx context.Context, projects repository.ProjectRepositor
 	return nil
 }
 
-// foldSecurity computes the live SecurityState from the deploy-config baseline
-// on p plus every governance event for p's addresses.
+// foldSecurity derives live SecurityState from p's deploy baseline and indexed events
+// for its contracts
 func foldSecurity(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, p *models.Project) (*models.SecurityState, error) {
 	a := p.Addresses
 	state := &models.SecurityState{
-		// Baselines from the immutable deploy config. A freshly deployed token
-		// is unpaused, so the paused baseline is false.
+		// Deploy-config baselines; a newly deployed token is unpaused
 		Auditor:                      p.Auditor,
 		Treasury:                     p.Treasury,
 		PurchasePricePerWholeToken:   p.PurchasePricePerWholeToken,
@@ -111,13 +90,9 @@ func foldSecurity(ctx context.Context, chainEvents repository.ChainEventReposito
 			state.Treasury = v
 		}
 	}
-	// The Vault's strategy pointer is mutable, so fold it BEFORE reading
-	// prices: after a setStrategy the prices that matter are the ones the
-	// NEW strategy emits, and the old contract's last PurchasePriceUpdated
-	// is not the live price any more. Everything downstream (the price
-	// fold, the role fold, and the indexer address set rebuilt from
-	// Security.Strategy) follows this address rather than the deploy
-	// baseline.
+	// Resolve the live Vault strategy before folding prices and roles; cmd/platform also
+	// uses Security.Strategy for the indexer watch set. Replacement-strategy price events
+	// override deploy prices; without them, the deploy baseline remains.
 	state.Strategy = a.Strategy
 	if a.Vault != "" {
 		if v, ok, err := latestAddressField(ctx, chainEvents, chainID, a.Vault, "StrategyChanged", "newStrategy"); err != nil {
@@ -156,28 +131,18 @@ func foldSecurity(ctx context.Context, chainEvents repository.ChainEventReposito
 		return nil, err
 	}
 	state.Roles = unionRoles(perContract)
-	// Derived single-value role fields: prefer the still-holding configured
-	// address (so the field is stable when nothing changed), else the
-	// lexicographically-first current holder, else empty (role vacated).
+	state.RolesByContract = rolesByContract(perContract, p.Addresses, state.Strategy)
+	// derive selects stable single-value role fields from current holders
 	state.Admin = derive(p.Admin, unionHolders(perContract, "DEFAULT_ADMIN_ROLE", a.Token, a.Compliance, a.SupplyController, a.Vault, a.RedemptionEscrow, state.Strategy))
 	state.ComplianceOperator = derive(p.ComplianceOperator, unionHolders(perContract, "COMPLIANCE_ROLE", a.Compliance))
 	state.Pricer = derive(p.Pricer, unionHolders(perContract, "PRICER_ROLE", state.Strategy))
 	state.Treasurer = derive(p.Treasurer, unionHolders(perContract, "TREASURER_ROLE", a.Vault, a.RedemptionEscrow))
 	state.RedemptionManager = derive(p.RedemptionManager, unionHolders(perContract, "REDEMPTION_MANAGER_ROLE", a.RedemptionEscrow))
 
-	// PendingAdmin: the incoming DEFAULT_ADMIN of an in-progress two-step admin
-	// transfer (AccessControlDefaultAdminRules). Event-sourced and reorg-safe
-	// like every field above — derived by full replay over the surviving
-	// chain_events, never carried forward from a prior projection. The transfer
-	// is begun and later accepted on ALL SIX governance contracts;
-	// acceptDefaultAdminTransfer emits NO dedicated event but moves
-	// DEFAULT_ADMIN_ROLE (RoleRevoked(old)+RoleGranted(new)), so "already
-	// accepted on this contract" is detected by the scheduled newAdmin ALREADY
-	// holding DEFAULT_ADMIN_ROLE there in the role fold (perContract). We report
-	// the first still-pending per-contract value in canonical order, so the
-	// field stays set for the whole handover and clears to "" only once the new
-	// admin holds DEFAULT_ADMIN on every contract (or a
-	// DefaultAdminTransferCanceled supersedes the schedule).
+	// PendingAdmin selects the first pending transfer in the deployed-contract order
+	// below. A scheduled newAdmin holding DEFAULT_ADMIN_ROLE counts as accepted; other
+	// contracts remain pending until their transfers are accepted, cancelled or
+	// superseded.
 	for _, addr := range []string{a.Token, a.Compliance, a.SupplyController, a.Vault, a.RedemptionEscrow, a.Strategy} {
 		if addr == "" {
 			continue
@@ -196,15 +161,12 @@ func foldSecurity(ctx context.Context, chainEvents repository.ChainEventReposito
 	return state, nil
 }
 
-// pendingAdminOnContract returns the DEFAULT_ADMIN address a two-step transfer
-// is currently handing addr to, or "" when none is pending on that contract.
-// It compares the latest non-reorged DefaultAdminTransferScheduled against the
-// latest DefaultAdminTransferCanceled by (block, logIndex): a Cancel that is
-// not earlier than the Schedule supersedes it (nothing pending). There is no
-// accept event — acceptDefaultAdminTransfer moves DEFAULT_ADMIN_ROLE via
-// RoleRevoked(old)+RoleGranted(new) instead — so a scheduled newAdmin who
-// ALREADY holds DEFAULT_ADMIN_ROLE here (per the role fold in adminHolders) has
-// completed the accept on this contract and is no longer pending.
+// pendingAdminOnContract returns the scheduled newAdmin, or "" if none is pending. It
+// compares the latest surviving schedule and cancellation by (block, logIndex);
+// cancellation at or after the schedule clears it.
+//
+// Acceptance emits only RoleRevoked/RoleGranted, so newAdmin already holding
+// DEFAULT_ADMIN_ROLE in adminHolders counts as accepted.
 func pendingAdminOnContract(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, addr string, adminHolders map[string]bool) (string, error) {
 	scheduled, err := latestEvent(ctx, chainEvents, chainID, addr, "DefaultAdminTransferScheduled")
 	if err != nil {
@@ -231,13 +193,12 @@ func pendingAdminOnContract(ctx context.Context, chainEvents repository.ChainEve
 	return newAdmin, nil
 }
 
-// foldRoles seeds each contract's per-role holder set from the deploy-config
-// baseline (the same expected assignment verifyRoles proved matched the chain
-// at deploy) and applies RoleGranted/RoleRevoked deltas in (block, logIndex)
-// order. The result is keyed by lowercased contract address -> role name ->
-// set of holder hex addresses.
-// strategyAddr is the LIVE strategy (Security.Strategy), which after a
-// Vault.setStrategy is no longer p.Addresses.Strategy — see foldSecurity.
+// foldRoles seeds verified deploy-time holders, then applies surviving
+// RoleGranted/RoleRevoked events in (block, logIndex) order. It maps lowercase contract
+// addresses to role names to holder sets.
+//
+// strategyAddr is the live Security.Strategy; a replacement strategy has no verified
+// deploy baseline.
 func foldRoles(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, p *models.Project, strategyAddr string) (map[string]map[string]map[string]bool, error) {
 	a := p.Addresses
 	perContract := map[string]map[string]map[string]bool{}
@@ -262,27 +223,23 @@ func foldRoles(ctx context.Context, chainEvents repository.ChainEventRepository,
 		holderSet(addr, role)[h.Hex()] = true
 	}
 
-	// Deploy baseline — mirrors internal/project/verify.go verifyRoles's
-	// expected map.
+	// Same verified deploy baseline as verifyRoles
 	contracts := []struct{ label, addr string }{
 		{"token", a.Token}, {"compliance", a.Compliance}, {"supplyController", a.SupplyController},
 		{"vault", a.Vault}, {"redemptionEscrow", a.RedemptionEscrow}, {"strategy", strategyAddr},
 	}
-	// A strategy swapped in after deployment carries no verified baseline —
-	// verifyRoles never checked it — so seeding the deploy config's admin
-	// and pricer onto it would assert authority nobody confirmed. Its
-	// holders are exactly what its own role events say, and nothing else.
+	// Do not seed deploy-time roles onto an unverified replacement strategy
 	swappedStrategy := strategyAddr != a.Strategy
 	for _, c := range contracts {
 		if c.label == "strategy" && swappedStrategy {
 			continue
 		}
-		seed(c.addr, "DEFAULT_ADMIN_ROLE", p.Admin) // admin is DEFAULT_ADMIN on every child
+		seed(c.addr, "DEFAULT_ADMIN_ROLE", p.Admin) // the admin holds DEFAULT_ADMIN_ROLE on every contract
 	}
 	seed(a.Token, "PAUSER_ROLE", p.Admin)
 	seed(a.Compliance, "COMPLIANCE_ROLE", p.ComplianceOperator)
 	if !swappedStrategy {
-		seed(a.Strategy, "PRICER_ROLE", p.Pricer) // strategy only — the Vault gates nothing on it
+		seed(a.Strategy, "PRICER_ROLE", p.Pricer) // strategy only; the Vault has no pricer role
 	}
 	seed(a.Vault, "TREASURER_ROLE", p.Treasurer)
 	seed(a.RedemptionEscrow, "TREASURER_ROLE", p.Treasurer)
@@ -317,19 +274,10 @@ func foldRoles(ctx context.Context, chainEvents repository.ChainEventRepository,
 	return perContract, nil
 }
 
-// foldFrozenBalances replays the token's surviving Frozen events in (block,
-// logIndex) order into the current holder -> amount map. Like foldRoles, this
-// is a full replay of the contract's lifetime history on every projection run.
-// That is fine at the volumes admin actions produce, but the freeze log grows
-// faster than the role log does (a freeze and its later release are two rows
-// per holder), so this is the pair to revisit together if enforcement ever
-// becomes routine. Each event carries an
-// ABSOLUTE amount, so a later one replaces an earlier one outright, and an
-// amount of zero deletes the entry rather than storing "0", which is what
-// keeps this map bounded by the number of currently-frozen holders instead of
-// growing with the lifetime event count. A forced transfer that eats into
-// frozen tokens emits its own Frozen first, so its reduction is folded here
-// like any other.
+// foldFrozenBalances replays the token's full surviving Frozen history in (block,
+// logIndex) order. Absolute amounts replace earlier values; zero removes the holder,
+// keeping map size bounded by currently frozen holders. Forced-transfer reductions emit
+// Frozen first and follow the same fold.
 func foldFrozenBalances(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, token string) (map[string]string, error) {
 	if token == "" {
 		return nil, nil
@@ -350,10 +298,8 @@ func foldFrozenBalances(ctx context.Context, chainEvents repository.ChainEventRe
 	for _, e := range surviving {
 		account, _ := e.Data["account"].(string)
 		amount, _ := e.Data["amount"].(string)
-		// Only the token contract can emit this log and the decoder fails closed on a
-		// malformed one, so an unusable event here means something upstream is already
-		// broken. Skip it loudly rather than failing the fold: aborting would take the
-		// pause flag, roles, auditor, and prices stale along with the frozen map.
+		// Log and skip unusable stored events so one bad freeze does not stall pause, roles,
+		// auditor or prices
 		if account == "" || !common.IsHexAddress(account) || amount == "" {
 			log.Printf("project: skipping unusable Frozen event %s/%d (account=%q amount=%q)",
 				e.TxHash, e.LogIndex, account, amount)
@@ -372,20 +318,15 @@ func foldFrozenBalances(ctx context.Context, chainEvents repository.ChainEventRe
 	return balances, nil
 }
 
-// isZeroAmount reports whether a base-10 amount string is zero, tolerating the
-// leading zeros a hand-written or re-encoded event could carry.
+// isZeroAmount reports whether a base-10 amount string is zero, including
+// strings with leading zeros
 func isZeroAmount(amount string) bool {
 	return strings.Trim(amount, "0") == ""
 }
 
-// latestForcedTransfer summarizes the most recent surviving ForcedTransfer on
-// the token, so a reorg that removes the latest seizure falls back to the one
-// before it. Returns nil when no seizure survives.
-//
-// An unusable event is skipped in favour of the one before it, for the same
-// reason foldFrozenBalances skips one: failing here would take the pause flag,
-// roles, auditor, and prices stale along with the seizure summary, and the
-// pause flag is exactly what an operator reads during an incident.
+// latestForcedTransfer returns the latest valid surviving token ForcedTransfer, or nil.
+// Reorgs and unusable events fall back to earlier events; skipping bad data keeps the
+// rest of Security updating, as in foldFrozenBalances.
 func latestForcedTransfer(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, token string) (*models.ForcedTransferState, error) {
 	if token == "" {
 		return nil, nil
@@ -428,9 +369,8 @@ type roleDelta struct {
 	grant bool
 }
 
-// roleDeltas returns this contract's non-reorged RoleGranted/RoleRevoked
-// events merged and sorted in (block, logIndex) order, so a grant-then-revoke
-// (or revoke-then-grant) of the same account resolves to the final state.
+// roleDeltas merges this contract's surviving RoleGranted/RoleRevoked events in (block,
+// logIndex) order so later operations win
 func roleDeltas(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, addr string) ([]roleDelta, error) {
 	granted, err := chainEvents.ListByName(ctx, chainID, addr, "RoleGranted")
 	if err != nil {
@@ -457,9 +397,8 @@ func roleDeltas(ctx context.Context, chainEvents repository.ChainEventRepository
 	return deltas, nil
 }
 
-// unionRoles collapses the per-contract holder sets into the deduped, sorted
-// role -> holders map the API exposes (a holder appears once per role no
-// matter how many contracts grant it that role).
+// unionRoles merges per-contract sets into the API's sorted role-to-holders map,
+// deduplicating holders across contracts
 func unionRoles(perContract map[string]map[string]map[string]bool) map[string][]string {
 	roles := map[string][]string{}
 	seen := map[string]map[string]bool{}
@@ -485,7 +424,37 @@ func unionRoles(perContract map[string]map[string]map[string]bool) map[string][]
 	return roles
 }
 
-// unionHolders returns the sorted union of holders of role across addrs.
+// rolesByContract groups holders by contract label for UI role checks; omits contracts without
+// holders
+func rolesByContract(perContract map[string]map[string]map[string]bool, a models.Addresses, strategy string) map[string]map[string][]string {
+	out := map[string]map[string][]string{}
+	for label, addr := range map[string]string{
+		"token": a.Token, "compliance": a.Compliance, "supplyController": a.SupplyController,
+		"vault": a.Vault, "redemptionEscrow": a.RedemptionEscrow, "strategy": strategy,
+	} {
+		if addr == "" {
+			continue
+		}
+		for role, holders := range perContract[strings.ToLower(addr)] {
+			if len(holders) == 0 {
+				continue
+			}
+			if out[label] == nil {
+				out[label] = map[string][]string{}
+			}
+			for h := range holders {
+				out[label][role] = append(out[label][role], h)
+			}
+			sort.Strings(out[label][role])
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// unionHolders returns the sorted union of holders of role across addrs
 func unionHolders(perContract map[string]map[string]map[string]bool, role string, addrs ...string) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -504,9 +473,8 @@ func unionHolders(perContract map[string]map[string]map[string]bool, role string
 	return out
 }
 
-// derive picks the live single-value role holder: the configured address if it
-// still holds the role (keeping the field stable across no-op reconciles),
-// otherwise the first current holder, otherwise "" (the role was vacated).
+// derive prefers the configured address if it still holds the role, otherwise the first
+// sorted current holder, otherwise ""; this preserves unchanged defaults
 func derive(configured string, holders []string) string {
 	if configured != "" && common.IsHexAddress(configured) {
 		want := common.HexToAddress(configured).Hex()
@@ -522,9 +490,8 @@ func derive(configured string, holders []string) string {
 	return ""
 }
 
-// latestPaused returns the token's current paused flag: whichever of the most
-// recent Paused / Unpaused events is later wins, with the deploy baseline
-// (unpaused) when neither has ever fired.
+// latestPaused uses the latest Paused/Unpaused event, defaulting to unpaused if neither
+// exists
 func latestPaused(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, token string) (bool, error) {
 	if token == "" {
 		return false, nil
@@ -547,10 +514,9 @@ func latestPaused(ctx context.Context, chainEvents repository.ChainEventReposito
 	}
 }
 
-// latestAddressField returns the address in field of the most recent
-// (non-reorged) event named name at addr, and ok=false when no such event
-// exists (leave the baseline in place). A malformed address in a surviving
-// event is a decode/data error worth surfacing, matching assets.ReconcileAuditor.
+// latestAddressField reads field from the latest surviving name event at addr. No event
+// returns ok=false, preserving the baseline; a malformed address returns an error, as
+// in assets.RecordService.ReconcileAuditor.
 func latestAddressField(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, addr, name, field string) (string, bool, error) {
 	ev, err := latestEvent(ctx, chainEvents, chainID, addr, name)
 	if err != nil {
@@ -566,9 +532,8 @@ func latestAddressField(ctx context.Context, chainEvents repository.ChainEventRe
 	return common.HexToAddress(v).Hex(), true, nil
 }
 
-// latestStringField returns the string in field of the most recent
-// (non-reorged) event named name at addr — used for the strategy price
-// events, whose values are already decimal strings.
+// latestStringField reads the required non-empty field from the latest surviving name
+// event at addr; strategy prices use decimal strings
 func latestStringField(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, addr, name, field string) (string, bool, error) {
 	ev, err := latestEvent(ctx, chainEvents, chainID, addr, name)
 	if err != nil {
@@ -584,9 +549,8 @@ func latestStringField(ctx context.Context, chainEvents repository.ChainEventRep
 	return v, true, nil
 }
 
-// latestEvent returns the most recent non-reorged event named name at addr, or
-// nil when none survives. Ordering is by (block, logIndex) so a same-block
-// pair resolves deterministically.
+// latestEvent returns the latest surviving name event at addr by (block, logIndex), or
+// nil; log order breaks same-block ties
 func latestEvent(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, addr, name string) (*models.ChainEvent, error) {
 	events, err := chainEvents.ListByName(ctx, chainID, addr, name)
 	if err != nil {
@@ -604,7 +568,7 @@ func latestEvent(ctx context.Context, chainEvents repository.ChainEventRepositor
 	return latest, nil
 }
 
-// earlier reports whether a precedes b in (block, logIndex) order.
+// earlier reports whether a precedes b in (block, logIndex) order
 func earlier(a, b *models.ChainEvent) bool {
 	if a.BlockNumber != b.BlockNumber {
 		return a.BlockNumber < b.BlockNumber

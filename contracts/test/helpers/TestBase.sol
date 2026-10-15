@@ -20,8 +20,7 @@ import {RedemptionEscrow} from "../../src/RedemptionEscrow.sol";
 import {FixedPriceStrategy} from "../../src/pricing/FixedPriceStrategy.sol";
 import {MockERC20} from "../mocks/token/MockERC20.sol";
 
-/// @notice Shared fixture: deploys one full project via RWAFactory and exposes EIP-712
-///         signing helpers that mirror shared/eip712/types.md exactly.
+/// @notice Deploys a project through RWAFactory; EIP-712 signing helpers mirror shared/eip712/types.md
 abstract contract TestBase is Test {
     RWAFactory internal factory;
     RWAToken internal token;
@@ -97,7 +96,7 @@ abstract contract TestBase is Test {
         vm.stopPrank();
     }
 
-    /// @dev Deploy helpers before the factory; see RWAFactory
+    /// @dev Deploy helpers before the factory; see ComplianceTokenDeployer for the size constraint
     function _deployFactory() internal returns (RWAFactory) {
         return new RWAFactory(
             address(new ComplianceTokenDeployer()),
@@ -143,9 +142,7 @@ abstract contract TestBase is Test {
         });
     }
 
-    // ---------------------------------------------------------------------
-    // EIP-712 signing helpers (mirror shared/eip712/types.md byte-for-byte)
-    // ---------------------------------------------------------------------
+    // EIP-712 signing helpers (mirror shared/eip712/types.md)
 
     function _mintAttestation(address signerAuditor, uint256 amount, string memory recordId, uint256 nonce)
         internal
@@ -246,13 +243,9 @@ abstract contract TestBase is Test {
         return keccak256(abi.encodePacked(bytes2(0x1901), domainSeparator, structHash));
     }
 
-    /// @dev Deploys a second, independent project via the same factory with a different quote
-    ///      token and 100 ether minted to the fresh Vault's inventory, so adversarial-token
-    ///      tests don't disturb the shared fixture's balances. `salt` lets a single test call
-    ///      this more than once (distinct projectId/recordKey per call; each deploy gets its
-    ///      own SupplyController nonce namespace anyway, so collisions are only a readability
-    ///      concern, not a correctness one). Callers that need `investor` to already hold RWA
-    ///      (e.g. to call `requestRedemption`) must transfer out of the fresh Vault themselves.
+    /// @dev Deploys a separate project with the supplied quote token and 100 ether of Vault inventory,
+    ///      preserving shared-fixture balances. salt distinguishes projectId and recordKey across calls.
+    ///      Tests needing investor-held RWA must transfer it from the new Vault.
     function _deployWithQuoteToken(address quoteToken_, bytes32 salt)
         internal
         returns (

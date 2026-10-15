@@ -1,195 +1,201 @@
 # Incident response guide
 
-Audience: issuer/operator security team. Covers detection, containment, and recovery for
-the key-compromise and system-failure scenarios this platform's trust model explicitly
-anticipates, plus the honest limits of what any response can undo.
-
-This guide assumes the role/mutability matrix in `docs/spec/roles.md`. Read that first if
-anything below seems to promise a recovery path that doesn't exist — V1 has **no clawback, no
-force-transfer, and no wallet-recovery module** (all explicitly deferred); several incident types
-below are contained but not fully reversed on-chain.
+Detect, contain and recover from key compromises and platform failures using this guide
+and the [role matrix](../spec/roles.md). Contracts are non-upgradeable and have no wallet
+recovery module. Admin freezing and forced transfers (`setFrozenTokens`, `forcedTransfer`)
+can contain incidents but cannot reverse completed mints, purchases or payouts.
 
 ## 0. General principles
 
-- **Pause first, investigate second**, whenever an incident could plausibly affect a
-  state-changing operation still in flight. `RWAToken.paused()` is the single project-wide
-  emergency flag and blocks `SupplyController`, `Vault`, and `RedemptionEscrow` state
-  changes (`docs/spec/contracts.md`, "Project pause"). It does not undo anything already
-  final on-chain.
-- **Rotation beats deletion.** For every compromised role, the correct first action is an
-  admin-executed rotation (new key/address takes over the role), not merely disabling the
-  old key locally. On-chain state only reflects the *current* role holder.
-- **Every admin action should be a multisig transaction**, not a single hot key — the admin
-  should be a multisig in production. If your deployment's `DEFAULT_ADMIN_ROLE` is not currently
-  a multisig, treat that as a standing finding (see `docs/security/security-review.md`) and
-  prioritize fixing it before anything else on this page, since every containment step below
-  assumes admin actions require multiple approvals — a single compromised admin key defeats them
-  all.
-- **Log everything you do.** `auditlog` and on-chain events are the only source of truth
-  once state has diverged; write down timestamps, transaction hashes, and who authorized
-  each step as you go, for the postmortem.
+- Pause promptly when an incident threatens further state changes. `RWAToken.pause()` requires
+  `PAUSER_ROLE`, initially held by the admin. It stops RWA transfers, mint, burn, purchases,
+  proceeds withdrawals and redemption transitions except timeout cancellation. Compliance,
+  freezing, forced transfers, auditor and price changes, and role administration remain available.
+  See [Project pause](../spec/contracts.md) for the full matrix. Pause does not
+  undo completed transactions.
+- Replace compromised authority: grant required roles to trusted replacements and revoke the
+  old holders. The Security screen supports role changes, pause, freezing and forced transfers.
+  For a Safe role holder, it exports a Safe{Wallet} Transaction Builder batch for owner approval
+  ([operator guide §4a](../operator/operator-guide.md#4a-privileged-roles-and-administration)).
+- Use a multisig admin in production. Administrative containment assumes a trusted approval
+  quorum; a single key holding `DEFAULT_ADMIN_ROLE` defeats that assumption.
+- Route alerts to your paging system. The server emits logs, audit entries and
+  `rwa_alerts_fired_total{kind}`, with no outbound notifier
+  ([operator guide §5](../operator/operator-guide.md#5-monitoring-and-alerts)). Role, auditor and
+  admin-transfer changes have no dedicated alert; monitor their events and the Security screen.
+- Record timestamps, transaction hashes and authorizations. Preserve on-chain events and the
+  MongoDB `audit_logs` collection; `opsctl` entries use category `opsctl`.
 
 ## 1. Compromised auditor key
 
-**Detection:** unexpected `Minted`/`Burned` events with a `recordId`/`operationId` your
-records don't recognize; the auditor reports a lost/stolen key or device; a signed
-attestation surfaces that nobody on your side remembers signing.
+Detection: an unapproved `Minted` record key or `Burned` operation ID, a lost or stolen signing
+key/device, or an attestation the auditor cannot account for.
 
-**Containment:**
-1. Admin executes `SupplyController` auditor rotation to a new address (emits
-   `AuditorChanged`). Do this *immediately* — it is the actual fix, not a follow-up step.
-2. Rotation has an important built-in property: `mint`/`burn` check `attestation.auditor ==
-   auditor` against the **current** configured value (`docs/spec/contracts.md` check #2).
-   The instant you rotate, every not-yet-submitted signature from the old key — no matter
-   how many are outstanding, and even if you don't know how many exist — becomes
-   permanently unusable. You do not need to track down or "cancel" individual signatures.
-3. Pause the project (`PAUSER_ROLE`) if you cannot rotate the auditor immediately (e.g.
-   waiting on multisig quorum), to stop any relay of a suspect signature in the interim.
-4. Issue the outgoing auditor a fresh keystore and password for any future signing; treat
-   the compromised keystore file as permanently burned, not reusable after a password
-   change.
+1. Call `SupplyController.setAuditor(newAuditor)` from the admin wallet or Safe. It works while
+   paused and emits `AuditorChanged`; the console has no form for it.
+2. Once rotation takes effect, mint and burn reject unsubmitted attestations naming the old
+   auditor. There is no need to revoke signatures individually.
+3. Pause if rotation must wait for quorum. Anyone with a valid attestation can submit it;
+   both supply operations revert while paused.
+4. Provision a fresh keystore and update the signer's `auditor` policy field. Changing the
+   compromised keystore's password does not restore trust in the key.
 
-**What this does NOT undo:** any mint/burn already relayed and mined before you rotated.
-If a fraudulent mint already landed, there is no burn-back-to-zero shortcut — the tokens
-exist and are subject to the same permissioned-transfer rules as any other supply. Recovery
-is an off-chain/legal matter (recover the tokens through negotiation, or the issuer
-initiates a compensating, properly-audited burn from Vault inventory if the tokens are
-recovered there). Document this limitation to stakeholders honestly and immediately;
-overstating an on-chain "undo" capability the platform doesn't have is worse than admitting
-the gap.
+For a Safe auditor, fewer compromised owners than its threshold cannot authorize alone.
+Replace compromised owners through a trusted Safe quorum and update every owner's `safe.owners`
+and threshold policy. Removed owners no longer count at verification. Rotate the auditor
+address if its approval threshold may be compromised.
 
-**Postmortem:** how was the key exposed (device compromise, password reuse, physical
-theft)? Was the air-gapped machine actually air-gapped? Update `docs/auditor/auditor-guide.md`
-key-hygiene guidance if the exposure vector reveals a gap in it.
+Rotation cannot undo a mined mint or burn. Fraudulent unsold supply remains in the Vault: pause
+purchases and prepare a burn signed by the new auditor. Burn also requires an unpaused project;
+have the Safe holding `PAUSER_ROLE` execute unpause, burn and re-pause in one atomic Transaction
+Builder batch, leaving no intervening purchase window. Sold supply belongs to buyers who paid
+for it; recovery requires a legal decision. The admin can force-transfer it to the Vault for
+burning. Replacing fraudulently burned inventory requires a new mint attestation. Tell
+stakeholders what recovery can achieve.
+
+Investigate device compromise, password reuse, physical theft and whether the signing machine
+was offline. Update [`docs/auditor/auditor-guide.md`](../auditor/auditor-guide.md) if the review
+finds a custody gap.
 
 ## 2. Compromised compliance key (`COMPLIANCE_ROLE`)
 
-**Detection:** unexpected `StatusChanged` events; a previously-blocked address becomes
-`Allowed` (or vice versa) without a corresponding KYC/webhook record; compliance-operator
-reports credential compromise.
+Detection: unexplained `StatusChanged` events, allowlist changes without a KYC or manual record,
+or reported credential exposure. The event identifies its caller.
 
-**Containment:**
-1. Admin revokes `COMPLIANCE_ROLE` from the compromised key and grants it to a new one.
-2. Review `StatusChanged` events since the suspected compromise window; for any wallet
-   status change you cannot attribute to a legitimate KYC event, revert it with a new,
-   correctly-attributed `setStatus` call.
-3. This role **cannot mint, burn, or move funds** — its blast radius is limited to
-   who is allowed to transact: a compromised compliance operator can approve or block wallets
-   but cannot mint. A compromised compliance key is serious (it can wrongfully freeze legitimate
-   holders or wrongfully allow a sanctioned/unverified wallet in) but is not a funds-at-risk
-   incident by itself.
-4. If the key is the KMS-backed server hot key, rotate the KMS credential and audit the
-   webhook signature-verification path (`server/internal/compliance/webhook.go`) for whether
-   the compromise came through a webhook HMAC bypass rather than direct key theft — those
-   require different fixes.
+1. Grant a replacement `COMPLIANCE_ROLE` and revoke the compromised holder. For the server,
+   provision the replacement through `keys.provider_mode` (`vault` or `local-keystore`), restart
+   with it, then revoke the old key
+   ([operator guide §7](../operator/operator-guide.md#7-key-rotation)).
+2. Review events from the suspected compromise time and correct unauthorized statuses with
+   new `setStatus` calls.
+3. Check related holdings. A wrongly Allowed wallet can buy and receive RWA; a blocked wallet
+   cannot transfer or progress an unfunded redemption. A Funded claim remains payable despite
+   registry blocking. The compliance role itself cannot mint, burn or move tokens; an admin can
+   freeze or force-transfer a non-system holder's tokens when required.
+4. Check webhook-secret exposure separately: `security.kyc_webhook_hmac_secret`,
+   `kyc.sumsub.webhook_secret` or `kyc.onfido.webhook_token` can authenticate forged decisions for
+   wallets with ownership proof. Rotate the affected secret in both provider and server settings.
 
-**Never set the Vault or RedemptionEscrow address to `Blocked`, under any circumstance,
-including "just to be safe" during an incident.** `RWAToken._update` requires both `from`
-and `to` to be `Allowed` on an ordinary transfer, and `Vault`/`RedemptionEscrow` are both
-`from` or `to` on every buy and claim. Blocking either one doesn't contain an
-incident — it self-inflicts a platform-wide outage and, worse, can strand a `Funded`
-redemption's escrowed quote mid-claim (the claim transfer to Vault reverts, so the request
-never reaches `Completed`). `ComplianceRegistry` pins both system addresses `Allowed` for the life of the deployment and
-rejects any attempt to change that at the contract level — but treat this note as
-defense-in-depth, not a reason to stop being careful with batch `setStatuses` calls during
-an incident.
+Vault and RedemptionEscrow are pinned system addresses. Only Allowed with no expiry is accepted
+for them (`SystemAddressCannotBeBlocked`). An attempted block in `setStatuses` reverts the
+whole batch; exclude them from blocking lists.
 
-## 3. Compromised admin (multisig signer or, worse, a non-multisig admin key)
+## 3. Compromised admin
 
-**Detection:** unexpected role grants/revocations; unexpected auditor/treasury/strategy
-changes; a multisig signer reports device compromise.
+Detection: unexpected `RoleGranted`, `RoleRevoked`, `AuditorChanged`, `TreasuryChanged`,
+`StrategyChanged`, `Frozen`, `ForcedTransfer` or `DefaultAdminTransferScheduled` events;
+`config_drift` after wiring changes; or a compromised multisig owner's device.
 
-**Containment:**
-1. If admin is a proper multisig: the remaining honest signers rotate out the compromised
-   signer's key via the multisig's own signer-management process (outside this platform's
-   contracts) before quorum can be reached by an attacker plus any other compromised
-   signer. Do this before anything else — every other containment step in this document
-   assumes admin integrity.
-2. If admin is (against recommendation) a single EOA and it's compromised: this is the
-   worst-case incident in this platform's trust model. The compromised admin can rotate
-   auditor, treasury, redemption manager, and strategy, and can pause/unpause. There is no
-   on-chain admin-recovery path in V1 (no timelock veto, no social recovery). Immediate pause
-   buys time only if the attacker hasn't already unpaused or doesn't control `PAUSER_ROLE`
-   too. Treat this as an emergency requiring off-chain/legal escalation and likely a new
-   deployment once contained — this is precisely why the admin should be a multisig in
-   production.
-3. `AccessControlDefaultAdminRules`'s admin-transfer delay (≥24h recommended in production)
-   is your main structural defense here: a malicious `DEFAULT_ADMIN_ROLE` transfer cannot
-   complete instantly. Monitor `DefaultAdminTransferScheduled`-style events and treat any
-   unexpected one as an active incident, not a notification to file away.
+An admin controls each contract where it holds `DEFAULT_ADMIN_ROLE`, initially all six. It can
+grant operational roles, replace the auditor to authorize supply changes, redirect future
+proceeds, replace the Vault strategy, freeze non-system holders or force-transfer their tokens
+to Allowed recipients.
 
-## 4. Redemption not funded promptly / funding-SLA incident
+1. If trusted Safe owners can meet the threshold, replace compromised owners through the Safe.
+   If they cannot form a trusted quorum, administrative containment cannot proceed normally.
+2. A compromised threshold or single-key admin has no platform recovery path: no timelock veto,
+   social recovery or upgrade. Pause gives limited protection because the admin can grant itself
+   `PAUSER_ROLE` and unpause. Escalate through legal and other off-chain channels and plan a
+   replacement deployment once the compromise is contained.
+3. The admin-transfer delay protects transfer of the role, not actions by its current holder.
+   Each contract requires `beginDefaultAdminTransfer`, the delay, then
+   `acceptDefaultAdminTransfer`; the current admin may cancel before acceptance. Use at least
+   24 hours in production. Treat unexpected `DefaultAdminTransferScheduled` as an incident.
+   The indexer and Security screen expose it, but no dedicated alert fires.
 
-This is an *operational*, not necessarily *security*, incident, but it belongs here because
-mishandling it looks like a security failure to holders.
+## 4. Compromised operational role
 
-**Detection:** `RedemptionRequested` events with no corresponding `RedemptionFunded` event
-approaching `redemptionTimeout`.
+Revoke the compromised key's roles on every hosting contract and grant them to trusted replacements.
 
-**Response:**
-1. This is not a bug to "fix" on-chain — a redemption request is deliberately not guaranteed
-   to be funded, and V1 has no pooled/instant-redemption fallback. The correct response is
-   operational: fund it, communicate a delay honestly to the holder, or let it time out so the
-   holder can `cancelRedemption` and recover their RWA tokens.
-2. Never describe a `Pending` request as funded, and never let it silently lapse without
-   holder communication — the UI must distinguish Pending, Funded, and Claimable clearly.
-3. Track this as an SLA metric (pending-redemption SLA alerts), not merely a support ticket
-   queue.
+| Role                                          | What a compromised holder can do                                                                               | Response                                                                                                                                                          |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PAUSER_ROLE`                                 | pause indefinitely or unpause during containment                                                               | revoke; the admin initially holds the role                                                                                                                        |
+| `PRICER_ROLE`                                 | sell inventory cheaply through a low purchase price, or commit inflated quotes through a high redemption price | pause and reset both prices; prepare rejection of inflated Pending requests, then unpause to reject (`REDEMPTION_MANAGER_ROLE`); completed purchases remain final |
+| `TREASURER_ROLE` (Vault and RedemptionEscrow) | withdraw proceeds to configured `treasury`; fund Pending requests from its own quote balance                   | revoke on both contracts                                                                                                                                          |
+| `REDEMPTION_MANAGER_ROLE`                     | reject Pending requests and return their RWA                                                                   | replace the role holder; affected investors can request again                                                                                                     |
 
-## 5. Smart-contract bug discovered post-deployment
+## 5. Compromised server or server secrets
 
-**Containment:**
-1. Pause immediately (`PAUSER_ROLE`) if the bug is exploitable in a live, funds-affecting
-   way. Pausing stops `SupplyController`, `Vault`, and `RedemptionEscrow` state changes but
-   does **not** stop plain ERC-20 `transfer`/`transferFrom` between already-allowed
-   holders — `RWAToken._update`'s compliance check is independent of `paused()`. If the bug
-   is in the token's transfer/compliance logic itself, pausing alone will not contain it;
-   you may additionally need `COMPLIANCE_ROLE` to block specific wallets.
-2. All V1 contracts are non-upgradeable — there is no proxy upgrade to patch the bug in
-   place. Remediation is: pause to stop further damage, quantify the damage precisely from
-   on-chain events, and deploy a new project version via `RWAFactory` once the fix is audited.
-   Migrating holder balances/state to the new deployment is a manual, off-chain-coordinated
-   process this platform does not automate.
-3. Do not attempt an unaudited hot-fix under pressure. The non-upgradeable, audited-deploy
-   discipline exists precisely because a same-day patch is exactly how a second bug gets
-   introduced.
+The server relays compliance writes with its compliance key (section 2). Admin, pricer and
+treasurer transactions use operator wallets or Safes; the server holds none of those keys.
+Protect the configuration YAML as a secrets file:
 
-## 6. Indexer/database diverges from chain state
+- `security.jwt_secret` permits forging admin sessions, including access to manual compliance
+  writes. Rotation invalidates existing sessions.
+- `security.admin_address` selects the wallet allowed to log in.
+- Provider webhook secrets and key-provider credentials (`keys.vault_token`, or the keystore
+  and `keys.keystore_password_file`) protect compliance authority.
 
-**Detection:** `make ci`'s reconciliation checks fail, or an operator notices a UI value
-that doesn't match a block explorer.
+Rotate exposed secrets and restart. Rotate the compliance key if the host may be compromised.
+Treat the served admin console as untrusted until the host is rebuilt; independently check wallet
+prompts for target contract, function and arguments.
 
-**Response:** the indexer is designed to be authoritative-from-chain, not
-authoritative-from-database: reconstruct state from chain events when database records
-diverge, and derive redemption status only from chain events — server workflow records may
-annotate but never override chain state. The fix is a targeted reindex from a known-good
-checkpoint, not a manual database edit. Manually editing read-model rows to "fix" a
-discrepancy without also fixing the indexing bug that caused it will silently recur.
+## 6. Redemption not funded promptly
 
-## 7. Quote-token anomaly (blacklist, pause, or failure)
+Detection: `pending_redemption_sla` (default 48 hours),
+`rwa_redemptions_pending_oldest_age_seconds`, or Pending requests nearing `redemptionTimeout`.
 
-**Detection:** a `buy`, `fundRedemption`, or `claimRedemption` call reverts unexpectedly
-against the configured quote token.
+1. Fund the request, explain the delay, or let it time out so the compliant beneficiary can
+   cancel and recover RWA. Funding is not guaranteed; V1 provides no pooled or instant redemption.
+2. Never describe Pending as funded or let a request lapse without telling its holder.
+   Distinguish waiting for funding from a Funded request eligible for claim.
+3. Track the delay as an SLA breach as well as a support issue.
 
-**Response:** this is a known, accepted risk class: the quote token itself may blacklist an
-address or fail, which can delay a funded claim independently of this platform. A funded
-redemption remains funded and claimable — retry after the underlying quote-token issue
-resolves (e.g. the beneficiary's address is unblacklisted by the token issuer). This is not
-a platform bug to patch; communicate the dependency to the affected holder.
+## 7. Smart-contract bug discovered after deployment
 
-## 8. Escalation matrix
+1. Pause immediately if the bug threatens funds. Pause blocks ordinary RWA transfers, supply
+   operations, purchases and most redemption transitions. For affected paths that remain
+   available, such as timeout cancellation, compliance or enforcement, restrict their applicable
+   roles or wallet eligibility instead; consult the pause matrix.
+2. Deployed contracts cannot be patched in place. Stop further damage, quantify it from events and
+   deploy a corrected, audited version as a new project. Balance and state migration is manual;
+   the platform does not automate it.
+3. Review and audit the fix before deployment, even under incident pressure.
 
-| Incident class                         | First responder                | Requires admin multisig action |
-| --------------------------------------- | ------------------------------- | ------------------------------- |
-| Compromised auditor key                 | Security on-call                | Yes (rotate auditor)            |
-| Compromised compliance key              | Security on-call                | Yes (rotate role)               |
-| Compromised admin signer                | All remaining multisig signers  | Yes (signer rotation)           |
-| Redemption funding SLA breach           | Treasury/operations             | No (operational)                |
-| Smart-contract bug (funds at risk)      | Security on-call + eng lead     | Yes (pause)                     |
-| Indexer/DB divergence                   | Platform engineering            | No                               |
-| Quote-token anomaly                     | Treasury/operations              | No                               |
+## 8. Indexer or database diverges from chain state
 
-Every row above ultimately needs a documented postmortem: timeline, root cause, on-chain
-transactions involved, what was and was not recoverable, and any guide (this one, the
-auditor guide, or `docs/security/security-review.md`) that should be updated as a
-result.
+Detection: `config_drift` with `rwa_config_drift` = 1, a halted `ReconciliationRequired`
+checkpoint after an unrecoverable reorg, rising `rwa_read_model_reconcile_errors_total`, the
+Security screen's stale warning, or disagreement with a block explorer.
+
+Rebuild from the authoritative chain rather than editing read models. Redemption status follows
+chain events; server annotations do not override it. Use
+[operator guide §6](../operator/operator-guide.md#6-backup-and-recovery):
+
+- `opsctl indexer reset-checkpoint --trusted-block=<n> --trusted-hash=0x...` to recover from
+  `ReconciliationRequired`, using an independently verified block;
+- `cmd/reindex` to drop indexed events and rebuild read models;
+- `opsctl dlq list|inspect|retry|dismiss` for undecodable logs.
+
+## 9. Quote-token anomaly (blacklist, pause, fee or failure)
+
+Detection: quote-token failures in `buy`, `withdrawProceeds`, `fundRedemption` or
+`claimRedemption`, or `funded_claim_failure`. `QuoteDeltaMismatch` reports an unexpected transfer
+amount, including fees; blacklist or pause failures use the quote token's revert.
+
+Quote tokens can fail independently of the platform. A failed claim leaves the request Funded;
+anyone can retry after the token issue is resolved. The payout cannot be redirected, so a
+blacklisted beneficiary needs the quote-token issuer to restore eligibility. Explain that
+dependency to the holder.
+
+Check eligibility before funding and combine funding with claim in one atomic batch to avoid
+committing funds when payout fails. See
+[operator guide §2a](../operator/operator-guide.md#2a-quote-tokens-with-an-allowlist-or-a-blacklist)
+and the [redemption guide](../operator/redemption-ops.md).
+
+## 10. Escalation matrix
+
+| Incident                          | First responder                           | Admin multisig action             |
+| --------------------------------- | ----------------------------------------- | --------------------------------- |
+| Compromised auditor key           | security on-call                          | yes: rotate the auditor           |
+| Compromised compliance key        | security on-call                          | yes: rotate the role              |
+| Compromised admin owner           | all remaining multisig owners             | yes: replace the owner            |
+| Compromised operational role      | security on-call                          | yes: rotate the role              |
+| Compromised server or secrets     | platform engineering and security on-call | only to rotate the compliance key |
+| Redemption funding SLA breach     | treasury and operations                   | no                                |
+| Smart-contract bug, funds at risk | security on-call and engineering lead     | yes: pause                        |
+| Indexer or database divergence    | platform engineering                      | no                                |
+| Quote-token anomaly               | treasury and operations                   | no                                |
+
+Write a postmortem with the timeline, cause, transactions, recovery limits and required updates
+to this guide, the operator guide or auditor guide.

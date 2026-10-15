@@ -63,16 +63,9 @@ func TestGetInventory(t *testing.T) {
 	}
 }
 
-// TestGetInventoryPricesFromTheVaultsCurrentStrategy pins the fix for a
-// swapped strategy: Vault.setStrategy is admin-callable, so the strategy
-// recorded at deploy time can stop being the one the Vault actually prices
-// through. The public inventory feed must follow the Vault, or it quotes a
-// price the investor's own client-side previewBuy will not honour.
-//
-// The assertion is on the call TARGET, not the returned numbers: the fake
-// client keys its canned responses by calldata alone, so both strategies
-// answer purchasePricePerWholeToken() identically and only the address the
-// read went to can distinguish them.
+// After setStrategy, assert reads target the Vault's live strategy: FakeClient's
+// calldata-only keys return identical purchasePricePerWholeToken values for both
+// addresses
 func TestGetInventoryPricesFromTheVaultsCurrentStrategy(t *testing.T) {
 	vaultAddr := common.HexToAddress("0x0000000000000000000000000000000000000A")
 	quoteAddr := common.HexToAddress("0x0000000000000000000000000000000000000B")
@@ -97,7 +90,7 @@ func TestGetInventoryPricesFromTheVaultsCurrentStrategy(t *testing.T) {
 	redeemReturn, _ := strategyABI.ABI.Methods["redemptionPricePerWholeToken"].Outputs.Pack(big.NewInt(2))
 	client.CallResponses[hexKey(redeemData)] = redeemReturn
 
-	// The Vault has since been pointed at a different strategy.
+	// the Vault has since been pointed at a different strategy
 	stratData, _ := vaultABI.PackStrategy()
 	stratReturn, _ := vaultABI.ABI.Methods["strategy"].Outputs.Pack(currentStrategy)
 	client.CallResponses[hexKey(stratData)] = stratReturn

@@ -8,8 +8,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// blockHashDoc is the indexer_block_hashes collection's document shape
-// (see repository.BlockHashRepository's doc comment).
+// blockHashDoc is the document shape of the indexer_block_hashes collection
 type blockHashDoc struct {
 	ChainID     int64  `bson:"chainId"`
 	BlockNumber uint64 `bson:"blockNumber"`

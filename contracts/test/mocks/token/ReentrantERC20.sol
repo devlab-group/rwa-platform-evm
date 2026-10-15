@@ -4,9 +4,8 @@ pragma solidity ^0.8.24;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /// @title ReentrantERC20
-/// @notice Quote token that, when configured, calls back into an arbitrary target during
-///         `transferFrom` — simulating a malicious/hook-bearing ERC-20 attempting reentrancy
-///         through Vault.buy / RedemptionEscrow.fundRedemption.
+/// @notice Configurable transferFrom callback to an arbitrary target, testing quote-token reentrancy
+///         against Vault.buy and RedemptionEscrow.fundRedemption
 contract ReentrantERC20 is ERC20 {
     address public target;
     bytes public callData;

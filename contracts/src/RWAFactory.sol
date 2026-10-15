@@ -18,11 +18,8 @@ import {
 
 /// @title RWAFactory
 /// @notice Deploys and wires a versioned project stack in one transaction
-/// @dev Stateless helpers (src/factory/*Deployer.sol) hold child creation code for the
-///      EIP-170 runtime size limit; see ComplianceTokenDeployer. RWAFactory invokes them
-///      via delegatecall so child constructors see it as msg.sender, preserving
-///      ComplianceRegistry's bootstrap COMPLIANCE_ROLE and RWAToken's one-time
-///      setSupplyController/setRedemptionEscrow permissions.
+/// @dev Delegatecalls five stateless helpers to preserve factory-owned bootstrap wiring while
+///      splitting creation code below the EIP-170 runtime limit; see ComplianceTokenDeployer
 contract RWAFactory is IRWAFactory {
     string private constant VERSION = "rwa-v3";
 
@@ -70,11 +67,11 @@ contract RWAFactory is IRWAFactory {
         address incomeDistributor = _deployIncomeDistributor(config, token, vault);
 
         RWAToken(token).setSupplyController(supplyController);
-        // Wire the escrow-only pause-bypass path (RWAToken.returnEscrowedRWA).
+        // Wire the escrow-only pause-bypass path (RWAToken.returnEscrowedRWA)
         RWAToken(token).setRedemptionEscrow(escrow);
 
         ComplianceRegistry complianceRegistry = ComplianceRegistry(compliance);
-        // Pin Vault + RedemptionEscrow so COMPLIANCE_ROLE can never block them later.
+        // Pin Vault and RedemptionEscrow to Allowed with no expiry
         complianceRegistry.setSystemAddresses(vault, escrow);
         complianceRegistry.setStatus(vault, IComplianceRegistry.ComplianceStatus.Allowed, 0);
         complianceRegistry.setStatus(escrow, IComplianceRegistry.ComplianceStatus.Allowed, 0);
@@ -156,8 +153,7 @@ contract RWAFactory is IRWAFactory {
     }
 
     function _delegateDeploy(address target, bytes memory data) private returns (bytes memory) {
-        // Targets come from immutable helper addresses; internal call sites fix selectors.
-        // Callers supply config values, so deployment must use trusted helper code.
+        // Project callers cannot change these immutable, nonzero helper targets or fixed selectors
         // slither-disable-next-line controlled-delegatecall
         (bool ok, bytes memory ret) = target.delegatecall(data);
         if (!ok) {

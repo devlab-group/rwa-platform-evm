@@ -18,9 +18,8 @@ func (r *assetRecordRepo) List(ctx context.Context) ([]*models.AssetRecord, erro
 	return findMany[models.AssetRecord](ctx, r.coll, bson.M{}, options.Find().SetSort(bson.D{{Key: "createdAt", Value: 1}}))
 }
 
-// ListPage returns one bounded, repository-level keyset page — see
-// the interface doc comment. Sorted (createdAt asc, _id asc), matching
-// List's pre-existing order.
+// ListPage returns one keyset page sorted by (createdAt, _id) ascending, the same
+// order as List
 func (r *assetRecordRepo) ListPage(ctx context.Context, cursor string, limit int) ([]*models.AssetRecord, string, error) {
 	items, err := findMany[models.AssetRecord](ctx, r.coll, keysetFilterDirDate(cursor, "createdAt", false),
 		options.Find().SetSort(bson.D{{Key: "createdAt", Value: 1}, {Key: "_id", Value: 1}}).SetLimit(int64(limit+1)))
@@ -49,10 +48,8 @@ func (r *assetRecordRepo) Update(ctx context.Context, rec *models.AssetRecord) e
 	return nil
 }
 
-// UpdateConditional is the storage-level CAS (mirror of
-// transactionRepo.UpdateConditional): the filter's version match/no-match IS
-// the atomicity. MatchedCount 0 means either the id is gone or a concurrent
-// writer advanced version, distinguished by a follow-up Get.
+// UpdateConditional matches _id and expectedVersion atomically. On no match, Get
+// distinguishes ErrNotFound from a version conflict, as in transactionRepo.
 func (r *assetRecordRepo) UpdateConditional(ctx context.Context, rec *models.AssetRecord, expectedVersion int) (bool, error) {
 	cp := *rec
 	cp.Version = expectedVersion + 1

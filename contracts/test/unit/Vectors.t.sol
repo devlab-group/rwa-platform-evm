@@ -9,11 +9,8 @@ import {FixedPriceStrategy} from "../../src/pricing/FixedPriceStrategy.sol";
 import {IERC7943} from "../../src/interfaces/IERC7943.sol";
 import {IRWAToken} from "../../src/interfaces/IRWAToken.sol";
 
-/// @notice Asserts the deployed contracts reproduce the FROZEN golden vectors in
-///         shared/vectors/typehashes.json, shared/vectors/mint-eip712.json, and
-///         shared/vectors/arithmetic.json byte-for-byte. Values below are transcribed
-///         verbatim from those files; do not "fix" a mismatch here without checking whether
-///         the frozen vector itself changed.
+/// @notice Checks deployed contracts against shared/vectors/{typehashes,mint-eip712,arithmetic}.json.
+///         Values below are transcribed; check for vector changes before adjusting a mismatch.
 
 contract VectorsTest is Test {
     // ---- shared/vectors/typehashes.json ----
@@ -47,8 +44,7 @@ contract VectorsTest is Test {
     SupplyController internal sc;
 
     function setUp() public {
-        // Deploy at nonce 0 from the vector's deployer so address(sc) == VERIFYING_CONTRACT,
-        // exactly reproducing how the golden vector was generated.
+        // Deploy from the vector's deployer at nonce 0 to reproduce VERIFYING_CONTRACT
         vm.setNonce(VECTOR_DEPLOYER, 0);
         vm.prank(VECTOR_DEPLOYER);
         sc = new SupplyController(
@@ -128,7 +124,7 @@ contract VectorsTest is Test {
     }
 }
 
-/// @notice shared/vectors/arithmetic.json — purchase rounds Ceil, redemption rounds Floor.
+/// @notice shared/vectors/arithmetic.json: purchase rounds Ceil, redemption rounds Floor
 contract ArithmeticVectorsTest is Test {
     function test_wholeTokenUsdc() public {
         _assertCase(18, 2_000_000, 1_950_000, 1_000_000_000_000_000_000, 2_000_000, 1_950_000);
@@ -164,10 +160,9 @@ contract ArithmeticVectorsTest is Test {
     }
 }
 
-/// @notice Asserts the compiled IERC7943 surface matches the FROZEN shared vector in
-///         shared/vectors/erc7943-abi.json, which the Go bindings and the web ABI fragments
-///         assert themselves against too. A rename or a reordered argument in the interface
-///         changes a selector here and fails in all three languages at once.
+/// @notice Checks compiled IERC7943 interface ID, selectors and event topics against the frozen
+///         shared/vectors/erc7943-abi.json fixture, also used by Go bindings and web ABI tests;
+///         renaming functions or changing argument types changes selectors
 contract ERC7943VectorsTest is Test {
     string internal vectors;
 
@@ -202,9 +197,8 @@ contract ERC7943VectorsTest is Test {
         );
     }
 
-    /// @dev The two mutating functions return `bool` in the final ERC. That is invisible to a
-    ///      selector, so nothing else in this file would catch its loss - and a caller typed
-    ///      against the published interface reverts on the empty returndata, uncatchably.
+    /// @dev Selectors do not encode return types; check both mutators return the expected bool
+    ///      so callers can decode their returndata
     function test_mutatingFunctionsReturnBool() public {
         IERC7943 pinned = IERC7943(address(new ReturnsTrue()));
         assertEq(vm.parseJsonStringArray(vectors, ".functions.setFrozenTokens.outputs")[0], "bool");
@@ -213,8 +207,8 @@ contract ERC7943VectorsTest is Test {
         assertTrue(pinned.forcedTransfer(address(1), address(2), 1));
     }
 
-    /// @dev The two errors the token actually raises on the ERC-20 transfer path, pinned
-    ///      beside the standard's set so an integrator's error table matches what arrives.
+    /// @dev Pin the platform's SenderNotAllowed/RecipientNotAllowed errors alongside ERC-7943 errors
+    ///      so integrators can decode ordinary-transfer failures
     function test_platformErrorSelectors() public view {
         _assertSelectorAt(".platformErrors.SenderNotAllowed", IRWAToken.SenderNotAllowed.selector);
         _assertSelectorAt(".platformErrors.RecipientNotAllowed", IRWAToken.RecipientNotAllowed.selector);
@@ -240,8 +234,7 @@ contract ERC7943VectorsTest is Test {
     }
 }
 
-/// @dev A minimal IERC7943 implementation, so the compiler proves the interface's mutating
-///      functions really are declared to return a decodable `bool`.
+/// @dev Minimal implementation checks both mutators declare and return a decodable bool
 contract ReturnsTrue is IERC7943 {
     function canSend(address) external pure returns (bool) {
         return true;

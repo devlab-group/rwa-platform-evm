@@ -7,7 +7,7 @@ const ETH_MAINNET = 1;
 const LOCAL = 31337;
 const LOCAL_HEX = "0x7a69";
 
-/** Finds every request call for a given EIP-1193 method. */
+// Finds every request call for an EIP-1193 method
 function callsFor(
   wallet: ReturnType<typeof installFakeWallet>,
   method: string,
@@ -72,20 +72,20 @@ describe("NetworkSwitcher", () => {
 
     fireEvent.change(select, { target: { value: String(LOCAL) } });
 
-    // The switch was requested for the target chain...
+    // Request the target chain
     await waitFor(() =>
       expect(callsFor(wallet, "wallet_switchEthereumChain")).toContainEqual(
         expect.objectContaining({ params: [{ chainId: LOCAL_HEX }] }),
       ),
     );
-    // ...no add-chain needed (the chain was already known)...
+    // Skip add-chain for a known network
     expect(callsFor(wallet, "wallet_addEthereumChain")).toHaveLength(0);
-    // ...and the current-network display follows the chainChanged event.
+    // Update the network display on chainChanged
     await waitFor(() => expect(select).toHaveValue(String(LOCAL)));
   });
 
   it("adds an unknown chain (4902) then retries the switch (Local anvil)", async () => {
-    // Wallet is on mainnet and doesn't know the Local chain yet.
+    // Mainnet wallet does not yet know Local
     wallet = installFakeWallet({
       chainId: ETH_MAINNET,
       notAddedChains: [LOCAL],
@@ -99,7 +99,7 @@ describe("NetworkSwitcher", () => {
 
     fireEvent.change(select, { target: { value: String(LOCAL) } });
 
-    // wallet_addEthereumChain was called with the Local network's EIP-3085 params.
+    // wallet_addEthereumChain received the Local network's EIP-3085 parameters
     await waitFor(() =>
       expect(callsFor(wallet, "wallet_addEthereumChain")).toHaveLength(1),
     );
@@ -113,7 +113,7 @@ describe("NetworkSwitcher", () => {
     expect(addParams.chainName).toBe("Local (Anvil)");
     expect(addParams.rpcUrls).toEqual(["http://localhost:8545"]);
 
-    // The switch was issued again after the add, and the display now shows Local.
+    // Switch again after adding, then display Local
     expect(
       callsFor(wallet, "wallet_switchEthereumChain").length,
     ).toBeGreaterThanOrEqual(2);

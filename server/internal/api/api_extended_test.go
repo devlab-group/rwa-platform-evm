@@ -85,9 +85,8 @@ func TestVerifyChallengeEndToEnd(t *testing.T) {
 		t.Errorf("Address = %s", status.Address)
 	}
 
-	// Proving ownership must mint a subject-scoped session token, and
-	// that token must authenticate GET /me/wallet-status for THIS address
-	// with no admin credential.
+	// Proving ownership issues a wallet session token that authenticates
+	// GET /me/wallet-status for this address without an admin credential
 	if status.SessionToken == "" {
 		t.Fatal("expected verifyChallenge to mint a SessionToken")
 	}
@@ -110,7 +109,7 @@ func TestVerifyChallengeEndToEnd(t *testing.T) {
 		t.Error("wallet-status OwnershipVerified = false, want true")
 	}
 
-	// Replaying the same challenge must fail.
+	// Replaying the same challenge fails
 	w = doJSON(t, env.router, http.MethodPost, "/api/v1/compliance/challenge/verify", verifyBody, nil)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("replay status = %d, want 400", w.Code)
@@ -136,10 +135,9 @@ func TestVerifyChallengeRejectsWrongAddress(t *testing.T) {
 	}
 }
 
-// TestCreateChallengeEnforcesActiveCapWith429 is the HTTP-level half of the
-// active-cap behavior: once an address has too many active challenges
-// outstanding, POST /compliance/challenge must reject with 429 and the stable
-// CodeTooManyActiveChallenges, not a generic 400.
+// TestCreateChallengeEnforcesActiveCapWith429 is the HTTP-level check of the
+// active cap: an address with too many active challenges gets 429 and
+// CodeTooManyActiveChallenges, not a generic 400
 func TestCreateChallengeEnforcesActiveCapWith429(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.Challenges.MaxActiveChallengesPerAddress = 2
@@ -166,24 +164,17 @@ func TestCreateChallengeEnforcesActiveCapWith429(t *testing.T) {
 	}
 }
 
-// A provider delivery that is correctly signed and carries a real decision, but
-// no provider timestamp, must be DROPPED rather than applied with a fabricated
-// one (internal/compliance derives both the freshness window and the
-// newest-decision-wins ordering from it — see kyc.ErrMissingTimestamp).
-//
-// The HTTP answer is 202, not a 4xx: the condition is permanent, and both
-// providers retry non-2xx — Sumsub auto-disabling the webhook after continuous
-// failures — so a refusal here would risk blocking every later, well-formed
-// delivery. The drop is made visible through the audit log instead, which is
-// what this test pins: acknowledged, nothing applied, and an operator-visible
-// record that it happened.
+// A signed decision without a provider timestamp is dropped: compliance needs that
+// timestamp for freshness and newest-decision-wins ordering (kyc.ErrMissingTimestamp).
+// The handler acknowledges it with 202, records the drop for audit and applies no
+// decision. Retrying the same payload cannot supply the missing timestamp.
 func TestKYCWebhookDropsDecisionWithNoProviderTimestamp(t *testing.T) {
 	env := setupTestApp(t)
 	walletAddr := addr("0xB0B0")
 	_ = env.app.Repos.Investors.Upsert(context.Background(), &models.Investor{Address: walletAddr, OwnershipVerified: true})
 
-	// Swap the generic provider for Onfido, whose webhook shape carries the
-	// decision timestamp in the payload rather than taking it on trust.
+	// Swap the generic provider for Onfido, whose webhook payload carries the
+	// decision timestamp
 	onfido, err := kyc.New(kyc.Config{
 		Mode:   kyc.ModeOnfido,
 		Onfido: kyc.OnfidoConfig{APIToken: "tok", WebhookToken: "whtok", WorkflowID: "wf1", Region: "eu"},
@@ -193,27 +184,25 @@ func TestKYCWebhookDropsDecisionWithNoProviderTimestamp(t *testing.T) {
 	}
 	env.app.KYC = onfido
 
-	// Bind the workflow run to the wallet FIRST. Without this the handler
-	// returns its own 422 for an unresolvable subject reference, and this test
-	// would pass whether or not the timestamp is checked at all.
+	// Bind the workflow first; otherwise an unresolvable reference returns 422 before
+	// timestamp validation and could mask a missing check
 	if err := env.app.Repos.KYCVerifications.Upsert(context.Background(), &models.KYCVerification{
 		Provider: "onfido", Ref: "run-123", Address: walletAddr,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// An approved workflow run with no completed_at_iso8601.
+	// An approved workflow run with no completed_at_iso8601
 	payload := []byte(`{"payload":{"resource_type":"workflow_run","action":"workflow_run.completed","object":{"id":"run-123","status":"approved"}}}`)
 	w := doJSONRaw(t, env.router, http.MethodPost, "/api/v1/compliance/webhook", payload,
 		map[string]string{"X-SHA2-Signature": sign(payload, "whtok")})
-	// Acknowledged so the provider does not retry a permanently-unprocessable
-	// delivery (and, for Sumsub, does not count it toward auto-disablement).
+	// Acknowledged with 202 so the provider does not retry a delivery that can never
+	// be processed
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202, body=%s", w.Code, w.Body.String())
 	}
 
-	// ...but NOTHING may have been applied: no decision recorded, so the
-	// fabricated-timestamp path is genuinely gone rather than merely renamed.
+	// Nothing is applied: no decision is recorded
 	events, err := env.app.Repos.KYCEvents.List(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -222,9 +211,8 @@ func TestKYCWebhookDropsDecisionWithNoProviderTimestamp(t *testing.T) {
 		t.Fatalf("expected no recorded kyc events, got %d: %+v", len(events), events)
 	}
 
-	// The 202 must not make the drop invisible — that is the whole reason this
-	// is not simply folded into the ErrUnhandledEvent branch. An operator has
-	// to be able to find it (GET /audit-logs) and apply the decision by hand.
+	// The 202 must still leave a trace: an operator finds the drop in
+	// GET /audit-logs and applies the decision by hand
 	logs, err := env.app.Repos.AuditLogs.List(context.Background(), "compliance", 50)
 	if err != nil {
 		t.Fatal(err)
@@ -242,9 +230,8 @@ func TestKYCWebhookDropsDecisionWithNoProviderTimestamp(t *testing.T) {
 		t.Fatalf("dropped decision left no audit trail; entries=%+v", logs)
 	}
 
-	// The same delivery WITH the provider's timestamp is accepted, so the
-	// rejection above is specifically about the missing timestamp and nothing
-	// else in the payload.
+	// The same delivery with the provider's timestamp is accepted, so the rejection
+	// above is caused only by the missing timestamp
 	ok := []byte(`{"payload":{"resource_type":"workflow_run","action":"workflow_run.completed","object":{"id":"run-123","status":"approved","completed_at_iso8601":"` +
 		time.Now().UTC().Format(time.RFC3339) + `"}}}`)
 	w2 := doJSONRaw(t, env.router, http.MethodPost, "/api/v1/compliance/webhook", ok,
@@ -267,12 +254,8 @@ func TestKYCWebhookRecordsWebhookEventAndListsIt(t *testing.T) {
 		t.Fatalf("webhook status = %d, body=%s", req.Code, req.Body.String())
 	}
 
-	// The handler only durably accepts the decision — submitting the
-	// on-chain status tx and confirming it happens asynchronously via
-	// WebhookReconciler, exactly as
-	// cmd/platform/main.go's background loop drives it. Replicate one
-	// submit tick + one confirm tick here rather than asserting Applied
-	// immediately after the webhook POST.
+	// Webhook handlers persist decisions; WebhookReconciler submits and confirms
+	// asynchronously. Run a submit tick and a confirm tick before asserting Applied.
 	ctx := context.Background()
 	reconciler := compliance.NewWebhookReconciler(env.app.Repos.KYCEvents, env.app.Repos.Transactions, env.app.Status)
 	if err := reconciler.Reconcile(ctx); err != nil {
@@ -310,7 +293,7 @@ func TestKYCWebhookRecordsWebhookEventAndListsIt(t *testing.T) {
 func TestListAuditLogsFiltersByCategory(t *testing.T) {
 	env := setupTestApp(t)
 
-	// Generate a compliance-category log entry via setComplianceStatus.
+	// Generate a compliance-category log entry via setComplianceStatus
 	body := SetStatusRequestBody{Address: addr("0xC0C0"), Status: "Allowed"}
 	w := doJSON(t, env.router, http.MethodPost, "/api/v1/compliance/status", body, map[string]string{"Authorization": env.bearer, "Idempotency-Key": "audit-log-category-status"})
 	if w.Code != http.StatusAccepted {
@@ -355,13 +338,9 @@ func TestListPurchasesEmpty(t *testing.T) {
 	}
 }
 
-// TestListPurchasesPaginatesViaKeysetCursor is the API-level test for keyset
-// pagination: with more than one page's worth of purchases, the
-// response is capped at `limit`, X-Next-Cursor is present, and walking it
-// via the `cursor` query parameter visits every purchase exactly once with
-// no gaps or duplicates — proving the handler end to end, not just the
-// repository layer (internal/dal/memory's pagination_test.go
-// covers that).
+// TestListPurchasesPaginatesViaKeysetCursor checks the limit, X-Next-Cursor and an
+// exactly-once walk across multiple purchase pages. Repository pagination is tested in
+// internal/dal/memory/pagination_test.go.
 func TestListPurchasesPaginatesViaKeysetCursor(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -419,9 +398,9 @@ func TestListPurchasesPaginatesViaKeysetCursor(t *testing.T) {
 	}
 }
 
-// TestListWalletsPaginatesViaKeysetCursor is the API-level test
-// for InvestorRepository.ListPage — mirrors
-// TestListPurchasesPaginatesViaKeysetCursor's structure.
+// TestListWalletsPaginatesViaKeysetCursor is the API-level test for
+// InvestorRepository.ListPage, structured like
+// TestListPurchasesPaginatesViaKeysetCursor
 func TestListWalletsPaginatesViaKeysetCursor(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -474,7 +453,7 @@ func TestListWalletsPaginatesViaKeysetCursor(t *testing.T) {
 func TestRedemptionResponseIncludesClaimable(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
-	// Funded 5 blocks before "now" (LastIndexedBlock=100), finality=3 -> claimable.
+	// Funded 5 blocks before the indexed head (LastIndexedBlock=100) with finality 3, so claimable
 	if err := env.app.Repos.RedemptionRequests.Upsert(ctx, &models.RedemptionRequest{
 		ID: "1", Beneficiary: addr("0xB0B0"), RWAAmount: "1000", QuoteAmount: "950",
 		Status: models.RedemptionFunded, FundedAtBlock: 95, CreatedAt: 1000, TimeoutAt: 2000,
@@ -509,7 +488,7 @@ func TestRedemptionResponseReflectsLiveBeneficiaryAllowed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Can the fake ComplianceRegistry to return isAllowed=true for this beneficiary.
+	// Configure the fake ComplianceRegistry to return isAllowed=true for this beneficiary
 	registry := bindings.NewComplianceRegistry()
 	data, err := registry.PackIsAllowed(common.HexToAddress(beneficiary))
 	if err != nil {
@@ -567,10 +546,9 @@ func TestListTransactionsFiltersByAddress(t *testing.T) {
 	}
 }
 
-// TestListTransactionsIncludesEventDerived: after the stack-transactions
-// projector runs, a wallet-broadcast on-chain action (here a treasury
-// withdrawal) that never touched TxManager appears in GET /transactions, and
-// the ?address= filter finds it by the acting EOA (caller).
+// TestListTransactionsIncludesEventDerived checks that the stack-transactions projector
+// exposes a wallet-broadcast treasury withdrawal through GET /transactions and
+// ?address=, without TxManager involvement
 func TestListTransactionsIncludesEventDerived(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -603,9 +581,9 @@ func TestListTransactionsIncludesEventDerived(t *testing.T) {
 	}
 }
 
-// TestListRedemptionsFiltersByBeneficiary covers the public investor-UI
-// endpoint: GET /redemptions?address=<b> returns only that beneficiary's
-// requests (case-insensitively) and is reachable with NO bearer token.
+// TestListRedemptionsFiltersByBeneficiary covers GET /redemptions?address=<b>,
+// which returns only that beneficiary's requests (case-insensitively) and needs no
+// bearer token
 func TestListRedemptionsFiltersByBeneficiary(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -621,7 +599,7 @@ func TestListRedemptionsFiltersByBeneficiary(t *testing.T) {
 		Status: models.RedemptionPending, CreatedAt: 2, UpdatedAt: now,
 	})
 
-	// Public: no Authorization header. Address filter is case-insensitive.
+	// Public: no Authorization header, and the address filter is case-insensitive
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/redemptions?address="+strings.ToLower(alice), nil, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
@@ -634,7 +612,7 @@ func TestListRedemptionsFiltersByBeneficiary(t *testing.T) {
 		t.Fatalf("address filter got %+v, want only alice's request", got)
 	}
 
-	// Unfiltered (also public) returns both.
+	// Unfiltered (also public) returns both
 	w = doJSON(t, env.router, http.MethodGet, "/api/v1/redemptions", nil, nil)
 	var all []dto.RedemptionResponse
 	_ = json.Unmarshal(w.Body.Bytes(), &all)
@@ -643,9 +621,9 @@ func TestListRedemptionsFiltersByBeneficiary(t *testing.T) {
 	}
 }
 
-// TestListTransactionsPaginatesViaKeysetCursor is the API-level test
-// for TransactionRepository.ListPage — mirrors
-// TestListPurchasesPaginatesViaKeysetCursor's structure.
+// TestListTransactionsPaginatesViaKeysetCursor is the API-level test for
+// TransactionRepository.ListPage, structured like
+// TestListPurchasesPaginatesViaKeysetCursor
 func TestListTransactionsPaginatesViaKeysetCursor(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -729,9 +707,8 @@ func TestProjectResponseIncludesExtendedFields(t *testing.T) {
 	if resp.TokenUnit != "gram" {
 		t.Errorf("TokenUnit = %q", resp.TokenUnit)
 	}
-	// FinalityConfirmations reflects the live server config (set to 3 in
-	// setupTestApp), not whatever might be persisted on the project record —
-	// see (*App).toProjectResponse.
+	// FinalityConfirmations comes from the server config (3 in setupTestApp), not
+	// the project record; see (*App).toProjectResponse
 	if resp.FinalityConfirmations != 3 {
 		t.Errorf("FinalityConfirmations = %d, want 3 (from app.FinalityConfirmations)", resp.FinalityConfirmations)
 	}
@@ -749,8 +726,8 @@ func TestProjectResponseIncludesExtendedFields(t *testing.T) {
 	}
 }
 
-// TestProjectResponsePriceOverlay confirms GET /project exposes the live
-// prices, preferring the event-sourced projection over the deploy baseline.
+// TestProjectResponsePriceOverlay confirms GET /project exposes the projected
+// prices, preferring them over the deploy-time values
 func TestProjectResponsePriceOverlay(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -758,7 +735,7 @@ func TestProjectResponsePriceOverlay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Deploy-baseline prices only (no projection yet) -> baseline is shown.
+	// Deploy-time prices only (no projection yet): the deploy-time values are shown
 	p.PurchasePricePerWholeToken = "1000"
 	p.RedemptionPricePerWholeToken = "900"
 	p.Security = nil
@@ -770,7 +747,7 @@ func TestProjectResponsePriceOverlay(t *testing.T) {
 		t.Fatalf("baseline prices = %s/%s, want 1000/900", resp.PurchasePricePerWholeToken, resp.RedemptionPricePerWholeToken)
 	}
 
-	// A live projection overlays the baseline.
+	// A projection overlays the deploy-time prices
 	p.Security = &models.SecurityState{
 		PurchasePricePerWholeToken:   "1500",
 		RedemptionPricePerWholeToken: "1400",
@@ -784,11 +761,8 @@ func TestProjectResponsePriceOverlay(t *testing.T) {
 	}
 }
 
-// TestProjectResponseStrategyOverlay: addresses.strategy is what the admin
-// console targets when it sets a price or grants PRICER_ROLE, so after a
-// Vault.setStrategy it must report the live strategy, not the deploy
-// baseline — otherwise those transactions go to the contract the Vault
-// stopped pricing through.
+// TestProjectResponseStrategyOverlay checks that Vault.setStrategy updates
+// addresses.strategy, the admin console's target for price and PRICER_ROLE transactions
 func TestProjectResponseStrategyOverlay(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -799,7 +773,7 @@ func TestProjectResponseStrategyOverlay(t *testing.T) {
 	deployed := "0x000000000000000000000000000000000000A11A"
 	p.Addresses.Strategy = deployed
 
-	// No projection yet: the deploy baseline is what there is.
+	// No projection yet: the deploy-time strategy is reported
 	p.Security = nil
 	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
 		t.Fatal(err)
@@ -808,7 +782,7 @@ func TestProjectResponseStrategyOverlay(t *testing.T) {
 		t.Fatalf("strategy = %s with no projection, want the baseline %s", got, deployed)
 	}
 
-	// The Vault has since been repointed.
+	// The Vault has since been repointed
 	swapped := "0x000000000000000000000000000000000000B11B"
 	p.Security = &models.SecurityState{Strategy: swapped}
 	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
@@ -819,8 +793,8 @@ func TestProjectResponseStrategyOverlay(t *testing.T) {
 	}
 }
 
-// TestProjectResponseLifecycleFields confirms GET /project surfaces the
-// deployment lifecycle status and verification note the admin UI polls.
+// TestProjectResponseLifecycleFields confirms GET /project returns the
+// deployment status and verification note
 func TestProjectResponseLifecycleFields(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
@@ -829,7 +803,7 @@ func TestProjectResponseLifecycleFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A deployment still in progress reports its status.
+	// A deployment in progress reports its status
 	p.Status = models.ProjectStatusDeploying
 	p.VerificationNote = ""
 	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
@@ -843,7 +817,7 @@ func TestProjectResponseLifecycleFields(t *testing.T) {
 		t.Fatalf("verificationNote = %q, want empty", resp.VerificationNote)
 	}
 
-	// A failed deployment surfaces the recorded reason.
+	// A failed deployment reports the recorded reason
 	p.Status = models.ProjectStatusFailed
 	p.VerificationNote = "missing required roles: [PAUSER_ROLE on token]"
 	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
@@ -858,14 +832,14 @@ func TestProjectResponseLifecycleFields(t *testing.T) {
 	}
 }
 
-// A uint256 beyond float64's exact integer range, used to prove amounts
-// survive the JSON round trip as strings.
+// A uint256 beyond float64's exact integer range, to check that amounts survive
+// the JSON round trip as strings
 const hugeFrozenAmount = "115792089237316195423570985008687907853269984665640564039457584007913129639935"
 
 const frozenHolder = "0x0000000000000000000000000000000000000A01"
 
-// seedEnforcementState puts a frozen holder and a seizure on the project's
-// security projection and returns the project.
+// seedEnforcementState puts a frozen holder and a forced transfer on the
+// project's security projection and returns the project
 func seedEnforcementState(t *testing.T, env *testEnv) {
 	t.Helper()
 	ctx := context.Background()
@@ -885,9 +859,8 @@ func seedEnforcementState(t *testing.T, env *testEnv) {
 	}
 }
 
-// TestProjectResponseOmitsEnforcementState: GET /project is public, so it must
-// never name the wallets an issuer has frozen, even when the projection holds
-// them.
+// TestProjectResponseOmitsEnforcementState checks that the public GET /project
+// never names frozen wallets, even when the projection holds them
 func TestProjectResponseOmitsEnforcementState(t *testing.T) {
 	env := setupTestApp(t)
 	seedEnforcementState(t, env)
@@ -905,12 +878,12 @@ func TestProjectResponseOmitsEnforcementState(t *testing.T) {
 }
 
 // TestEnforcementEndpointIsAdminOnly confirms the enforcement view answers the
-// admin and rejects an unauthenticated caller outright.
+// admin and rejects an unauthenticated caller
 func TestEnforcementEndpointIsAdminOnly(t *testing.T) {
 	env := setupTestApp(t)
 	seedEnforcementState(t, env)
 
-	// Same refusal the admin-gated wallet list gives an anonymous caller.
+	// An anonymous caller is refused, as on the admin-only wallet list
 	if w := doJSON(t, env.router, http.MethodGet, "/api/v1/project/enforcement", nil, nil); w.Code != http.StatusForbidden {
 		t.Fatalf("unauthenticated status = %d, want 403", w.Code)
 	}
@@ -935,8 +908,8 @@ func TestEnforcementEndpointIsAdminOnly(t *testing.T) {
 	}
 }
 
-// TestEnforcementEndpointEmptyWhenNothingFrozen: no projection yet reports
-// empty and stale rather than 500ing or inventing state.
+// TestEnforcementEndpointEmptyWhenNothingFrozen checks that with no projection
+// the response is empty and stale, not a 500 and not invented state
 func TestEnforcementEndpointEmptyWhenNothingFrozen(t *testing.T) {
 	env := setupTestApp(t)
 

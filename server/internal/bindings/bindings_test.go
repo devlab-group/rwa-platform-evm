@@ -48,7 +48,7 @@ func TestComplianceRegistryEventRoundTrip(t *testing.T) {
 	c := NewComplianceRegistry()
 	event := c.ABI.Events["StatusChanged"]
 	packed, err := event.Inputs.NonIndexed().Pack(uint8(1), uint8(2), uint64(0), uint64(999))
-	// NonIndexed fields for StatusChanged: previousStatus, newStatus, previousValidUntil, newValidUntil (account/caller are indexed).
+	// non-indexed fields of StatusChanged: previousStatus, newStatus, previousValidUntil, newValidUntil (account and caller are indexed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,13 +172,8 @@ func TestRedemptionEscrowGetRedemptionRoundTrip(t *testing.T) {
 	}
 }
 
-// TestRedemptionEscrowRequestedEventDecode is a regression test for a real
-// bug this exact call hit in server/e2e/run_e2e.sh: go-ethereum's untagged
-// struct-field abi matching maps "rwaAmount" to the Go field name
-// ToCamelCase("rwaAmount") == "RwaAmount" (only the first character is
-// upcased), which never matches this codebase's "RWA" all-caps acronym
-// spelling — UnpackIntoInterface failed with "abi: field rwaAmount can't be
-// found in the given value" until the struct gained an explicit `abi:` tag.
+// TestRedemptionEscrowRequestedEventDecode checks the abi tag needed to map rwaAmount
+// to RWAAmount; go-ethereum otherwise expects RwaAmount
 func TestRedemptionEscrowRequestedEventDecode(t *testing.T) {
 	r := NewRedemptionEscrow()
 	event := r.ABI.Events["RedemptionRequested"]

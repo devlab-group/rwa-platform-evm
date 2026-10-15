@@ -36,7 +36,7 @@ func (r *WalletSessionRepository) Get(ctx context.Context, token string) (*model
 		return nil, repository.ErrNotFound
 	}
 	if time.Now().UTC().After(s.ExpiresAt) {
-		delete(r.m, token) // opportunistic eviction, same pattern as the old in-process SessionManager
+		delete(r.m, token) // evict the expired entry
 		return nil, repository.ErrNotFound
 	}
 	cp := *s

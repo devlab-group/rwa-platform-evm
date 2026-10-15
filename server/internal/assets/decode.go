@@ -7,11 +7,11 @@ import (
 	"github.com/rwa-platform/server/internal/bindings"
 )
 
-// EventNames are the SupplyController events the assets reconciler
-// understands.
+// EventNames are the SupplyController events DecodeLog decodes
 var EventNames = []string{"Minted", "Burned", "AuditorChanged"}
 
-// DecodeLog is an indexer.EventDecoder for SupplyController logs.
+// DecodeLog is an indexer.EventDecoder for SupplyController logs. A log with no
+// topics, or whose first topic is not a known event, decodes as "unknown".
 func DecodeLog(log types.Log) (string, map[string]any, error) {
 	controller := bindings.NewSupplyController()
 	if len(log.Topics) == 0 {
@@ -39,7 +39,7 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 			"amount": ev.Amount.String(), "nonce": ev.Nonce.String(), "auditor": ev.Auditor.Hex(),
 		}, nil
 	case controller.EventID("AuditorChanged"):
-		// All three fields are indexed; there is no non-indexed data to unpack.
+		// all three parameters are indexed, so there is no data to unpack
 		data := map[string]any{}
 		if len(log.Topics) >= 4 {
 			data["previousAuditor"] = common.HexToAddress(log.Topics[1].Hex()).Hex()

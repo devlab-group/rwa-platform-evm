@@ -13,7 +13,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// Stable machine-readable error codes.
+// Stable machine-readable error codes
 const (
 	CodeBadRequest     = "bad_request"
 	CodeNotFound       = "not_found"
@@ -22,34 +22,27 @@ const (
 	CodeInternal       = "internal_error"
 	CodeNotImplemented = "not_configured"
 	// CodeIdempotencyKeyRequired is returned by auth.Idempotency when a
-	// side-effecting endpoint is called with no Idempotency-Key header.
-	// Declared alongside the other stable codes here (rather than in
-	// internal/auth) so every consumer-facing error
-	// code lives in one place; auth.Idempotency uses the identical literal.
+	// side-effecting endpoint is called without an Idempotency-Key header.
+	// auth.Idempotency uses the same literal.
 	CodeIdempotencyKeyRequired = "idempotency_key_required"
-	// CodeTooManyActiveChallenges is returned by createChallenge once an
-	// address has too many currently-active wallet challenges outstanding.
+	// CodeTooManyActiveChallenges is returned by createChallenge when an address
+	// has too many active wallet challenges
 	CodeTooManyActiveChallenges = "too_many_active_challenges"
+	// CodeHolderCapReached reports a new-wallet approval refused by the configured cap
+	CodeHolderCapReached = "holder_cap_reached"
+	// CodeSanctionedAddress reports an Allowed submission refused by sanctions screening
+	CodeSanctionedAddress = "sanctioned_address"
 )
 
 func fail(c *gin.Context, status int, code, message string) {
 	c.AbortWithStatusJSON(status, dto.ErrorResponse{Code: code, Message: message})
 }
 
-// failInternal reports an unexpected server-side failure: err is logged in full
-// with a short reference, and the client is told only that reference.
-//
-// Errors reaching a 500 here come from the Mongo driver, the chain RPC client
-// and the IPFS client, whose messages carry host:port pairs, endpoint URLs, and
-// collection/index names. Several routes that can hit one are deliberately
-// public and unauthenticated (project, config, sales/inventory, redemptions,
-// transactions, compliance/allowed), so echoing err.Error() would let anyone
-// map the deployment's internals just by polling a read endpoint while a
-// backend is unhealthy. Handlers that want to tell the caller something
-// specific should keep using failErr with a 4xx.
+// failInternal logs the full error and returns only a short reference, keeping Mongo,
+// RPC and IPFS hosts, URLs, collection and index names private. Use failErr with 4xx
+// for safe details.
 func failInternal(c *gin.Context, err error) {
-	// An oversized body is the caller's problem, not ours — let failErr keep
-	// mapping it to 413 rather than burying it as an opaque 500.
+	// An oversized request body is a client error, so report it as 413
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		failErr(c, http.StatusRequestEntityTooLarge, "request_too_large", err)
@@ -64,11 +57,9 @@ func failInternal(c *gin.Context, err error) {
 	fail(c, http.StatusInternalServerError, CodeInternal, "internal error (reference "+ref+")")
 }
 
-// errorReference is a short random tag that appears in both the log line and
-// the response, so an operator can find the real error for a 500 a user
-// reports. Not a secret and not unique forever — it only has to be findable in
-// the log, so 4 bytes is plenty. A failed read degrades to a fixed placeholder
-// rather than failing the response we are already in the middle of writing.
+// errorReference generates a short random tag linking a client-reported 500 to its log
+// entry. It is neither secret nor guaranteed unique. Failed randomness returns
+// "unavailable" without failing the response.
 func errorReference() string {
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -77,12 +68,9 @@ func errorReference() string {
 	return hex.EncodeToString(b[:])
 }
 
-// failErr reports err at status/code, EXCEPT when err (however it got
-// wrapped by gin's JSON binding or a handler's own io.ReadAll) traces back
-// to the http.MaxBytesReader installed by auth.MaxRequestBody: that always
-// reports 413, regardless of what status the specific call site asked for,
-// so every handler gets the request-size limit enforced the same way
-// without each one needing its own detection code.
+// failErr returns status and code, except wrapped http.MaxBytesError from
+// auth.MaxRequestBody becomes 413 "request_too_large" for consistent body-limit
+// handling
 func failErr(c *gin.Context, status int, code string, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
@@ -92,7 +80,7 @@ func failErr(c *gin.Context, status int, code string, err error) {
 	fail(c, status, code, err.Error())
 }
 
-// notFoundOrInternal maps repository.ErrNotFound to 404 and anything else to 500.
+// notFoundOrInternal maps repository.ErrNotFound to 404 and anything else to 500
 func notFoundOrInternal(c *gin.Context, err error) {
 	if errors.Is(err, repository.ErrNotFound) {
 		fail(c, http.StatusNotFound, CodeNotFound, "resource not found")

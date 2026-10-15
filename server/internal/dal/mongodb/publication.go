@@ -10,7 +10,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// publicationRepo persists ipfs_publications.
+// publicationRepo persists ipfs_publications
 type publicationRepo struct{ coll *mongo.Collection }
 
 func (r *publicationRepo) Get(ctx context.Context, id string) (*models.PublicationRecord, error) {

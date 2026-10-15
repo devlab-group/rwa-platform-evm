@@ -13,61 +13,52 @@ import (
 	"github.com/rwa-platform/server/internal/indexer"
 )
 
-// StepResult records one scripted Step's outcome.
+// StepResult records one scripted Step's outcome
 type StepResult struct {
 	Index       int           `json:"index"`
 	Description string        `json:"description"`
 	Duration    time.Duration `json:"duration"`
-	// Err is non-empty if this step's Poll call failed unexpectedly (or
-	// succeeded when ExpectPollError said it shouldn't have).
+	// Err is non-empty if the step's Poll failed unexpectedly, or succeeded when
+	// ExpectPollError said it would fail
 	Err string `json:"err,omitempty"`
 }
 
-// Report is a shadow replay run's full result. The release criteria —
-// resource usage staying within defined thresholds, and final indexed
-// state matching an independent reconciliation process — are meant to be
-// checked against this, whether by a human reading it or an automated gate
-// in a soak-test pipeline.
+// Report records replay outcomes, resource snapshots and final event/DLQ count
+// comparisons. Reconciled checks counts and step errors; resource thresholds require
+// separate human or automated review.
 type Report struct {
 	Steps             []StepResult       `json:"steps"`
 	ResourceSnapshots []ResourceSnapshot `json:"resourceSnapshots"`
-	// FinalEventCount is how many chain_events the indexer actually
-	// persisted by the end of the run.
+	// FinalEventCount counts persisted chain_events for the expected event names at run
+	// completion
 	FinalEventCount int `json:"finalEventCount"`
-	// ExpectedEventCount/ExpectedDLQEntries are independently derived
-	// directly from the scenario's final chain state (see Runner.Run),
-	// NOT from what the indexer itself reported — an independent
-	// reconciliation, not a tautology.
+	// ExpectedEventCount/ExpectedDLQEntries come from the scenario's final chain state,
+	// independently of the indexer (Runner.reconcile)
 	ExpectedEventCount int `json:"expectedEventCount"`
 	DLQEntries         int `json:"dlqEntries"`
 	ExpectedDLQEntries int `json:"expectedDLQEntries"`
-	// Errors collects every unexpected step failure/mismatch; empty AND
-	// Reconciled true is the release-gate pass condition.
+	// Errors records unexpected Poll outcomes; passing requires none and Reconciled=true,
+	// with resource checks evaluated separately
 	Errors     []string `json:"errors,omitempty"`
 	Reconciled bool     `json:"reconciled"`
 }
 
-// Runner drives a Scenario against the real indexer/reconciliation logic
-// (indexer.Indexer, wired exactly as cmd/platform/main.go wires it —
-// WithBlockHashRepository + WithDeadLetterQueue) over an isolated in-memory
-// repository set, with no blockchain.TxManager, keys.Provider, or any other
-// signing capability ever constructed: it holds no production signing keys
-// and cannot submit a state-changing production transaction — a structural
-// guarantee, not a configuration-based one.
+// Runner drives a Scenario through indexer.Indexer with isolated memory repositories,
+// block-hash history and a DLQ. WithChunkCommitter is disabled, so event/checkpoint
+// writes are separate. No TxManager, keys.Provider or signer is constructed.
 type Runner struct {
 	scenario *Scenario
 }
 
-// NewRunner constructs a Runner for scenario.
+// NewRunner constructs a Runner for scenario
 func NewRunner(scenario *Scenario) *Runner {
 	return &Runner{scenario: scenario}
 }
 
-// Run executes every scripted Step in order, sampling resource usage after
-// each one, then performs the final independent reconciliation. It returns
-// a Report even on a scenario-level mismatch (Reconciled=false) — only a ctx
-// cancellation or a genuine harness-construction error returns a non-nil
-// error alongside it.
+// Run executes steps, samples resources after each and reconciles final counts.
+// Unexpected Poll outcomes enter Report.Errors; count or step mismatches set
+// Reconciled=false without a Go error. A cancellation detected before a step or a final
+// repository read failure returns a Go error.
 func (r *Runner) Run(ctx context.Context) (*Report, error) {
 	sc := r.scenario
 	repos := memory.New()
@@ -131,10 +122,8 @@ func (r *Runner) Run(ctx context.Context) (*Report, error) {
 	return report, nil
 }
 
-// reconcile independently derives the expected canonical event/DLQ counts
-// directly from source's final chain state (not from anything the indexer
-// itself reported) and compares them against what actually got persisted,
-// confirming the final indexed state matches an independent reconciliation.
+// reconcile compares event/DLQ counts derived independently from source's final chain
+// state with persisted counts
 func (r *Runner) reconcile(ctx context.Context, sc *Scenario, source *indexer.FakeSource, repos *repository.Repositories, undecodable map[string]bool, report *Report) error {
 	configured := map[common.Address]bool{}
 	for _, a := range sc.addressList() {

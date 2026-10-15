@@ -9,10 +9,10 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 	  awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-bootstrap: ## Install toolchains/deps for all subrepos
-	# contracts/lib is gitignored with no submodule/lockfile, so install the pinned deps
-	# explicitly (idempotent — skips a dep that is already present). Keep these versions in
-	# sync with .github/actions/forge-deps (the CI single source of truth).
+bootstrap: ## Install dependencies for each module
+	# contracts/lib is gitignored with no submodule or lockfile, so install the pinned deps
+	# explicitly (idempotent: a dep that is already present is skipped). Keep these versions in
+	# sync with .github/actions/forge-deps, the source of truth for CI.
 	@echo "==> contracts"; cd contracts && \
 	  { [ -d lib/openzeppelin-contracts ] || forge install --no-git OpenZeppelin/openzeppelin-contracts@v5.6.1; } && \
 	  { [ -d lib/forge-std ] || forge install --no-git foundry-rs/forge-std@v1.16.2; }
@@ -28,7 +28,7 @@ format: ## Format all code
 	-cd web && npm run format --if-present
 	-cd investor-web && npm run format --if-present
 
-lint: ## Lint all code (fail-closed: a lint failure fails the build)
+lint: ## Check Solidity formatting, Go code and web lint
 	cd contracts && forge fmt --check
 	cd signer && go vet ./...
 	cd server && go vet ./...
@@ -55,17 +55,15 @@ vectors-check: dialect-check ## Verify shared golden vectors reproduce across la
 	cd contracts && forge test --match-contract Vectors
 	# ERC-7943 ABI surface: every language asserts its own fragments against
 	# shared/vectors/erc7943-abi.json, so one drifting selector fails here.
-	# NOTE: the web line needs web/node_modules, so a standalone run of this
-	# target on a fresh checkout wants `make bootstrap` first (inside `make ci`
-	# the web job has already installed them).
+	# The web line needs web/node_modules, so run `make bootstrap` first on a fresh checkout.
 	cd server && go test ./internal/bindings/... -run Vectors -count=1
 	cd web && npm test -- --run src/lib/abis.test.ts
 
 dialect-check: ## Cross-binary parity for the assetSchema dialect
-	# First run fails the build on any failing case; second asserts a Dialect test
-	# actually ran (guards against a rename silently matching zero tests). Package
-	# globs include every package holding a Dialect* test (server: assets;
-	# signer: jsonschema + profile, where the envelope differential test lives).
+	# The first run fails on any failing case; the second asserts that a Dialect test
+	# ran, so a rename cannot silently match zero tests. The package globs cover every
+	# package holding a Dialect test (server: assets; signer: jsonschema and profile,
+	# where the envelope differential test lives).
 	cd server && go test ./internal/assets/... -run Dialect -count=1 && \
 	  go test ./internal/assets/... -run Dialect -count=1 -v | grep -q -- '--- PASS: .*Dialect'
 	cd signer && go test ./internal/jsonschema/... ./internal/profile/... -run Dialect -count=1 && \
@@ -75,13 +73,12 @@ bindings-check: ## Build ABIs and fail on hand-written binding drift
 	cd contracts && forge build
 	cd server && go run ./cmd/verifyabi
 
-platform: ## Build the release platform binary with a FRESH embedded SPA
-	# Deterministic production web build (web/package.json pins NODE_ENV=production),
-	# then re-embed it into the server module tree before compiling the binary, so
-	# the shipped binary can never carry a stale SPA. The built SPA is NOT committed:
-	# only dist/.gitkeep is tracked and assets/ are gitignored, so it is rebuilt here
-	# every release. Clear everything EXCEPT the tracked
-	# placeholder so a removed/renamed asset can't linger (Vite content-hashes names).
+platform: ## Build the release binary with a fresh embedded admin app
+	# Build the web app for production (the build script sets NODE_ENV=production), then
+	# embed it into the server module tree before compiling the binary, so the binary
+	# never carries a stale SPA. The built SPA is not committed: only dist/.gitkeep is
+	# tracked and assets/ is gitignored. Everything except that placeholder is cleared
+	# first so a removed or renamed asset cannot linger (Vite content-hashes file names).
 	cd web && npm install && npm run build
 	find server/internal/webui/dist -mindepth 1 ! -name .gitkeep -delete
 	cp -r web/dist/. server/internal/webui/dist/
@@ -93,24 +90,24 @@ signer: ## Build the offline signer binary (signer/bin/signer)
 	@echo "signer binary -> signer/bin/signer"
 
 embed-check: platform ## Prove the release binary builds with a freshly embedded SPA (dist is built at release, not committed)
-	# The built SPA is no longer committed (only dist/.gitkeep is tracked), so a
-	# committed-drift diff no longer applies. `platform` rebuilds web/, embeds it
-	# fresh, and compiles the binary — proving go:embed resolves the real assets.
+	# The built SPA is not committed, so there is no drift to diff. `platform` rebuilds
+	# web/, embeds it and compiles the binary, which shows that go:embed resolves the
+	# real assets.
 	@echo "embed-check OK (fresh SPA embedded into server/bin/platform)"
 
 e2e: ## Full on-chain + HTTP-API end-to-end flow
 	cd contracts && bash script/e2e.sh
 	cd server && bash e2e/run_e2e.sh
 
-ci: lint contracts-test signer-test server-test web-test investor-web-test vectors-check bindings-check embed-check ## PR gate (mirrors the fail-closed CI: lint checks formatting, it does not auto-fix — run `make format` yourself first)
+ci: lint contracts-test signer-test server-test web-test investor-web-test vectors-check bindings-check embed-check ## Run PR checks; run make format first
 	@echo "CI OK"
 
 security-scan: ## Dependency vulnerability scan (fail-closed on reachable advisories)
-	cd server && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-	cd signer && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	cd server && go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+	cd signer && go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 	# Production deps only: dev tooling (eslint, openapi-typescript, playwright) never
-	# ships in the SPA/binary, and some of its transitive advisories have no upstream fix
-	# (js-yaml via @redocly/openapi-core). Mirrors the ci.yml security-scan job.
+	# ships in the SPA or binary, and some of its transitive advisories have no upstream
+	# fix (js-yaml via @redocly/openapi-core). Mirrors the ci.yml security-scan job.
 	cd web && npm audit --omit=dev --audit-level=high
 
 up: ## Start local dev stack (anvil, mongo, ipfs)

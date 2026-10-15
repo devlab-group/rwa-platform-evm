@@ -20,16 +20,21 @@ export class AdminAssetsPage {
     return sectionByHeading(this.page, "Records");
   }
 
-  async createRecord(fields: { recordId: string; amount: string }): Promise<void> {
+  async createRecord(fields: {
+    recordId: string;
+    amount: string;
+  }): Promise<void> {
     await this.page.locator("#recordId").fill(fields.recordId);
     await this.page.locator("#amount").fill(fields.amount);
-    await this.createSection.getByRole("button", { name: "Create record" }).click();
+    await this.createSection
+      .getByRole("button", { name: "Create record" })
+      .click();
   }
 
   /**
-   * Uploads the auditor's signed-result.json (built from the given fields) and
-   * relays. The form no longer takes the signature fields individually — they
-   * are read from the uploaded file (shared/schemas/signed-result.schema.json).
+   * Uploads the auditor's signed-result.json, built from the given fields, and
+   * submits the mint. The form reads the signature fields from the file
+   * (shared/schemas/signed-result.schema.json).
    */
   async uploadSignature(fields: {
     recordId: string;
@@ -54,7 +59,9 @@ export class AdminAssetsPage {
       mimeType: "application/json",
       buffer: Buffer.from(JSON.stringify(signedResult)),
     });
-    await this.signatureSection.getByRole("button", { name: "Upload signature & mint" }).click();
+    await this.signatureSection
+      .getByRole("button", { name: "Upload signature & mint" })
+      .click();
   }
 
   /** Uploads a raw file body to the signed-result input (for malformed-file specs). */
@@ -68,5 +75,31 @@ export class AdminAssetsPage {
 
   recordRow(recordId: string) {
     return this.recordsSection.locator("tr", { hasText: recordId });
+  }
+
+  private get burnsSection() {
+    return sectionByHeading(this.page, "Burns");
+  }
+
+  burnRow(recordId: string) {
+    return this.burnsSection.locator("tr", { hasText: recordId });
+  }
+
+  /** Creates a burn from a Minted record using whole units */
+  async createBurn(recordId: string, amount: string): Promise<void> {
+    await this.recordRow(recordId)
+      .getByRole("button", { name: `Burn ${recordId}` })
+      .click();
+    await this.page.getByLabel(/Burn amount/).fill(amount);
+    await this.page.getByRole("button", { name: "Create burn" }).click();
+  }
+
+  /** Uploads signed-result.json for the first Pending burn */
+  async uploadBurnSignedResult(contents: object): Promise<void> {
+    await this.page.getByLabel(/Upload signed result for burn/).setInputFiles({
+      name: "signed-result.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(JSON.stringify(contents)),
+    });
   }
 }

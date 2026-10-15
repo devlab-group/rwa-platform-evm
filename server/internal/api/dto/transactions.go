@@ -4,13 +4,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// TransactionResponse mirrors components.schemas.Transaction.
-//
-// sender/nonce/replacedBy/replacementCount are additive operator-intervention
-// fields (transaction id, nonce, sender, replacement lineage) so the SPA can
-// show identity and replacement lineage for
-// needs_intervention/nonce_consumed_externally transactions. All are omitempty
-// to preserve the existing minimal payload for the common case.
+// TransactionResponse exposes transaction identity, status and replacement lineage.
+// Optional fields are omitted at their zero values.
 type TransactionResponse struct {
 	TxHash           string `json:"txHash"`
 	Kind             string `json:"kind"`
@@ -23,12 +18,15 @@ type TransactionResponse struct {
 	ReplacementCount int    `json:"replacementCount,omitempty"`
 }
 
-// ToTransactionResponse maps one transaction record onto its API view. Status
-// is passed through raw, so a new models.TxStatus reaches clients without a
-// change here.
-func ToTransactionResponse(tx *models.Transaction) TransactionResponse {
-	return TransactionResponse{
+// ToTransactionResponse preserves the stored status and adds an explorer link
+// when both explorerURL and the transaction hash are set
+func ToTransactionResponse(tx *models.Transaction, explorerURL string) TransactionResponse {
+	r := TransactionResponse{
 		TxHash: tx.TxHash, Kind: tx.Kind, Status: string(tx.Status), BlockNumber: tx.BlockNumber,
 		Sender: tx.From, Nonce: tx.Nonce, ReplacedBy: tx.ReplacedBy, ReplacementCount: tx.ReplacementCount,
 	}
+	if explorerURL != "" && tx.TxHash != "" {
+		r.ExplorerURL = explorerURL + "/tx/" + tx.TxHash
+	}
+	return r
 }

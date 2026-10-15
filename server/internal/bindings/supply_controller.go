@@ -66,14 +66,13 @@ const supplyControllerABIJSON = `[
 // SupplyController encodes calldata / decodes events for ISupplyController.
 type SupplyController struct{ ABI abi.ABI }
 
-// NewSupplyController parses the SupplyController ABI once.
+// NewSupplyController parses the SupplyController ABI
 func NewSupplyController() SupplyController {
 	return SupplyController{ABI: mustABI(supplyControllerABIJSON)}
 }
 
-// MintAttestation mirrors ISupplyController.MintAttestation. Field names use
-// `abi:` tags so go-ethereum's tuple packer matches them to the Solidity
-// component names regardless of Go field order.
+// MintAttestation mirrors ISupplyController.MintAttestation. abi tags map Go fields to
+// Solidity tuple components independently of field order.
 type MintAttestation struct {
 	Auditor        common.Address `abi:"auditor"`
 	ProfileDigest  [32]byte       `abi:"profileDigest"`

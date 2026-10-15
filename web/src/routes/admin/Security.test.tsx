@@ -8,7 +8,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Security } from "./Security";
 import { api } from "../../lib/client";
-import { encodeErrorResult } from "viem";
+import { encodeErrorResult, type Address } from "viem";
 import { rwaTokenErrorsAbi } from "../../lib/abis";
 import {
   readErc20Decimals,
@@ -17,15 +17,16 @@ import {
   sendForcedTransfer,
   sendRoleChange,
   sendSetFrozenTokens,
+  pauseCall,
   sendSetPaused,
   sendSetStrategyPrice,
   waitForTxReceipt,
 } from "../../lib/wallet";
 import { roleHash, ROLES } from "../../lib/roles";
+import { exportSafeBatch } from "../../lib/safeBatch";
 import { installFakeWallet, renderWithWallet } from "../../test/walletHarness";
 
-// The live prices are quote-token MINIMAL units and must render as HUMAN whole
-// units scaled by the QUOTE token's decimals (6 here). "2000000" -> "2".
+// Scale quote prices with quote decimals: 2000000 at six decimals displays as 2
 vi.mock("../../lib/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/client")>();
   return {
@@ -34,8 +35,16 @@ vi.mock("../../lib/client", async (importOriginal) => {
   };
 });
 
-// readErc20Decimals is stubbed; the admin write helpers are spied so the
-// role-gated action tests can assert the exact broadcast without a chain.
+// Spy on the batch export without downloading a browser file
+vi.mock("../../lib/safeBatch", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/safeBatch")>();
+  return {
+    ...actual,
+    exportSafeBatch: vi.fn().mockReturnValue("Saved batch."),
+  };
+});
+
+// Stub decimals and spy on writes to verify privileged calls without a chain
 vi.mock("../../lib/wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/wallet")>();
   return {
@@ -49,12 +58,11 @@ vi.mock("../../lib/wallet", async (importOriginal) => {
     sendBeginAdminTransfer: vi.fn().mockResolvedValue("0xhash"),
     sendAcceptAdminTransfer: vi.fn().mockResolvedValue("0xhash"),
     waitForTxReceipt: vi.fn().mockResolvedValue(undefined),
-    // describeWalletError is the real one: it is the thing under test in the
-    // revert-reason case, and it falls back to err.message for everything else.
+    // Keep the real revert decoder for error-message assertions
   };
 });
 
-/** Default for tests that do not care about enforcement state. */
+// Default enforcement fixture
 const NO_ENFORCEMENT = { securityStale: false };
 
 const BASE = {
@@ -64,7 +72,7 @@ const BASE = {
   redemptionPricePerWholeToken: "5500000",
 };
 
-/** The <dd> value of the row whose <dt> matches `label`. */
+// priceValue finds the value paired with a definition-list label
 function priceValue(label: RegExp): string {
   const dt = screen.getByText(label);
   const dd = dt.parentElement?.querySelector("dd");
@@ -87,12 +95,12 @@ describe("Security current prices", () => {
       expect(screen.getByText(/current purchase price/i)).toBeTruthy(),
     );
 
-    // 2000000 / 5500000 minimal at 6 decimals -> "2" / "5.5" whole units.
+    // Scale 2000000 / 5500000 at 6 decimals to 2 / 5.5
     await waitFor(() =>
       expect(priceValue(/current purchase price/i)).toBe("2"),
     );
     expect(priceValue(/current redemption price/i)).toBe("5.5");
-    // Server supplied quoteDecimals, so no on-chain round trip.
+    // Project.quoteDecimals avoids an on-chain read
     expect(readErc20Decimals).not.toHaveBeenCalled();
   });
 
@@ -121,7 +129,7 @@ describe("Security current prices", () => {
     await waitFor(() =>
       expect(
         within(card.parentElement as HTMLElement).getByText(
-          /no on-chain prices reported/i,
+          /No prices reported/i,
         ),
       ).toBeTruthy(),
     );
@@ -162,7 +170,7 @@ describe("Security admin actions (role-gated, connected wallet broadcasts)", () 
   });
 
   it("hides an action behind a notice when the connected wallet lacks the role", async () => {
-    // Connected wallet holds no roles → the pause action is gated out.
+    // No connected role holder; pause requires a route selection
     vi.mocked(api.getProject)
       .mockReset()
       .mockResolvedValue({
@@ -175,10 +183,34 @@ describe("Security admin actions (role-gated, connected wallet broadcasts)", () 
       name: "Pause / unpause trading",
     });
     const section = heading.closest("section") as HTMLElement;
-    // The gate renders a notice naming the required role instead of the button.
+    // Name the required role before a Safe is selected
     expect(within(section).getByText("PAUSER_ROLE")).toBeInTheDocument();
     expect(
       within(section).queryByRole("button", { name: "Pause trading" }),
+    ).toBeNull();
+  });
+
+  it("gates admin actions by target contract", async () => {
+    // Token-only admin can edit PAUSER_ROLE; transferring admin needs all governance contracts
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({
+        ...DEPLOYED,
+        roles: { DEFAULT_ADMIN_ROLE: [ADMIN] },
+        rolesByContract: {
+          token: { DEFAULT_ADMIN_ROLE: [ADMIN] },
+          vault: {
+            DEFAULT_ADMIN_ROLE: ["0x00000000000000000000000000000000000000a1"],
+          },
+        },
+      });
+    renderWithWallet(<Security />, { connected: true });
+
+    expect(
+      await screen.findByRole("button", { name: "Grant role" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Begin admin transfer" }),
     ).toBeNull();
   });
 
@@ -258,8 +290,7 @@ describe("Security admin actions (role-gated, connected wallet broadcasts)", () 
 describe("Security accept admin role (incoming admin, not role-gated)", () => {
   let wallet: ReturnType<typeof installFakeWallet>;
 
-  // The six governance contracts an admin transfer is accepted on, in the order
-  // adminTransferTargets() resolves them from DEPLOYED.addresses.
+  // Acceptance targets in adminTransferTargets order
   const GOVERNANCE_TARGETS = [
     DEPLOYED.addresses.token,
     DEPLOYED.addresses.compliance,
@@ -303,6 +334,57 @@ describe("Security accept admin role (incoming admin, not role-gated)", () => {
     }
   });
 
+  it("saves a pause batch for a Safe holding PAUSER_ROLE instead of broadcasting", async () => {
+    const safe = "0x9a7F3dfDEeBb51eAbBbA3c8eCCf8cF2a983A1C72";
+    vi.mocked(exportSafeBatch).mockClear();
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({ ...DEPLOYED, roles: { PAUSER_ROLE: [safe] } });
+    renderWithWallet(<Security />, { connected: true });
+
+    fireEvent.change(await screen.findByLabelText(/Safe holding PAUSER_ROLE/), {
+      target: { value: safe },
+    });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Pause trading" }),
+    );
+
+    await screen.findByText("Saved batch.");
+    expect(exportSafeBatch).toHaveBeenCalledWith(31337, safe, "Pause trading", [
+      pauseCall(DEPLOYED.addresses.token as Address, true),
+    ]);
+    expect(sendSetPaused).not.toHaveBeenCalled();
+  });
+
+  it("saves one acceptance batch covering every governance contract for an incoming Safe admin", async () => {
+    const safe = "0x9a7F3dfDEeBb51eAbBbA3c8eCCf8cF2a983A1C72";
+    vi.mocked(exportSafeBatch).mockClear();
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({ ...DEPLOYED, roles: {}, pendingAdmin: safe });
+    renderWithWallet(<Security />, { connected: true });
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Save acceptance batch for the incoming admin",
+      }),
+    );
+
+    await screen.findByText("Saved batch.");
+    const [chainId, target, name, calls] =
+      vi.mocked(exportSafeBatch).mock.calls[0];
+    expect([chainId, target, name]).toEqual([31337, safe, "Accept admin role"]);
+    expect(calls.map((c) => c.to)).toEqual([
+      DEPLOYED.addresses.token,
+      DEPLOYED.addresses.compliance,
+      DEPLOYED.addresses.supplyController,
+      DEPLOYED.addresses.vault,
+      DEPLOYED.addresses.redemptionEscrow,
+      DEPLOYED.addresses.strategy,
+    ]);
+    expect(sendAcceptAdminTransfer).not.toHaveBeenCalled();
+  });
+
   it("shows a read-only note (no accept button) when the pending admin is someone else", async () => {
     const other = "0x2222222222222222222222222222222222222222";
     vi.mocked(api.getProject)
@@ -329,7 +411,7 @@ describe("Security accept admin role (incoming admin, not role-gated)", () => {
       .mockResolvedValue({ ...DEPLOYED, roles: {} });
     renderWithWallet(<Security />, { connected: true });
 
-    // Wait for the page to settle (the Status card renders once loaded).
+    // Wait for the loaded Status card
     await screen.findByRole("heading", { name: "Status" });
     expect(
       screen.queryByRole("heading", { name: "Accept admin role" }),
@@ -349,7 +431,7 @@ describe("Security frozen balances (indexed read state)", () => {
         securityStale: true,
         frozenBalances: {
           "0x000000000000000000000000000000000000AAA1": "1500000000000000000",
-          // Beyond float64's exact integer range: must render digit-for-digit.
+          // Preserve digits beyond float64 precision
           "0x000000000000000000000000000000000000BBB2":
             "123456789012345678901234567890",
         },
@@ -529,7 +611,7 @@ describe("Security ERC-7943 enforcement controls", () => {
     });
     const section = heading.closest("section") as HTMLElement;
     expect(
-      within(section).getByText(/does not add to an existing hold/i),
+      within(section).getByText(/replacing the previous hold/i),
     ).toBeInTheDocument();
   });
 
@@ -544,7 +626,7 @@ describe("Security ERC-7943 enforcement controls", () => {
       await screen.findByText(/is not a valid address/i),
     ).toBeInTheDocument();
 
-    // 19 fractional digits on an 18-decimal token would silently round.
+    // Reject precision beyond the token's 18 decimals
     fireEvent.change(account, { target: { value: HOLDER } });
     fireEvent.change(amount, { target: { value: "1.0000000000000000001" } });
     fireEvent.click(submit);
@@ -569,9 +651,11 @@ describe("Security ERC-7943 enforcement controls", () => {
     fireEvent.change(amount, { target: { value: "2" } });
     fireEvent.click(screen.getByRole("button", { name: "Force transfer" }));
 
-    // Nothing is signed until the operator reads the warning and confirms.
+    // Require warning review and confirmation before signing
     expect(
-      await screen.findByText(/even while trading is paused/i),
+      await screen.findByText(
+        /Bypasses pause and blocked\/expired holder status/i,
+      ),
     ).toBeInTheDocument();
     expect(sendForcedTransfer).not.toHaveBeenCalled();
 
@@ -603,7 +687,7 @@ describe("Security ERC-7943 enforcement controls", () => {
       fireEvent.change(amount, { target: { value: "1" } });
       fireEvent.click(screen.getByRole("button", { name: "Force transfer" }));
       expect(
-        await screen.findByText(/cannot be seized from/i),
+        await screen.findByText(/cannot be seizure sources/i),
       ).toBeInTheDocument();
     }
     expect(sendForcedTransfer).not.toHaveBeenCalled();
@@ -620,7 +704,7 @@ describe("Security ERC-7943 enforcement controls", () => {
 
     for (const section of [freeze, forced]) {
       expect(
-        within(section).getByText(/visible in the mempool/i),
+        within(section).getByText(/see this transaction in the mempool/i),
       ).toBeInTheDocument();
       expect(
         within(section).getByText(/pause the project/i),
@@ -652,8 +736,7 @@ describe("Security ERC-7943 enforcement controls", () => {
     fireEvent.change(amount, { target: { value: "2" } });
     fireEvent.click(screen.getByRole("button", { name: "Force transfer" }));
 
-    // The confirmation names the parties in full, not shortened, since a
-    // mistyped-but-well-formed address is the mistake it exists to catch.
+    // Confirm full addresses so transcription errors remain visible
     const panel = (await screen.findByRole("alert")) as HTMLElement;
     expect(within(panel).getByText(HOLDER)).toBeInTheDocument();
     expect(within(panel).getByText(RECIPIENT)).toBeInTheDocument();
@@ -661,7 +744,7 @@ describe("Security ERC-7943 enforcement controls", () => {
       within(panel).getByText(/2000000000000000000 minimal units/),
     ).toBeInTheDocument();
 
-    // An edit behind the open panel cannot change what gets sent.
+    // Keep submission bound to reviewed values despite input changes
     expect((recipient as HTMLInputElement).disabled).toBe(true);
     fireEvent.change(recipient, {
       target: { value: "0x000000000000000000000000000000000000dEaD" },
@@ -684,7 +767,7 @@ describe("Security ERC-7943 enforcement controls", () => {
   it("reports a mined-but-reverted seizure as a failure, not a success", async () => {
     vi.mocked(waitForTxReceipt).mockRejectedValueOnce(
       new Error(
-        "Transaction 0xhash was mined but reverted on-chain. Nothing changed.",
+        "Transaction 0xhash was mined but reverted on-chain. Contract state is unchanged.",
       ),
     );
     renderWithWallet(<Security />, { connected: true });
@@ -722,7 +805,7 @@ describe("Security ERC-7943 enforcement controls", () => {
     fireEvent.click(submit);
 
     expect(
-      await screen.findByText(/can never be seized from/i),
+      await screen.findByText(/cannot be a seizure source/i),
     ).toBeInTheDocument();
   });
 

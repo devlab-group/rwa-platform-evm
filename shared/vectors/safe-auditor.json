@@ -1,0 +1,49 @@
+{
+  "_comment": "FROZEN golden vector for a Safe multisig auditor. Recorded on anvil (chainId 31337) against Safe v1.4.1 with CompatibilityFallbackHandler: the Safe returned 0x1626ba7e from isValidSignature(digest, combinedSignature) and SupplyController.mint succeeded with the Safe as auditor. digest is the ordinary MintAttestation EIP-712 digest with auditor = the Safe. Each owner signs safeMessageHash (raw hash, no EIP-191 prefix, v in {27,28}); combinedSignature concatenates the owner signatures in ascending owner-address order. Owner keys are anvil accounts 1 and 2; account 3 is the unused third owner.",
+  "safe": {
+    "address": "0x9a7F3dfDEeBb51eAbBbA3c8eCCf8cF2a983A1C72",
+    "version": "1.4.1",
+    "owners": [
+      "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "0x90F79bf6EB2c4f870365E785982E1f101E93b906"
+    ],
+    "threshold": 2
+  },
+  "domain": {
+    "name": "RWA-Supply-Attestation",
+    "version": "1",
+    "chainId": 31337,
+    "verifyingContract": "0x88577731Cc84560fE297792ab784b600A54728E2"
+  },
+  "message": {
+    "auditor": "0x9a7F3dfDEeBb51eAbBbA3c8eCCf8cF2a983A1C72",
+    "profileDigest": "0x9e942e05f836a4e090a41563fd8d74f52ab8add72c5537e42acbee6758f8e2c2",
+    "recordId": "SAFE-REC-1",
+    "recordKey": "0x468ebaf0e527d5cfbbb1d1a45e5395ad400ff5bdc36d8f8e183da896f43f36d9",
+    "metadataDigest": "0x2222222222222222222222222222222222222222222222222222222222222222",
+    "amount": "1000000000000000000000",
+    "nonce": "7",
+    "validUntil": 1900000000,
+    "vault": "0x0Db1D0Cfcba97F7dc5AF76cfEC1a646c33cD9297"
+  },
+  "domainSeparator": "0x5610bd0b4aaec40793b359175bec0ad67efcfe0e30665a1535dcfaf3deccebc1",
+  "digest": "0xde317c8fdb361f0eedafd9dab66f5c97f09c1387116465b3c6e09823c4741633",
+  "safeDomainTypehash": "0x47e79534a245952e8b16893a336b85a3d9ea9fa8c573f3d803afb92a79469218",
+  "safeMessageTypehash": "0x60b3cbf8b4a223d68d641b3b6ddf9a298e7f33710cf3d3a9d1146b5a6150fbca",
+  "safeDomainSeparator": "0xd2cda9d89a5075fe5b91f86cdf81777e38911c96b5d49ff23344a2b36b6c5577",
+  "safeMessageHash": "0x3e8fd6b71c51d10ac17f65392aff464d5afde7260b41f6a7478a19c6d14df7cc",
+  "ownerSignatures": [
+    {
+      "owner": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "privateKey": "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+      "signature": "0x239fb676e38fe76db5959f279f7a734dad066cca3f89107cb8d2eeb990963e28216e4e9e76579f909c997bfbe1f848f25fac6633443085bd04f5e1674a78e8e01b"
+    },
+    {
+      "owner": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "privateKey": "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
+      "signature": "0xb938c2896bcdd2c1ce3a2a4dd5378c4104a448bfe26b474a8f9e9774c2203616094a551cf39a43a3abbf5a72eb2f6c24742fb1f8a811b1c4c99256808a172e3b1b"
+    }
+  ],
+  "combinedSignature": "0xb938c2896bcdd2c1ce3a2a4dd5378c4104a448bfe26b474a8f9e9774c2203616094a551cf39a43a3abbf5a72eb2f6c24742fb1f8a811b1c4c99256808a172e3b1b239fb676e38fe76db5959f279f7a734dad066cca3f89107cb8d2eeb990963e28216e4e9e76579f909c997bfbe1f848f25fac6633443085bd04f5e1674a78e8e01b"
+}

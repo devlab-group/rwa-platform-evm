@@ -3,8 +3,7 @@ pragma solidity ^0.8.24;
 
 /// @title IRWAFactory
 /// @notice Deploys and wires a versioned project stack
-/// @dev incomeDistributor pays quote-token income without moving RWA; there are no
-///      inventory distributor/distributionCap fields. See docs/spec/contracts.md, Factory.
+/// @dev Stable interface; see docs/spec/contracts.md, "RWAFactory"
 interface IRWAFactory {
     enum StrategyKind {
         Fixed,

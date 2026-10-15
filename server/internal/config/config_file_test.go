@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// writeConfig writes contents to a temp YAML file and returns its path.
+// writeConfig writes contents to a temp YAML file and returns its path
 func writeConfig(t *testing.T, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -18,10 +18,8 @@ func writeConfig(t *testing.T, contents string) string {
 	return path
 }
 
-// TestLoadExampleConfig: the committed server/config.example.yaml must load
-// cleanly. Because LoadFile uses KnownFields(true), this fails if the example
-// documents a key the fileSchema doesn't declare (or vice versa) — a cheap
-// guard against the example and the schema drifting apart.
+// TestLoadExampleConfig requires server/config.example.yaml to match fileSchema;
+// LoadFile rejects unknown keys
 func TestLoadExampleConfig(t *testing.T) {
 	cfg, err := LoadFile("../../config.example.yaml")
 	if err != nil {
@@ -35,16 +33,15 @@ func TestLoadExampleConfig(t *testing.T) {
 	}
 }
 
-// TestLoadFileMissing: a nonexistent path is a startup error, not a silent
-// fall-through to defaults.
+// TestLoadFileMissing checks that a nonexistent path is an error, not a fall-back to defaults
 func TestLoadFileMissing(t *testing.T) {
 	if _, err := LoadFile(filepath.Join(t.TempDir(), "does-not-exist.yaml")); err == nil {
 		t.Fatal("expected an error for a missing config file")
 	}
 }
 
-// TestLoadFileEmptyYieldsDefaults: an empty YAML document resolves exactly
-// the documented defaults, same as LoadFromMap({}).
+// TestLoadFileEmptyYieldsDefaults checks that an empty YAML document resolves to
+// the defaults, as LoadFromMap with an empty map does
 func TestLoadFileEmptyYieldsDefaults(t *testing.T) {
 	cfg, err := LoadFile(writeConfig(t, ""))
 	if err != nil {
@@ -70,9 +67,8 @@ func TestLoadFileEmptyYieldsDefaults(t *testing.T) {
 	}
 }
 
-// TestLoadFileFullRoundTrip parses a complete YAML — INCLUDING secrets — and
-// asserts every field group flattens and resolves correctly: strings, typed
-// numbers, durations, the comma-joined trusted proxies list, and secrets.
+// TestLoadFileFullRoundTrip checks YAML strings, numbers, durations, comma-joined
+// trusted proxies and secrets across every field group
 func TestLoadFileFullRoundTrip(t *testing.T) {
 	const yaml = `
 environment: development
@@ -176,11 +172,7 @@ alerts:
 			t.Errorf("TrustedProxies[%d] = %q, want %q", i, cfg.TrustedProxies[i], w)
 		}
 	}
-	// cors_allowed_origins lives under http:, alongside trusted_proxies — it
-	// is an HTTP-transport concern, not a credential/identity one. Asserting
-	// it through the FILE path (not just the env map) is what pins the block
-	// it belongs to: a key under the wrong block is rejected outright by
-	// KnownFields, so this would fail rather than silently ignore it.
+	// Keep cors_allowed_origins under http:; strict decoding rejects it in another block
 	wantOrigins := []string{"http://localhost:5173", "https://investor.example"}
 	if len(cfg.CORSAllowedOrigins) != len(wantOrigins) {
 		t.Fatalf("CORSAllowedOrigins = %v, want %v", cfg.CORSAllowedOrigins, wantOrigins)
@@ -192,8 +184,8 @@ alerts:
 	}
 }
 
-// TestLoadFileRejectsUnknownKey: a typo in a security-relevant key must fail
-// startup (KnownFields(true)) rather than silently taking a default.
+// TestLoadFileRejectsUnknownKey checks that a misspelled key fails instead of
+// silently taking a default
 func TestLoadFileRejectsUnknownKey(t *testing.T) {
 	const yaml = `
 security:
@@ -204,24 +196,24 @@ security:
 	}
 }
 
-// TestLoadFileRejectsMalformedYAML: a syntactically broken document is a
-// parse error, not a silent empty-defaults load.
+// TestLoadFileRejectsMalformedYAML checks that a malformed document is a parse
+// error, not a load of defaults
 func TestLoadFileRejectsMalformedYAML(t *testing.T) {
 	if _, err := LoadFile(writeConfig(t, "http: [unterminated")); err == nil {
 		t.Fatal("expected an error for malformed YAML")
 	}
 }
 
-// TestLoadFileRejectsWrongScalarType: a value of the wrong type (a string
-// where an int64 is expected) is a decode error.
+// TestLoadFileRejectsWrongScalarType checks that a string where an int64 is
+// expected is a decode error
 func TestLoadFileRejectsWrongScalarType(t *testing.T) {
 	if _, err := LoadFile(writeConfig(t, "chain:\n  id: \"not-a-number\"\n")); err == nil {
 		t.Fatal("expected an error for a non-integer chain.id")
 	}
 }
 
-// prodYAML is a minimal production config that passes every fail-closed
-// check — the LoadFile counterpart of config_test.go's prodEnv().
+// prodYAML supplies minimal valid production settings for LoadFile, matching
+// config_test.go's prodEnv
 const prodYAML = `
 environment: production
 contract:
@@ -236,8 +228,8 @@ chain:
   max_fee_per_gas_wei: "500000000000"
 `
 
-// TestLoadFileProductionRoundTrips: a valid production YAML (secrets included)
-// starts, proving the production fail-closed checks run through LoadFile.
+// TestLoadFileProductionRoundTrips checks that a valid production YAML file
+// loads
 func TestLoadFileProductionRoundTrips(t *testing.T) {
 	cfg, err := LoadFile(writeConfig(t, prodYAML))
 	if err != nil {
@@ -248,11 +240,9 @@ func TestLoadFileProductionRoundTrips(t *testing.T) {
 	}
 }
 
-// TestLoadFileProductionRejectsPlaceholderWebhookSecret: the 32-zero string is
-// a known placeholder AND exactly 32 bytes, so the length floor alone waves it
-// through. It must be caught by the same blocklist that protects JWT_SECRET —
-// a forged KYC decision under a guessable webhook secret is relayed on-chain by
-// the compliance hot key.
+// TestLoadFileProductionRejectsPlaceholderWebhookSecret rejects 32 zeroes despite
+// meeting the length floor, applying the shared JWT/webhook placeholder blocklist
+// against forgeable KYC secrets
 func TestLoadFileProductionRejectsPlaceholderWebhookSecret(t *testing.T) {
 	yaml := strings.Replace(prodYAML,
 		`kyc_webhook_hmac_secret: "01234567890123456789012345678901"`,
@@ -266,9 +256,8 @@ func TestLoadFileProductionRejectsPlaceholderWebhookSecret(t *testing.T) {
 	}
 }
 
-// TestLoadFileProductionValidationFires: the SAME production checks LoadFromMap
-// enforces must also fire when the config arrives as YAML. Each case drops or
-// weakens exactly one required value and expects startup to fail.
+// TestLoadFileProductionValidationFires weakens one required value per case to check
+// that YAML enforces the same production rules as LoadFromMap
 func TestLoadFileProductionValidationFires(t *testing.T) {
 	cases := map[string]string{
 		"weak webhook secret": `
@@ -379,9 +368,8 @@ ipfs:
 	}
 }
 
-// TestLoadFileProductionExplicitZeroHonored proves an explicit numeric zero
-// (distinct from an omitted key) is carried through the pointer flattening
-// and rejected in production where it would disable a control.
+// TestLoadFileProductionExplicitZeroHonored checks that explicit zero reaches
+// production validation and is rejected where it disables a control
 func TestLoadFileProductionExplicitZeroHonored(t *testing.T) {
 	const yaml = `
 environment: production
@@ -400,9 +388,8 @@ chain:
 	}
 }
 
-// TestLoadFileProductionOverride proves the PRODUCTION_ALLOW_* escape hatches
-// are reachable from YAML: disabling the rate limit is rejected by default
-// but accepted with the explicit override.
+// TestLoadFileProductionOverride checks YAML production_overrides: disabled rate
+// limiting requires explicit permission
 func TestLoadFileProductionOverride(t *testing.T) {
 	base := `
 environment: production
@@ -430,10 +417,40 @@ production_overrides:
 	}
 }
 
-// TestExampleConfigParses keeps server/config.example.yaml honest: the shipped
-// example must always parse (no unknown keys, well-typed values) and load.
+// TestExampleConfigParses checks that server/config.example.yaml parses with no
+// unknown keys and well-typed values, and loads
 func TestExampleConfigParses(t *testing.T) {
 	if _, err := LoadFile("../../config.example.yaml"); err != nil {
 		t.Fatalf("config.example.yaml failed to load: %v", err)
+	}
+}
+
+// TestLoadFileComplianceGuards covers the holder cap, sanctions list and monitoring action
+func TestLoadFileComplianceGuards(t *testing.T) {
+	cfg, err := LoadFile(writeConfig(t, "compliance:\n  max_allowed_wallets: 99\n  sanctions_list_file: /etc/rwa/sdn.txt\nkyc:\n  monitoring_action: block\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxAllowedWallets != 99 || cfg.SanctionsListFile != "/etc/rwa/sdn.txt" || cfg.KYCMonitoringAction != "block" {
+		t.Errorf("got %d %q %q", cfg.MaxAllowedWallets, cfg.SanctionsListFile, cfg.KYCMonitoringAction)
+	}
+
+	def, err := LoadFromMap(map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.MaxAllowedWallets != 0 || def.SanctionsListFile != "" || def.KYCMonitoringAction != "alert" {
+		t.Errorf("defaults: %d %q %q", def.MaxAllowedWallets, def.SanctionsListFile, def.KYCMonitoringAction)
+	}
+
+	env, err := LoadFromMap(map[string]string{"MAX_ALLOWED_WALLETS": "5", "KYC_MONITORING_ACTION": "block"})
+	if err != nil || env.MaxAllowedWallets != 5 || env.KYCMonitoringAction != "block" {
+		t.Errorf("env override: %+v %v", env.MaxAllowedWallets, err)
+	}
+
+	for key, val := range map[string]string{"MAX_ALLOWED_WALLETS": "-1", "KYC_MONITORING_ACTION": "freeze"} {
+		if _, err := LoadFromMap(map[string]string{key: val}); err == nil {
+			t.Errorf("%s=%s must be rejected", key, val)
+		}
 	}
 }

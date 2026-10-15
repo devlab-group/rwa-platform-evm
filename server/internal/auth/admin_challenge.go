@@ -17,32 +17,21 @@ import (
 	"github.com/rwa-platform/server/internal/eip712"
 )
 
-// ErrAdminChallengeExpired is returned by AdminChallengeService.Verify when no
-// active (unexpired) challenge exists for the address — either it was never
-// issued, or it has expired. The two are deliberately not distinguished (a
-// login probe learns nothing about which).
-var ErrAdminChallengeExpired = errors.New("auth: no active admin challenge for this address")
+// ErrAdminChallengeExpired covers both an absent and an expired challenge in
+// AdminChallengeService.Verify, preventing login probes from distinguishing them
+var ErrAdminChallengeExpired = errors.New("auth: no active admin challenge for this nonce")
 
-// ErrAdminChallengeUsed is returned by Verify for a replayed challenge.
+// ErrAdminChallengeUsed is returned by Verify for a challenge that was already
+// consumed
 var ErrAdminChallengeUsed = errors.New("auth: admin challenge already used")
 
 // ErrAdminAddressMismatch is returned when the recovered signer does not
-// control the address the challenge was issued for.
+// control the address the challenge was issued for
 var ErrAdminAddressMismatch = errors.New("auth: recovered signer does not match challenge address")
 
-// AdminChallengeService issues and verifies single-use admin wallet-login
-// challenges (the admin half of the wallet-signature -> JWT flow). It reuses
-// the same primitives that power investor auth — a random nonce, a
-// personal_sign message, EIP-191 hashing via accounts.TextHash, and
-// eip712.RecoverSigner — but is deliberately NOT entangled with the
-// compliance/investor Investor record: it only proves control of a wallet so
-// the caller (api/auth.go) can compare the recovered signer to the configured
-// admin address before issuing a JWT.
-//
-// There is one active challenge per address (Create upserts): the verify step
-// carries no client-echoed nonce (POST /auth/session is {address, signature}),
-// so the service looks the challenge back up by address and recomputes its
-// message to recover the signer.
+// AdminChallengeService verifies nonce-keyed, single-use personal_sign (EIP-191) messages
+// separately from investor records. Distinct nonces let challenges coexist. api/auth.go authorizes
+// the recovered signer against the configured admin before issuing a JWT.
 type AdminChallengeService struct {
 	repo   repository.AdminChallengeRepository
 	ttl    time.Duration
@@ -50,26 +39,23 @@ type AdminChallengeService struct {
 }
 
 // NewAdminChallengeService constructs an AdminChallengeService. domainName
-// appears in the human-readable challenge message (e.g. the issuer's site
-// name), matching the investor challenge's presentation.
+// opens the human-readable challenge message, as in the investor challenge,
+// and is typically the issuer's site name.
 func NewAdminChallengeService(repo repository.AdminChallengeRepository, ttl time.Duration, domainName string) *AdminChallengeService {
 	return &AdminChallengeService{repo: repo, ttl: ttl, domain: domainName}
 }
 
-// Create issues (and stores, replacing any prior) the single active challenge
-// for address, returning the exact message the wallet must personal_sign and
-// its expiry. It does not itself check whether address is the admin — anyone
-// may request a challenge; only Verify + the caller's admin-address comparison
-// decides authorization.
-func (s *AdminChallengeService) Create(ctx context.Context, address string) (message string, expiresAt time.Time, err error) {
+// Create stores a challenge for address and returns nonce, personal_sign message and expiry.
+// Requests are public; the caller authorizes the signer after Verify.
+func (s *AdminChallengeService) Create(ctx context.Context, address string) (nonce, message string, expiresAt time.Time, err error) {
 	if !common.IsHexAddress(address) {
-		return "", time.Time{}, fmt.Errorf("auth: invalid address %q", address)
+		return "", "", time.Time{}, fmt.Errorf("auth: invalid address %q", address)
 	}
 	nonceBytes := make([]byte, 16)
 	if _, err := rand.Read(nonceBytes); err != nil {
-		return "", time.Time{}, fmt.Errorf("auth: generate nonce: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("auth: generate nonce: %w", err)
 	}
-	nonce := hex.EncodeToString(nonceBytes)
+	nonce = hex.EncodeToString(nonceBytes)
 	now := time.Now().UTC()
 	expiresAt = now.Add(s.ttl)
 	addr := common.HexToAddress(address)
@@ -83,29 +69,29 @@ func (s *AdminChallengeService) Create(ctx context.Context, address string) (mes
 		Address: addr.Hex(), Message: message, Nonce: nonce,
 		ExpiresAt: expiresAt, Used: false, CreatedAt: now,
 	}
-	if err := s.repo.Upsert(ctx, c); err != nil {
-		return "", time.Time{}, err
+	if err := s.repo.Insert(ctx, c); err != nil {
+		return "", "", time.Time{}, err
 	}
-	return message, expiresAt, nil
+	return nonce, message, expiresAt, nil
 }
 
-// Verify checks a personal_sign signature over the active challenge for
-// address, enforcing single-use and expiry, and returns the recovered signer.
-// The caller is responsible for the final authorization decision (comparing
-// the returned address to the configured admin address). The challenge is
-// marked used only on a signature that recovers to the address it was issued
-// for, so a mismatched signature cannot burn a pending admin's challenge.
-func (s *AdminChallengeService) Verify(ctx context.Context, address string, signature []byte) (common.Address, error) {
+// Verify finds the challenge by nonce, validates its address, expiry and single use, and returns
+// the personal_sign signer. Only a matching signature consumes it; the caller authorizes the
+// returned address.
+func (s *AdminChallengeService) Verify(ctx context.Context, address, nonce string, signature []byte) (common.Address, error) {
 	if !common.IsHexAddress(address) {
 		return common.Address{}, fmt.Errorf("auth: invalid address %q", address)
 	}
 	normalized := common.HexToAddress(address).Hex()
-	c, err := s.repo.Get(ctx, normalized)
+	c, err := s.repo.Get(ctx, nonce)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return common.Address{}, ErrAdminChallengeExpired
 		}
 		return common.Address{}, err
+	}
+	if c.Address != normalized {
+		return common.Address{}, ErrAdminAddressMismatch
 	}
 	if c.Used {
 		return common.Address{}, ErrAdminChallengeUsed
@@ -122,9 +108,8 @@ func (s *AdminChallengeService) Verify(ctx context.Context, address string, sign
 		return common.Address{}, ErrAdminAddressMismatch
 	}
 
-	// Mark used only after the address matches, so a concurrent replay loses
-	// (CAS) and a wrong-address signature cannot consume the challenge.
-	if err := s.repo.MarkUsed(ctx, normalized); err != nil {
+	// MarkUsed is a compare-and-set, so of two concurrent replays only one wins
+	if err := s.repo.MarkUsed(ctx, nonce); err != nil {
 		if errors.Is(err, repository.ErrAlreadyExists) {
 			return common.Address{}, ErrAdminChallengeUsed
 		}

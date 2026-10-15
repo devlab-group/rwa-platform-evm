@@ -9,9 +9,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// BuildPurchases converts decoded Vault Purchased chain events into
-// models.Purchase records, one per event (each Purchased log is a
-// self-contained fill, unlike redemption's multi-event lifecycle).
+// BuildPurchases converts decoded Vault Purchased events into models.Purchase records,
+// one per complete fill
 func BuildPurchases(events []*models.ChainEvent) []*models.Purchase {
 	out := make([]*models.Purchase, 0, len(events))
 	for _, e := range events {
@@ -35,23 +34,12 @@ func toString(v any) string {
 	return s
 }
 
-// Reconcile rebuilds the purchases read model out of every persisted Vault
-// chain event for (chainID, vaultAddr), mirroring internal/redemption.
-// Service.Reconcile: always safe to call, including after an indexer
-// reorg rollback.
+// Reconcile rebuilds purchases from persisted Vault events for (chainID, vaultAddr),
+// reflecting indexer rollbacks as internal/redemption.Service.Reconcile does.
 //
-// This used to DeleteAll then Create every record, which let
-// a concurrent API reader observe an empty or partially rebuilt history —
-// and a crash between the delete and the last insert left it that way
-// until the next successful pass. It now does a generation-swap instead:
-// every surviving record is Upsert'd (create-or-replace by id, never
-// deleted first) tagged with a fresh generation, so a reader mid-rebuild
-// always sees either the previous generation's value for an id not yet
-// reached, or the new generation's value for one already reached — never a
-// gap. Only AFTER every record has been upserted are stale entries (ids
-// that no longer appear at all, e.g. rolled back by a reorg) pruned by
-// generation, which is safe precisely because every id that SHOULD survive
-// has already been re-stamped with the current generation by that point.
+// Upsert every fill under a fresh generation before pruning older rows, avoiding
+// delete-first gaps for surviving purchases. Readers can see mixed generations; a crash
+// leaves old rows alongside completed upserts.
 func (s *Service) Reconcile(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64) error {
 	var all []*models.ChainEvent
 	for _, name := range EventNames {

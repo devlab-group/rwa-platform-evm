@@ -6,6 +6,12 @@ import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { api, ApiError } from "../../lib/client";
 import type { components } from "../../lib/api-types";
 import { formatUnixSeconds, shortenAddress } from "../../lib/format";
+import {
+  COMPLIANCE_STATUS_LABEL,
+  complianceDisplayStatus,
+  type ComplianceDisplayStatus,
+} from "../../lib/status";
+import { TableWrap } from "../../components/TableWrap";
 
 type WalletStatus = components["schemas"]["WalletStatus"];
 type Challenge = components["schemas"]["Challenge"];
@@ -14,11 +20,20 @@ type AuditLog = components["schemas"]["AuditLog"];
 type ComplianceStatus = NonNullable<WalletStatus["status"]>;
 type WebhookOutcome = NonNullable<WebhookEvent["outcome"]>;
 
-const STATUS_TONE: Record<ComplianceStatus, string> = {
-  Unknown: "badge--neutral",
+const STATUS_TONE: Record<ComplianceDisplayStatus, string> = {
+  NotOnboarded: "badge--neutral",
   Allowed: "badge--success",
+  Expired: "badge--warning",
   Blocked: "badge--danger",
 };
+
+function ComplianceBadge({ status }: { status: ComplianceDisplayStatus }) {
+  return (
+    <span className={`badge ${STATUS_TONE[status]}`}>
+      {COMPLIANCE_STATUS_LABEL[status]}
+    </span>
+  );
+}
 
 const WEBHOOK_TONE: Record<WebhookOutcome, string> = {
   Allowed: "badge--success",
@@ -26,10 +41,7 @@ const WEBHOOK_TONE: Record<WebhookOutcome, string> = {
   Pending: "badge--neutral",
 };
 
-/**
- * Compliance: investor status/expiry, manual allow/block, wallet-ownership
- * challenge/evidence, KYC webhook history, and audit log.
- */
+/** Wallet status/expiry, manual decisions, ownership proofs, webhook history and audit log */
 export function Compliance() {
   const wallets = usePaginatedList<WalletStatus>(
     (cursor, signal) => api.listWallets({ signal, cursor }),
@@ -61,7 +73,7 @@ export function Compliance() {
         >
           {(data) => (
             <>
-              <div className="table-wrap">
+              <TableWrap label="Wallets">
                 <table>
                   <thead>
                     <tr>
@@ -78,11 +90,12 @@ export function Compliance() {
                           {shortenAddress(w.address)}
                         </td>
                         <td>
-                          {w.status && (
-                            <span className={`badge ${STATUS_TONE[w.status]}`}>
-                              {w.status}
-                            </span>
-                          )}
+                          <ComplianceBadge
+                            status={complianceDisplayStatus(
+                              w.status,
+                              w.validUntil,
+                            )}
+                          />
                         </td>
                         <td>{formatUnixSeconds(w.validUntil)}</td>
                         <td>{w.ownershipVerified ? "Yes" : "No"}</td>
@@ -90,7 +103,7 @@ export function Compliance() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableWrap>
               <PaginationFooter
                 loadedCount={data.length}
                 totalCount={wallets.totalCount}
@@ -124,7 +137,7 @@ export function Compliance() {
         >
           {(data) => (
             <>
-              <div className="table-wrap">
+              <TableWrap label="Webhook history">
                 <table>
                   <thead>
                     <tr>
@@ -141,7 +154,7 @@ export function Compliance() {
                         <td className="mono" title={w.address}>
                           {shortenAddress(w.address)}
                         </td>
-                        <td>{w.provider ?? "—"}</td>
+                        <td>{w.provider ?? "-"}</td>
                         <td>
                           {w.outcome && (
                             <span
@@ -152,12 +165,12 @@ export function Compliance() {
                           )}
                         </td>
                         <td>{w.applied ? "Yes" : "No"}</td>
-                        <td>{w.receivedAt ?? "—"}</td>
+                        <td>{w.receivedAt ?? "-"}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableWrap>
               <PaginationFooter
                 loadedCount={data.length}
                 totalCount={webhooks.totalCount}
@@ -181,7 +194,7 @@ export function Compliance() {
         >
           {(data) => (
             <>
-              <div className="table-wrap">
+              <TableWrap label="Audit log">
                 <table>
                   <thead>
                     <tr>
@@ -195,20 +208,20 @@ export function Compliance() {
                   <tbody>
                     {data.map((entry) => (
                       <tr key={entry.id}>
-                        <td>{entry.category ?? "—"}</td>
+                        <td>{entry.category ?? "-"}</td>
                         <td className="mono" title={entry.actor}>
                           {shortenAddress(entry.actor)}
                         </td>
-                        <td>{entry.action ?? "—"}</td>
+                        <td>{entry.action ?? "-"}</td>
                         <td className="mono" title={entry.target}>
-                          {entry.target ? shortenAddress(entry.target) : "—"}
+                          {entry.target ? shortenAddress(entry.target) : "-"}
                         </td>
-                        <td>{entry.createdAt ?? "—"}</td>
+                        <td>{entry.createdAt ?? "-"}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableWrap>
               <PaginationFooter
                 loadedCount={data.length}
                 totalCount={auditLogs.totalCount}
@@ -248,7 +261,7 @@ function SetStatusForm({ onSubmitted }: { onSubmitted: () => void }) {
         `compliance-${address}-${status}`,
       );
       setResult(ref.txHash ?? "submitted");
-      setConfirmGateKey((k) => k + 1); // collapse the confirm panel back down
+      setConfirmGateKey((k) => k + 1); // Close the confirmation panel
       onSubmitted();
     } catch (err) {
       setError(
@@ -279,7 +292,7 @@ function SetStatusForm({ onSubmitted }: { onSubmitted: () => void }) {
         >
           <option value="Allowed">Allowed</option>
           <option value="Blocked">Blocked</option>
-          <option value="Unknown">Unknown</option>
+          <option value="Unknown">Unknown (not onboarded)</option>
         </select>
       </div>
       <div className="field">
@@ -297,7 +310,7 @@ function SetStatusForm({ onSubmitted }: { onSubmitted: () => void }) {
         reviewLabel="Review status change"
         confirmLabel="Confirm set status"
         confirmHeading="Confirm compliance status change"
-        confirmWarning="This calls the server's compliance hot key directly and takes effect immediately — no wallet signature step follows to catch a mistake."
+        confirmWarning="Submits through the server's compliance key, taking effect when mined. This confirmation has no further wallet approval."
         disabled={!address}
         submitting={submitting}
         onConfirm={handleSubmit}

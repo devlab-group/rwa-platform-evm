@@ -11,10 +11,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// writeTestKeystore encrypts priv into dir/role.json with password, using
-// the same go-ethereum keystore machinery `cast wallet import` and the
-// signer CLI's --keystore flag use, and dir/<passwordFileName> holding
-// password. Returns dir.
+// writeTestKeystore creates a fresh encrypted dir/role.json and dir/<passwordFileName>,
+// returning dir
 func writeTestKeystore(t *testing.T, role, password string, passwordFileName string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -96,8 +94,7 @@ func TestLocalKeystoreReloadPicksUpReplacedFile(t *testing.T) {
 	}
 	firstAddr, _ := p.Address(context.Background())
 
-	// Replace the keystore file + password with a different key/password,
-	// simulating an operator rotating the on-disk credential.
+	// Replace the keystore file and password to simulate rotating the key on disk
 	dir2 := writeTestKeystore(t, "compliance", "second-password", "password.txt")
 	newRaw, err := os.ReadFile(filepath.Join(dir2, "compliance.json"))
 	if err != nil {
@@ -119,7 +116,7 @@ func TestLocalKeystoreReloadPicksUpReplacedFile(t *testing.T) {
 	}
 }
 
-// TestLocalKeystoreCloseZeroesKey is the K2 regression test.
+// TestLocalKeystoreCloseZeroesKey checks that Close zeroes the decrypted key
 func TestLocalKeystoreCloseZeroesKey(t *testing.T) {
 	dir := writeTestKeystore(t, "compliance", "s3cret", "password.txt")
 	p, err := newLocalKeystoreProvider("compliance", dir, filepath.Join(dir, "password.txt"))

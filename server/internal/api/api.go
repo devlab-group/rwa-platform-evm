@@ -1,9 +1,5 @@
-// Package api implements the Gin HTTP handlers matching every operationId
-// in api/openapi.yaml (FROZEN). Handlers are thin: validation
-// and side effects live in the workflow packages (internal/assets,
-// internal/compliance, internal/sales, internal/redemption,
-// internal/project); this package only translates HTTP <-> those calls and
-// enforces auth/idempotency/rate-limit middleware.
+// Package api serves the HTTP API with authentication, idempotency and request limits.
+// Workflow services own asset, compliance, sales, redemption and project operations.
 package api
 
 import (
@@ -25,82 +21,60 @@ import (
 	"github.com/rwa-platform/server/internal/sales"
 )
 
-// challengeCreateRatePerSecond/challengeCreateBurst bound POST
-// /compliance/challenge specifically, independent of app.RateLimitRPS
-// (the deployment-wide limit, which may be disabled or configured looser).
-// This endpoint is unauthenticated and each call always creates a new
-// stored document, so it gets its own always-on, deliberately strict
-// per-IP bucket regardless of global rate-limit configuration.
+// Limit unauthenticated challenge creation per IP independently of the global limiter
 const (
 	challengeCreateRatePerSecond = 0.5
 	challengeCreateBurst         = 5
 )
 
-// sessionLoginRatePerSecond/sessionLoginBurst bound the admin auth endpoints
-// POST /auth/challenge and POST /auth/session with an endpoint-specific login
-// limiter that stays on independent of the optional global limiter. These are
-// the credential-verification surface (a wallet-signature is verified against
-// the admin address here — see createSession); with RATE_LIMIT_RPS<=0 (a
-// valid, if inadvisable, production value that config.validateProductionBounds
-// now refuses without an explicit override) rapid guessing would otherwise go
-// completely unthrottled. Same always-on-regardless-of-global-config pattern as
-// challengeCreateRatePerSecond.
+// Keep per-IP admin-login limits enabled even when global rate limiting is disabled
 const (
 	sessionLoginRatePerSecond = 1
 	sessionLoginBurst         = 10
 )
 
-// App bundles every dependency the API handlers need. All fields except
-// Repos/ChainID may be nil in a reduced configuration (e.g. no compliance
-// key configured); handlers that need a nil dependency return a documented
-// 501/400 rather than panicking.
+// App holds handler dependencies; unconfigured optional services disable their endpoints
 type App struct {
 	Repos *repository.Repositories
 
 	ChainID int64
-	// FactoryAddress is the RWAFactory deploy entry point, surfaced verbatim by
-	// GET /api/v1/config so the admin's web wallet can broadcast the deploy
-	// itself (the server only observes ProjectDeployed). Empty when no factory
-	// is configured.
+	// ExplorerURL supplies transaction links; empty omits them
+	ExplorerURL string
+	// FactoryAddress is exposed by GET /api/v1/config for wallet-side deployment;
+	// empty means no factory is configured
 	FactoryAddress string
-	// ProjectID is the operator-configured UUID this deployment is pinned to.
-	// It is surfaced by GET /api/v1/config so the admin web builds its Asset
-	// Profile with this projectId instead of minting one, and createProfile
-	// rejects any profile whose projectId differs (the safety gate). Empty
-	// leaves the gate off (development/test).
+	// ProjectID pins profile creation to the operator's UUID and is exposed in config.
+	// Empty disables the match requirement for development or tests.
 	ProjectID        string
 	LastIndexedBlock func() uint64 // nil-safe accessor; defaults to 0 if nil
-	ReadyCheck       func() error  // nil means always ready
+	ReadyCheck       func() error  // nil means not ready
 
 	Project    *project.Service
 	Records    *assets.RecordService
+	Burns      *assets.BurnService
 	Challenges *compliance.ChallengeService
 	Webhooks   *compliance.WebhookService
 	Status     *compliance.StatusService
-	// KYC is the configured KYC provider (none/sumsub/onfido). nil disables the
-	// KYC endpoints (startKYC / kycWebhook return 501 not_configured). Provider
-	// selection is config-driven — see internal/kyc.New and cmd/platform.
+	// Guard checks Allowed submissions against cap and sanctions rules; nil disables these checks
+	Guard *compliance.Guard
+	// MonitoringBlock queues a Blocked decision for a monitoring hit on an unexpired Allowed wallet
+	MonitoringBlock bool
+	// KYC is the configured provider; nil disables startKYC and kycWebhook with 501
 	KYC         kyc.Provider
 	Sales       *sales.Service
 	Redemptions *redemption.Service
 	Audit       *auditlog.Logger
-	// Sessions issues/validates the WalletSession bearer minted at
-	// verifyChallenge. nil disables /api/v1/me/wallet-status
-	// (auth.RequireWalletSession responds 501, not a panic — see its doc
-	// comment) rather than every other handler needing its own nil check.
+	// Sessions issues wallet-scoped tokens after ownership verification;
+	// nil disables protected wallet-status access
 	Sessions *auth.SessionManager
-	// AdminChallenges issues/verifies the single-use admin wallet-login
-	// challenges backing POST /auth/challenge + /auth/session. nil makes both
-	// return 501 not_configured (no admin can log in).
+	// AdminChallenges supplies single-use login challenges; nil disables admin login
 	AdminChallenges *auth.AdminChallengeService
 
-	// FinalityConfirmations gates Redemption.claimable (api Schemas.Redemption).
+	// FinalityConfirmations bounds when a funded redemption is exposed as claimable
 	FinalityConfirmations uint64
 
-	// Admin auth (wallet-signature -> JWT, single-admin model). AdminAddress is
-	// the one wallet allowed to authenticate; JWTSecret signs/verifies the
-	// issued admin JWT; JWTTTL bounds its lifetime. All three empty/zero
-	// disable admin login (createSession returns 501).
+	// AdminAddress identifies the login wallet; JWTSecret authenticates its tokens
+	// and JWTTTL bounds their lifetime
 	AdminAddress string
 	JWTSecret    []byte
 	JWTTTL       time.Duration
@@ -108,32 +82,16 @@ type App struct {
 	IdempotencyTTL time.Duration
 	RateLimitRPS   float64
 	RateLimitBurst int
-	// MaxRequestBodyBytes bounds every request body. <=0 disables the limit.
+	// MaxRequestBodyBytes limits request bodies; non-positive values disable the limit
 	MaxRequestBodyBytes int64
-	// TrustedProxies is forwarded to gin.Engine.SetTrustedProxies. nil/empty
-	// (the default) trusts NO proxies — see config.Config.TrustedProxies'
-	// doc comment for why that, not gin's own permissive built-in default,
-	// is what a directly internet-facing deployment needs.
+	// TrustedProxies configures forwarded-IP trust; empty trusts no proxies
 	TrustedProxies []string
-	// CORSAllowedOrigins is the exact browser origins allowed to call this API
-	// cross-origin. Empty (the default) disables CORS entirely — correct for a
-	// deployment serving only the embedded, same-origin admin console. Copied
-	// verbatim from config.Config; see auth.CORS.
+	// CORSAllowedOrigins lists permitted browser origins; empty disables CORS
 	CORSAllowedOrigins []string
 }
 
-// recordAudit appends one entry to the operational audit trail, logging
-// (never silently swallowing) a failure to do so. If these appends dropped
-// their errors, a privileged transaction could be broadcast and returned as
-// accepted while its actor/action record went missing. Every handler in this
-// package that records a privileged action's audit entry should call this
-// instead of `_ = app.Audit.Record(...)`, so a persistence failure for a
-// compliance/mint/redemption action is at least OBSERVABLE (in server
-// logs/monitoring) rather than invisible. This is a partial mitigation, not the
-// stronger design (a transactional outbox that persists the audit/operation
-// intent BEFORE broadcast and blocks on it) — retrofitting that across
-// assets/compliance/sales without disturbing their existing request flows
-// needs dedicated design work of its own.
+// recordAudit attempts an audit append and logs persistence failures.
+// It is best effort; use recordAuditIntent when a durable record must precede an effect.
 func (app *App) recordAudit(ctx context.Context, category, actor, action, target string, metadata map[string]any) {
 	if app.Audit == nil {
 		return
@@ -143,16 +101,9 @@ func (app *App) recordAudit(ctx context.Context, category, actor, action, target
 	}
 }
 
-// recordAuditIntent persists a durable pre-effect audit INTENT and returns its
-// id. A privileged handler that broadcasts/mutates external
-// state calls this BEFORE the effect and MUST treat a non-nil error as fatal —
-// failing the request closed rather than acting with no durable actor/action
-// trail. On success it later calls recordAuditResult with the returned id.
-//
-// A reduced deployment with no audit logger wired (app.Audit == nil) returns
-// an empty id and nil: there is genuinely no durable store to fail closed
-// against, matching every other optional-dependency degrade in this package
-// (production config requires a real Mongo, so Audit is always wired there).
+// recordAuditIntent persists intent before a privileged effect. Callers MUST abort on
+// error and link completion with recordAuditResult. A reduced app without Audit returns
+// an empty ID and no error.
 func (app *App) recordAuditIntent(ctx context.Context, category, actor, action, target string, metadata map[string]any) (string, error) {
 	if app.Audit == nil {
 		return "", nil
@@ -160,10 +111,8 @@ func (app *App) recordAuditIntent(ctx context.Context, category, actor, action, 
 	return app.Audit.RecordIntent(ctx, category, actor, action, target, metadata)
 }
 
-// recordAuditResult records the linked completion for a prior
-// recordAuditIntent. A persistence failure is logged, never
-// fatal: the intent already durably captured the actor/action, so the request
-// itself has already succeeded or failed on its own merits by this point.
+// recordAuditResult links completion to a prior intent, logging failures without
+// changing the already determined operation result
 func (app *App) recordAuditResult(ctx context.Context, intentID, category, actor, action, target string, ok bool, metadata map[string]any) {
 	if app.Audit == nil {
 		return
@@ -173,161 +122,98 @@ func (app *App) recordAuditResult(ctx context.Context, intentID, category, actor
 	}
 }
 
-// NewRouter builds the Gin engine with every api/openapi.yaml route wired
-// to its handler, plus RBAC/idempotency/rate-limit/size-limit/security-header
-// middleware.
+// NewRouter wires API handlers and authentication, idempotency and request-limit middleware
 func NewRouter(app *App) *gin.Engine {
 	r := gin.New()
 	if err := r.SetTrustedProxies(app.TrustedProxies); err != nil {
-		// Only returned for a malformed proxy entry (bad IP/CIDR) — a
-		// config error, not a runtime condition to degrade gracefully
-		// from: better to fail loudly at startup than silently trust
-		// nothing (or, worse, panic later on first request).
+		// Reject malformed proxy configuration at router construction
 		panic("api: invalid TrustedProxies: " + err.Error())
 	}
 	r.Use(gin.Recovery())
 	r.Use(metrics.GinMiddleware())
 	r.Use(auth.SecurityHeaders())
-	// CORS sits AHEAD of the rate limiter and Authenticate, and behind
-	// SecurityHeaders. A preflight OPTIONS carries no Authorization header by
-	// design, so it must be answered before anything tries to authenticate it;
-	// and counting preflights against the per-IP budget would let a browser's
-	// own bookkeeping exhaust a legitimate client's rate limit. Recovery and
-	// the metrics/security-header middleware still wrap it, so a preflight is
-	// still measured and still gets the baseline security headers.
+	// Answer CORS preflights before authentication and rate limiting, while retaining
+	// recovery, metrics and security headers
 	r.Use(auth.CORS(app.CORSAllowedOrigins))
 	r.Use(auth.MaxRequestBody(app.MaxRequestBodyBytes))
 	if app.RateLimitRPS > 0 {
 		r.Use(auth.RateLimit(app.RateLimitRPS, app.RateLimitBurst))
 	}
-	r.Use(auth.Authenticate(app.JWTSecret))
+	r.Use(auth.Authenticate(app.JWTSecret, app.AdminAddress))
 
 	idem := auth.Idempotency(app.Repos.Idempotency, app.IdempotencyTTL)
 
 	r.GET("/healthz", app.getHealth)
 	r.GET("/readyz", app.getReady)
 
-	// Admin wallet login (BearerJwt scheme). Both steps are public (no role
-	// gate — this is how the admin authenticates in the first place) and live
-	// outside /api/v1, matching the SPA's /auth contract; both get an
-	// always-on, strict per-IP limiter regardless of the global one. There is
-	// no DELETE — the JWT is stateless, so logout is client-side.
+	// Login endpoints are public and independently rate-limited.
+	// JWT logout is client-side; there is no DELETE session route.
 	authLimiter := auth.RateLimit(sessionLoginRatePerSecond, sessionLoginBurst)
 	r.POST("/auth/challenge", authLimiter, app.createAuthChallenge)
 	r.POST("/auth/session", authLimiter, app.createSession)
 
-	// adminOnly gates every route in the public/private matrix below that
-	// must reject a missing/invalid admin JWT outright, instead of silently
-	// downgrading it to RoleReadOnly the way auth.Authenticate does by default.
-	// Without this, GET routes with no explicit role requirement would conflict
-	// with the global auth rule. V1 is single-admin, so admin is the only
-	// non-public role there is.
+	// adminOnly requires a valid admin JWT instead of anonymous read-only fallback
 	adminOnly := auth.RequireRole(auth.RoleAdmin)
 
 	v1 := r.Group("/api/v1")
 	{
 		v1.GET("/project", app.getProject)
-		// ERC-7943 enforcement state is gated for the same reason
-		// /compliance/wallets is: which named wallets the issuer has frozen,
-		// and who was seized from, is operational compliance data rather than
-		// public market information. GET /project stays public without it.
+		// Enforcement history is admin-only operational compliance data
 		v1.GET("/project/enforcement", adminOnly, app.getEnforcement)
-		// getConfig is PUBLIC: it exposes only the chain id and factory address
-		// the admin's web wallet needs to broadcast the deploy itself (the
-		// server no longer deploys — it observes ProjectDeployed).
+		// Public config supplies chain, factory and project identity for wallet-side setup
 		v1.GET("/config", app.getConfig)
 
-		v1.POST("/profile/validate", app.validateProfile)
-		// admin-only, create-once (see createProfile) — the only supported
-		// way to durably persist an Asset Profile.
+		// Validation compiles a caller-supplied schema, so it is admin-only like profile creation
+		v1.POST("/profile/validate", adminOnly, app.validateProfile)
+		// Profile creation is admin-only and create-once
 		v1.POST("/profile", auth.RequireRole(auth.RoleAdmin), idem, app.createProfile)
-		// getProfile lets the admin UI repopulate the Setup page after a reload
-		// (the stored profile survived, but there was no way to fetch it) —
-		// admin-only, same gating as createProfile; 404 when none exists yet.
+		// Admin-only profile retrieval returns 404 until a profile is stored
 		v1.GET("/profile", auth.RequireRole(auth.RoleAdmin), app.getProfile)
 
-		// wallet/KYC history is operational compliance data, not
-		// public market information — gated, unlike the investor
-		// self-service challenge flow right below it (the caller there
-		// only ever proves/queries ITS OWN address, nothing global).
+		// Global wallet and KYC history requires admin authentication
 		v1.GET("/compliance/wallets", adminOnly, app.listWallets)
-		// An endpoint-specific limiter, ON TOP OF the
-		// per-address active-challenge cap enforced inside
-		// compliance.ChallengeService.Create — the limiter bounds request
-		// RATE from a given source, the cap bounds STANDING storage per
-		// address; neither alone is sufficient (a slow-but-steady caller
-		// under the rate limit could still accumulate challenges without
-		// the cap; a burst from many source IPs for the SAME address is
-		// caught by the cap even though each IP individually stays under
-		// its own rate limit).
+		// Per-IP rate limits bound creation frequency; ChallengeService's active cap
+		// also bounds stored challenges per wallet
 		v1.POST("/compliance/challenge", auth.RateLimit(challengeCreateRatePerSecond, challengeCreateBurst), app.createChallenge)
 		v1.POST("/compliance/challenge/verify", app.verifyChallenge)
-		// getMyWalletStatus is subject-scoped by auth.RequireWalletSession
-		// (X-Wallet-Session, minted at verifyChallenge — not the admin JWT),
-		// so it is deliberately outside the adminOnly/RequireRole
-		// vocabulary entirely, not merely "public" like the routes below.
+		// Wallet status requires its own X-Wallet-Session, not an admin JWT
 		v1.GET("/me/wallet-status", auth.RequireWalletSession(app.Sessions), app.getMyWalletStatus)
-		// startKYC begins a provider verification for the session's OWN
-		// wallet (subject-scoped by RequireWalletSession, same as
-		// /me/wallet-status — the address is never a request parameter).
+		// Start verification for the session wallet, never a request-supplied address
 		v1.POST("/compliance/kyc/start", auth.RequireWalletSession(app.Sessions), app.startKYC)
-		// isAddressAllowed is genuinely public (api/openapi.yaml:
-		// security: []) — an anonymous transfer-preflight lookup that
-		// discloses only {allowed}, never the full WalletStatus of a third
-		// party. No RequireRole/RequireWalletSession here by design.
+		// Public transfer preflight exposes allowed status without full wallet/KYC history
 		v1.GET("/compliance/allowed/:address", app.isAddressAllowed)
 		v1.GET("/compliance/webhooks", adminOnly, app.listWebhookEvents)
 		v1.POST("/compliance/status", auth.RequireRole(auth.RoleAdmin), idem, app.setComplianceStatus)
-		// kycWebhook is deliberately NOT role-gated: it authenticates via
-		// its own HMAC signature scheme (X-Webhook-Signature, or the
-		// configured provider's own header) — see the handler's doc comment.
+		// Webhooks authenticate with the configured provider's raw-body signature
 		v1.POST("/compliance/webhook", app.kycWebhook)
 
 		v1.GET("/audit-logs", adminOnly, app.listAuditLogs)
 
-		// The full asset-record list and .rwa package download
-		// (profile + metadata + typed data + proof material) are
-		// operational/compliance data, gated; the preview-style GETs
-		// elsewhere in this file stay public by design (see their own
-		// comments).
+		// Asset records and audit packages contain operational evidence and require admin access
 		v1.GET("/assets/records", adminOnly, app.listRecords)
 		v1.POST("/assets/records", auth.RequireRole(auth.RoleAdmin), idem, app.createRecord)
 		v1.GET("/assets/records/:recordId/package", adminOnly, app.downloadPackage)
-		// reissue is admin-only: re-attesting a stuck record is an audited
-		// recovery action, narrower than the operator-or-admin create/sign
-		// path above.
+		// Reissuing a stuck record is an admin recovery action
 		v1.POST("/assets/records/:recordId/reissue", auth.RequireRole(auth.RoleAdmin), idem, app.reissueRecord)
 
-		// sales/inventory stays public: market-facing figures an investor
-		// reads before/without ever authenticating — the same on-chain state
-		// is trivially readable by anyone directly from the chain regardless
-		// of server-side gating. Per-amount purchase quotes are read straight
-		// from Vault.previewBuy by the SPA, and the buy transaction itself is
-		// built and signed client-side by the investor's wallet; the server
-		// never assembles it.
+		// Burn package creation, download and reissue
+		v1.GET("/assets/burns", adminOnly, app.listBurns)
+		v1.POST("/assets/burns", auth.RequireRole(auth.RoleAdmin), idem, app.createBurn)
+		v1.GET("/assets/burns/:burnId/package", adminOnly, app.downloadBurnPackage)
+		v1.POST("/assets/burns/:burnId/reissue", auth.RequireRole(auth.RoleAdmin), idem, app.reissueBurn)
+
+		// Inventory is public; wallets read purchase quotes and submit buys directly
 		v1.GET("/sales/inventory", app.getInventory)
-		// The full purchase history list is an operational record,
-		// gated (unlike the inventory GET above).
+		// Global purchase history requires admin access
 		v1.GET("/sales/purchases", adminOnly, app.listPurchases)
 
-		// The redemption list is PUBLIC: redemption requests are
-		// on-chain-public data (the same set is trivially readable from the
-		// chain, and a single redemption by :id is already public), so
-		// gating the server's mirror provides no real confidentiality. Made
-		// public so issuers can build their own investor UIs on top of it;
-		// the optional `address` query filters to one beneficiary's
-		// requests. A single redemption by :id likewise stays public:
-		// RedemptionEscrow.getRedemption(id) is itself an unauthenticated
-		// on-chain view call, and ids are sequential, not a capability token.
-		// Redemption quotes come from RedemptionEscrow.previewRedeem read by
-		// the SPA, and investor request/claim/cancel transactions are built
-		// client-side by the wallet.
+		// Redemption reads mirror public chain data, optionally filtered by beneficiary.
+		// Wallets read quotes and submit request, claim and cancel calls directly.
 		v1.GET("/redemptions", app.listRedemptions)
 		v1.GET("/redemptions/:id", app.getRedemption)
 
-		// Server-submitted transaction history. PUBLIC (on-chain-public
-		// data; issuers build their own investor UIs) with an optional
-		// `address` query filtering to transactions touching that address.
+		// Public transaction history includes server and indexed wallet transactions,
+		// with an optional address filter
 		v1.GET("/transactions", app.listTransactions)
 	}
 

@@ -18,11 +18,9 @@ func TestCanonicalizeSortsKeysAndStripsWhitespace(t *testing.T) {
 	}
 }
 
-// TestCanonicalizeUnicodeKeyOrdering checks BMP-codepoint key sorting
-// (U+00E9 'e-acute' < U+20AC euro sign < U+FB2A hebrew shin, all single
-// UTF-16 code units so codepoint order and UTF-16-code-unit order agree —
-// this avoids hand-coding the RFC 8785 surrogate-pair edge case, which the
-// library's own upstream test suite already covers).
+// TestCanonicalizeUnicodeKeyOrdering covers U+00E9, U+20AC and U+FB2A. Each occupies
+// one UTF-16 unit, so code point and RFC 8785 code-unit ordering agree. The jcs library
+// tests surrogate pairs.
 func TestCanonicalizeUnicodeKeyOrdering(t *testing.T) {
 	in := []byte(`{"` + "€" + `":"euro","` + "é" + `":"eacute","` + "שׁ" + `":"shin"}`)
 	got, err := Canonicalize(in)
@@ -50,7 +48,7 @@ func TestCanonicalizeRejectsInvalidUTF8(t *testing.T) {
 }
 
 func TestCanonicalizeRejectsExcessiveDepth(t *testing.T) {
-	// Build a deeply nested array beyond MaxObjectDepth.
+	// Build a deeply nested array beyond MaxObjectDepth
 	var b strings.Builder
 	depth := MaxObjectDepth + 10
 	for i := 0; i < depth; i++ {
@@ -102,7 +100,7 @@ func TestCIDv1RawIsStableAndCodecRaw(t *testing.T) {
 		t.Errorf("CID not stable: %s != %s", c1, c2)
 	}
 	if !strings.HasPrefix(c1, "b") {
-		// base32 (lower) CIDv1 strings conventionally start with 'b'.
+		// the multibase prefix for base32 is 'b'
 		t.Errorf("CID %s does not look like a base32 CIDv1", c1)
 	}
 }

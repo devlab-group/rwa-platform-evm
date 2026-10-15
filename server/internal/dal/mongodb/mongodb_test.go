@@ -9,8 +9,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// operandFor digs the $gt/$lt operand out of a keyset filter's first $or
-// clause, which is where the "strictly past this sort value" comparison lives.
+// operandFor extracts the first $or branch's $gt/$lt operand for sort-value assertions
 func operandFor(t *testing.T, filter bson.M, sortField, op string) any {
 	t.Helper()
 	clauses, ok := filter["$or"].(bson.A)
@@ -32,18 +31,10 @@ func operandFor(t *testing.T, filter bson.M, sortField, op string) any {
 	return v
 }
 
-// TestKeysetFilterDirDateEmitsDateOperand is the regression test for the
-// silently-empty second page: asset_records.createdAt and
-// transactions.submittedAt are persisted from Go time.Time values, so they are
-// BSON Dates. MongoDB brackets comparisons by type, so an int64 operand against
-// a Date field matches zero documents and every page after the first comes back
-// empty. The operand must therefore be a time.Time, not the raw cursor int64.
-//
-// This can only be asserted at the filter-construction level here: the
-// repository unit tests run against internal/dal/memory, where both sides are
-// the same int64 and compare correctly no matter what — which is exactly why
-// the bug survived `go test ./...`. A live-Mongo check belongs in the e2e
-// harness.
+// TestKeysetFilterDirDateEmitsDateOperand requires time.Time operands for
+// asset_records.createdAt and transactions.submittedAt (BSON Dates). Memory tests
+// cannot expose BSON type mismatches; live tests cover queries. See
+// keysetFilterDirDate.
 func TestKeysetFilterDirDateEmitsDateOperand(t *testing.T) {
 	want := time.Date(2026, 7, 25, 12, 34, 56, 789_000_000, time.UTC)
 	cursor := repository.EncodeKeysetCursor(repository.KeysetCursor{SortValue: want.UnixNano(), ID: "rec-1"})
@@ -52,7 +43,7 @@ func TestKeysetFilterDirDateEmitsDateOperand(t *testing.T) {
 		got := operandFor(t, keysetFilterDirDate(cursor, sortField, false), sortField, "$gt")
 		ts, ok := got.(time.Time)
 		if !ok {
-			t.Fatalf("%s operand is %T (%v), want time.Time — an int64 never matches a BSON Date", sortField, got, got)
+			t.Fatalf("%s operand is %T (%v), want time.Time (an int64 never matches a BSON Date)", sortField, got, got)
 		}
 		if !ts.Equal(want) {
 			t.Errorf("%s operand = %v, want %v", sortField, ts, want)
@@ -60,10 +51,9 @@ func TestKeysetFilterDirDateEmitsDateOperand(t *testing.T) {
 	}
 }
 
-// TestKeysetFilterDirKeepsNumericOperand: the numeric collections
-// (purchases.blockNumber, redemption_requests.createdAt) store their sort field
-// as a number and must keep comparing against the raw int64 — the Date fix must
-// not "fix" them into a type mismatch of their own.
+// TestKeysetFilterDirKeepsNumericOperand checks that purchases.blockNumber and
+// redemption_requests.createdAt, which are stored as numbers, still compare against
+// the raw int64
 func TestKeysetFilterDirKeepsNumericOperand(t *testing.T) {
 	cursor := repository.EncodeKeysetCursor(repository.KeysetCursor{SortValue: 4242, ID: "0xabc"})
 
@@ -77,10 +67,8 @@ func TestKeysetFilterDirKeepsNumericOperand(t *testing.T) {
 	}
 }
 
-// TestKeysetFilterNoCursorIsUnfiltered: an absent/garbage cursor is the first
-// page, which must be an empty filter in every variant — not a comparison
-// against a zero sort value (that would drop the whole first page for the Date
-// variant, where zero is 1970).
+// TestKeysetFilterNoCursorIsUnfiltered checks that absent or malformed cursors impose
+// no boundary in numeric or Date filters
 func TestKeysetFilterNoCursorIsUnfiltered(t *testing.T) {
 	for _, filter := range []bson.M{
 		keysetFilterDirDate("", "createdAt", false),

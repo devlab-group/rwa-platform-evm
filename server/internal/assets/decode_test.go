@@ -10,9 +10,8 @@ import (
 	"github.com/rwa-platform/server/internal/bindings"
 )
 
-// makeLog builds a minimal types.Log for decoder tests: topics[0] is the
-// event ID, followed by any indexed topics, with data as the packed
-// non-indexed fields.
+// makeLog builds a types.Log for decoder tests: topics[0] is the event ID,
+// followed by any indexed topics, and data holds the packed non-indexed fields
 func makeLog(eventID common.Hash, indexedTopics []common.Hash, data []byte) types.Log {
 	topics := append([]common.Hash{eventID}, indexedTopics...)
 	return types.Log{Topics: topics, Data: data}

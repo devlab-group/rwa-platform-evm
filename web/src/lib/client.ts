@@ -1,6 +1,4 @@
-// Thin, hand-written fetch wrapper typed against the generated OpenAPI schema
-// (src/lib/api-types.ts, produced by `npm run gen:api`). Do not hand-edit that
-// generated file — extend this one instead.
+// Typed fetch wrapper; extend this file and regenerate api-types.ts with npm run gen:api
 import type { components, operations } from "./api-types";
 import { clearSession, getSession } from "./authSession";
 
@@ -13,7 +11,7 @@ function baseUrl(): string {
 
 export type ApiErrorBody = components["schemas"]["Error"];
 
-/** Thrown for any non-2xx response. Carries the parsed error body when present. */
+/** Thrown for any non-2xx response, carrying the parsed error body when there is one */
 export class ApiError extends Error {
   readonly status: number;
   readonly body: ApiErrorBody | undefined;
@@ -34,7 +32,7 @@ type JsonContent<T> = T extends { content: { "application/json": infer J } }
     ? C
     : never;
 
-/** Union of the 2xx JSON response bodies declared for an operation. */
+// Declared 200/201/202/204 JSON bodies, falling back to raw content maps
 type OpResponse<Op> = Op extends { responses: infer R }
   ? R extends Record<PropertyKey, unknown>
     ? JsonContent<R[Extract<keyof R, SuccessStatus>]>
@@ -59,15 +57,10 @@ type OpQueryParams<Op> = Op extends {
   ? Q
   : never;
 
-/** Element type of an array-typed operation response (the list endpoints). */
+// Element of an array response
 type ArrayItem<T> = T extends (infer U)[] ? U : never;
 
-/**
- * A page of a cursor-paginated list endpoint. `totalCount` is omitted
- * server-side for most-recent-N stores (e.g. audit logs) — treat its absence
- * as "unknown", not zero. `nextCursor` is present iff another page exists;
- * pass it back as `cursor` to fetch it.
- */
+/** Cursor page: absent totalCount means unknown; pass nextCursor as cursor for another page */
 export interface PageResult<T> {
   items: T[];
   totalCount?: number;
@@ -83,7 +76,7 @@ interface RequestOptions<Op> {
   signal?: AbortSignal;
 }
 
-/** Caller-facing options for a paginated list wrapper: signal + limit/cursor, plus any endpoint-specific filter. */
+// Pagination signal, limit/cursor and endpoint filters
 type PageOptions<Op, Extra extends object = object> = Pick<
   RequestOptions<Op>,
   "signal"
@@ -118,16 +111,13 @@ function appendQuery(
 }
 
 function authHeaders(): Record<string, string> {
-  // Admin JWT from the wallet-signature login (see lib/authSession.ts),
-  // attached as a standard bearer token.
+  // Admin JWT from the wallet-signature login (lib/authSession.ts)
   const session = getSession();
   return session ? { Authorization: `Bearer ${session.token}` } : {};
 }
 
 async function throwForErrorResponse(res: Response): Promise<never> {
-  // A rejected/expired session is never worth holding onto — drop it so the
-  // UI falls back to the login form instead of silently retrying with a dead
-  // token.
+  // Clear rejected sessions on 401 so the shell requests a fresh login
   if (res.status === 401) clearSession();
   let body: ApiErrorBody | undefined;
   try {
@@ -136,6 +126,16 @@ async function throwForErrorResponse(res: Response): Promise<never> {
     body = undefined;
   }
   throw new ApiError(res.status, body);
+}
+
+// Authenticated GET as a Blob
+async function fetchBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  const res = await fetch(`${baseUrl()}${path}`, {
+    headers: authHeaders(),
+    signal,
+  });
+  if (!res.ok) await throwForErrorResponse(res);
+  return res.blob();
 }
 
 async function request<Op>(
@@ -168,21 +168,12 @@ async function request<Op>(
 
   if (res.status === 204) return undefined as OpResponse<Op>;
 
-  // Every non-204 success response in api/openapi.yaml is application/json.
-  // Don't silently swallow an unexpected body (e.g. an SPA-fallback HTML page
-  // from a misconfigured proxy) as `undefined` — parsing it as JSON and
-  // letting a SyntaxError propagate to the caller as a real failure is safer
-  // than handing callers `undefined` disguised as a successful response.
+  // Parse non-204 successes as JSON; malformed bodies such as SPA-fallback HTML reject. Downloads
+  // use Blob.
   return (await res.json()) as OpResponse<Op>;
 }
 
-/**
- * Like `request`, but for the cursor-paginated list endpoints: reads the
- * X-Total-Count/X-Page-Size/X-Next-Cursor response headers instead of
- * discarding them, so callers can show a total/"more available"
- * indicator and fetch further pages rather than silently truncating at the
- * server's default page size.
- */
+// Reads list items plus X-Total-Count, X-Page-Size and X-Next-Cursor for pagination
 async function requestPage<Op>(
   pathTemplate: string,
   options: RequestOptions<Op> = {},
@@ -216,7 +207,7 @@ async function requestPage<Op>(
   };
 }
 
-// ---- Endpoint wrappers, one per operationId in api/openapi.yaml -----------
+// Wrappers named after the supported OpenAPI operationIds
 
 export const api = {
   getHealth: (
@@ -231,10 +222,7 @@ export const api = {
     opts: Pick<RequestOptions<operations["getProject"]>, "signal"> = {},
   ) => request<operations["getProject"]>("GET", "/api/v1/project", opts),
 
-  /**
-   * ERC-7943 enforcement state: who is frozen, and the last seizure. Admin-only,
-   * unlike getProject, because it names individual wallets.
-   */
+  // Admin-only frozen balances and latest forced transfer, which identify wallets
   getEnforcement: (
     opts: Pick<RequestOptions<operations["getEnforcement"]>, "signal"> = {},
   ) =>
@@ -244,12 +232,9 @@ export const api = {
       opts,
     ),
 
-  /**
-   * Public, unauthenticated bootstrap for the admin console: the chain id and
-   * RWAFactory address the admin needs to assemble ProjectConfig and broadcast
-   * RWAFactory.deploy from their own wallet. Used pre-first-deploy, where
-   * GET /project still 404s, so it (not /project) is the source of the factory
-   * address + chain.
+  /*
+   * Public bootstrap chain/factory values for wallet deployment, available before GET /project
+   * exists
    */
   getConfig: (
     opts: Pick<RequestOptions<operations["getConfig"]>, "signal"> = {},
@@ -260,12 +245,12 @@ export const api = {
       body,
     }),
 
-  /** Admin-only — the deployment's single stored profile, or 404 if none yet (so Setup can repopulate after a reload). */
+  /** Admin-only. The deployment's stored profile, or 404 when none exists yet */
   getProfile: (
     opts: Pick<RequestOptions<operations["getProfile"]>, "signal"> = {},
   ) => request<operations["getProfile"]>("GET", "/api/v1/profile", opts),
 
-  /** Admin-only, create-once — persists the profile. Setup must call this, not just validate. */
+  // Admin-only, create-once storage per projectId; validateProfile persists nothing
   createProfile: (
     body: OpBody<operations["createProfile"]>,
     idempotencyKey: string,
@@ -340,36 +325,54 @@ export const api = {
       idempotencyKey,
     }),
 
-  /**
-   * Fetches the binary .rwa package with the operator's bearer session
-   * attached. A plain `<a href>` can't set that header, so the protected
-   * endpoint would 403; callers instead turn the Blob into an object URL and
-   * trigger the download themselves — see routes/admin/Assets.tsx.
+  /*
+   * Fetches a protected .rwa package as Blob; callers download through an object URL
+   * because an anchor cannot attach the bearer header (routes/admin/Assets.tsx)
    */
-  downloadPackage: async (
+  downloadPackage: (
     recordId: string,
     opts: Pick<RequestOptions<operations["downloadPackage"]>, "signal"> = {},
-  ): Promise<Blob> => {
-    const headers: Record<string, string> = {};
-    const session = getSession();
-    if (session) headers["Authorization"] = `Bearer ${session.token}`;
+  ): Promise<Blob> =>
+    fetchBlob(
+      `/api/v1/assets/records/${encodeURIComponent(recordId)}/package`,
+      opts.signal,
+    ),
 
-    const res = await fetch(
-      `${baseUrl()}/api/v1/assets/records/${encodeURIComponent(recordId)}/package`,
-      { headers, signal: opts.signal },
-    );
-    if (!res.ok) {
-      if (res.status === 401) clearSession();
-      let body: ApiErrorBody | undefined;
-      try {
-        body = (await res.json()) as ApiErrorBody;
-      } catch {
-        body = undefined;
-      }
-      throw new ApiError(res.status, body);
-    }
-    return res.blob();
+  listBurns: (opts: PageOptions<operations["listBurns"]> = {}) => {
+    const { signal, limit, cursor } = opts;
+    return requestPage<operations["listBurns"]>("/api/v1/assets/burns", {
+      signal,
+      query: { limit, cursor },
+    });
   },
+
+  createBurn: (
+    body: OpBody<operations["createBurn"]>,
+    idempotencyKey: string,
+  ) =>
+    request<operations["createBurn"]>("POST", "/api/v1/assets/burns", {
+      body,
+      idempotencyKey,
+    }),
+
+  downloadBurnPackage: (
+    burnId: string,
+    opts: Pick<
+      RequestOptions<operations["downloadBurnPackage"]>,
+      "signal"
+    > = {},
+  ): Promise<Blob> =>
+    fetchBlob(
+      `/api/v1/assets/burns/${encodeURIComponent(burnId)}/package`,
+      opts.signal,
+    ),
+
+  reissueBurn: (burnId: string, idempotencyKey: string) =>
+    request<operations["reissueBurn"]>(
+      "POST",
+      "/api/v1/assets/burns/{burnId}/reissue",
+      { path: { burnId }, idempotencyKey },
+    ),
 
   getInventory: (
     opts: Pick<RequestOptions<operations["getInventory"]>, "signal"> = {},
@@ -415,24 +418,15 @@ export const api = {
     });
   },
 
-  /**
-   * Step 1 of admin login: requests a single-use, time-limited message for
-   * the connected wallet to personal_sign. Public/unauthenticated — this is
-   * the login entry point (see components/Login.tsx).
-   */
+  // Public admin-login step 1: requests a single-use, expiring personal_sign challenge
   createAuthChallenge: (body: OpBody<operations["createAuthChallenge"]>) =>
     request<operations["createAuthChallenge"]>("POST", "/auth/challenge", {
       body,
     }),
 
-  /**
-   * Step 2 of admin login: submits the wallet address + its signature over
-   * the challenge message. The server recovers the signer and, if it equals
-   * the configured project admin, returns a signed JWT (token/expiresAt/role/
-   * address) to store and attach as `Authorization: Bearer <token>`. A 401
-   * means the recovered signer is not the admin. Public by design — this *is*
-   * the exchange call. Logout is client-side (drop the token); there is no
-   * DELETE endpoint.
+  /*
+   * Public admin-login step 2: exchange address/signature for a JWT when the signer matches
+   * the configured admin. Logout is client-side; there is no logout endpoint.
    */
   createSession: (body: OpBody<operations["createSession"]>) =>
     request<operations["createSession"]>("POST", "/auth/session", {

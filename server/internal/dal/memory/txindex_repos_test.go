@@ -11,8 +11,8 @@ import (
 func TestChainEventRepositoryListAllIncludesRemovedSortedByPosition(t *testing.T) {
 	repo := NewChainEventRepository()
 	ctx := context.Background()
-	// Two chains; ListAll must return only the requested chain's events,
-	// including a Removed one, ordered by (block, logIndex).
+	// two chains: ListAll returns only the requested chain's events, including a
+	// Removed one, ordered by (block, logIndex)
 	mk := func(chainID int64, addr, txHash string, block uint64, logIndex uint, removed bool) *models.ChainEvent {
 		return &models.ChainEvent{ChainID: chainID, Address: addr, TxHash: txHash, BlockNumber: block, LogIndex: logIndex, Name: "Purchased", Removed: removed}
 	}
@@ -28,7 +28,7 @@ func TestChainEventRepositoryListAllIncludesRemovedSortedByPosition(t *testing.T
 	if len(got) != 3 {
 		t.Fatalf("ListAll len = %d, want 3 (removed included, other chain excluded)", len(got))
 	}
-	// (10,0) removed, then (10,1), then (12,0).
+	// (10,0) removed, then (10,1), then (12,0)
 	if got[0].TxHash != "0x2" || !got[0].Removed || got[1].TxHash != "0x1" || got[2].TxHash != "0x3" {
 		t.Fatalf("order = [%s,%s,%s]", got[0].TxHash, got[1].TxHash, got[2].TxHash)
 	}
@@ -53,13 +53,13 @@ func TestTransactionRepositoryGetByTxHash(t *testing.T) {
 	if got.ID != "mgr-1" {
 		t.Fatalf("ID = %s, want mgr-1", got.ID)
 	}
-	// Wrong chain must not match.
+	// a different chain does not match
 	if _, err := repo.GetByTxHash(ctx, 1, "0xabc"); err != repository.ErrNotFound {
 		t.Fatalf("wrong-chain err = %v, want ErrNotFound", err)
 	}
 
-	// When both a manager and an event-derived record share a hash, the
-	// manager (non-EventDerived) record is returned so the projector dedups.
+	// when a manager record and an event-derived record share a hash, the manager
+	// record is returned so the projector dedups
 	_ = repo.Create(ctx, &models.Transaction{ID: models.EventDerivedTxIDPrefix + "0xdef", ChainID: 31337, TxHash: "0xdef", Status: models.TxConfirmed})
 	_ = repo.Create(ctx, &models.Transaction{ID: "mgr-2", ChainID: 31337, TxHash: "0xdef", Status: models.TxConfirmed})
 	got, err = repo.GetByTxHash(ctx, 31337, "0xdef")

@@ -1,8 +1,5 @@
 import { useState } from "react";
-// `isAddress` is called with strict:false throughout. Operators paste
-// addresses from block explorers and spreadsheets, where the EIP-55 casing is
-// often lost; the contract only cares that the address is well formed, so
-// checking the shape and not the checksum is what these forms need.
+// Accept well-formed addresses without requiring preserved EIP-55 casing
 import { isAddress, type Address } from "viem";
 import { AsyncSection } from "../../components/AsyncSection";
 import { RoleGate } from "../../components/RoleGate";
@@ -17,14 +14,25 @@ import {
   toMinimalUnits,
 } from "../../lib/format";
 import {
+  ADMIN_CONTRACT_FIELDS,
   adminTransferTargets,
   GRANTABLE_ROLES,
+  ROLE_TARGET_FIELDS,
   ROLES,
   roleHash,
   roleTargets,
 } from "../../lib/roles";
+import { exportSafeBatch } from "../../lib/safeBatch";
+import { useTxRoute } from "../../lib/txRoute";
 import {
+  acceptAdminTransferCall,
+  beginAdminTransferCall,
   describeWalletError,
+  forcedTransferCall,
+  pauseCall,
+  roleChangeCall,
+  setFrozenTokensCall,
+  strategyPriceCall,
   sendAcceptAdminTransfer,
   sendBeginAdminTransfer,
   sendForcedTransfer,
@@ -34,6 +42,7 @@ import {
   sendSetStrategyPrice,
   waitForTxReceipt,
 } from "../../lib/wallet";
+import { TableWrap } from "../../components/TableWrap";
 
 type Addresses = components["schemas"]["Addresses"];
 
@@ -41,20 +50,14 @@ type Project = components["schemas"]["Project"];
 
 type Enforcement = components["schemas"]["Enforcement"];
 
-/**
- * `securityAsOfBlock` (number), `securityAsOfTime` (ISO string), and
- * `securityStale` (boolean) aren't in api/openapi.yaml yet, so we extend the
- * generated `Project` type locally rather than hand-editing api-types.ts.
- * Every read below is optional-chained, so an older server that hasn't shipped
- * these fields still renders — just without the staleness banner.
- */
+// Optional indexer snapshot metadata; servers without it remain compatible
 type ProjectWithSecurityStaleness = Project & {
   securityAsOfBlock?: number;
   securityAsOfTime?: string;
   securityStale?: boolean;
 };
 
-/** "as of 3m ago" / "as of 2h ago" / "as of just now" — no external date lib needed for this granularity. */
+// formatRelativeAge formats a valid timestamp as a short elapsed age
 function formatRelativeAge(isoTime: string): string | undefined {
   const then = new Date(isoTime).getTime();
   if (Number.isNaN(then)) return undefined;
@@ -74,8 +77,7 @@ function SecurityStalenessNotice({
   data: ProjectWithSecurityStaleness;
 }) {
   const { securityAsOfBlock, securityAsOfTime, securityStale } = data;
-  // Older server: none of these fields are present. Say nothing rather than
-  // imply a guarantee we can't back up either way.
+  // Do not imply freshness when the server supplies no snapshot metadata
   if (
     securityAsOfBlock === undefined &&
     securityAsOfTime === undefined &&
@@ -93,23 +95,19 @@ function SecurityStalenessNotice({
       className={`security-staleness ${securityStale ? "security-staleness--stale" : ""}`}
       role={securityStale ? "alert" : "status"}
     >
-      {securityStale ? "Possibly stale — " : ""}
+      {securityStale ? "Possibly stale - " : ""}
       as of
       {securityAsOfBlock !== undefined ? ` block ${securityAsOfBlock}` : ""}
       {age ? ` (${age})` : ""}
-      {securityAsOfBlock === undefined && !age ? " an unknown point" : ""}. Not
-      guaranteed current — reload to refresh.
+      {securityAsOfBlock === undefined && !age ? " an unknown point" : ""}. May
+      lag the chain; reload to check the indexed state.
     </p>
   );
 }
 
 /**
- * Security: pause status, role holders, auditor, treasury, redemption
- * manager, strategy, deployment bytecode/version.
- *
- * This data is a point-in-time snapshot from the last indexer read, not a
- * live chain read — it must never be presented as guaranteed current. See
- * SecurityStalenessNotice above.
+ * Shows indexed governance/enforcement with freshness metadata; submit wallet actions or export
+ * Safe batches
  */
 export function Security() {
   const project = useAsync<ProjectWithSecurityStaleness>(
@@ -118,11 +116,7 @@ export function Security() {
     [],
   );
 
-  // The live prices are quote-token minimal units, so they scale by the QUOTE
-  // token's decimals (never the RWA token's). Prefer the server-provided
-  // Project.quoteDecimals; fall back to an on-chain read only when it's absent.
-  // A failed resolve leaves quoteDecimals undefined and formatTokenAmount shows
-  // the grouped raw integer rather than mis-scaling.
+  // Resolve quote decimals; use raw display units on failure, not RWA decimals
   const proj = project.status === "success" ? project.data : undefined;
   const chainId = proj?.chainId ?? 0;
   const quoteDecimalsState = useAsync<number | null>(async () => {
@@ -138,9 +132,7 @@ export function Security() {
       ? (quoteDecimalsState.data ?? undefined)
       : undefined;
 
-  // Enforcement state is admin-gated and lives on its own endpoint, so it is a
-  // second fetch rather than a field on the project. Reloaded together with the
-  // project after any enforcement transaction confirms.
+  // Load admin-only enforcement separately; reload it and project state after writes
   const enforcement = useAsync<Enforcement>(
     (signal) => api.getEnforcement({ signal }),
     [],
@@ -180,7 +172,7 @@ export function Security() {
                 </div>
                 <div className="tx-preview__row">
                   <dt>Version</dt>
-                  <dd>{data.version ?? "—"}</dd>
+                  <dd>{data.version ?? "-"}</dd>
                 </div>
                 <div className="tx-preview__row">
                   <dt>Bytecode verified</dt>
@@ -194,15 +186,15 @@ export function Security() {
                 </div>
                 <div className="tx-preview__row">
                   <dt>Decimals</dt>
-                  <dd>{data.decimals ?? "—"}</dd>
+                  <dd>{data.decimals ?? "-"}</dd>
                 </div>
                 <div className="tx-preview__row">
                   <dt>Token unit</dt>
-                  <dd>{data.tokenUnit ?? "—"}</dd>
+                  <dd>{data.tokenUnit ?? "-"}</dd>
                 </div>
                 <div className="tx-preview__row">
                   <dt>Finality confirmations</dt>
-                  <dd>{data.finalityConfirmations ?? "—"}</dd>
+                  <dd>{data.finalityConfirmations ?? "-"}</dd>
                 </div>
                 <div className="tx-preview__row">
                   <dt>Auditor</dt>
@@ -235,6 +227,8 @@ export function Security() {
         <h2>Pause / unpause trading</h2>
         <RoleGate
           roles={proj?.roles}
+          rolesByContract={proj?.rolesByContract}
+          contracts={["token"]}
           role={ROLES.pauser}
           action="pause or unpause trading"
         >
@@ -253,8 +247,8 @@ export function Security() {
             data.purchasePricePerWholeToken === undefined &&
             data.redemptionPricePerWholeToken === undefined ? (
               <p className="field__hint">
-                No on-chain prices reported yet (project not deployed or price
-                not projected).
+                No prices reported: deployment or price projection may be
+                pending.
               </p>
             ) : (
               <dl className="tx-preview__grid">
@@ -288,7 +282,13 @@ export function Security() {
 
       <section className="card">
         <h2>Update prices</h2>
-        <RoleGate roles={proj?.roles} role={ROLES.pricer} action="set prices">
+        <RoleGate
+          roles={proj?.roles}
+          rolesByContract={proj?.rolesByContract}
+          contracts={["strategy"]}
+          role={ROLES.pricer}
+          action="set prices"
+        >
           <PriceControls
             project={proj}
             chainId={chainId}
@@ -307,7 +307,7 @@ export function Security() {
           emptyLabel="No role holders reported."
         >
           {(data) => (
-            <div className="table-wrap">
+            <TableWrap label="Role holders">
               <table>
                 <thead>
                   <tr>
@@ -331,24 +331,18 @@ export function Security() {
                     ))}
                 </tbody>
               </table>
-            </div>
+            </TableWrap>
           )}
         </AsyncSection>
       </section>
 
       <section className="card">
         <h2>Manage roles &amp; admin</h2>
-        <RoleGate
-          roles={proj?.roles}
-          role={ROLES.admin}
-          action="change role holders or transfer admin"
-        >
-          <RoleAdminControls
-            project={proj}
-            chainId={chainId}
-            onChanged={project.reload}
-          />
-        </RoleGate>
+        <RoleAdminControls
+          project={proj}
+          chainId={chainId}
+          onChanged={project.reload}
+        />
       </section>
 
       <section className="card">
@@ -362,7 +356,7 @@ export function Security() {
           {(data) => (
             <>
               <SecurityStalenessNotice data={data} />
-              <div className="table-wrap">
+              <TableWrap label="Frozen balances">
                 <table>
                   <thead>
                     <tr>
@@ -385,10 +379,10 @@ export function Security() {
                     )}
                   </tbody>
                 </table>
-              </div>
+              </TableWrap>
               <p className="field__hint">
-                A frozen amount can exceed the holder&apos;s balance, which
-                withholds tokens they have not received yet.
+                A freeze can exceed the holder&apos;s balance, restricting
+                future receipts too.
               </p>
             </>
           )}
@@ -434,8 +428,8 @@ export function Security() {
             </div>
           </dl>
           <p className="field__hint">
-            The most recent seizure only. Every forced transfer is in the
-            transaction list and on-chain.
+            Latest seizure only; see indexed transactions or on-chain logs for
+            history.
           </p>
         </section>
       ) : null}
@@ -444,6 +438,8 @@ export function Security() {
         <h2>Freeze tokens</h2>
         <RoleGate
           roles={proj?.roles}
+          rolesByContract={proj?.rolesByContract}
+          contracts={["token"]}
           role={ROLES.admin}
           action="freeze a holder's tokens"
         >
@@ -459,6 +455,8 @@ export function Security() {
         <h2>Forced transfer</h2>
         <RoleGate
           roles={proj?.roles}
+          rolesByContract={proj?.rolesByContract}
+          contracts={["token"]}
           role={ROLES.admin}
           action="seize tokens from a holder"
         >
@@ -470,13 +468,7 @@ export function Security() {
         </RoleGate>
       </section>
 
-      {/*
-        Not RoleGate-gated: the incoming admin is NOT DEFAULT_ADMIN yet (that's
-        the whole point of accepting), so it never appears in proj.roles. Shown
-        only while a transfer is pending (proj.pendingAdmin set); the control
-        itself decides between the accept button (wallet matches pendingAdmin)
-        and a read-only note (someone else is the incoming admin).
-      */}
+      {/* Pending admins accept before holding the role, so acceptance sits outside RoleGate */}
       {proj?.pendingAdmin ? (
         <section className="card">
           <h2>Accept admin role</h2>
@@ -491,7 +483,7 @@ export function Security() {
   );
 }
 
-/** The connected wallet address, or null. All admin actions require it. */
+// useSender returns the connected wallet, which direct submissions require
 function useSender(): Address | null {
   return useWalletContext().address;
 }
@@ -506,6 +498,7 @@ function PauseControls({
   onChanged: () => void;
 }) {
   const from = useSender();
+  const route = useTxRoute();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -515,10 +508,22 @@ function PauseControls({
   async function handle(pause: boolean) {
     setError(null);
     setDone(null);
-    if (!from || !token) {
+    if (!token || (route.kind === "wallet" && !from)) {
       setError("Wallet not connected or token address unavailable.");
       return;
     }
+    if (route.kind === "safe") {
+      setDone(
+        exportSafeBatch(
+          chainId,
+          route.safe,
+          pause ? "Pause trading" : "Unpause trading",
+          [pauseCall(token as Address, pause)],
+        ),
+      );
+      return;
+    }
+    if (!from) return;
     setBusy(true);
     try {
       const hash = await sendSetPaused(chainId, from, token as Address, pause);
@@ -541,8 +546,9 @@ function PauseControls({
         >
           {paused ? "Paused" : "Active"}
         </span>
-        . Pausing halts all token transfers (buys, redemptions, and wallet
-        transfers) until unpaused.
+        . Pause stops purchases, ordinary transfers, redemption requests,
+        funding, claims and rejection. Timed-out cancellation and admin
+        enforcement remain available.
       </p>
       <div className="tx-preview__actions">
         <button
@@ -584,6 +590,7 @@ function PriceControls({
   onChanged: () => void;
 }) {
   const from = useSender();
+  const route = useTxRoute();
   const [purchase, setPurchase] = useState("");
   const [redemption, setRedemption] = useState("");
   const [busy, setBusy] = useState<"purchase" | "redemption" | null>(null);
@@ -594,21 +601,18 @@ function PriceControls({
   async function handle(side: "purchase" | "redemption", value: string) {
     setError(null);
     setDone(null);
-    if (!from || !strategy) {
+    if (!strategy || (route.kind === "wallet" && !from)) {
       setError("Wallet not connected or strategy address unavailable.");
       return;
     }
-    // Prices are entered in whole quote-token units and scaled to the quote
-    // token's minimal units (per whole RWA token) before going on-chain. The
-    // decimals come from the server (Project.quoteDecimals) or an on-chain
-    // read; a failed resolve blocks the tx rather than mis-scaling.
+    // Require known quote decimals before converting the entered price to minimal units
     let decimals = quoteDecimals;
     if (decimals === undefined) {
       try {
         decimals = await resolveQuoteDecimals(project, chainId);
       } catch {
         setError(
-          "Couldn't determine the quote token's decimals — connect your wallet to the project chain and try again.",
+          "Could not read quote-token decimals. Connect your wallet to the project chain and retry.",
         );
         return;
       }
@@ -620,6 +624,18 @@ function PriceControls({
       setError(err instanceof Error ? err.message : "Invalid price.");
       return;
     }
+    if (route.kind === "safe") {
+      setDone(
+        exportSafeBatch(
+          chainId,
+          route.safe,
+          side === "purchase" ? "Set purchase price" : "Set redemption price",
+          [strategyPriceCall(strategy as Address, side, BigInt(minimal))],
+        ),
+      );
+      return;
+    }
+    if (!from) return;
     setBusy(side);
     try {
       const hash = await sendSetStrategyPrice(
@@ -646,8 +662,8 @@ function PriceControls({
   return (
     <div>
       <p className="field__hint">
-        Prices are per whole token, in whole quote-token units. Each is set on
-        the fixed-price strategy independently.
+        Independent prices per whole token, in whole quote-token units, on the
+        fixed-price strategy.
       </p>
       <div className="field">
         <label htmlFor="new-purchase-price">
@@ -695,12 +711,7 @@ function PriceControls({
   );
 }
 
-/**
- * Sends `send` to each target contract in turn (a role may live on more than
- * one contract), waiting for each receipt. Returns a per-contract error message
- * if any submission fails, naming how many succeeded so the operator knows the
- * partial state.
- */
+// Submits/confirms targets sequentially; failure includes the completed count
 async function runSequential(
   targets: Address[],
   send: (target: Address) => Promise<`0x${string}`>,
@@ -720,12 +731,7 @@ async function runSequential(
   return null;
 }
 
-/**
- * Parses a human-entered RWA amount into the token's minimal units, or returns
- * the reason it can't be. The token's decimals come from the project record; a
- * project that has not reported them blocks the transaction rather than
- * guessing a scale.
- */
+// Converts with project decimals or returns a validation error
 function parseTokenAmount(
   value: string,
   decimals: number | undefined,
@@ -745,11 +751,7 @@ function parseTokenAmount(
   }
 }
 
-/**
- * Whether `value` is the Vault or the redemption escrow. Early feedback only: the contract
- * refuses both a freeze and a seizure on either one, since they hold the unsold float and
- * already-funded redemptions on the whole project's behalf.
- */
+// Detect Vault/escrow early; contracts forbid their nonzero freezes and use as seizure sources
 function isSystemAddress(
   value: string,
   addresses: Addresses | undefined,
@@ -761,25 +763,19 @@ function isSystemAddress(
   );
 }
 
-/** Both enforcement calls sit in a public mempool long enough for the target to react. */
+// Balances and eligibility may change before an enforcement call executes
 function FrontRunningWarning() {
   return (
     <p className="field__hint">
-      This transaction is visible in the mempool before it lands, so a holder
-      watching for it can move their balance first. Pause the project and
-      confirm the pause landed before freezing or seizing, then unpause:
-      ordinary transfers stop while these two calls keep working. On a chain
-      where a pause is too disruptive, submit through a private relay instead.
+      A holder may see this transaction in the mempool and move tokens first.
+      Pause the project and confirm before freezing or seizing, then unpause.
+      Enforcement works while ordinary transfers are paused. Use a private relay
+      if pausing is too disruptive.
     </p>
   );
 }
 
-/**
- * ERC-7943 setFrozenTokens: withholds part (or all) of a holder's balance
- * without moving it. The amount is ABSOLUTE, which the copy here has to make
- * unmissable - an operator who reads it as "freeze this much more" would
- * release tokens they meant to hold.
- */
+// Replaces the absolute freeze rather than adding to it
 function FreezeControls({
   project,
   chainId,
@@ -790,6 +786,7 @@ function FreezeControls({
   onChanged: () => void;
 }) {
   const from = useSender();
+  const route = useTxRoute();
   const [account, setAccount] = useState("");
   const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState(false);
@@ -801,7 +798,7 @@ function FreezeControls({
   async function handle() {
     setError(null);
     setDone(null);
-    if (!from || !token) {
+    if (!token || (route.kind === "wallet" && !from)) {
       setError("Wallet not connected or token address unavailable.");
       return;
     }
@@ -811,7 +808,7 @@ function FreezeControls({
     }
     if (isSystemAddress(account, addresses)) {
       setError(
-        "The Vault and the redemption escrow can never be frozen - freezing one would stop every buy, claim, and cancel.",
+        "The Vault and redemption escrow can never be frozen with a nonzero amount; their inventory must remain unfrozen.",
       );
       return;
     }
@@ -820,6 +817,19 @@ function FreezeControls({
       setError(parsed.error);
       return;
     }
+    if (route.kind === "safe") {
+      setDone(
+        exportSafeBatch(chainId, route.safe, "Set frozen tokens", [
+          setFrozenTokensCall(
+            token as Address,
+            account as Address,
+            parsed.units,
+          ),
+        ]),
+      );
+      return;
+    }
+    if (!from) return;
     setBusy(true);
     try {
       const hash = await sendSetFrozenTokens(
@@ -847,9 +857,8 @@ function FreezeControls({
     <div>
       <p className="field__hint">
         Sets the holder&apos;s <strong>absolute</strong> frozen amount,
-        replacing whatever was frozen before. It does not add to an existing
-        hold. Enter 0 to release everything. Frozen tokens stay in the
-        holder&apos;s wallet; they just cannot be sent.
+        replacing the previous hold. Enter 0 to release it. Tokens stay in the
+        holder&apos;s wallet but cannot be sent.
       </p>
       <FrontRunningWarning />
       <div className="field">
@@ -888,12 +897,8 @@ function FreezeControls({
   );
 }
 
-/**
- * ERC-7943 forcedTransfer: moves tokens out of a holder who cannot or will not
- * sign. Two-step on purpose - the confirmation spells out which protections
- * this bypasses, since nothing about the form itself signals that it moves
- * someone else's tokens.
- */
+// Reviews holder-token seizure and explains the sender eligibility, freeze and pause checks it
+// bypasses
 function ForcedTransferControls({
   project,
   chainId,
@@ -904,14 +909,11 @@ function ForcedTransferControls({
   onChanged: () => void;
 }) {
   const sender = useSender();
+  const route = useTxRoute();
   const [holder, setHolder] = useState("");
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
-  // The reviewed values, frozen at the moment the operator asked to confirm.
-  // The confirmation has to be about a specific transfer, and it has to be the
-  // one that gets sent: a mistyped recipient is the mistake this step exists
-  // to catch, and re-reading the live inputs on confirm would let an edit slip
-  // past the panel the operator just read.
+  // Bind confirmation to reviewed values
   const [pending, setPending] = useState<{
     holder: Address;
     recipient: Address;
@@ -923,9 +925,9 @@ function ForcedTransferControls({
   const token = project?.addresses?.token;
   const addresses = project?.addresses as Addresses | undefined;
 
-  /** Validates the form and returns the parsed amount, or null after setting an error. */
+  // Parse amount or set an error and return null
   function validate(): bigint | null {
-    if (!sender || !token) {
+    if (!token || (route.kind === "wallet" && !sender)) {
       setError("Wallet not connected or token address unavailable.");
       return null;
     }
@@ -939,13 +941,13 @@ function ForcedTransferControls({
     }
     if (isSystemAddress(holder, addresses)) {
       setError(
-        "The Vault and the redemption escrow cannot be seized from - their balances are the unsold float and redemptions that are already funded.",
+        "The Vault and redemption escrow cannot be seizure sources: they hold sale inventory and Pending/Funded redemption tokens.",
       );
       return null;
     }
     if (holder.toLowerCase() === recipient.toLowerCase()) {
       setError(
-        "Sender and recipient must differ - the contract rejects a forced transfer to self.",
+        "Sender and recipient must differ; forced transfers to self revert.",
       );
       return null;
     }
@@ -972,6 +974,20 @@ function ForcedTransferControls({
   async function handle() {
     if (!pending) return;
     setError(null);
+    if (route.kind === "safe") {
+      setDone(
+        exportSafeBatch(chainId, route.safe, "Forced transfer", [
+          forcedTransferCall(
+            token as Address,
+            pending.holder,
+            pending.recipient,
+            pending.units,
+          ),
+        ]),
+      );
+      setPending(null);
+      return;
+    }
     setBusy(true);
     try {
       const hash = await sendForcedTransfer(
@@ -998,8 +1014,8 @@ function ForcedTransferControls({
   return (
     <div>
       <p className="field__hint">
-        Moves tokens out of a holder&apos;s wallet without their signature, for
-        a seizure or a court-ordered recovery.
+        Seizes tokens without the holder&apos;s signature, including for
+        court-ordered recovery.
       </p>
       <FrontRunningWarning />
       <div className="field">
@@ -1048,16 +1064,12 @@ function ForcedTransferControls({
             </div>
           </dl>
           <p>
-            <strong>This moves someone else&apos;s tokens.</strong> It goes
-            through even if the holder is blocked or expired in the compliance
-            registry, and even while trading is paused. It also reduces their
-            frozen amount if it reaches into frozen tokens. The recipient must
-            still be Allowed on-chain, and the transfer reverts otherwise.
+            <strong>This moves someone else&apos;s tokens.</strong> Bypasses
+            pause and blocked/expired holder status; reduces the frozen amount
+            if it spends frozen tokens. The recipient must be Allowed.
           </p>
           <p>
-            If the holder may be watching the mempool, pause the project first
-            and confirm the pause landed: this call still works while paused,
-            ordinary transfers do not.
+            Confirm the pause before seizing; see the mempool warning above.
           </p>
           <div className="tx-preview__actions">
             <button
@@ -1098,6 +1110,7 @@ function ForcedTransferControls({
   );
 }
 
+// Gate role edits on that role's target contracts; gate admin transfer on all governance contracts
 function RoleAdminControls({
   project,
   chainId,
@@ -1107,9 +1120,86 @@ function RoleAdminControls({
   chainId: number;
   onChanged: () => void;
 }) {
-  const from = useSender();
-  const addresses = project?.addresses as Addresses | undefined;
   const [role, setRole] = useState<string>(GRANTABLE_ROLES[0]);
+  const addresses = project?.addresses as Addresses | undefined;
+  const gate = {
+    roles: project?.roles,
+    rolesByContract: project?.rolesByContract,
+    role: ROLES.admin,
+  };
+  return (
+    <div>
+      <h3>Grant or revoke a role</h3>
+      <div className="field">
+        <label htmlFor="role-select">Role</label>
+        <select
+          id="role-select"
+          value={role}
+          onChange={(e) => setRole(e.target.value)}
+        >
+          {GRANTABLE_ROLES.map((r) => (
+            <option key={r} value={r}>
+              {r}
+            </option>
+          ))}
+        </select>
+        <span className="field__hint">
+          Configured target contracts ({roleTargets(role, addresses).length}{" "}
+          total).
+        </span>
+      </div>
+      <RoleGate
+        {...gate}
+        contracts={ROLE_TARGET_FIELDS[role]}
+        action="grant or revoke this role"
+      >
+        <RoleAdminForm
+          part="role"
+          role={role}
+          project={project}
+          chainId={chainId}
+          onChanged={onChanged}
+        />
+      </RoleGate>
+
+      <h3 className="u-mt-5">Transfer admin</h3>
+      <p className="field__hint">
+        Starts a two-step DEFAULT_ADMIN transfer on each governance contract.
+        You remain admin until the incoming admin accepts there after its delay.
+      </p>
+      <RoleGate
+        {...gate}
+        contracts={ADMIN_CONTRACT_FIELDS}
+        action="transfer admin"
+      >
+        <RoleAdminForm
+          part="transfer"
+          role={role}
+          project={project}
+          chainId={chainId}
+          onChanged={onChanged}
+        />
+      </RoleGate>
+    </div>
+  );
+}
+
+function RoleAdminForm({
+  part,
+  role,
+  project,
+  chainId,
+  onChanged,
+}: {
+  part: "role" | "transfer";
+  role: string;
+  project: Project | undefined;
+  chainId: number;
+  onChanged: () => void;
+}) {
+  const from = useSender();
+  const route = useTxRoute();
+  const addresses = project?.addresses as Addresses | undefined;
   const [account, setAccount] = useState("");
   const [newAdmin, setNewAdmin] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1125,16 +1215,31 @@ function RoleAdminControls({
 
   async function handleRoleChange(action: "grant" | "revoke") {
     begin();
-    if (!from) {
+    if (route.kind === "wallet" && !from) {
       setError("Wallet not connected.");
       return;
     }
     const targets = roleTargets(role, addresses);
     if (targets.length === 0) {
-      setError("No target contracts for this role — project not deployed?");
+      setError("No target contracts for this role - project not deployed?");
       return;
     }
     const hashRole = roleHash(role);
+    if (route.kind === "safe") {
+      // Export all targets for atomic Safe execution
+      setDone(
+        exportSafeBatch(
+          chainId,
+          route.safe,
+          `${action === "grant" ? "Grant" : "Revoke"} ${role}`,
+          targets.map((target) =>
+            roleChangeCall(target, action, hashRole, account as Address),
+          ),
+        ),
+      );
+      return;
+    }
+    if (!from) return;
     setBusy(true);
     const failure = await runSequential(
       targets,
@@ -1164,15 +1269,29 @@ function RoleAdminControls({
 
   async function handleTransferAdmin() {
     begin();
-    if (!from) {
+    if (route.kind === "wallet" && !from) {
       setError("Wallet not connected.");
       return;
     }
     const targets = adminTransferTargets(addresses);
     if (targets.length === 0) {
-      setError("No governance contracts found — project not deployed?");
+      setError("No governance contracts found - project not deployed?");
       return;
     }
+    if (route.kind === "safe") {
+      setDone(
+        exportSafeBatch(
+          chainId,
+          route.safe,
+          "Begin admin transfer",
+          targets.map((target) =>
+            beginAdminTransferCall(target, newAdmin as Address),
+          ),
+        ),
+      );
+      return;
+    }
+    if (!from) return;
     setBusy(true);
     const failure = await runSequential(
       targets,
@@ -1185,7 +1304,7 @@ function RoleAdminControls({
     if (failure) setError(failure);
     else {
       setDone(
-        `Admin transfer to ${newAdmin} begun on ${targets.length} contract(s). The new admin must accept it on each contract after the on-chain delay to complete the transfer.`,
+        `Admin transfer to ${newAdmin} begun on ${targets.length} contract(s). The incoming admin must accept on each after its delay.`,
       );
       onChanged();
     }
@@ -1193,76 +1312,57 @@ function RoleAdminControls({
 
   return (
     <div>
-      <h3>Grant or revoke a role</h3>
-      <div className="field">
-        <label htmlFor="role-select">Role</label>
-        <select
-          id="role-select"
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-        >
-          {GRANTABLE_ROLES.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-        <span className="field__hint">
-          Applied to every contract the role is held on (
-          {roleTargets(role, addresses).length} for this role).
-        </span>
-      </div>
-      <div className="field">
-        <label htmlFor="role-account">Account address</label>
-        <input
-          id="role-account"
-          className="mono"
-          value={account}
-          onChange={(e) => setAccount(e.target.value)}
-        />
-      </div>
-      <div className="tx-preview__actions">
-        <button
-          type="button"
-          className="button button--primary"
-          onClick={() => handleRoleChange("grant")}
-          disabled={busy || !account}
-        >
-          Grant role
-        </button>
-        <button
-          type="button"
-          className="button button--danger"
-          onClick={() => handleRoleChange("revoke")}
-          disabled={busy || !account}
-        >
-          Revoke role
-        </button>
-      </div>
-
-      <h3 className="u-mt-5">Transfer admin</h3>
-      <p className="field__hint">
-        Begins a two-step DEFAULT_ADMIN transfer on every governance contract.
-        The new admin must then accept on each contract after the configured
-        on-chain delay — until then, you remain admin.
-      </p>
-      <div className="field">
-        <label htmlFor="new-admin">New admin address</label>
-        <input
-          id="new-admin"
-          className="mono"
-          value={newAdmin}
-          onChange={(e) => setNewAdmin(e.target.value)}
-        />
-      </div>
-      <button
-        type="button"
-        className="button button--danger"
-        onClick={handleTransferAdmin}
-        disabled={busy || !newAdmin}
-      >
-        Begin admin transfer
-      </button>
+      {part === "role" ? (
+        <>
+          <div className="field">
+            <label htmlFor="role-account">Account address</label>
+            <input
+              id="role-account"
+              className="mono"
+              value={account}
+              onChange={(e) => setAccount(e.target.value)}
+            />
+          </div>
+          <div className="tx-preview__actions">
+            <button
+              type="button"
+              className="button button--primary"
+              onClick={() => handleRoleChange("grant")}
+              disabled={busy || !account}
+            >
+              Grant role
+            </button>
+            <button
+              type="button"
+              className="button button--danger"
+              onClick={() => handleRoleChange("revoke")}
+              disabled={busy || !account}
+            >
+              Revoke role
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="field">
+            <label htmlFor="new-admin">New admin address</label>
+            <input
+              id="new-admin"
+              className="mono"
+              value={newAdmin}
+              onChange={(e) => setNewAdmin(e.target.value)}
+            />
+          </div>
+          <button
+            type="button"
+            className="button button--danger"
+            onClick={handleTransferAdmin}
+            disabled={busy || !newAdmin}
+          >
+            Begin admin transfer
+          </button>
+        </>
+      )}
 
       {progress && (
         <p role="status" className="u-mt-4">
@@ -1283,14 +1383,8 @@ function RoleAdminControls({
   );
 }
 
-/**
- * Step 2 of the two-step DEFAULT_ADMIN transfer, for the INCOMING admin. Renders
- * only when `project.pendingAdmin` is set (gated by the caller). If the connected
- * wallet is that pending admin, it offers an "Accept admin role" button that
- * calls acceptDefaultAdminTransfer() on every governance contract in turn
- * (DEFAULT_ADMIN lives on each). Otherwise it shows a read-only note naming who
- * must accept. Acceptance reverts on-chain until the configured delay elapses.
- */
+// Accepts delayed admin transfers sequentially from the incoming wallet, or exports a batch for its
+// Safe owners
 function AcceptAdminControls({
   project,
   chainId,
@@ -1323,7 +1417,7 @@ function AcceptAdminControls({
     }
     const targets = adminTransferTargets(addresses);
     if (targets.length === 0) {
-      setError("No governance contracts found — project not deployed?");
+      setError("No governance contracts found - project not deployed?");
       return;
     }
     setBusy(true);
@@ -1343,25 +1437,63 @@ function AcceptAdminControls({
     }
   }
 
+  // Export acceptance across configured governance contracts for Safe owner approval
+  function handleExportAccept() {
+    setError(null);
+    setDone(null);
+    const targets = adminTransferTargets(addresses);
+    if (!pendingAdmin || targets.length === 0) {
+      setError("No governance contracts found - project not deployed?");
+      return;
+    }
+    setDone(
+      exportSafeBatch(
+        chainId,
+        pendingAdmin as Address,
+        "Accept admin role",
+        targets.map(acceptAdminTransferCall),
+      ),
+    );
+  }
+
   if (!isIncomingAdmin) {
     return (
-      <p className="field__hint">
-        An admin transfer is pending to{" "}
-        <span className="mono" title={pendingAdmin}>
-          {pendingAdmin ? shortenAddress(pendingAdmin) : "—"}
-        </span>
-        . The incoming admin must accept it.
-      </p>
+      <div>
+        <p className="field__hint">
+          An admin transfer is pending to{" "}
+          <span className="mono" title={pendingAdmin}>
+            {pendingAdmin ? shortenAddress(pendingAdmin) : "-"}
+          </span>
+          . The incoming admin must accept after the delay. For a Safe, save a
+          Safe{"{Wallet}"} acceptance batch for its owners to approve and
+          execute.
+        </p>
+        <button
+          type="button"
+          className="button button--secondary"
+          onClick={handleExportAccept}
+        >
+          Save acceptance batch for the incoming admin
+        </button>
+        {error && (
+          <p className="async-state--error" role="alert">
+            {error}
+          </p>
+        )}
+        {done && (
+          <p role="status" className="u-mt-4">
+            {done}
+          </p>
+        )}
+      </div>
     );
   }
 
   return (
     <div>
       <p className="field__hint">
-        A two-step admin transfer is pending to your wallet. Accepting completes
-        it and makes you the DEFAULT_ADMIN — you must accept on every governance
-        contract. This reverts if the configured on-chain delay has not elapsed
-        yet; if so, wait and try again.
+        Become DEFAULT_ADMIN by accepting each pending transfer after its
+        configured delay.
       </p>
       <button
         type="button"

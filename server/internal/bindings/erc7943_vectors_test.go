@@ -10,9 +10,9 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// erc7943Vector mirrors shared/vectors/erc7943-abi.json, the frozen ERC-7943
-// ABI surface that the Solidity interface and the web ABI fragments are also
-// asserted against.
+// erc7943Vector mirrors shared/vectors/erc7943-abi.json, the ERC-7943 ABI
+// surface that the Solidity interface and the web ABI fragments are also
+// checked against
 type erc7943Vector struct {
 	InterfaceID string `json:"interfaceId"`
 	Functions   map[string]struct {
@@ -44,9 +44,8 @@ func loadERC7943Vector(t *testing.T) erc7943Vector {
 	return v
 }
 
-// TestERC7943VectorsSelfConsistent recomputes every pinned selector and topic0
-// from its canonical signature, and rebuilds the ERC-165 interface id from the
-// six function selectors, so a hand-edited hex value in the vector cannot pass.
+// TestERC7943VectorsSelfConsistent recomputes pinned selectors, topic0 hashes and the
+// ERC-165 ID from the six function selectors, rejecting inconsistent vector edits
 func TestERC7943VectorsSelfConsistent(t *testing.T) {
 	v := loadERC7943Vector(t)
 

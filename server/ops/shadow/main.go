@@ -1,20 +1,14 @@
-// Command shadow runs the shadow-replay / soak-test harness
-// (server/internal/shadow) against a scripted replay dataset. It never
-// dials a live chain, never opens a
-// real database connection, and never constructs anything capable of
-// signing a transaction — it only imports server/internal/shadow and
-// server/internal/indexer, neither of which pulls in
-// server/internal/blockchain's TxManager/Signer or server/internal/keys at
-// all, so "cannot submit state-changing production transactions" is
-// structural, not a runtime check that could be misconfigured away.
+// Command shadow runs internal/shadow's scripted replay and resource sampling
+// with the indexer and in-memory repositories. It makes no live chain or database
+// connections and constructs no signer; dependencies exclude internal/keys and
+// internal/blockchain.
 //
-// Usage:
+// Usage (from server/):
 //
-//	go run ./ops/shadow -scenario testdata/scenario.json
-//	go run ./ops/shadow -scenario testdata/scenario.json -idle 72h -sample 5m
+//	go run ./ops/shadow -scenario ops/shadow/testdata/scenario.json
+//	go run ./ops/shadow -scenario ops/shadow/testdata/scenario.json -idle 72h -sample 5m
 //
-// See docs/operator/soak-runbook.md for the release-candidate soak
-// procedure this drives and the failure criteria to apply to its output.
+// See docs/operator/soak-runbook.md for release-candidate procedures and failure criteria.
 package main
 
 import (
@@ -33,7 +27,7 @@ import (
 
 func main() {
 	scenarioPath := flag.String("scenario", "", "path to a shadow.Scenario JSON file (required)")
-	idle := flag.Duration("idle", 0, "after the scripted steps complete, keep polling with no new data for this long — for a real extended-duration soak run (e.g. -idle 72h) rather than just proving the harness works")
+	idle := flag.Duration("idle", 0, "after the scripted steps complete, keep sampling resource usage for this long (for example -idle 72h), without polling the indexer or adding chain activity")
 	sampleEvery := flag.Duration("sample", time.Minute, "resource-sample interval during the idle phase")
 	reportPath := flag.String("report", "", "write the final JSON Report here (default: stdout only)")
 	flag.Parse()
@@ -72,12 +66,8 @@ func run(ctx context.Context, scenarioPath string, idle, sampleEvery time.Durati
 	return writeReport(report, reportPath)
 }
 
-// idleUntil keeps sampling resource usage (with no new scripted chain
-// state — a real extended run should instead point -scenario at a much
-// longer recorded history) for idle, appending to report.ResourceSnapshots,
-// so an operator running an actual 72h+ soak per docs/operator/soak-runbook.md
-// gets a full resource-usage timeline to evaluate the failure criteria
-// against, not just the scripted portion's snapshots.
+// idleUntil appends resource samples to report.ResourceSnapshots every sampleEvery
+// during idle, extending the replay timeline without chain activity or indexer polls
 func idleUntil(ctx context.Context, idle, sampleEvery time.Duration, report *shadow.Report) {
 	deadline := time.Now().Add(idle)
 	ticker := time.NewTicker(sampleEvery)

@@ -1,20 +1,9 @@
-// Package webui embeds the built web/ SPA and serves it same-origin from
-// the platform binary — production assets embed and serve straight from
-// the Go binary — with client-side-route SPA fallback so a
-// direct navigation or hard refresh on e.g. /admin/setup still loads.
+// Package webui embeds the admin SPA for same-origin serving, falling back to
+// index.html for client routes and reloads.
 //
-// go:embed can only reach files under this module tree, and web/dist does
-// not exist at a bare `go build` (it is a separate npm package, built
-// separately). So dist/ here is a real, checked-in directory, but its build
-// output is gitignored — only an empty placeholder dist/.gitkeep is tracked
-// (the `all:` embed prefix includes dotfiles, so .gitkeep alone satisfies the
-// directive). That keeps `go build`/`go test` from ever depending on a web
-// build existing, while ensuring a release build never dirties a tracked
-// file: a real deployment (or server/e2e/run_e2e.sh, for the live-smoke
-// suite) copies the actual web/dist build — index.html plus hashed assets —
-// over it before building the platform binary. Either way this package embeds
-// whatever is on disk at `go build` time; the two "real embedded build" tests
-// skip when only the placeholder is present.
+// Tracked dist/.gitkeep satisfies go:embed all:dist without a web build. make platform
+// and server/e2e/run_e2e.sh copy web/dist here before compilation; output is
+// gitignored, and the binary embeds dist/'s build-time contents.
 package webui
 
 import (
@@ -32,39 +21,28 @@ import (
 //go:embed all:dist
 var embedded embed.FS
 
-// FS returns the embedded assets rooted at dist/ (so index.html etc. sit at
-// the filesystem root instead of under "dist/").
+// FS returns embedded assets rooted at dist/, with index.html at the root
 func FS() fs.FS {
 	sub, err := fs.Sub(embedded, "dist")
 	if err != nil {
-		// Can't happen: dist/ always ships in the repo (see package doc).
+		// dist/ is tracked, so the embed always contains it
 		panic("webui: dist embed is malformed: " + err.Error())
 	}
 	return sub
 }
 
-// Attach mounts a Gin NoRoute handler that serves the embedded SPA for any
-// request the router's registered routes didn't claim. Every real API
-// route (/api/v1/**, /healthz, /readyz) is registered explicitly by
-// internal/api.NewRouter and so always wins; NoRoute only ever fires for
-// paths nothing else matched. An unmatched /api/* path still 404s as JSON
-// rather than falling through to the SPA — only unmatched GET/HEAD requests
-// outside /api/ get the SPA treatment.
+// Attach serves the embedded SPA with Gin NoRoute; registered API routes (/api/v1/**,
+// /healthz, /readyz from internal/api.NewRouter) take precedence. Unmatched /api/ paths
+// and methods other than GET/HEAD return JSON 404.
 //
-// Static assets (JS/CSS/images — anything that exists as a real file in
-// the embedded tree) are served as-is with their normal content type and
-// caching headers via http.FileServer; everything else falls back to
-// index.html so react-router's client-side routes resolve.
+// Existing embedded paths use http.FileServer; other GET/HEAD paths fall back to
+// index.html for react-router navigation.
 func Attach(r *gin.Engine) {
 	attach(r, FS())
 }
 
-// attach holds Attach's actual logic over an arbitrary fs.FS, so tests can
-// exercise the routing behavior (SPA fallback vs. real-file vs. /api/ 404)
-// against a small fixture instead of the real embedded dist/ — which
-// server/e2e/run_e2e.sh overwrites with a real `npm run build` output that
-// won't have the same files as whatever placeholder happens to be checked
-// in, so tests must not depend on its exact contents.
+// attach accepts an fs.FS so fixture tests cover routing, static files and /api/ 404s
+// independently of embedded build contents
 func attach(r *gin.Engine, assets fs.FS) {
 	fileServer := http.FileServer(http.FS(assets))
 
@@ -87,8 +65,7 @@ func attach(r *gin.Engine, assets fs.FS) {
 			}
 		}
 
-		// SPA fallback: no real file at this path, so it's a client-side
-		// route (or "/") — serve index.html and let react-router take over.
+		// Serve index.html for "/" or a client route without an embedded path
 		c.Request.URL.Path = "/"
 		fileServer.ServeHTTP(c.Writer, c.Request)
 	})

@@ -1,26 +1,22 @@
 import { useState, type ReactNode } from "react";
 
 interface ConfirmStepProps {
-  /** Label for the initial button that reveals the confirm panel. */
+  /** Label for the button that opens the confirm panel */
   reviewLabel: string;
-  /** Label for the button inside the confirm panel that actually submits. */
+  /** Label for the button in the confirm panel that submits */
   confirmLabel: string;
   confirmHeading: string;
-  /** Why this needs a second look — e.g. "This calls the server's compliance hot key directly." */
+  // Reason for review, such as a server compliance-key call
   confirmWarning: string;
-  /** Disables the initial review button (e.g. required fields still empty). */
+  // Disables review while required input is missing
   disabled?: boolean;
   submitting?: boolean;
   onConfirm: () => void;
-  /** Summary of what's about to happen — rendered inside the confirm panel. */
+  /** Summary of the action, rendered inside the confirm panel */
   children: ReactNode;
 }
 
-/**
- * Two-step confirm gate for admin actions that call a server hot-key
- * endpoint directly. Reuses the same review-then-confirm shape as
- * Setup's deploy flow.
- */
+/** Review/confirm step for admin calls to server hot-key endpoints */
 export function ConfirmStep({
   reviewLabel,
   confirmLabel,

@@ -10,21 +10,20 @@ import {SupplyControllerDeployer} from "../src/factory/SupplyControllerDeployer.
 import {IncomeDistributorDeployer} from "../src/factory/IncomeDistributorDeployer.sol";
 import {RedemptionEscrowDeployer} from "../src/factory/RedemptionEscrowDeployer.sol";
 
-/// @notice Deploys RWAFactory and its stateless helpers, without a project, quote token
-///         or role assignments. Configure the server with the logged factory address
-///         (`contract.factory_address`) and scan start block (`contract.start_block`).
-///         Deploy projects later with `factory.deploy(config)`, or use `Deploy.s.sol` for both.
+/// @notice Deploys RWAFactory and five stateless helpers; logs contract.factory_address and
+///         contract.start_block for server config. Reuse the factory for factory.deploy(config);
+///         Deploy.s.sol instead creates a factory and project together.
 ///
 /// Usage:
 ///   forge script script/DeployFactory.s.sol --rpc-url <url> --broadcast -vv
 ///
 /// Env vars:
-///   DEPLOYER_PK  Broadcast key. Defaults to public Anvil account 0 only on chainId 31337;
-///                elsewhere it must be set or RefusingAnvilKeyFallbackOnNonAnvilChain reverts.
+///   DEPLOYER_PK  Broadcast key; defaults to public Anvil account 0 on chain 31337.
+///                Required elsewhere or RefusingAnvilKeyFallbackOnNonAnvilChain reverts.
 ///
-/// The factory has no admin or owner. DEPLOYER_PK is the only script input; fund that
-/// account for the helper and factory CREATE transactions.
-/// @dev Uses DeployBase._deployerPrivateKey for the same key guard as Deploy.
+/// DEPLOYER_PK is the only input; fund it for six creations. No project or quote token is
+/// created, and the factory has no admin, owner or roles.
+/// @dev Shares DeployBase._deployerPrivateKey() and its key guard with Deploy
 contract DeployFactory is DeployBase {
     function run() external returns (RWAFactory factory) {
         uint256 deployerPk = _deployerPrivateKey();
@@ -32,7 +31,7 @@ contract DeployFactory is DeployBase {
 
         vm.startBroadcast(deployerPk);
 
-        // Deploy stateless helpers first; see RWAFactory's constructor
+        // Deploy helpers before the factory; see ComplianceTokenDeployer for the size constraint
         factory = new RWAFactory(
             address(new ComplianceTokenDeployer()),
             address(new MarketDeployer()),
@@ -45,8 +44,7 @@ contract DeployFactory is DeployBase {
 
         console2.log("=== RWAFactory deployed ===");
         console2.log("factory       ", address(factory));
-        // The block this deploy landed in: the server's indexer starts scanning here, so it
-        // becomes `contract.start_block` in the server config.
+        // The indexer starts scanning at contract.start_block
         console2.log("start_block   ", block.number);
         console2.log("version       ", factory.version());
         console2.log("deployer      ", deployer);

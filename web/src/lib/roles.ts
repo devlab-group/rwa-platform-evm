@@ -7,14 +7,8 @@ type RoleHolders = components["schemas"]["RoleHolders"];
 type Addresses = components["schemas"]["Addresses"];
 
 /**
- * On-chain AccessControl role names, exactly as the server projects them into
- * Project.roles (server/internal/project/security.go). Used to gate admin
- * actions in the UI by the connected wallet's role.
- *
- * Note this gate is a UX convenience, not a security boundary: the calldata the
- * gated forms build is still authorized on-chain by the contract's `onlyRole`
- * modifier when it is finally submitted. Hiding an action the connected wallet
- * can't perform just avoids building calldata that would revert.
+ * Projected role names for UI routing; stale/union holder data is advisory, and contracts enforce
+ * authorization
  */
 export const ROLES = {
   admin: "DEFAULT_ADMIN_ROLE",
@@ -25,25 +19,18 @@ export const ROLES = {
   compliance: "COMPLIANCE_ROLE",
 } as const;
 
-/** The DEFAULT_ADMIN_ROLE bytes32 is the zero hash, not keccak256("DEFAULT_ADMIN_ROLE"). */
+/** DEFAULT_ADMIN_ROLE is the zero hash, not keccak256("DEFAULT_ADMIN_ROLE") */
 export const DEFAULT_ADMIN_ROLE_HASH = `0x${"0".repeat(64)}` as Hex;
 
-/**
- * The on-chain `bytes32` role id: OpenZeppelin AccessControl computes it as
- * keccak256 of the role name's UTF-8 bytes (DEFAULT_ADMIN_ROLE being the zero
- * hash special case). Used to encode grantRole/revokeRole calls.
- */
+/** Role ID is keccak256 of the UTF-8 name, except DEFAULT_ADMIN_ROLE's zero hash */
 export function roleHash(role: string): Hex {
   if (role === ROLES.admin) return DEFAULT_ADMIN_ROLE_HASH;
   return keccak256(toBytes(role));
 }
 
 /**
- * Which deployed contracts each granular role is held on, exactly mirroring how
- * the server provisions and projects them (server/internal/project/security.go).
- * Granting or revoking a role must target every contract in its set to keep the
- * on-chain holders consistent with the platform's model. DEFAULT_ADMIN_ROLE is
- * excluded here — it is changed via the two-step admin transfer, not grantRole.
+ * Role-change targets matching the server's projection model; grant/revoke each listed
+ * contract for consistent holders. DEFAULT_ADMIN_ROLE uses two-step transfer instead.
  */
 export const ROLE_TARGET_FIELDS: Record<string, (keyof Addresses)[]> = {
   [ROLES.pauser]: ["token"],
@@ -53,7 +40,7 @@ export const ROLE_TARGET_FIELDS: Record<string, (keyof Addresses)[]> = {
   [ROLES.compliance]: ["compliance"],
 };
 
-/** The roles a DEFAULT_ADMIN can grant/revoke from the UI (admin itself excluded — see transfer flow). */
+/** The roles the admin can grant or revoke in the UI; DEFAULT_ADMIN_ROLE is excluded */
 export const GRANTABLE_ROLES = [
   ROLES.pauser,
   ROLES.pricer,
@@ -62,7 +49,7 @@ export const GRANTABLE_ROLES = [
   ROLES.compliance,
 ] as const;
 
-/** Every governance contract carries DEFAULT_ADMIN_ROLE, so an admin transfer must be begun on each. */
+/** Begin two-step admin transfer on each governance contract */
 export const ADMIN_CONTRACT_FIELDS: (keyof Addresses)[] = [
   "token",
   "compliance",
@@ -72,7 +59,7 @@ export const ADMIN_CONTRACT_FIELDS: (keyof Addresses)[] = [
   "strategy",
 ];
 
-/** Resolves the deployed contract addresses a role change must be sent to. */
+/** Resolves the deployed contract addresses a role change targets */
 export function roleTargets(
   role: string,
   addresses: Addresses | undefined,
@@ -81,7 +68,7 @@ export function roleTargets(
   return resolveAddresses(fields, addresses);
 }
 
-/** Resolves the governance contract addresses an admin transfer must be begun on. */
+/** Resolves the governance contract addresses an admin transfer begins on */
 export function adminTransferTargets(
   addresses: Addresses | undefined,
 ): Address[] {
@@ -101,6 +88,27 @@ function resolveAddresses(
   return out;
 }
 
+/** Address field names accepted by holdersOnAll */
+export type ContractLabel = keyof Addresses;
+
+/**
+ * Case-insensitive intersection of role holders across contracts. Without either map or list,
+ * returns the union; an empty list returns none.
+ */
+export function holdersOnAll(
+  roles: RoleHolders | undefined,
+  rolesByContract: Record<string, RoleHolders> | undefined,
+  role: string,
+  contracts: readonly ContractLabel[] | undefined,
+): string[] {
+  if (!rolesByContract || !contracts) return roles?.[role] ?? [];
+  const lists = contracts.map((c) => rolesByContract[c]?.[role] ?? []);
+  if (lists.length === 0) return [];
+  return lists[0].filter((h) =>
+    lists.every((l) => l.some((x) => x.toLowerCase() === h.toLowerCase())),
+  );
+}
+
 /** Whether `address` is one of the holders of `role` in the project's role map. */
 export function hasRole(
   roles: RoleHolders | undefined,
@@ -114,16 +122,17 @@ export function hasRole(
   return holders.some((h) => h.toLowerCase() === target);
 }
 
-/**
- * Whether the connected wallet holds `role` in the given project role map.
- * `false` while the wallet is disconnected, the roles haven't loaded, or the
- * hook is used outside a <WalletProvider> (read defensively so a gated form
- * simply reports "no access" rather than throwing).
- */
+/** Checks wallet membership in the holdersOnAll result */
 export function useHasRole(
   roles: RoleHolders | undefined,
   role: string,
+  rolesByContract?: Record<string, RoleHolders>,
+  contracts?: readonly ContractLabel[],
 ): boolean {
   const ctx = useContext(WalletContext);
-  return hasRole(roles, role, ctx?.address ?? null);
+  return hasRole(
+    { [role]: holdersOnAll(roles, rolesByContract, role, contracts) },
+    role,
+    ctx?.address ?? null,
+  );
 }

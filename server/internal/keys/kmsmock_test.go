@@ -53,7 +53,7 @@ func TestKMSMockEmptySeedIsRandomAndEphemeral(t *testing.T) {
 	}
 }
 
-// TestKMSMockCloseZeroesKey is the K2 regression test.
+// TestKMSMockCloseZeroesKey checks that Close zeroes the derived key
 func TestKMSMockCloseZeroesKey(t *testing.T) {
 	p, err := newKMSMockProvider("compliance", "test-seed")
 	if err != nil {

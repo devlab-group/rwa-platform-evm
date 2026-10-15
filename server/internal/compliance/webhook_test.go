@@ -24,9 +24,8 @@ func sign(payload []byte, secret string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// validPayload returns a WebhookPayload satisfying every required field
-// (provider, eventId, occurredAt) with a fresh occurredAt, so individual
-// tests only need to override the one field they care about.
+// validPayload supplies required fields and a fresh occurredAt; tests override the
+// case-specific value
 func validPayload(eventID, address, status string) WebhookPayload {
 	return WebhookPayload{
 		EventID: eventID, Address: address, Provider: "test-provider", Status: status,
@@ -67,12 +66,8 @@ func TestWebhookProcessAcceptsVerifiedOwnership(t *testing.T) {
 	}
 }
 
-// TestVerifyHMACRejectsEmptySecret checks that an empty secret is refused:
-// HMAC-SHA256 with an empty key is a well-defined, publicly computable
-// function, so an
-// attacker who knows the secret is unconfigured could otherwise compute a
-// "valid" signature for any payload. VerifyHMAC must refuse an empty secret
-// outright rather than deferring to the underlying HMAC comparison.
+// TestVerifyHMACRejectsEmptySecret checks refusal of signatures anyone could forge for
+// an unconfigured webhook
 func TestVerifyHMACRejectsEmptySecret(t *testing.T) {
 	payload := []byte(`{"address":"0xattacker","status":"Allowed"}`)
 	forgedSig := sign(payload, "") // exactly what an attacker who knows the secret is empty would compute
@@ -81,10 +76,8 @@ func TestVerifyHMACRejectsEmptySecret(t *testing.T) {
 	}
 }
 
-// TestWebhookProcessRejectsEmptySecret is the same check at the
-// Process layer: a WebhookService constructed with an empty secret (which
-// cmd/platform's buildApp avoids doing at all) must still
-// fail closed as defense-in-depth.
+// TestWebhookProcessRejectsEmptySecret is the same check at the Process layer,
+// for a WebhookService built with an empty secret
 func TestWebhookProcessRejectsEmptySecret(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
@@ -126,11 +119,8 @@ func TestWebhookProcessRejectsReplay(t *testing.T) {
 	}
 }
 
-// TestWebhookProcessRejectsReplayViaReserializedPayload covers the case where
-// the same logical event is reserialized and re-signed as a new payload:
-// dedup by raw payload hash alone is
-// insufficient — the (provider,eventId) uniqueness constraint must catch a
-// byte-different resend of the same logical decision.
+// TestWebhookProcessRejectsReplayViaReserializedPayload checks (provider, eventId)
+// uniqueness when a reserialized, re-signed delivery evades payload-hash matching
 func TestWebhookProcessRejectsReplayViaReserializedPayload(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
@@ -145,9 +135,8 @@ func TestWebhookProcessRejectsReplayViaReserializedPayload(t *testing.T) {
 		t.Fatalf("first Process: %v", err)
 	}
 
-	// Same logical event (same provider+eventId), reserialized with a
-	// trailing field so the raw bytes — and therefore the payload hash —
-	// differ from the first delivery.
+	// Add a field while preserving provider/eventId, changing both raw bytes and payload
+	// hash
 	raw, _ := json.Marshal(first)
 	var m map[string]any
 	_ = json.Unmarshal(raw, &m)
@@ -160,12 +149,9 @@ func TestWebhookProcessRejectsReplayViaReserializedPayload(t *testing.T) {
 	}
 }
 
-// TestWebhookProcessConcurrentIdenticalDeliveriesOnlyOneApplied is the S4
-// regression test: webhook providers commonly retry deliveries, sometimes
-// concurrently (e.g. after an ambiguous timeout). N goroutines Process the
-// exact same signed payload at once; exactly one may succeed, the rest
-// must get ErrReplayed — never each independently pass the (racy)
-// Exists() pre-check and both Create() a KYCEvent for the same decision.
+// TestWebhookProcessConcurrentIdenticalDeliveriesOnlyOneApplied checks racing identical
+// payloads: exactly one Process succeeds; others return ErrReplayed even if Exists
+// initially passes
 func TestWebhookProcessConcurrentIdenticalDeliveriesOnlyOneApplied(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
@@ -254,7 +240,7 @@ func TestWebhookProcessRejectsUnknownStatus(t *testing.T) {
 	}
 }
 
-// --- payload validation regression tests ---
+// --- payload validation tests ---
 
 func TestWebhookProcessRejectsMissingProvider(t *testing.T) {
 	events := memory.NewKYCEventRepository()
@@ -297,7 +283,7 @@ func TestWebhookProcessRejectsInvalidAddress(t *testing.T) {
 }
 
 // TestWebhookProcessNormalizesAddressChecksum checks address normalization:
-// a lowercase input address must come back EIP-55 checksummed.
+// a lowercase input address must come back EIP-55 checksummed
 func TestWebhookProcessNormalizesAddressChecksum(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
@@ -316,8 +302,8 @@ func TestWebhookProcessNormalizesAddressChecksum(t *testing.T) {
 	}
 }
 
-// TestWebhookProcessRejectsMissingOccurredAt: a signed occurrence timestamp
-// is required.
+// TestWebhookProcessRejectsMissingOccurredAt checks that occurredAt is
+// required
 func TestWebhookProcessRejectsMissingOccurredAt(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
@@ -332,9 +318,8 @@ func TestWebhookProcessRejectsMissingOccurredAt(t *testing.T) {
 	}
 }
 
-// TestWebhookProcessRejectsStaleOccurredAt enforces a bounded delivery
-// window: an old, correctly signed decision that was never delivered must
-// not remain valid indefinitely.
+// TestWebhookProcessRejectsStaleOccurredAt checks that a correctly signed
+// decision older than MaxWebhookAge is rejected
 func TestWebhookProcessRejectsStaleOccurredAt(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
@@ -349,9 +334,8 @@ func TestWebhookProcessRejectsStaleOccurredAt(t *testing.T) {
 	}
 }
 
-// TestWebhookProcessRejectsFutureOccurredAt covers the other end of the
-// bounded window: an implausibly-far-future timestamp is rejected, not
-// silently accepted as "fresh."
+// TestWebhookProcessRejectsFutureOccurredAt checks that an occurredAt far in
+// the future is rejected
 func TestWebhookProcessRejectsFutureOccurredAt(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
@@ -366,11 +350,8 @@ func TestWebhookProcessRejectsFutureOccurredAt(t *testing.T) {
 	}
 }
 
-// TestWebhookProcessRejectsOutOfOrderDecision covers ordering of
-// newer/older decisions: a second, DIFFERENT
-// eventId for the same address whose occurredAt is not strictly newer than
-// the already-applied decision must be rejected, even though it isn't a
-// literal (provider,eventId) replay.
+// TestWebhookProcessRejectsOutOfOrderDecision checks that an older occurredAt loses the
+// address claim even with a distinct provider/eventId
 func TestWebhookProcessRejectsOutOfOrderDecision(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
@@ -385,16 +366,15 @@ func TestWebhookProcessRejectsOutOfOrderDecision(t *testing.T) {
 	}
 
 	older := validPayload("evt-older", addr, "Blocked")
-	older.OccurredAt = newer.OccurredAt - 3600 // an hour earlier — stale relative to what's already applied
+	older.OccurredAt = newer.OccurredAt - 3600 // an hour earlier, stale against the applied decision
 	payload2, _ := json.Marshal(older)
 	if _, err := svc.Process(context.Background(), payload2, sign(payload2, testSecret), true); !errors.Is(err, ErrStale) {
 		t.Fatalf("err = %v, want ErrStale", err)
 	}
 }
 
-// TestWebhookProcessAcceptsNewerDecisionForSameAddress is the positive
-// counterpart: a genuinely newer decision for the same address must be
-// accepted, not blocked by the ordering check.
+// TestWebhookProcessAcceptsNewerDecisionForSameAddress checks that a newer
+// decision for the same address is accepted
 func TestWebhookProcessAcceptsNewerDecisionForSameAddress(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
@@ -416,11 +396,8 @@ func TestWebhookProcessAcceptsNewerDecisionForSameAddress(t *testing.T) {
 	}
 }
 
-// TestWebhookProcessEqualTimestampUsesEventKeyTieBreak covers the
-// deterministic (occurredAt,eventKey) tie-break:
-// two DIFFERENT events for the same address at the EXACT same occurredAt
-// must resolve identically everywhere — the lexicographically greater
-// eventKey wins, regardless of arrival order.
+// TestWebhookProcessEqualTimestampUsesEventKeyTieBreak checks that equal-timestamp
+// decisions select the lexicographically greater eventKey regardless of arrival order
 func TestWebhookProcessEqualTimestampUsesEventKeyTieBreak(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
@@ -435,9 +412,8 @@ func TestWebhookProcessEqualTimestampUsesEventKeyTieBreak(t *testing.T) {
 		t.Fatalf("Process lower-key: %v", err)
 	}
 
-	// Same occurredAt, lexicographically GREATER eventKey — must still win
-	// the claim under the tie-break even though it isn't strictly newer
-	// in time.
+	// Same occurredAt and a greater eventKey wins the claim, although it is
+	// not newer in time
 	higher := validPayload("evt-zzz", addr, "Blocked")
 	higher.OccurredAt = occurredAt
 	payloadHigher, _ := json.Marshal(higher)
@@ -445,8 +421,7 @@ func TestWebhookProcessEqualTimestampUsesEventKeyTieBreak(t *testing.T) {
 		t.Fatalf("Process higher-key at equal timestamp: %v", err)
 	}
 
-	// And the reverse: a lexicographically SMALLER eventKey at the same
-	// timestamp as the current claim holder must lose.
+	// A smaller eventKey at the claim holder's timestamp loses
 	evenLower := validPayload("evt-aab", addr, "Allowed")
 	evenLower.OccurredAt = occurredAt
 	payloadEvenLower, _ := json.Marshal(evenLower)
@@ -455,14 +430,9 @@ func TestWebhookProcessEqualTimestampUsesEventKeyTieBreak(t *testing.T) {
 	}
 }
 
-// TestWebhookProcessConcurrentDistinctEventsAtomicClaim is the counterpart
-// to TestWebhookProcessConcurrentIdenticalDeliveriesOnlyOneApplied:
-// N goroutines Process DIFFERENT events (distinct eventIds, distinct
-// strictly-increasing occurredAt) for the SAME address concurrently. The
-// globally newest event can never lose its claim regardless of scheduling
-// — nothing concurrent can ever be newer than it — which is a scheduling-
-// order-independent way to prove ClaimLatestForAddress's compare-and-set
-// is genuinely atomic rather than racy.
+// TestWebhookProcessConcurrentDistinctEventsAtomicClaim checks racing distinct
+// decisions for one address: the greatest occurredAt must hold the claim regardless of
+// scheduling
 func TestWebhookProcessConcurrentDistinctEventsAtomicClaim(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
@@ -496,15 +466,13 @@ func TestWebhookProcessConcurrentDistinctEventsAtomicClaim(t *testing.T) {
 		case err == nil:
 			successes++
 		case errors.Is(err, ErrStale):
-			// lost the claim to a concurrently-processed, newer event — expected
+			// lost the claim to a concurrently-processed, newer event, expected
 		default:
 			t.Errorf("unexpected error: %v", err)
 		}
 	}
-	// Every distinct delivery is durably recorded in the
-	// append-only history BEFORE the claim is resolved (winners as
-	// Accepted, losers as Superseded), so all n are stored — unlike the
-	// old claim-first order, which only persisted claim winners.
+	// Store all n deliveries before resolving claims; winners are Accepted and losers
+	// Superseded
 	all, err := events.List(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -514,9 +482,8 @@ func TestWebhookProcessConcurrentDistinctEventsAtomicClaim(t *testing.T) {
 	}
 }
 
-// TestWebhookProcessRejectsNegativeValidUntil guards the int64->uint64 cast:
-// a negative validUntil must be rejected
-// BEFORE any unsigned conversion, not silently wrapped into a huge expiry.
+// TestWebhookProcessRejectsNegativeValidUntil checks that a negative validUntil
+// is rejected before the unsigned conversion wraps it into a huge expiry
 func TestWebhookProcessRejectsNegativeValidUntil(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
@@ -531,8 +498,8 @@ func TestWebhookProcessRejectsNegativeValidUntil(t *testing.T) {
 	}
 }
 
-// TestWebhookProcessRejectsValidUntilBeyondPolicyHorizon rejects
-// out-of-policy expirations.
+// TestWebhookProcessRejectsValidUntilBeyondPolicyHorizon checks that a
+// validUntil beyond MaxValidUntilHorizon is rejected
 func TestWebhookProcessRejectsValidUntilBeyondPolicyHorizon(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
@@ -551,14 +518,8 @@ func TestWebhookProcessRejectsValidUntilBeyondPolicyHorizon(t *testing.T) {
 
 var errInjected = errors.New("injected persistence failure")
 
-// faultyKYCRepo wraps the in-memory KYCEventRepository and injects failures
-// at specific persistence boundaries, so these tests can reproduce a
-// crash/transient error between the durable event write and the claim
-// advancement and prove the decision is never lost. Because Process now
-// Creates the event BEFORE advancing the claim, the old "claim succeeds /
-// event insert fails" loss window is structurally impossible; the boundaries
-// that remain are "event insert succeeds / claim (or finalize) fails", both
-// of which leave a durable Claiming event the reconciler recovers.
+// faultyKYCRepo injects failures after Create, during claiming or finalization. Both
+// must retain a Claiming event for reconciler recovery.
 type faultyKYCRepo struct {
 	*memory.KYCEventRepository
 	failClaim  bool
@@ -580,10 +541,8 @@ func (f *faultyKYCRepo) Update(ctx context.Context, e *models.KYCEvent) error {
 	return f.KYCEventRepository.Update(ctx, e)
 }
 
-// TestWebhookProcessRecoversWhenClaimFailsAfterCreate reproduces the exact
-// loss scenario — a transient failure right where the claim would have
-// advanced — and asserts the decision survives as a durable Claiming event
-// that the reconciler finalizes to Accepted.
+// TestWebhookProcessRecoversWhenClaimFailsAfterCreate checks that a failed claim leaves
+// Claiming for reconciliation to Accepted
 func TestWebhookProcessRecoversWhenClaimFailsAfterCreate(t *testing.T) {
 	base := memory.NewKYCEventRepository()
 	repo := &faultyKYCRepo{KYCEventRepository: base, failClaim: true}
@@ -618,10 +577,8 @@ func TestWebhookProcessRecoversWhenClaimFailsAfterCreate(t *testing.T) {
 	}
 }
 
-// TestWebhookProcessRecoversWhenFinalizeUpdateFails covers the other
-// boundary: the claim CAS succeeds but the state-write that promotes the
-// event out of Claiming fails. The event stays durably Claiming and the
-// reconciler still finalizes it to Accepted.
+// TestWebhookProcessRecoversWhenFinalizeUpdateFails checks that a successful claim with
+// failed finalization stays Claiming until reconciliation restores Accepted
 func TestWebhookProcessRecoversWhenFinalizeUpdateFails(t *testing.T) {
 	base := memory.NewKYCEventRepository()
 	repo := &faultyKYCRepo{KYCEventRepository: base, failUpdate: 1}
@@ -648,11 +605,9 @@ func TestWebhookProcessRecoversWhenFinalizeUpdateFails(t *testing.T) {
 	}
 }
 
-// TestWebhookProcessNewestBlockedRecoverableAfterClaimFailure is the core
-// recovery invariant: with an older Allowed decision already Accepted, a newer
-// Blocked decision whose claim advance fails must still be recovered — it
-// wins the claim, the older Allowed is superseded, and the Blocked decision
-// is queued to apply exactly once and is never lost.
+// TestWebhookProcessNewestBlockedRecoverableAfterClaimFailure checks that a newer
+// Blocked decision recovers its failed claim, supersedes older Allowed and queues one
+// application
 func TestWebhookProcessNewestBlockedRecoverableAfterClaimFailure(t *testing.T) {
 	base := memory.NewKYCEventRepository()
 	repo := &faultyKYCRepo{KYCEventRepository: base}
@@ -677,8 +632,7 @@ func TestWebhookProcessNewestBlockedRecoverableAfterClaimFailure(t *testing.T) {
 	}
 	repo.failClaim = false
 
-	// Two ticks reach steady state: the first finalizes the Blocked claim and
-	// advances the pointer; the second supersedes the now-stale Allowed event.
+	// First finalize the Blocked claim, then supersede stale Allowed on the next tick
 	rec := NewWebhookReconciler(repo, memory.NewTransactionRepository(), nil)
 	for i := 0; i < 2; i++ {
 		if err := rec.Reconcile(context.Background()); err != nil {

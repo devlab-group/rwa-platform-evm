@@ -1,9 +1,5 @@
-// Minimal, abstracted wallet integration. Every call the console broadcasts is
-// encoded here from a pinned ABI fragment (lib/abis.ts) — the standard ERC-20
-// approve plus the admin actions (deploy, mint, roles, pause/price, treasury
-// withdrawal, redemption fund/reject). Nothing is ever submitted from
-// server-supplied calldata. Deliberately isolated behind this module so the
-// rest of the app — and the production build — never needs a live wallet to run.
+// Build wallet writes and Safe-batch calldata from pinned ABI fragments in lib/abis.ts.
+// The console does not submit server-supplied calldata.
 import {
   createPublicClient,
   createWalletClient,
@@ -25,9 +21,11 @@ import {
   redemptionEscrowAbi,
   rwaFactoryAbi,
   supplyControllerAbi,
+  supplyControllerErrorsAbi,
   vaultAbi,
 } from "./abis";
 import { findNetwork, toAddChainParams } from "./networks";
+import type { ContractCall } from "./safeBatch";
 
 export interface InjectedProvider {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -49,19 +47,14 @@ export function getInjectedProvider(): InjectedProvider | undefined {
   return window.ethereum;
 }
 
-/**
- * Thrown by every chain-touching wallet call when the wallet's
- * currently-connected chain doesn't match the project's configured chain.
- * Never silently retarget a tx — the caller must ask the wallet to switch
- * (see requestSwitchChain) and retry.
- */
+/** Expected-chain mismatch; switch and retry without retargeting the write */
 export class ChainMismatchError extends Error {
   constructor(
     public readonly expectedChainId: number,
     public readonly actualChainId: number,
   ) {
     super(
-      `Wallet is connected to chain ${actualChainId}, but this project requires chain ${expectedChainId}. Switch networks in your wallet and try again.`,
+      `Wallet is connected to chain ${actualChainId}, but this project requires chain ${expectedChainId}. Switch networks in your wallet and retry.`,
     );
     this.name = "ChainMismatchError";
   }
@@ -74,24 +67,17 @@ async function getInjectedChainId(provider: InjectedProvider): Promise<number> {
   return Number(chainIdHex);
 }
 
-/**
- * Reads the injected wallet's currently-connected chainId without prompting
- * for account access (eth_chainId needs no permission). Used pre-deploy on
- * Setup, where no project (hence no configured chainId) exists yet but the
- * quote token's decimals must still be read on-chain: the operator's wallet
- * must already be on the deployment chain, so its live chain is the one to
- * read against.
- */
+/** Reads chain ID without account access, including pre-deployment Setup */
 export async function readInjectedChainId(): Promise<number> {
   const provider = getInjectedProvider();
   if (!provider)
     throw new Error(
-      "No injected wallet found (e.g. MetaMask). Connect a wallet on the deployment chain to read the quote token's decimals.",
+      "No injected wallet found (e.g. MetaMask). Connect one on the deployment chain to read quote-token decimals.",
     );
   return getInjectedChainId(provider);
 }
 
-/** Throws ChainMismatchError unless the wallet is currently on `expectedChainId`. */
+// Requires the injected wallet to be on expectedChainId
 export async function assertChain(
   provider: InjectedProvider,
   expectedChainId: number,
@@ -101,13 +87,7 @@ export async function assertChain(
     throw new ChainMismatchError(expectedChainId, actual);
 }
 
-/**
- * A minimal viem Chain descriptor for the project's configured chain.
- * Transport is always the injected provider (never a direct RPC), so
- * `rpcUrls` is unused; the object exists so the wallet client can assert
- * the wallet's actual chain against it (see the `chain` param below) instead
- * of passing `chain: null`, which disables that check entirely.
- */
+// Expected chain for viem's send-time check; RPC uses the injected transport
 function projectChain(chainId: number): Chain {
   return defineChain({
     id: chainId,
@@ -131,11 +111,7 @@ export async function connectWallet(): Promise<ConnectedWallet> {
   return { address, chainId };
 }
 
-/**
- * True when a wallet_switchEthereumChain rejection is EIP-3326's 4902
- * ("chain not added to the wallet"). MetaMask sometimes nests the code under
- * `data.originalError`, so check both.
- */
+// isChainNotAddedError finds code 4902 directly or under data.originalError
 function isChainNotAddedError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
   const top = (err as { code?: unknown }).code;
@@ -145,13 +121,7 @@ function isChainNotAddedError(err: unknown): boolean {
   return nested === 4902;
 }
 
-/**
- * Requests that the wallet switch to `expectedChainId` (EIP-3326). If the
- * wallet doesn't know that chain yet (4902 — e.g. a local anvil node absent
- * from MetaMask by default), add it via wallet_addEthereumChain using the
- * allow-listed network params (lib/networks.ts) and retry the switch. An
- * unknown chain (not in the allow-list) or any other error propagates.
- */
+/** Switch to expectedChainId; on 4902 add an allowlisted chain and retry, propagating other errors */
 export async function requestSwitchChain(
   expectedChainId: number,
 ): Promise<void> {
@@ -166,13 +136,12 @@ export async function requestSwitchChain(
   } catch (err) {
     if (!isChainNotAddedError(err)) throw err;
     const network = findNetwork(expectedChainId);
-    if (!network) throw err; // not something we know how to add
+    if (!network) throw err; // Propagate unsupported-network errors
     await provider.request({
       method: "wallet_addEthereumChain",
       params: [toAddChainParams(network)],
     });
-    // Adding usually leaves the wallet on the new chain, but not guaranteed —
-    // re-issue the switch so the final state is deterministic.
+    // Request the switch explicitly after adding the chain
     await provider.request({
       method: "wallet_switchEthereumChain",
       params: [{ chainId: chainIdHex }],
@@ -193,11 +162,7 @@ export async function signMessage(
   return client.signMessage({ account: address, message });
 }
 
-/**
- * Project.decimals is not exposed by GET /api/v1/project (only present on
- * the deploy request), so it's read directly from the token contract —
- * standard ERC-20, robust regardless of that API gap.
- */
+/** Reads ERC-20 decimals through the injected provider after checking its chain */
 export async function readErc20Decimals(
   expectedChainId: number,
   token: Address,
@@ -213,7 +178,7 @@ export async function readErc20Decimals(
   });
 }
 
-/** Reads the current on-chain allowance(owner, spender) for `token`. */
+/** Reads token allowance for owner and spender on the expected chain */
 export async function readErc20Allowance(
   expectedChainId: number,
   token: Address,
@@ -233,11 +198,8 @@ export async function readErc20Allowance(
 }
 
 /**
- * Vault.previewBuy(tokenAmount) — what a purchase of `tokenAmount` RWA minimal
- * units currently costs, in quote-token minimal units. A plain view call: the
- * price lives in the vault's strategy, so the chain is the only authority on
- * it. Quotes are indicative — the price can move before the buy lands, which
- * is why Vault.buy takes its own maxQuoteAmount bound.
+ * Quotes RWA minimal units in quote-token minimal units; execution enforces maxQuoteAmount if price
+ * changes
  */
 export async function readPreviewBuy(
   expectedChainId: number,
@@ -256,18 +218,7 @@ export async function readPreviewBuy(
   });
 }
 
-/**
- * Blocks until a submitted transaction is mined AND succeeded. An ERC-20
- * approval must be confirmed on-chain before the UI trusts it and enables the
- * call that spends it. A short polling interval is fine here: the platform
- * targets a single, fast local/permissioned chain, not mainnet.
- *
- * A mined-but-reverted transaction resolves the receipt normally, so the
- * status has to be checked explicitly: without it a seizure the chain refused
- * (the holder emptied the wallet first, the recipient lost compliance between
- * the gas estimate and inclusion) would be reported to the operator as done.
- * Every caller already surfaces a thrown message, so throwing here is enough.
- */
+/** Waits for a successful receipt; mined reverts throw before approval-dependent spending */
 export async function waitForTxReceipt(hash: Hex): Promise<void> {
   const provider = getInjectedProvider();
   if (!provider) throw new Error("No injected wallet found.");
@@ -281,36 +232,30 @@ export async function waitForTxReceipt(hash: Hex): Promise<void> {
   });
   if (receipt.status !== "success") {
     throw new Error(
-      `Transaction ${hash} was mined but reverted on-chain. Nothing changed.`,
+      `Transaction ${hash} was mined but reverted on-chain. Contract state is unchanged.`,
     );
   }
 }
 
-/**
- * Turns a failed wallet call into a sentence, decoding the token's own revert
- * data when the wallet passes it back. `sendWrite` posts raw calldata, so viem
- * has no ABI attached to the call and cannot name the error by itself; the
- * revert bytes still travel on the error object, and `rwaTokenErrorsAbi`
- * covers every error the enforcement calls can raise.
- *
- * Falls back to the raw message whenever there is nothing decodable, which is
- * the common case for a user rejection or an RPC failure.
- */
+/** Decodes token reverts for raw writes; unknown/unavailable data falls back to wallet/RPC errors */
 export function describeWalletError(err: unknown): string {
   const data = revertData(err);
   if (data) {
     try {
-      const decoded = decodeErrorResult({ abi: rwaTokenErrorsAbi, data });
+      const decoded = decodeErrorResult({
+        abi: [...rwaTokenErrorsAbi, ...supplyControllerErrorsAbi],
+        data,
+      });
       const named = explainTokenError(decoded.errorName, decoded.args);
       if (named) return named;
     } catch {
-      // Not one of ours (an OZ error, a plain string revert): fall through.
+      // Fall back when this ABI cannot decode the revert
     }
   }
   return err instanceof Error ? err.message : "Transaction failed.";
 }
 
-/** Digs the `0x`-prefixed revert payload out of whatever shape the wallet threw. */
+// Search data on the error and cause chain, examining up to six objects
 function revertData(err: unknown): Hex | undefined {
   let current: unknown = err;
   for (let depth = 0; current && depth < 6; depth++) {
@@ -327,7 +272,7 @@ function revertData(err: unknown): Hex | undefined {
   return undefined;
 }
 
-/** Plain-language text for the errors an operator can actually trigger. */
+// explainTokenError describes recognized token errors
 function explainTokenError(
   name: string,
   args: readonly unknown[] | undefined,
@@ -336,19 +281,37 @@ function explainTokenError(
   switch (name) {
     case "ERC7943CannotReceive":
     case "RecipientNotAllowed":
-      return `The recipient ${first} is not Allowed in the compliance registry, so the token refused the transfer.`;
+      return `The recipient ${first} is not Allowed in the compliance registry; the transfer was refused.`;
     case "SenderNotAllowed":
       return `${first} is not Allowed in the compliance registry and cannot send.`;
     case "ERC7943InsufficientUnfrozenBalance":
       return `${first} does not have that many unfrozen tokens: ${String(args?.[2])} of their balance is movable (in minimal units).`;
     case "SystemAddressCannotBeFrozen":
-      return `${first} is the Vault or the redemption escrow, which can never be frozen.`;
+      return `${first} is the Vault or redemption escrow, which can never be frozen with a nonzero amount.`;
     case "SystemAddressCannotBeSeized":
-      return `${first} is the Vault or the redemption escrow, which can never be seized from.`;
+      return `${first} is the Vault or redemption escrow, which cannot be a seizure source.`;
     case "ForcedTransferToSelf":
       return "A forced transfer must have different sender and recipient.";
     case "ZeroAddress":
       return "The zero address is not a valid party to this call.";
+    case "InsufficientVaultInventory":
+      return `The Vault holds ${String(args?.[1])} minimal units, less than the ${String(first)} requested. Nothing was burned.`;
+    case "OperationIdAlreadyUsed":
+      return "This burn was already executed; its operation ID cannot be reused.";
+    case "NonceAlreadyUsed":
+      return "This attestation's nonce was already used.";
+    case "AttestationExpired":
+      return "The auditor's attestation has expired. Obtain a new signed attestation.";
+    case "InvalidSignature":
+      return "The signature does not match this attestation's auditor.";
+    case "WrongAuditor":
+    case "WrongProfileDigest":
+    case "WrongVault":
+      return `The attestation does not match this deployment (${name}).`;
+    case "ProjectPaused":
+      return "The project is paused. Unpause it before changing supply.";
+    case "ZeroAmount":
+      return "The attestation amount is zero.";
     case "AccessControlUnauthorizedAccount":
       return `${first} does not hold the role this call requires.`;
     default:
@@ -356,7 +319,7 @@ function explainTokenError(
   }
 }
 
-/** Sends an ERC-20 `approve(spender, amount)` from the connected wallet. */
+/** Sends ERC-20 approve from the connected wallet on the expected chain */
 export async function sendErc20Approve(
   expectedChainId: number,
   owner: Address,
@@ -372,27 +335,31 @@ export async function sendErc20Approve(
     chain,
     transport: custom(provider),
   });
-  // `chain` (not null) makes viem assert the wallet's live chain against it
-  // immediately before sending — a mismatch throws instead of broadcasting.
+  // Setting chain enables viem's live-chain check before sending
   return client.sendTransaction({
     account: owner,
     chain,
+    ...erc20ApproveCall(token, spender, amount),
+  });
+}
+
+/** ERC-20 approve(spender, amount) call */
+export function erc20ApproveCall(
+  token: Address,
+  spender: Address,
+  amount: bigint,
+): ContractCall {
+  return {
     to: token,
     data: encodeFunctionData({
       abi: erc20Abi,
       functionName: "approve",
       args: [spender, amount],
     }),
-  });
+  };
 }
 
-/**
- * Sends an encoded contract write from the connected wallet on the project's
- * chain. Shared by every helper below, including the Security-page admin
- * actions, which broadcast the privileged call directly (the contract's
- * onlyRole check is the authorization, not the UI — see lib/roles.ts).
- * Mirrors sendErc20Approve's chain-assertion.
- */
+// Checks chain and submits local calldata; contracts enforce authorization
 async function sendWrite(
   expectedChainId: number,
   from: Address,
@@ -410,25 +377,53 @@ async function sendWrite(
   return client.sendTransaction({ account: from, chain, to, data });
 }
 
-/** RWAToken.pause()/unpause() — halts or resumes all token transfers (trading). PAUSER_ROLE. */
+function sendCall(
+  expectedChainId: number,
+  from: Address,
+  call: ContractCall,
+): Promise<Hex> {
+  return sendWrite(expectedChainId, from, call.to, call.data);
+}
+
+/** Encodes RWAToken pause or unpause */
+export function pauseCall(token: Address, pause: boolean): ContractCall {
+  return {
+    to: token,
+    data: encodeFunctionData({
+      abi: pausableAbi,
+      functionName: pause ? "pause" : "unpause",
+    }),
+  };
+}
+
+/** Submits the PAUSER_ROLE pause or unpause action */
 export async function sendSetPaused(
   expectedChainId: number,
   from: Address,
   token: Address,
   pause: boolean,
 ): Promise<Hex> {
-  return sendWrite(
-    expectedChainId,
-    from,
-    token,
-    encodeFunctionData({
-      abi: pausableAbi,
-      functionName: pause ? "pause" : "unpause",
-    }),
-  );
+  return sendCall(expectedChainId, from, pauseCall(token, pause));
 }
 
-/** FixedPriceStrategy.setPurchasePrice/setRedemptionPrice — price is quote-token minimal units per whole token. PRICER_ROLE. */
+/** Encodes a purchase or redemption price update */
+export function strategyPriceCall(
+  strategy: Address,
+  side: "purchase" | "redemption",
+  priceMinimalUnits: bigint,
+): ContractCall {
+  return {
+    to: strategy,
+    data: encodeFunctionData({
+      abi: fixedPriceStrategyAbi,
+      functionName:
+        side === "purchase" ? "setPurchasePrice" : "setRedemptionPrice",
+      args: [priceMinimalUnits],
+    }),
+  };
+}
+
+/** Submits a PRICER_ROLE price update in quote-token minimal units per whole RWA token */
 export async function sendSetStrategyPrice(
   expectedChainId: number,
   from: Address,
@@ -436,24 +431,16 @@ export async function sendSetStrategyPrice(
   side: "purchase" | "redemption",
   priceMinimalUnits: bigint,
 ): Promise<Hex> {
-  return sendWrite(
+  return sendCall(
     expectedChainId,
     from,
-    strategy,
-    encodeFunctionData({
-      abi: fixedPriceStrategyAbi,
-      functionName:
-        side === "purchase" ? "setPurchasePrice" : "setRedemptionPrice",
-      args: [priceMinimalUnits],
-    }),
+    strategyPriceCall(strategy, side, priceMinimalUnits),
   );
 }
 
 /**
- * RWAToken.setFrozenTokens(account, amount) - ERC-7943. `amount` is ABSOLUTE
- * token minimal units, not a delta: it replaces whatever was frozen before,
- * and 0 releases the hold entirely. DEFAULT_ADMIN_ROLE authorizes; the
- * contract also refuses a non-zero amount on the Vault or RedemptionEscrow.
+ * Replaces absolute frozen RWA minimal units; zero releases, and positive system-address freezes
+ * revert
  */
 export async function sendSetFrozenTokens(
   expectedChainId: number,
@@ -462,23 +449,32 @@ export async function sendSetFrozenTokens(
   account: Address,
   amountMinimalUnits: bigint,
 ): Promise<Hex> {
-  return sendWrite(
+  return sendCall(
     expectedChainId,
     from,
-    token,
-    encodeFunctionData({
+    setFrozenTokensCall(token, account, amountMinimalUnits),
+  );
+}
+
+/** Encodes an absolute frozen-amount replacement; see sendSetFrozenTokens */
+export function setFrozenTokensCall(
+  token: Address,
+  account: Address,
+  amountMinimalUnits: bigint,
+): ContractCall {
+  return {
+    to: token,
+    data: encodeFunctionData({
       abi: erc7943Abi,
       functionName: "setFrozenTokens",
       args: [account, amountMinimalUnits],
     }),
-  );
+  };
 }
 
 /**
- * RWAToken.forcedTransfer(from, to, amount) - ERC-7943 seizure. Moves tokens
- * without the holder's signature, bypassing their own eligibility and an
- * active pause; the recipient must still be compliance-Allowed, which the
- * contract enforces. DEFAULT_ADMIN_ROLE authorizes.
+ * Admin transfer without holder approval; bypasses sender eligibility, freeze and pause but
+ * requires eligible recipient
  */
 export async function sendForcedTransfer(
   expectedChainId: number,
@@ -488,19 +484,48 @@ export async function sendForcedTransfer(
   recipient: Address,
   amountMinimalUnits: bigint,
 ): Promise<Hex> {
-  return sendWrite(
+  return sendCall(
     expectedChainId,
     sender,
-    token,
-    encodeFunctionData({
+    forcedTransferCall(token, holder, recipient, amountMinimalUnits),
+  );
+}
+
+/** Encodes forcedTransfer; see sendForcedTransfer */
+export function forcedTransferCall(
+  token: Address,
+  holder: Address,
+  recipient: Address,
+  amountMinimalUnits: bigint,
+): ContractCall {
+  return {
+    to: token,
+    data: encodeFunctionData({
       abi: erc7943Abi,
       functionName: "forcedTransfer",
       args: [holder, recipient, amountMinimalUnits],
     }),
-  );
+  };
 }
 
-/** AccessControl.grantRole/revokeRole(role, account) on one contract. DEFAULT_ADMIN_ROLE authorizes. */
+/** Encodes a role grant or revocation on one contract */
+export function roleChangeCall(
+  contract: Address,
+  action: "grant" | "revoke",
+  role: Hex,
+  account: Address,
+): ContractCall {
+  return {
+    to: contract,
+    data: encodeFunctionData({
+      abi: accessControlAdminAbi,
+      functionName: action === "grant" ? "grantRole" : "revokeRole",
+      args: [role, account],
+    }),
+  };
+}
+
+/** Submits an admin-authorized role grant or revocation on one contract */
 export async function sendRoleChange(
   expectedChainId: number,
   from: Address,
@@ -509,63 +534,65 @@ export async function sendRoleChange(
   role: Hex,
   account: Address,
 ): Promise<Hex> {
-  return sendWrite(
+  return sendCall(
     expectedChainId,
     from,
-    contract,
-    encodeFunctionData({
-      abi: accessControlAdminAbi,
-      functionName: action === "grant" ? "grantRole" : "revokeRole",
-      args: [role, account],
-    }),
+    roleChangeCall(contract, action, role, account),
   );
 }
 
-/** AccessControlDefaultAdminRules.beginDefaultAdminTransfer(newAdmin) on one contract (step 1 of 2). */
+/** Encodes the first admin-transfer step on one contract */
+export function beginAdminTransferCall(
+  contract: Address,
+  newAdmin: Address,
+): ContractCall {
+  return {
+    to: contract,
+    data: encodeFunctionData({
+      abi: accessControlAdminAbi,
+      functionName: "beginDefaultAdminTransfer",
+      args: [newAdmin],
+    }),
+  };
+}
+
+/** Schedules the first admin-transfer step on one contract */
 export async function sendBeginAdminTransfer(
   expectedChainId: number,
   from: Address,
   contract: Address,
   newAdmin: Address,
 ): Promise<Hex> {
-  return sendWrite(
+  return sendCall(
     expectedChainId,
     from,
-    contract,
-    encodeFunctionData({
-      abi: accessControlAdminAbi,
-      functionName: "beginDefaultAdminTransfer",
-      args: [newAdmin],
-    }),
+    beginAdminTransferCall(contract, newAdmin),
   );
 }
 
-/**
- * AccessControlDefaultAdminRules.acceptDefaultAdminTransfer() on one contract
- * (step 2 of 2). Broadcast by the PENDING (incoming) admin to complete a
- * transfer begun with beginDefaultAdminTransfer; reverts until the on-chain
- * delay has elapsed. No args — the contract already recorded the pending admin.
- */
+/** Submits acceptance from the pending admin after the on-chain delay */
 export async function sendAcceptAdminTransfer(
   expectedChainId: number,
   from: Address,
   contract: Address,
 ): Promise<Hex> {
-  return sendWrite(
-    expectedChainId,
-    from,
-    contract,
-    encodeFunctionData({
+  return sendCall(expectedChainId, from, acceptAdminTransferCall(contract));
+}
+
+/** Encodes admin-transfer acceptance on one contract */
+export function acceptAdminTransferCall(contract: Address): ContractCall {
+  return {
+    to: contract,
+    data: encodeFunctionData({
       abi: accessControlAdminAbi,
       functionName: "acceptDefaultAdminTransfer",
     }),
-  );
+  };
 }
 
 /**
- * Vault.withdrawProceeds(amount) — TREASURER_ROLE. Pays out the vault's
- * accumulated quote-token proceeds; no approve needed (the vault holds and
- * transfers the funds). `amount` is in quote-token minimal units.
+ * TREASURER_ROLE withdrawal to configured treasury in quote minimal units; Vault funds need no
+ * approval
  */
 export async function sendWithdrawProceeds(
   expectedChainId: number,
@@ -573,43 +600,39 @@ export async function sendWithdrawProceeds(
   vault: Address,
   amount: bigint,
 ): Promise<Hex> {
-  return sendWrite(
-    expectedChainId,
-    from,
-    vault,
-    encodeFunctionData({
+  return sendCall(expectedChainId, from, withdrawProceedsCall(vault, amount));
+}
+
+/** Encodes a treasury withdrawal; see sendWithdrawProceeds */
+export function withdrawProceedsCall(
+  vault: Address,
+  amount: bigint,
+): ContractCall {
+  return {
+    to: vault,
+    data: encodeFunctionData({
       abi: vaultAbi,
       functionName: "withdrawProceeds",
       args: [amount],
     }),
-  );
+  };
 }
 
-/**
- * RedemptionEscrow.fundRedemption(id) — TREASURER_ROLE. The escrow pulls the
- * request's quoteAmount from the treasurer via safeTransferFrom, so the caller
- * MUST have approved the escrow for that amount of the quote token first (see
- * the Redemptions page's approve→fund flow).
- */
+/** Submits TREASURER_ROLE funding after the treasurer approves the recorded quote amount */
 export async function sendFundRedemption(
   expectedChainId: number,
   from: Address,
   escrow: Address,
   id: bigint,
 ): Promise<Hex> {
-  return sendWrite(
+  return sendCall(
     expectedChainId,
     from,
-    escrow,
-    encodeFunctionData({
-      abi: redemptionEscrowAbi,
-      functionName: "fundRedemption",
-      args: [id],
-    }),
+    escrowCall(escrow, "fundRedemption", id),
   );
 }
 
-/** RedemptionEscrow.rejectRedemption(id, reasonCode) — REDEMPTION_MANAGER_ROLE. reasonCode is a bytes32 (see encodeReasonCode). */
+/** Submits REDEMPTION_MANAGER_ROLE rejection with a bytes32 reason from encodeReasonCode */
 export async function sendRejectRedemption(
   expectedChainId: number,
   from: Address,
@@ -617,22 +640,48 @@ export async function sendRejectRedemption(
   id: bigint,
   reasonCode: Hex,
 ): Promise<Hex> {
-  return sendWrite(
+  return sendCall(
     expectedChainId,
     from,
-    escrow,
-    encodeFunctionData({
+    rejectRedemptionCall(escrow, id, reasonCode),
+  );
+}
+
+/** Encodes a redemption funding or permissionless claim call */
+export function escrowCall(
+  escrow: Address,
+  functionName: "fundRedemption" | "claimRedemption",
+  id: bigint,
+): ContractCall {
+  return {
+    to: escrow,
+    data: encodeFunctionData({
+      abi: redemptionEscrowAbi,
+      functionName,
+      args: [id],
+    }),
+  };
+}
+
+/** Encodes redemption rejection with a bytes32 reason */
+export function rejectRedemptionCall(
+  escrow: Address,
+  id: bigint,
+  reasonCode: Hex,
+): ContractCall {
+  return {
+    to: escrow,
+    data: encodeFunctionData({
       abi: redemptionEscrowAbi,
       functionName: "rejectRedemption",
       args: [id, reasonCode],
     }),
-  );
+  };
 }
 
 /**
- * The full RWAFactory.deploy(ProjectConfig) argument, assembled client-side on
- * Setup. Field names/order mirror IRWAFactory.ProjectConfig (see rwaFactoryAbi);
- * bytes32/address fields are 0x-hex strings and the uint fields are bigint.
+ * Browser-built IRWAFactory.ProjectConfig: ABI field order, hex addresses/bytes32 and declared
+ * integer widths
  */
 export interface ProjectConfigInput {
   name: string;
@@ -651,16 +700,13 @@ export interface ProjectConfigInput {
   treasurer: Address;
   redemptionManager: Address;
   treasury: Address;
-  // uint48 — viem's ABI types map integer widths <= 48 bits to `number`
-  // (uint8 decimals above too), while the wider uint64/uint256 fields are bigint.
+  // viem uses number through uint48 and bigint for wider integer types
   adminTransferDelay: number;
 }
 
 /**
- * Broadcasts RWAFactory.deploy(config) from the connected admin wallet. deploy
- * is permissionless (no on-chain role) — the `admin` field inside `config`
- * becomes DEFAULT_ADMIN_ROLE. The server observes the resulting ProjectDeployed
- * event; it never signs or relays the deploy.
+ * Permissionless wallet deployment with config.admin authority; server observes ProjectDeployed
+ * without relaying
  */
 export async function sendDeployProject(
   expectedChainId: number,
@@ -680,12 +726,7 @@ export async function sendDeployProject(
   );
 }
 
-/**
- * The SupplyController.mint(MintAttestation, signature) attestation, assembled
- * client-side on Assets from the record + project. Field names/order mirror
- * ISupplyController.MintAttestation (see supplyControllerAbi); bytes32/address
- * fields are 0x-hex strings and the uint fields are bigint.
- */
+/** Browser-built MintAttestation: hex addresses/bytes32 and bigint uint fields */
 export interface MintAttestationInput {
   auditor: Address;
   profileDigest: Hex;
@@ -697,13 +738,7 @@ export interface MintAttestationInput {
   vault: Address;
 }
 
-/**
- * Broadcasts SupplyController.mint(attestation, signature) from the connected
- * admin wallet. There is no on-chain role gate — the auditor's EIP-712
- * `signature` over the attestation (bound to an unused nonce) is the
- * authorization, verified on-chain. The server observes the Minted event and
- * advances the record; it no longer relays the mint.
- */
+/** Permissionless wallet mint with a valid auditor attestation; server projects Minted */
 export async function sendMint(
   expectedChainId: number,
   from: Address,
@@ -720,5 +755,48 @@ export async function sendMint(
       functionName: "mint",
       args: [attestation, signature],
     }),
+  );
+}
+
+/** BurnAttestation with hex addresses/bytes32 and bigint uint fields */
+export interface BurnAttestationInput {
+  auditor: Address;
+  profileDigest: Hex;
+  operationId: Hex;
+  metadataDigest: Hex;
+  amount: bigint;
+  nonce: bigint;
+  validUntil: bigint;
+  vault: Address;
+}
+
+/** Encodes SupplyController.burn(attestation, signature) */
+export function burnCall(
+  supplyControllerAddress: Address,
+  attestation: BurnAttestationInput,
+  signature: Hex,
+): ContractCall {
+  return {
+    to: supplyControllerAddress,
+    data: encodeFunctionData({
+      abi: supplyControllerAbi,
+      functionName: "burn",
+      args: [attestation, signature],
+    }),
+  };
+}
+
+/** Submits a permissionless burn of Vault inventory using the auditor's attestation */
+export function sendBurn(
+  expectedChainId: number,
+  from: Address,
+  supplyControllerAddress: Address,
+  attestation: BurnAttestationInput,
+  signature: Hex,
+): Promise<Hex> {
+  return sendCall(
+    expectedChainId,
+    from,
+    burnCall(supplyControllerAddress, attestation, signature),
   );
 }

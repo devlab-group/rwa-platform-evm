@@ -21,19 +21,13 @@ const accessControlABIJSON = `[
     "outputs":[{"name":"","type":"address"}]}
 ]`
 
-// AccessControl encodes calldata / decodes reads for OZ AccessControl's
-// standard surface (hasRole/getRoleAdmin) plus the AccessControlEnumerable
-// extension (getRoleMemberCount/getRoleMember), shared verbatim by every
-// project contract that grants roles (docs/spec/roles.md: "Each contract may
-// host its own AccessControl instance ... implementer choice"). One binding
-// works against any of them since the function signatures are identical. The
-// enumerable calls let deployment verification enumerate the COMPLETE holder
-// set of every role and reject an unexpected holder, which a candidate-only
-// hasRole check cannot detect; every child contract inherits
-// AccessControlEnumerable, so these calls are always present.
+// AccessControl binds hasRole, getRoleAdmin, getRoleMemberCount and getRoleMember
+// across the platform's AccessControlEnumerable governance contracts
+// (docs/spec/roles.md). Deployment verification enumerates role holders to detect
+// unexpected members that checking known candidates with hasRole would miss.
 type AccessControl struct{ ABI abi.ABI }
 
-// NewAccessControl parses the shared AccessControl ABI once.
+// NewAccessControl parses the shared AccessControl ABI
 func NewAccessControl() AccessControl { return AccessControl{ABI: mustABI(accessControlABIJSON)} }
 
 // PackHasRole builds calldata for hasRole(bytes32,address).
@@ -78,8 +72,8 @@ func (a AccessControl) UnpackGetRoleMember(data []byte) (common.Address, error) 
 	return *abi.ConvertType(out[0], new(common.Address)).(*common.Address), nil
 }
 
-// Role IDs per docs/spec/roles.md (FROZEN). DefaultAdminRole
-// is OZ's fixed bytes32(0); the rest are keccak256 of the exact role name string.
+// Role IDs as defined in docs/spec/roles.md. DefaultAdminRole is OpenZeppelin's
+// bytes32(0); the others are the keccak256 of the role name.
 var (
 	DefaultAdminRole      = [32]byte{}
 	PauserRole            = crypto.Keccak256Hash([]byte("PAUSER_ROLE"))

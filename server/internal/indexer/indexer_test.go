@@ -14,8 +14,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// noSleep replaces the indexer's backoff wait in tests, so a retry test
-// runs instantly instead of actually waiting out the backoff schedule.
+// noSleep replaces the indexer's backoff wait so retry tests run instantly
 func noSleep(time.Duration) {}
 
 const chainID = 31337
@@ -76,8 +75,8 @@ func TestIndexerIngestionIsIdempotentAcrossPolls(t *testing.T) {
 	if err := idx.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// Nothing new happened on-chain; a second poll must not duplicate events
-	// nor error, even though it re-scans from a stable checkpoint.
+	// nothing new happened on-chain, so a second poll must neither duplicate events
+	// nor error, even though it re-scans from a stable checkpoint
 	source.SetHeader(4, 1)
 	source.SetHead(3)
 	if err := idx.Poll(context.Background()); err != nil {
@@ -99,13 +98,13 @@ func TestIndexerReorgRollsBackAndReingests(t *testing.T) {
 		source.SetHeader(i, 1)
 	}
 	source.SetHead(5)
-	// Old-chain logs: event "old-A" at block 4, event "old-B" at block 5.
+	// old-chain logs: event "old-A" at block 4, event "old-B" at block 5
 	source.AddLog(types.Log{Address: addr1, BlockNumber: 4, TxHash: common.HexToHash("0xa001"), Index: 0, Topics: []common.Hash{common.HexToHash("0xaaaa")}})
 	source.AddLog(types.Log{Address: addr1, BlockNumber: 5, TxHash: common.HexToHash("0xb001"), Index: 0, Topics: []common.Hash{common.HexToHash("0xbbbb")}})
 
 	checkpoints := memory.NewIndexerCheckpointRepository()
 	events := memory.NewChainEventRepository()
-	// Small rollback window so the test only needs a handful of blocks.
+	// use a small rollback window so the test needs only a few blocks
 	idx := newTestIndexer(t, source, checkpoints, events, WithRollbackWindow(2))
 
 	if err := idx.Poll(context.Background()); err != nil {
@@ -116,9 +115,7 @@ func TestIndexerReorgRollsBackAndReingests(t *testing.T) {
 		t.Fatalf("expected old-A ingested before reorg, got %d", len(preReorg))
 	}
 
-	// Simulate a reorg that replaces blocks 4 and 5 with new content: the
-	// header hashes change (new seed) and the old logs are replaced by a
-	// new log "new-C" at block 4.
+	// Replace blocks 4/5 headers and old logs with fork event new-C at block 4
 	source.SetHeader(4, 2)
 	source.SetHeader(5, 2)
 	source.RemoveLogsAtOrAfter(4)
@@ -129,10 +126,8 @@ func TestIndexerReorgRollsBackAndReingests(t *testing.T) {
 		t.Fatalf("Poll after reorg: %v", err)
 	}
 
-	// The rollback window is 2, checkpoint was at block 5, so rollback
-	// discards events at/after block 5-2+1=4 — exactly where the fork
-	// happened, so old-A (block 4) and old-B (block 5) must both be gone,
-	// and new-C (block 4) must be present.
+	// Checkpoint 5 minus rollback window 2 deletes from block 4: remove old-A/old-B and
+	// retain new-C
 	oldA, _ := events.ListByName(context.Background(), chainID, addr1.Hex(), common.HexToHash("0xaaaa").Hex())
 	if len(oldA) != 0 {
 		t.Errorf("expected old-A to be rolled back, still present: %v", oldA)
@@ -179,12 +174,9 @@ func TestIndexerNoOpWhenNoNewBlocks(t *testing.T) {
 	}
 }
 
-// TestIndexerDeepReorgWalksBackPastFixedWindow covers deep reorgs:
-// a reorg deeper than rollbackWindow must still be fully rolled back when a
-// BlockHashRepository is configured — not just the fixed window's worth,
-// which would silently leave stale events (and, per the audit, a
-// freshly-re-read checkpoint hash that matches canonical again, so the
-// deeper divergence is never rediscovered on a later poll).
+// TestIndexerDeepReorgWalksBackPastFixedWindow checks full-fork recovery through
+// retained hashes; fixed rollback would hide older stale events behind a re-baselined
+// checkpoint
 func TestIndexerDeepReorgWalksBackPastFixedWindow(t *testing.T) {
 	source := NewFakeSource()
 	checkpoints := memory.NewIndexerCheckpointRepository()
@@ -193,8 +185,8 @@ func TestIndexerDeepReorgWalksBackPastFixedWindow(t *testing.T) {
 	idx := New(source, checkpoints, events, chainID, []common.Address{addr1}, 1, nil,
 		WithRollbackWindow(3), WithBlockHashRepository(blockHashes), WithMaxRetainedHistory(256))
 
-	// Build a 20-block original chain, polling after every new block so
-	// every height gets its own retained hash.
+	// build a 20-block original chain, polling after every new block so every height
+	// gets its own retained hash
 	for i := uint64(1); i <= 20; i++ {
 		source.SetHeader(i, 1)
 		source.SetHead(i)
@@ -210,9 +202,8 @@ func TestIndexerDeepReorgWalksBackPastFixedWindow(t *testing.T) {
 		t.Fatalf("expected old-D ingested before reorg, got %d", len(oldD))
 	}
 
-	// An 11-block-deep reorg (blocks 10..20 replaced) — deeper than
-	// rollbackWindow(3), which alone would only roll back to block 17,
-	// leaving old-D (block 15) stale.
+	// Replace blocks 10..20, beyond rollbackWindow(3), which alone would leave old-D at
+	// block 15
 	for i := uint64(10); i <= 20; i++ {
 		source.SetHeader(i, 2)
 	}
@@ -242,22 +233,10 @@ func TestIndexerDeepReorgWalksBackPastFixedWindow(t *testing.T) {
 	}
 }
 
-// TestIndexerReorgBeyondRetainedHistoryRollsBackAndRebuildsFromTrustedStart
-// covers deep-reorg reconciliation. An earlier version of this test
-// asserted that an event below the retained-history floor (block 10, well
-// below maxHistory's 5-block window) survives a reorg touching the entire
-// chain untouched — that was the bug: the old algorithm pinned the rollback
-// ancestor at exactly the oldest *retained* height regardless of whether
-// that height was actually verified against the chain, so anything below
-// it was never even reconsidered, silently trusting stale data forever.
-//
-// The correct behavior: when the fork can't be verified anywhere within
-// retained history, but the total depth from the checkpoint down to the
-// indexer's trusted-start block is still within the configured automatic
-// recovery policy (maxAutoReorgDepth — generous by default here), the
-// indexer rebuilds from that trusted start, discarding and correctly
-// re-deriving EVERY event since deployment — including ones below the old
-// retained-history floor. Nothing is silently preserved unverified.
+// TestIndexerReorgBeyondRetainedHistoryRollsBackAndRebuildsFromTrustedStart checks
+// rebuilding from the trusted start when it remains within maxAutoReorgDepth. No old
+// events may survive unverified, including block 10 below the five-block retained
+// window.
 func TestIndexerReorgBeyondRetainedHistoryRollsBackAndRebuildsFromTrustedStart(t *testing.T) {
 	source := NewFakeSource()
 	checkpoints := memory.NewIndexerCheckpointRepository()
@@ -270,7 +249,7 @@ func TestIndexerReorgBeyondRetainedHistoryRollsBackAndRebuildsFromTrustedStart(t
 		source.SetHeader(i, 1)
 		source.SetHead(i)
 		if i == 10 {
-			// Well below the retained floor (20-5=15).
+			// well below the retained floor (20-5=15)
 			source.AddLog(types.Log{Address: addr1, BlockNumber: 10, TxHash: common.HexToHash("0xf001"), Index: 0, Topics: []common.Hash{common.HexToHash("0xffff")}})
 		}
 		if i == 16 {
@@ -281,10 +260,8 @@ func TestIndexerReorgBeyondRetainedHistoryRollsBackAndRebuildsFromTrustedStart(t
 		}
 	}
 
-	// A reorg touching the entire chain, deeper than maxHistory(5) but well
-	// within the default maxAutoReorgDepth(100): every old-chain log,
-	// including the one at block 10, is genuinely gone; the new chain only
-	// emits a replacement event at block 16.
+	// Replace the chain beyond maxHistory(5) but within maxAutoReorgDepth(100); remove all
+	// old logs, leaving one new event at block 16
 	for i := uint64(1); i <= 20; i++ {
 		source.SetHeader(i, 2)
 	}
@@ -321,12 +298,9 @@ func TestIndexerReorgBeyondRetainedHistoryRollsBackAndRebuildsFromTrustedStart(t
 	}
 }
 
-// TestIndexerReorgBeyondAutomaticPolicyEntersReconciliationRequired: a
-// divergence deeper than maxAutoReorgDepth must NOT be silently rebuilt
-// from an unverified point — Poll must
-// instead leave all persisted state untouched and report
-// ErrReconciliationRequired, and keep doing so on every subsequent Poll
-// until an operator calls ResetToTrustedCheckpoint.
+// TestIndexerReorgBeyondAutomaticPolicyEntersReconciliationRequired checks that
+// excessive divergence preserves events and scan position, pauses with
+// ErrReconciliationRequired, and requires operator reset before later polls resume
 func TestIndexerReorgBeyondAutomaticPolicyEntersReconciliationRequired(t *testing.T) {
 	source := NewFakeSource()
 	checkpoints := memory.NewIndexerCheckpointRepository()
@@ -346,9 +320,8 @@ func TestIndexerReorgBeyondAutomaticPolicyEntersReconciliationRequired(t *testin
 		}
 	}
 
-	// Replace blocks 10..20 (10 blocks deep) — deeper than
-	// maxAutoReorgDepth(3), so no genuine ancestor can be confirmed within
-	// policy.
+	// Replace blocks 10..20 beyond maxAutoReorgDepth(3), leaving no verified ancestor
+	// within policy
 	for i := uint64(10); i <= 20; i++ {
 		source.SetHeader(i, 2)
 	}
@@ -371,16 +344,15 @@ func TestIndexerReorgBeyondAutomaticPolicyEntersReconciliationRequired(t *testin
 		t.Errorf("checkpoint LastBlock changed during a refused rollback: got %d, want unchanged 20", cp.LastBlock)
 	}
 
-	// Nothing was deleted: the event that would eventually need demoting
-	// stays exactly as it was, not silently trusted as canonical nor
-	// silently discarded — an operator must decide.
+	// Keep unresolved events until operator recovery, neither trusting them as canonical
+	// nor discarding them automatically
 	stillThere, _ := events.ListByName(context.Background(), chainID, addr1.Hex(), common.HexToHash("0xffff").Hex())
 	if len(stillThere) != 1 {
 		t.Fatalf("expected the unverified event to be left untouched pending reconciliation, got %d", len(stillThere))
 	}
 
-	// Poll again: it must keep refusing without attempting any further
-	// chain reads or state changes.
+	// poll again: it must keep refusing, with no further chain reads or state
+	// changes
 	if err := idx.Poll(context.Background()); !errors.Is(err, ErrReconciliationRequired) {
 		t.Fatalf("second Poll while flagged: got %v, want ErrReconciliationRequired", err)
 	}
@@ -392,8 +364,8 @@ func TestIndexerReorgBeyondAutomaticPolicyEntersReconciliationRequired(t *testin
 		t.Errorf("checkpoint changed on a second flagged Poll: %+v", cpAgain)
 	}
 
-	// Operator recovers by designating block 9 (the last block before the
-	// touched range) as trusted.
+	// the operator recovers by designating block 9 (the last block before the touched
+	// range) as trusted
 	if err := idx.ResetToTrustedCheckpoint(context.Background(), 9); err != nil {
 		t.Fatalf("ResetToTrustedCheckpoint: %v", err)
 	}
@@ -412,7 +384,7 @@ func TestIndexerReorgBeyondAutomaticPolicyEntersReconciliationRequired(t *testin
 		t.Errorf("expected the orphaned event (block 10) to be rolled back by the reset, got %d", len(cleared))
 	}
 
-	// Poll resumes normally, re-scanning forward from the trusted checkpoint.
+	// poll resumes normally, re-scanning forward from the trusted checkpoint
 	source.AddLog(types.Log{Address: addr1, BlockNumber: 12, TxHash: common.HexToHash("0xe001"), Index: 0, Topics: []common.Hash{common.HexToHash("0xeeee")}})
 	if err := idx.Poll(context.Background()); err != nil {
 		t.Fatalf("Poll after reset: %v", err)
@@ -430,12 +402,8 @@ func TestIndexerReorgBeyondAutomaticPolicyEntersReconciliationRequired(t *testin
 	}
 }
 
-// TestIndexerHeadRegressionBelowCheckpointIsHandledExplicitly: an RPC whose
-// visible head regressed below the checkpoint (source failover to a
-// lagging node, or a reorg that shortened the canonical chain) must not
-// simply error out of HeaderByNumber(cp.LastBlock) forever — Poll must
-// recognize the regression and roll back to a verified point at/below the
-// new head instead.
+// TestIndexerHeadRegressionBelowCheckpointIsHandledExplicitly checks rollback below a
+// regressed head instead of repeated missing-checkpoint-header failures
 func TestIndexerHeadRegressionBelowCheckpointIsHandledExplicitly(t *testing.T) {
 	source := NewFakeSource()
 	checkpoints := memory.NewIndexerCheckpointRepository()
@@ -455,10 +423,8 @@ func TestIndexerHeadRegressionBelowCheckpointIsHandledExplicitly(t *testing.T) {
 		}
 	}
 
-	// The visible head regresses to 5 (blocks 6..10, including block 7's
-	// header, are simply no longer visible on this source at all — e.g. an
-	// RPC failover). cp.LastBlock (10) no longer exists on the source, so
-	// naively fetching HeaderByNumber(10) would error every poll.
+	// Regress head from 10 to 5 so headers 6..10 disappear, simulating RPC failover.
+	// Fetching the old checkpoint header would repeatedly fail.
 	source.SetHead(5)
 
 	if err := idx.Poll(context.Background()); err != nil {
@@ -480,8 +446,8 @@ func TestIndexerHeadRegressionBelowCheckpointIsHandledExplicitly(t *testing.T) {
 		t.Errorf("expected the block-7 event to be rolled back after head regression to 5, got %d", len(rolledBack))
 	}
 
-	// The source "catches up" again with the same canonical history; a
-	// subsequent poll must cleanly re-ingest the same event without error.
+	// Restore the same canonical chain; the next Poll must re-ingest its event
+	// successfully
 	source.SetHead(10)
 	if err := idx.Poll(context.Background()); err != nil {
 		t.Fatalf("Poll after head recovers: %v", err)
@@ -492,10 +458,8 @@ func TestIndexerHeadRegressionBelowCheckpointIsHandledExplicitly(t *testing.T) {
 	}
 }
 
-// TestIndexerReplayAfterRollbackStaysIdempotent: after a rollback+re-scan,
-// polling again with nothing new on-chain must not duplicate any event —
-// idempotent replay (via ChainEventRepository.Exists) must keep holding
-// across the rollback/rebuild path.
+// TestIndexerReplayAfterRollbackStaysIdempotent checks repeated polls after
+// rollback/rescan without duplicate events
 func TestIndexerReplayAfterRollbackStaysIdempotent(t *testing.T) {
 	source := NewFakeSource()
 	checkpoints := memory.NewIndexerCheckpointRepository()
@@ -513,7 +477,7 @@ func TestIndexerReplayAfterRollbackStaysIdempotent(t *testing.T) {
 	}
 	source.AddLog(types.Log{Address: addr1, BlockNumber: 4, TxHash: common.HexToHash("0xaa01"), Index: 0, Topics: []common.Hash{common.HexToHash("0xaaaa")}})
 
-	// Shallow reorg replacing blocks 4-5.
+	// shallow reorg replacing blocks 4-5
 	source.SetHeader(4, 2)
 	source.SetHeader(5, 2)
 	source.SetHead(5)
@@ -525,7 +489,7 @@ func TestIndexerReplayAfterRollbackStaysIdempotent(t *testing.T) {
 		t.Fatalf("expected event ingested once after rollback+replay, got %d", len(first))
 	}
 
-	// Poll repeatedly with nothing new: must never duplicate.
+	// poll repeatedly with nothing new: it must never duplicate
 	for i := 0; i < 3; i++ {
 		if err := idx.Poll(context.Background()); err != nil {
 			t.Fatalf("idle poll %d: %v", i, err)
@@ -539,12 +503,9 @@ func TestIndexerReplayAfterRollbackStaysIdempotent(t *testing.T) {
 
 // --- Bounded log-range sync, DLQ ---
 
-// TestIndexerScanLogsRestrictedRPCRange proves initial historical
-// synchronization works against a provider that enforces a strict
-// eth_getLogs block-range limit: WithMaxLogRange configures the indexer to
-// never ask for more than 10 blocks at once, well below the 40-block gap
-// being backfilled, so it must split into multiple FilterLogs calls yet
-// still ingest every log across the whole range.
+// TestIndexerScanLogsRestrictedRPCRange splits a 40-block backfill into FilterLogs
+// calls of at most 10 blocks through WithMaxLogRange, satisfying the provider limit
+// while ingesting every log
 func TestIndexerScanLogsRestrictedRPCRange(t *testing.T) {
 	source := NewFakeSource()
 	for i := uint64(1); i <= 40; i++ {
@@ -579,11 +540,8 @@ func TestIndexerScanLogsRestrictedRPCRange(t *testing.T) {
 	}
 }
 
-// TestIndexerScanLogsShrinksOnOversizedResponse proves the indexer adapts
-// to a provider limit it did NOT know about in advance (WithMaxLogRange
-// left at the generous default), by shrinking its request width in
-// response to the provider's oversized-response error, rather than only
-// working when preconfigured with exactly the right size.
+// TestIndexerScanLogsShrinksOnOversizedResponse checks adaptation to provider limits
+// smaller than the configured maximum
 func TestIndexerScanLogsShrinksOnOversizedResponse(t *testing.T) {
 	source := NewFakeSource()
 	for i := uint64(1); i <= 20; i++ {
@@ -609,9 +567,8 @@ func TestIndexerScanLogsShrinksOnOversizedResponse(t *testing.T) {
 	}
 }
 
-// TestIndexerScanLogsRetriesTransientFailure proves a transient (non-range)
-// FilterLogs failure is retried with bounded backoff rather than
-// immediately failing the whole Poll.
+// TestIndexerScanLogsRetriesTransientFailure requires bounded-backoff retries for
+// transient FilterLogs failures that are not range errors
 func TestIndexerScanLogsRetriesTransientFailure(t *testing.T) {
 	source := NewFakeSource()
 	source.SetHeader(1, 1)
@@ -632,14 +589,9 @@ func TestIndexerScanLogsRetriesTransientFailure(t *testing.T) {
 	}
 }
 
-// TestIndexerScanLogsGivesUpAndPreservesCheckpoint proves that exhausting
-// the retry budget surfaces the error (does not silently treat the range as
-// empty) and does NOT corrupt/advance the last verified checkpoint, so an
-// RPC-provider failure never corrupts the last verified checkpoint. A
-// subsequent Poll (once the provider recovers) must then
-// resume and ingest everything, including what the failed attempt never
-// saw, without duplicating anything a partially-successful earlier chunk
-// might already have persisted.
+// TestIndexerScanLogsGivesUpAndPreservesCheckpoint checks that exhausted retries leave
+// progress unchanged; recovery resumes missing chunks without duplicating committed
+// work
 func TestIndexerScanLogsGivesUpAndPreservesCheckpoint(t *testing.T) {
 	source := NewFakeSource()
 	for i := uint64(1); i <= 5; i++ {
@@ -660,8 +612,8 @@ func TestIndexerScanLogsGivesUpAndPreservesCheckpoint(t *testing.T) {
 		t.Fatal("expected no checkpoint to have been persisted after a failed initial sync")
 	}
 
-	// Provider recovers: a fresh Poll must succeed and ingest the log that
-	// was never seen.
+	// the provider recovers: a fresh Poll must succeed and ingest the log that was
+	// never seen
 	if err := idx.Poll(context.Background()); err != nil {
 		t.Fatalf("Poll after recovery: %v", err)
 	}
@@ -671,11 +623,8 @@ func TestIndexerScanLogsGivesUpAndPreservesCheckpoint(t *testing.T) {
 	}
 }
 
-// TestIndexerDeadLetterQueueRecordsAndContinues proves a single
-// unprocessable log (a decode failure) does not block every other
-// canonical event behind it: with a DLQ configured, Poll succeeds, the
-// good log is ingested, the checkpoint advances, and the bad log is
-// recorded to the DLQ instead of being silently dropped.
+// TestIndexerDeadLetterQueueRecordsAndContinues checks that a bad log enters the DLQ
+// while good logs and checkpoint progress persist
 func TestIndexerDeadLetterQueueRecordsAndContinues(t *testing.T) {
 	source := NewFakeSource()
 	source.SetHeader(1, 1)
@@ -722,10 +671,8 @@ func TestIndexerDeadLetterQueueRecordsAndContinues(t *testing.T) {
 	}
 }
 
-// TestIndexerDeadLetterQueueRequiredToAvoidAbortingPoll proves the
-// documented no-DLQ-configured fallback: a decode failure still aborts
-// Poll exactly as before this feature existed, rather than silently
-// skipping the event.
+// TestIndexerDeadLetterQueueRequiredToAvoidAbortingPoll checks the fallback
+// without a DLQ: a decode failure aborts Poll instead of skipping the event
 func TestIndexerDeadLetterQueueRequiredToAvoidAbortingPoll(t *testing.T) {
 	source := NewFakeSource()
 	source.SetHeader(1, 1)
@@ -745,9 +692,8 @@ func TestIndexerDeadLetterQueueRequiredToAvoidAbortingPoll(t *testing.T) {
 	}
 }
 
-// TestIndexerRetryDeadLetterSucceeds proves an operator can retry a DLQ
-// entry once the underlying cause is fixed, ingesting the originally-failed
-// log from its retained source data and marking the entry Resolved.
+// TestIndexerRetryDeadLetterSucceeds checks retained-log ingestion and Resolved after
+// the decode problem is fixed
 func TestIndexerRetryDeadLetterSucceeds(t *testing.T) {
 	source := NewFakeSource()
 	source.SetHeader(1, 1)
@@ -795,11 +741,8 @@ func TestIndexerRetryDeadLetterSucceeds(t *testing.T) {
 	}
 }
 
-// TestIndexerRetryDeadLetterDismissesOrphanedLog covers DLQ orphan
-// handling: a DLQ entry whose retained block is no longer canonical
-// by the time it's retried (a reorg happened in between) must be dismissed
-// WITHOUT being ingested — never silently reintroducing an orphaned-fork
-// event.
+// TestIndexerRetryDeadLetterDismissesOrphanedLog checks that a reorged entry resolves
+// without ingestion
 func TestIndexerRetryDeadLetterDismissesOrphanedLog(t *testing.T) {
 	source := NewFakeSource()
 	source.SetHeader(1, 1) // fork A
@@ -825,8 +768,8 @@ func TestIndexerRetryDeadLetterDismissesOrphanedLog(t *testing.T) {
 	}
 	id := entries[0].ID
 
-	// Block 1 reorgs to fork B before the operator retries — the DLQ
-	// entry's retained BlockHash (fork A) no longer matches.
+	// Reorganize block 1 to fork B before retry so its retained fork-A hash no longer
+	// matches
 	source.SetHeader(1, 2)
 
 	if err := idx.RetryDeadLetter(context.Background(), id); err != nil {
@@ -851,20 +794,9 @@ func TestIndexerRetryDeadLetterDismissesOrphanedLog(t *testing.T) {
 
 // --- Reorg racing a single Poll call ---
 
-// TestIndexerRejectsForkThatChangesBetweenFilterLogsAndHeaderByNumber is the
-// exact failure sequence: FilterLogs returns fork-A logs,
-// the chain then reorganizes to fork B before the subsequent
-// HeaderByNumber call the old implementation used to compute the
-// checkpoint. The old code would persist fork-A's events under a
-// checkpoint hash that matches fork B, and normal polling would never
-// detect or remove them (the checkpoint-hash-mismatch rollback trigger
-// only fires at the START of the NEXT Poll, and by then the checkpoint
-// already agrees with fork B).
-//
-// This test uses FakeSource.FilterLogsHook to fire the reorg at EXACTLY
-// that point — inside the same Poll call, between FilterLogs and the
-// following HeaderByNumber — and asserts that no fork-A event or block
-// hash survives, and the only committed checkpoint is fork B's.
+// TestIndexerRejectsForkThatChangesBetweenFilterLogsAndHeaderByNumber switches to fork
+// B after fork-A logs return. Events, retained hashes and checkpoint must all belong to
+// B, avoiding hidden stale-fork data.
 func TestIndexerRejectsForkThatChangesBetweenFilterLogsAndHeaderByNumber(t *testing.T) {
 	source := NewFakeSource()
 	for i := uint64(1); i <= 5; i++ {
@@ -877,13 +809,12 @@ func TestIndexerRejectsForkThatChangesBetweenFilterLogsAndHeaderByNumber(t *test
 	blockHashes := memory.NewBlockHashRepository()
 	idx := newTestIndexer(t, source, checkpoints, events, WithBlockHashRepository(blockHashes), WithMaxRangeRetries(5), withSleepFunc(noSleep))
 
-	// First poll establishes a clean baseline checkpoint at block 2, fork A.
+	// the first poll establishes a clean baseline checkpoint at block 2, fork A
 	if err := idx.Poll(context.Background()); err != nil {
 		t.Fatalf("initial Poll: %v", err)
 	}
 
-	// Fork A has an event at block 3, which the vulnerable code path would
-	// ingest before ever re-checking the chain.
+	// Fork A's block-3 event would slip through without post-scan validation
 	forkAEvent := common.HexToHash("0xA000")
 	source.AddLog(types.Log{Address: addr1, BlockNumber: 3, TxHash: common.HexToHash("0xa3"), Index: 0, Topics: []common.Hash{forkAEvent}})
 	source.SetHead(5)
@@ -891,10 +822,7 @@ func TestIndexerRejectsForkThatChangesBetweenFilterLogsAndHeaderByNumber(t *test
 	reorgFired := false
 	source.FilterLogsHook = func() {
 		reorgFired = true
-		// The node reorganizes to fork B for every block this poll is
-		// about to scan, RIGHT BETWEEN the FilterLogs call that already
-		// returned fork-A's log and the indexer's next HeaderByNumber
-		// call.
+		// Switch to fork B after FilterLogs returns A's logs, before the next HeaderByNumber
 		for i := uint64(3); i <= 5; i++ {
 			source.SetHeader(i, 2)
 		}
@@ -909,7 +837,7 @@ func TestIndexerRejectsForkThatChangesBetweenFilterLogsAndHeaderByNumber(t *test
 		t.Fatal("test setup error: FilterLogsHook never fired")
 	}
 
-	// No fork-A event may have survived, under any checkpoint.
+	// no fork-A event may have survived, under any checkpoint
 	forkA, err := events.ListByName(context.Background(), chainID, addr1.Hex(), forkAEvent.Hex())
 	if err != nil {
 		t.Fatal(err)
@@ -918,7 +846,7 @@ func TestIndexerRejectsForkThatChangesBetweenFilterLogsAndHeaderByNumber(t *test
 		t.Fatalf("expected zero fork-A events to survive, got %d", len(forkA))
 	}
 
-	// Fork B's replacement event must be the one actually indexed.
+	// fork B's replacement event must be the one indexed
 	forkB, err := events.ListByName(context.Background(), chainID, addr1.Hex(), common.HexToHash("0xB000").Hex())
 	if err != nil {
 		t.Fatal(err)
@@ -927,8 +855,7 @@ func TestIndexerRejectsForkThatChangesBetweenFilterLogsAndHeaderByNumber(t *test
 		t.Fatalf("expected exactly 1 fork-B event ingested, got %d", len(forkB))
 	}
 
-	// The checkpoint must agree with fork B's actual header at 5, not any
-	// hash observed mid-scan before the reorg.
+	// Checkpoint 5 must use fork B's hash, not the pre-reorg observation
 	cp, err := checkpoints.Get(context.Background(), chainID, CheckpointAddress)
 	if err != nil {
 		t.Fatal(err)
@@ -941,10 +868,7 @@ func TestIndexerRejectsForkThatChangesBetweenFilterLogsAndHeaderByNumber(t *test
 		t.Fatalf("checkpoint hash = %s, want fork B's actual hash %s", cp.LastBlockHash, wantHash.Hash().Hex())
 	}
 
-	// The retained block-hash history (used for future reorg walk-back)
-	// must also reflect fork B only, at every scanned height — a stale
-	// fork-A hash here would let a LATER reorg's common-ancestor search
-	// wrongly "confirm" a fork-A block as still canonical.
+	// Retained hashes must all describe fork B for later ancestor searches
 	for i := uint64(3); i <= 5; i++ {
 		got, err := blockHashes.Get(context.Background(), chainID, i)
 		if err != nil {
@@ -960,13 +884,8 @@ func TestIndexerRejectsForkThatChangesBetweenFilterLogsAndHeaderByNumber(t *test
 	}
 }
 
-// TestIndexerRetriesWhenLogBlockHashDisagreesWithCanonicalHeader covers the
-// per-log validation defense specifically — validating every returned
-// log's BlockHash against the canonical header at its block number —
-// isolated from the boundary-hash check: the reorg touches only
-// an INTERMEDIATE block within the chunk, not the chunk's upper bound `to`
-// — so the boundary-hash recheck at `to` sees no change at all, and only
-// the per-log check catches the stale intermediate log.
+// TestIndexerRetriesWhenLogBlockHashDisagreesWithCanonicalHeader changes an interior
+// block while its boundary stays fixed, requiring per-log hash validation
 func TestIndexerRetriesWhenLogBlockHashDisagreesWithCanonicalHeader(t *testing.T) {
 	source := NewFakeSource()
 	source.SetHeader(1, 1)
@@ -977,8 +896,7 @@ func TestIndexerRetriesWhenLogBlockHashDisagreesWithCanonicalHeader(t *testing.T
 	events := memory.NewChainEventRepository()
 	idx := newTestIndexer(t, source, checkpoints, events, WithMaxRangeRetries(5), withSleepFunc(noSleep))
 
-	// The event is at block 1 — an INTERMEDIATE block, not the chunk's
-	// upper bound (block 2).
+	// Place the event inside block 1, below chunk boundary 2
 	source.AddLog(types.Log{Address: addr1, BlockNumber: 1, TxHash: common.HexToHash("0xaa"), Index: 0, Topics: []common.Hash{common.HexToHash("0x01")}})
 
 	swapped := false
@@ -987,8 +905,7 @@ func TestIndexerRetriesWhenLogBlockHashDisagreesWithCanonicalHeader(t *testing.T
 			return
 		}
 		swapped = true
-		// Reorg block 1 ONLY — block 2 (the chunk's boundary) is
-		// untouched, so the boundary-hash recheck alone would miss this.
+		// Change only block 1; a boundary-only check at block 2 would miss it
 		source.SetHeader(1, 2)
 	}
 
@@ -998,9 +915,8 @@ func TestIndexerRetriesWhenLogBlockHashDisagreesWithCanonicalHeader(t *testing.T
 	if !swapped {
 		t.Fatal("test setup error: hook never fired")
 	}
-	// The log's stale-hashed first appearance must not have been
-	// committed; only after the retry (which re-fetches the log with the
-	// NOW-current header and hash) does it get ingested.
+	// Commit the log only after retry returns its current canonical hash, never on the
+	// first stale observation
 	evs, err := events.ListByName(context.Background(), chainID, addr1.Hex(), common.HexToHash("0x01").Hex())
 	if err != nil {
 		t.Fatal(err)

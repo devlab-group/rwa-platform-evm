@@ -8,11 +8,9 @@ import (
 	"testing"
 )
 
-// TestJCSCIDGoldenVector cross-checks Canonicalize/Digest/CIDv1Raw against
-// the FROZEN shared/vectors/jcs-cid.json, the cross-language proof that
-// this package's RFC 8785 canonicalization and CID convention agree
-// with the signer/TS client for a document exercising key sorting, nested
-// objects/arrays, and array-order preservation.
+// TestJCSCIDGoldenVector checks Canonicalize, Digest and CIDv1Raw against
+// shared/vectors/jcs-cid.json, which covers key sorting, nested objects and
+// arrays, and array order preservation
 func TestJCSCIDGoldenVector(t *testing.T) {
 	p := filepath.Join("..", "..", "..", "shared", "vectors", "jcs-cid.json")
 	data, err := os.ReadFile(p)

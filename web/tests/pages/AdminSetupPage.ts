@@ -25,10 +25,9 @@ export class AdminSetupPage {
   }
 
   /**
-   * Fills the discrete profile fields then validates + creates in one call —
-   * the common path for deploy-focused specs. projectId (from the server config)
-   * and profileVersion (pinned 1.0) aren't entered here; read the projectId back
-   * with `generatedProjectId()`.
+   * Fills the profile fields, then validates and creates the profile. The
+   * projectId comes from the server config and the version is fixed, so neither
+   * is entered here; read the projectId back with `generatedProjectId()`.
    */
   async createProfileFor(fields: {
     tokenUnit: string;
@@ -52,9 +51,7 @@ export class AdminSetupPage {
     return this.profileSection.getByRole("status");
   }
 
-  /** The deployment's project ID (from the server config), read from the create
-   * form (before create) or the persisted-profile summary (after create) — both
-   * show a "Project ID" row. */
+  /** The deployment's project ID from the server config; the create form and the stored-profile summary both show it in a "Project ID" row */
   async generatedProjectId(): Promise<string> {
     const row = this.profileSection
       .locator(".tx-preview__row")

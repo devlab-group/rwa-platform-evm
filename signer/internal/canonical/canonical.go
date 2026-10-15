@@ -1,11 +1,6 @@
-// Package canonical implements RFC 8785 JSON Canonicalization Scheme (JCS).
-//
-// It provides a strict JSON parser (duplicate object keys are rejected,
-// input must be valid UTF-8) and a canonical serializer (object keys sorted
-// by UTF-16 code unit, ECMAScript Number::toString number formatting,
-// minimal string escaping) so that Go and any other JCS-compliant
-// implementation (the server's TypeScript canonicalizer, in particular)
-// produce byte-identical output for the same logical JSON document.
+// Package canonical parses and serializes RFC 8785 JSON (JCS), rejecting duplicate keys
+// and invalid UTF-8. It uses UTF-16 key order, ECMAScript number formatting and minimal
+// escaping; shared vectors check parity with server/internal/auditpkg.
 package canonical
 
 import (
@@ -15,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,28 +18,27 @@ import (
 	"unicode/utf8"
 )
 
-// Value is a parsed JSON value: nil, bool, json.Number, string, []Value, or *Object.
+// Value is a parsed JSON value: nil, bool, json.Number, string, []Value or *Object
 type Value interface{}
 
-// Object is a JSON object that preserves insertion order and rejects
-// duplicate keys during parsing.
+// Object preserves parsed key order and rejects duplicates during parsing
 type Object struct {
 	keys   []string
 	values map[string]Value
 }
 
-// Keys returns the object's keys in the order they were parsed.
+// Keys returns the object's keys in the order they were parsed
 func (o *Object) Keys() []string {
 	return o.keys
 }
 
-// Get returns the value for key and whether it was present.
+// Get returns the value for key and whether it was present
 func (o *Object) Get(key string) (Value, bool) {
 	v, ok := o.values[key]
 	return v, ok
 }
 
-// Len returns the number of properties in the object.
+// Len returns the number of properties in the object
 func (o *Object) Len() int {
 	return len(o.keys)
 }
@@ -61,33 +56,25 @@ func (o *Object) set(key string, v Value) error {
 	return nil
 }
 
-// Limits bounds the shape of a document during ParseWithLimits, guarding
-// against pathological or malicious input before it is ever hashed or
-// walked by a schema validator.
+// Limits bounds documents during ParseWithLimits before hashing or schema validation
 type Limits struct {
 	MaxBytes int64 // total input size in bytes; 0 means unbounded
-	MaxDepth int   // maximum object/array nesting depth; 0 means unbounded
-	// MaxStringLen is the maximum length, in UTF-8 BYTES (Go len(string)),
-	// of any JSON string token -- applied IDENTICALLY to string values AND
-	// object keys. The unit is UTF-8 bytes to match the server's limits.go,
-	// which measures every string token (key or value) with len(string). The
-	// unit matters: measuring runes for values only, and skipping keys, would
-	// let a 10,000-emoji value or a 32,769-byte object key slip past here
-	// while the server rejects it. 0 means unbounded.
+	MaxDepth int   // nesting limit; 0 still uses the hard ceiling
+	// MaxStringLen bounds UTF-8 bytes in both string values and object keys, matching the
+	// server's len(string) checks; 0 is unbounded
 	MaxStringLen  int
 	MaxArrayLen   int // maximum number of elements in any array; 0 means unbounded
 	MaxObjectKeys int // maximum number of properties in any object; 0 means unbounded
+	// SafeIntegers rejects integer literals without fraction/exponent parts outside
+	// JavaScript's exact range [-(2^53-1), 2^53-1], matching the server's check
+	SafeIntegers bool
 }
 
-// DefaultLimits returns the structural limits for operator-supplied
-// profile and metadata documents. These are the exact values the server
-// enforces (server/internal/auditpkg/canonical.go: MaxDocumentBytes,
-// MaxObjectDepth, MaxStringLength, MaxArrayLength, MaxObjectKeys). They must
-// stay in lockstep: if the signer's limits are looser than the server's, a
-// hand-built package can pass here while the server rejects it, so the two
-// validators would disagree on the same document. Both sides MUST use these
-// same numbers; do not change them here without also changing the server's
-// copy and shared/vectors/schema-dialect-conformance.json's boundary cases.
+// DefaultLimits matches server/internal/auditpkg's MaxDocumentBytes, MaxObjectDepth,
+// MaxStringLength, MaxArrayLength and MaxObjectKeys, plus
+// shared/schemas/structural-limits.json. Keep both implementations and
+// shared/vectors/schema-dialect-conformance.json boundaries aligned so packages pass
+// the same limits.
 func DefaultLimits() Limits {
 	return Limits{
 		MaxBytes:      1 << 20, // 1 MiB
@@ -95,6 +82,7 @@ func DefaultLimits() Limits {
 		MaxStringLen:  32768,
 		MaxArrayLen:   4096,
 		MaxObjectKeys: 4096,
+		SafeIntegers:  true,
 	}
 }
 
@@ -103,16 +91,14 @@ type parser struct {
 	limit Limits
 }
 
-// Parse parses input into a Value tree with no size/depth limits beyond a
-// hard-coded safety ceiling, rejecting duplicate object keys, invalid
-// UTF-8, and trailing data. Use ParseWithLimits to enforce document limits.
+// Parse builds a Value tree, rejecting duplicate keys, invalid UTF-8 and trailing data.
+// It enforces only a hard depth ceiling; use ParseWithLimits for document limits.
 func Parse(input []byte) (Value, error) {
 	return ParseWithLimits(input, Limits{})
 }
 
-// ParseWithLimits parses input into a Value tree, enforcing lim (zero
-// fields are treated as unbounded, except depth which always has a hard
-// safety ceiling to protect the Go call stack).
+// ParseWithLimits builds a Value tree under lim; zero numeric limits are unbounded
+// except depth, which always has a hard ceiling to protect the call stack
 func ParseWithLimits(input []byte, lim Limits) (Value, error) {
 	if lim.MaxBytes > 0 && int64(len(input)) > lim.MaxBytes {
 		return nil, fmt.Errorf("canonical: document exceeds max size of %d bytes", lim.MaxBytes)
@@ -167,10 +153,14 @@ func (p *parser) parseTokenValue(tok json.Token, depth int) (Value, error) {
 	case bool:
 		return t, nil
 	case json.Number:
+		if p.limit.SafeIntegers {
+			if err := checkSafeInteger(t); err != nil {
+				return nil, err
+			}
+		}
 		return t, nil
 	case string:
-		// Byte length, not rune count -- must match the server's Go
-		// len(string) check byte-for-byte. See Limits.MaxStringLen.
+		// Measure UTF-8 bytes, matching the server (Limits.MaxStringLen)
 		if p.limit.MaxStringLen > 0 && len(t) > p.limit.MaxStringLen {
 			return nil, fmt.Errorf("canonical: string exceeds max length of %d bytes", p.limit.MaxStringLen)
 		}
@@ -194,9 +184,7 @@ func (p *parser) parseObject(depth int) (*Object, error) {
 		if !ok {
 			return nil, fmt.Errorf("canonical: expected object key, got %T", keyTok)
 		}
-		// Object keys are bound by the same MaxStringLen (in UTF-8 bytes) as
-		// string values, matching the server's limits.go, which enforces the
-		// bound on every string token including keys.
+		// Apply MaxStringLen to keys too, matching the server
 		if p.limit.MaxStringLen > 0 && len(key) > p.limit.MaxStringLen {
 			return nil, fmt.Errorf("canonical: object key exceeds max length of %d bytes", p.limit.MaxStringLen)
 		}
@@ -234,9 +222,28 @@ func (p *parser) parseArray(depth int) ([]Value, error) {
 	return arr, nil
 }
 
-// Canonicalize parses input as JSON and re-serializes it as RFC 8785
-// canonical bytes. It rejects duplicate object keys, invalid UTF-8, and
-// non-finite numbers.
+// maxSafeInteger is 2^53-1, JavaScript's Number.MAX_SAFE_INTEGER
+var maxSafeInteger = big.NewInt(1<<53 - 1)
+
+// checkSafeInteger matches the server: literals containing a fraction or exponent
+// bypass the integer-range check
+func checkSafeInteger(n json.Number) error {
+	s := string(n)
+	if strings.ContainsAny(s, ".eE") {
+		return nil
+	}
+	i, ok := new(big.Int).SetString(s, 10)
+	if !ok {
+		return fmt.Errorf("canonical: invalid number literal %q", s)
+	}
+	if i.CmpAbs(maxSafeInteger) > 0 {
+		return fmt.Errorf("canonical: integer %s is outside the safe range [-(2^53-1), 2^53-1]; use a string instead", s)
+	}
+	return nil
+}
+
+// Canonicalize returns RFC 8785 bytes, rejecting duplicate keys, invalid UTF-8,
+// trailing data and numbers outside float64 range
 func Canonicalize(input []byte) ([]byte, error) {
 	v, err := Parse(input)
 	if err != nil {
@@ -245,7 +252,7 @@ func Canonicalize(input []byte) ([]byte, error) {
 	return Marshal(v)
 }
 
-// Marshal serializes an already-parsed Value tree as RFC 8785 canonical bytes.
+// Marshal serializes an already-parsed Value tree as RFC 8785 canonical bytes
 func Marshal(v Value) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := writeValue(&buf, v); err != nil {
@@ -309,8 +316,7 @@ func writeValue(buf *bytes.Buffer, v Value) error {
 	return nil
 }
 
-// utf16Less reports whether a sorts before b when both are compared as
-// sequences of UTF-16 code units, per RFC 8785 section 3.2.3.
+// utf16Less compares a and b by UTF-16 code units (RFC 8785 §3.2.3)
 func utf16Less(a, b string) bool {
 	ua := utf16.Encode([]rune(a))
 	ub := utf16.Encode([]rune(b))
@@ -326,10 +332,8 @@ func utf16Less(a, b string) bool {
 	return len(ua) < len(ub)
 }
 
-// writeString writes s as a JSON string using the minimal escaping RFC 8785
-// requires: only '"', '\\', and control characters (U+0000-U+001F) are
-// escaped; everything else, including non-ASCII characters and '/', is
-// emitted as raw UTF-8.
+// writeString escapes quotes, backslashes and U+0000-U+001F as RFC 8785 requires; other
+// characters, including '/' and non-ASCII, remain raw UTF-8
 func writeString(buf *bytes.Buffer, s string) {
 	buf.WriteByte('"')
 	for _, r := range s {
@@ -359,15 +363,14 @@ func writeString(buf *bytes.Buffer, s string) {
 	buf.WriteByte('"')
 }
 
-// formatNumber renders f using the ECMAScript Number::toString algorithm
-// (ECMA-262 7.1.12.1), which RFC 8785 mandates for JSON number
-// serialization.
+// formatNumber implements ECMAScript Number::toString (ECMA-262 7.1.12.1), required by
+// RFC 8785 §3.2.2.3
 func formatNumber(f float64) (string, error) {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		return "", errors.New("canonical: NaN/Infinity cannot be canonicalized")
 	}
 	if f == 0 {
-		// Both +0 and -0 serialize as "0".
+		// Both +0 and -0 serialize as "0"
 		return "0", nil
 	}
 

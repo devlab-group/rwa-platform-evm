@@ -6,13 +6,9 @@ import (
 	"testing"
 )
 
-// TestDefaultTrustedProxiesIgnoresForwardedFor covers SetTrustedProxies:
-// with App.TrustedProxies left at its zero
-// value (nil), gin must NOT honor X-Forwarded-For for c.ClientIP() — which
-// auth.RateLimit keys on — so a caller can't spoof a fresh IP on every
-// request to dodge per-IP rate limiting. Two requests with the same real
-// RemoteAddr but different spoofed X-Forwarded-For values must be counted
-// against the SAME rate-limit bucket.
+// TestDefaultTrustedProxiesIgnoresForwardedFor requires nil TrustedProxies to ignore
+// X-Forwarded-For in c.ClientIP(). Requests sharing RemoteAddr must share
+// auth.RateLimit's bucket despite different spoofed headers.
 func TestDefaultTrustedProxiesIgnoresForwardedFor(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.RateLimitRPS = 0.001 // effectively "one request, then blocked" for the rest of this test's short lifetime
@@ -33,8 +29,8 @@ func TestDefaultTrustedProxiesIgnoresForwardedFor(t *testing.T) {
 	if code := doWithForwardedFor(""); code != http.StatusOK {
 		t.Fatalf("first request status = %d, want 200", code)
 	}
-	// A spoofed, different X-Forwarded-For on every subsequent request
-	// must NOT reset the rate limit bucket if proxies aren't trusted.
+	// A different spoofed X-Forwarded-For on each later request must not reset the
+	// rate-limit bucket when proxies are not trusted
 	for i, xff := range []string{"1.2.3.4", "5.6.7.8", "9.10.11.12"} {
 		if code := doWithForwardedFor(xff); code != http.StatusTooManyRequests {
 			t.Errorf("request %d (X-Forwarded-For: %s) status = %d, want 429 (X-Forwarded-For must be ignored by default)", i, xff, code)

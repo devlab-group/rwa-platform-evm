@@ -1,18 +1,16 @@
-// Injects a minimal EIP-1193 provider as window.ethereum before any page
-// script runs, so the Buy/Redemption/Transfer/Wallet flows (src/lib/wallet.ts)
-// work without a real browser extension. Return values for eth_call are
-// pre-encoded here (in Node, where viem's full encoder is available) and
-// handed to the injected script as plain data — the in-page script itself
-// stays framework-free. The argument-dependent ones (allowance, the two price
-// previews) are single uint256 words, so the in-page script pads them itself.
+// Injects window.ethereum before page scripts for wallet flows without an
+// extension. Node encodes fixed balance and decimals responses with viem and
+// passes plain data; the browser pads argument-dependent allowance and quote
+// responses as uint256 words without importing dependencies.
 import type { Page } from "@playwright/test";
 import { encodeFunctionResult, erc20Abi } from "viem";
 
-export const MOCK_WALLET_ADDRESS = "0x1111111111111111111111111111111111111111" as const;
+export const MOCK_WALLET_ADDRESS =
+  "0x1111111111111111111111111111111111111111" as const;
 export const MOCK_CHAIN_ID = 31337;
 export const MOCK_TOKEN_DECIMALS = 18;
 export const MOCK_TOKEN_BALANCE = 1_500_000_000_000_000_000n; // 1.5 tokens
-/** Quote-token price of one whole RWA token, as the mock Vault/escrow views report it. */
+/** Quote-token price of one whole RWA token, as the mock Vault and escrow views report it. */
 export const MOCK_PURCHASE_PRICE = 1_000_000n;
 export const MOCK_REDEMPTION_PRICE = 950_000n;
 
@@ -60,11 +58,14 @@ export async function installMockWallet(
     }) => {
       let txNonce = 0;
       let blockNumber = 1000;
-      // token address -> spender -> approved amount, so a later allowance()
-      // read reflects a preceding approve() send — the Buy flow does
-      // approve → confirm receipt → read allowance before enabling Buy.
+      // Approved amount by `token:spender`, so a later allowance() read reflects
+      // an earlier approve() send; the Buy flow approves, waits for the receipt,
+      // then reads the allowance before enabling Buy
       const allowances = new Map<string, bigint>();
-      const receipts = new Map<string, { blockNumber: number; to: string | null }>();
+      const receipts = new Map<
+        string,
+        { blockNumber: number; to: string | null }
+      >();
       const sentTransactions: { to: string | null; data: string | null }[] = [];
       let currentChainIdHex = args.chainIdHex;
 
@@ -72,28 +73,35 @@ export async function installMockWallet(
         isMockWallet: true,
         _listeners: new Map<string, Set<(...a: unknown[]) => void>>(),
         on(event: string, handler: (...a: unknown[]) => void) {
-          if (!this._listeners.has(event)) this._listeners.set(event, new Set());
+          if (!this._listeners.has(event))
+            this._listeners.set(event, new Set());
           this._listeners.get(event)!.add(handler);
         },
         removeListener(event: string, handler: (...a: unknown[]) => void) {
           this._listeners.get(event)?.delete(handler);
         },
         _emit(event: string, payload: unknown) {
-          for (const handler of this._listeners.get(event) ?? []) handler(payload);
+          for (const handler of this._listeners.get(event) ?? [])
+            handler(payload);
         },
-        // Test-only hook (not part of EIP-1193): specs call this directly via
-        // page.evaluate to simulate the wallet switching networks.
+        // Test-only hook, not part of EIP-1193: specs call it through
+        // page.evaluate to simulate the wallet switching networks
         __setChainId(chainId: number) {
           currentChainIdHex = `0x${chainId.toString(16)}`;
           this._emit("chainChanged", currentChainIdHex);
         },
-        // Test-only hook: exposes every eth_sendTransaction payload so specs
-        // can decode and assert on the outgoing calldata (e.g. an approval's
-        // token + spender).
+        // Test-only hook: exposes every eth_sendTransaction payload so specs can
+        // decode the outgoing calldata (e.g. an approval's token and spender)
         __getSentTransactions() {
           return sentTransactions;
         },
-        async request({ method, params }: { method: string; params?: unknown[] }) {
+        async request({
+          method,
+          params,
+        }: {
+          method: string;
+          params?: unknown[];
+        }) {
           switch (method) {
             case "eth_requestAccounts":
             case "eth_accounts":
@@ -118,7 +126,8 @@ export async function installMockWallet(
               const data = tx.data ?? "";
               sentTransactions.push({ to: tx.to ?? null, data: data || null });
               if (data.startsWith(args.approveSelector) && tx.to) {
-                const spender = `0x${data.slice(10, 74).slice(24)}`.toLowerCase();
+                const spender =
+                  `0x${data.slice(10, 74).slice(24)}`.toLowerCase();
                 const amount = BigInt(`0x${data.slice(74, 138)}`);
                 allowances.set(`${tx.to.toLowerCase()}:${spender}`, amount);
               }
@@ -150,20 +159,25 @@ export async function installMockWallet(
             case "eth_blockNumber":
               return `0x${(blockNumber + 1).toString(16)}`;
             case "eth_call": {
-              const call = (params?.[0] ?? {}) as { data?: string; to?: string };
+              const call = (params?.[0] ?? {}) as {
+                data?: string;
+                to?: string;
+              };
               const data = call.data ?? "";
-              if (data.startsWith(args.balanceOfSelector)) return args.balanceOfResult;
-              if (data.startsWith(args.decimalsSelector)) return args.decimalsResult;
+              if (data.startsWith(args.balanceOfSelector))
+                return args.balanceOfResult;
+              if (data.startsWith(args.decimalsSelector))
+                return args.decimalsResult;
               if (data.startsWith(args.allowanceSelector)) {
-                const spender = `0x${data.slice(74, 138).slice(24)}`.toLowerCase();
+                const spender =
+                  `0x${data.slice(74, 138).slice(24)}`.toLowerCase();
                 const token = (call.to ?? "").toLowerCase();
                 const amount = allowances.get(`${token}:${spender}`) ?? 0n;
                 return `0x${amount.toString(16).padStart(64, "0")}`;
               }
-              // Vault.previewBuy / RedemptionEscrow.previewRedeem — the buy and
-              // redemption quotes, now read from the chain rather than the API.
-              // Both take a single uint256 amount in RWA minimal units and
-              // return a quote-token amount at the fixed price.
+              // Vault.previewBuy and RedemptionEscrow.previewRedeem, the buy and
+              // redemption quotes. Both take a uint256 amount in RWA minimal
+              // units and return a quote-token amount at the fixed price
               const isPreviewBuy = data.startsWith(args.previewBuySelector);
               if (isPreviewBuy || data.startsWith(args.previewRedeemSelector)) {
                 const amount = BigInt(`0x${data.slice(10, 74)}`);
@@ -203,10 +217,15 @@ export async function installMockWallet(
   );
 }
 
-/** Simulates the wallet switching networks after connect, for the chain-binding tests. */
-export async function mockWalletSwitchChain(page: Page, chainId: number): Promise<void> {
+/** Simulates the wallet switching networks after connect, for the chain guard specs. */
+export async function mockWalletSwitchChain(
+  page: Page,
+  chainId: number,
+): Promise<void> {
   await page.evaluate((id: number) => {
-    (window as unknown as { ethereum: { __setChainId: (c: number) => void } }).ethereum.__setChainId(id);
+    (
+      window as unknown as { ethereum: { __setChainId: (c: number) => void } }
+    ).ethereum.__setChainId(id);
   }, chainId);
 }
 
@@ -216,10 +235,14 @@ export interface MockSentTransaction {
 }
 
 /** Returns every `eth_sendTransaction` payload submitted so far, for calldata-decode assertions. */
-export async function getMockSentTransactions(page: Page): Promise<MockSentTransaction[]> {
+export async function getMockSentTransactions(
+  page: Page,
+): Promise<MockSentTransaction[]> {
   return page.evaluate(() =>
     (
-      window as unknown as { ethereum: { __getSentTransactions: () => MockSentTransaction[] } }
+      window as unknown as {
+        ethereum: { __getSentTransactions: () => MockSentTransaction[] };
+      }
     ).ethereum.__getSentTransactions(),
   );
 }

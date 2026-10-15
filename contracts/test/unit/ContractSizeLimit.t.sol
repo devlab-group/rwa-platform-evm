@@ -5,7 +5,9 @@ import {TestBase} from "../helpers/TestBase.sol";
 import {OraclePriceStrategy} from "../../src/pricing/OraclePriceStrategy.sol";
 import {MockAggregatorV3} from "../mocks/oracle/MockAggregatorV3.sol";
 
-/// @notice Checks factory, deployer and project runtime bytecode against EIP_170_LIMIT
+/// @notice Asserts the factory, helpers and project contracts fit EIP-170's 24,576-byte runtime
+///         limit, which forge test does not enforce by default. Factory creation code is split
+///         across delegatecall helpers; see ComplianceTokenDeployer.
 contract ContractSizeLimitTest is TestBase {
     uint256 internal constant EIP_170_LIMIT = 24_576;
 
@@ -21,9 +23,7 @@ contract ContractSizeLimitTest is TestBase {
         _assertUnderLimit(factory.incomeDistributorDeployer(), "IncomeDistributorDeployer");
     }
 
-    /// @dev Regression coverage for every other production contract too, so a future change
-    ///      that bloats one of them (e.g. adding a big struct-returning view, more inherited
-    ///      OZ mixins) fails CI immediately instead of only surfacing during a real deploy.
+    /// @dev Check all six project contracts so runtime growth fails CI before deployment
     function test_deployedProjectContractsUnderSizeLimit() public view {
         _assertUnderLimit(address(token), "RWAToken");
         _assertUnderLimit(address(compliance), "ComplianceRegistry");

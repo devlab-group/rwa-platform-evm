@@ -1,19 +1,12 @@
-// Minimal ABI fragments for the contract calls this app makes: the writes it
-// encodes and broadcasts from the connected wallet — all of them investor
-// actions taken on the investor's own behalf — plus the two price previews it
-// reads. Only the functions actually used here are declared; full ABIs live in
-// the server's generated bindings. Pinning the fragments in the client (rather
-// than fetching calldata or quotes from the server) is deliberate: a
-// compromised server cannot redirect a call it never builds, nor misquote a
-// price the browser reads for itself.
+// Pinned ABIs for locally encoded transactions and on-chain previews.
+// Verify server-supplied project addresses in the transaction preview.
 import type { Abi } from "viem";
 
-/** Vault.buy — the investor purchase. The vault pulls `maxQuoteAmount`-bounded
- * quote token from the buyer via safeTransferFrom, so the buyer must approve
- * the vault first, and both caller and `recipient` must be Allowed. Amounts are
- * minimal units (`tokenAmount` in RWA decimals, the quote amount in quote-token
- * decimals). previewBuy prices that same `tokenAmount` at the current on-chain
- * price — it is what the slippage ceiling is applied to. */
+/**
+ * Vault.buy pulls quote tokens after checking maxQuoteAmount; approve Vault first.
+ * Caller and recipient must be Allowed. tokenAmount uses RWA minimal units; quotes use
+ * quote-token minimal units. previewBuy supplies the price used for the slippage ceiling.
+ */
 export const vaultAbi = [
   {
     type: "function",
@@ -36,13 +29,12 @@ export const vaultAbi = [
   },
 ] as const satisfies Abi;
 
-/** RedemptionEscrow writes the investor broadcasts: requestRedemption escrows
- * the RWA (approve the escrow first) and returns the new request id,
- * claimRedemption is permissionless once a request is funded (it always pays
- * the recorded beneficiary), and cancelRedemption refunds the escrowed RWA to
- * the beneficiary after the timeout, plus the previewRedeem view the request
- * form quotes from. Funding and rejection are issuer-side calls and are not
- * part of this app. */
+/**
+ * Escrow investor calls: requestRedemption pulls approved RWA and assigns a request ID;
+ * funded claim is permissionless and pays the recorded beneficiary. Only the beneficiary
+ * can cancel a Pending request after timeout. previewRedeem supplies request quotes;
+ * funding and rejection are issuer-side calls.
+ */
 export const redemptionEscrowAbi = [
   {
     type: "function",
@@ -78,9 +70,7 @@ export const redemptionEscrowAbi = [
   },
 ] as const satisfies Abi;
 
-/** The RWAToken revert reasons an investor can actually hit, so a failed transfer or
- * redemption reads as a sentence rather than raw hex. Errors only: every call here is
- * encoded from the fragments above, and this is used purely for decoding a revert. */
+/** Token errors used only to decode failed transfers/redemptions into readable messages */
 export const tokenErrorsAbi = [
   {
     type: "error",

@@ -8,8 +8,7 @@
   white-space: nowrap;
 }
 
-// Lays out a status badge alongside a secondary badge (e.g. a compliance
-// warning) without wrapping them in an inline `style` (see index.html CSP).
+// Lay out status/compliance badges without CSP-blocked inline styles
 .badge-row {
   display: flex;
   align-items: center;

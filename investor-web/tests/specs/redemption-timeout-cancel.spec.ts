@@ -1,7 +1,7 @@
 import { expect, mockOnly, test } from "../fixtures/fixtures";
 import { InvestorPage } from "../pages/InvestorPage";
 
-test.describe("Redemption — timeout and cancel", () => {
+test.describe("Redemption - timeout and cancel", () => {
   mockOnly();
 
   test("a still-pending, not-yet-timed-out redemption offers neither Claim nor Cancel", async ({ page, api }) => {
@@ -22,8 +22,8 @@ test.describe("Redemption — timeout and cancel", () => {
     await investor.goto();
     await investor.connectWallet();
 
-    // The connected wallet's requests load as an address-filtered list — no
-    // lookup-by-id needed. This one is Pending and not yet timed out.
+    // The connected wallet's requests load as an address-filtered list. This one
+    // is Pending and not yet timed out
     const row = investor.redemptionRow("9002");
     await expect(row.locator(".badge[data-status='Pending']")).toBeVisible();
     await expect(row.getByRole("button", { name: "Cancel (timeout elapsed)" })).toHaveCount(0);
@@ -31,7 +31,7 @@ test.describe("Redemption — timeout and cancel", () => {
   });
 
   test("a Pending redemption past its timeout offers Cancel, and cancelling submits a tx", async ({ page, api }) => {
-    // Numeric id: the web does BigInt(id) to build the uint256 cancelRedemption arg.
+    // Numeric id: the app calls BigInt(id) to build the uint256 cancelRedemption argument
     api.redemptions.push({
       id: "9003",
       beneficiary: "0x1111111111111111111111111111111111111111",
@@ -49,7 +49,7 @@ test.describe("Redemption — timeout and cancel", () => {
     await investor.goto();
     await investor.connectWallet();
 
-    // Loaded from the address-filtered list; Pending + timed out => Cancel.
+    // Loaded from the address-filtered list; Pending and past its timeout shows Cancel
     const cancelButton = investor
       .redemptionRow("9003")
       .getByRole("button", { name: "Cancel (timeout elapsed)" });

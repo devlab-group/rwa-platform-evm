@@ -6,16 +6,10 @@ import (
 	"testing"
 )
 
-// TestRouteAuthorizationMatrix asserts an authorization outcome for every
-// route. It exercises every route
-// NewRouter registers with NO Authorization header (a missing/invalid admin
-// JWT reads as RoleReadOnly per auth.Authenticate — see api.go's adminOnly
-// doc comment) and asserts the expected outcome: a gated route must reject
-// with 403 before the handler ever runs (regardless of a missing/invalid
-// body or path parameter — RequireRole is upstream middleware); a public
-// route must NOT be rejected with 403 (it may still fail for other
-// reasons — bad params, 404, 501 not_configured — none of which is an
-// authorization decision).
+// TestRouteAuthorizationMatrix calls every NewRouter route without Authorization,
+// yielding RoleReadOnly. RequireRole must reject gated routes with 403 before their
+// handlers run, regardless of body or path. Public routes may return parameter, 404 or
+// 501 errors, but never an authorization 403.
 func TestRouteAuthorizationMatrix(t *testing.T) {
 	env := setupTestApp(t)
 
@@ -32,7 +26,7 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 		{http.MethodGet, "/api/v1/project/enforcement", true},
 		{http.MethodGet, "/api/v1/config", false},
 
-		{http.MethodPost, "/api/v1/profile/validate", false},
+		{http.MethodPost, "/api/v1/profile/validate", true},
 		{http.MethodPost, "/api/v1/profile", true},
 
 		{http.MethodGet, "/api/v1/compliance/wallets", true},
@@ -47,6 +41,11 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 		{http.MethodGet, "/api/v1/assets/records", true},
 		{http.MethodPost, "/api/v1/assets/records", true},
 		{http.MethodGet, "/api/v1/assets/records/rec-1/package", true},
+
+		{http.MethodGet, "/api/v1/assets/burns", true},
+		{http.MethodPost, "/api/v1/assets/burns", true},
+		{http.MethodGet, "/api/v1/assets/burns/b-1/package", true},
+		{http.MethodPost, "/api/v1/assets/burns/b-1/reissue", true},
 
 		{http.MethodGet, "/api/v1/sales/inventory", false},
 		{http.MethodGet, "/api/v1/sales/purchases", true},

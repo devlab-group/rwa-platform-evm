@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// Attestation records a verified signed-result (collection: attestations).
+// Attestation records a verified signed-result (collection: attestations)
 type Attestation struct {
 	RecordID        string    `json:"recordId" bson:"_id"`
 	FormatVersion   string    `json:"formatVersion" bson:"formatVersion"`

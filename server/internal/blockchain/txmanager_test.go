@@ -17,15 +17,11 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// --- Broadcast/receipt lifecycle regression tests ---
+// --- Broadcast and receipt lifecycle tests ---
 
-// TestTxManagerSubmitAmbiguousBroadcastMarksUnknown covers the "broadcast
-// timeout after node acceptance" case: a transport-level
-// SendTransaction error (here, context.DeadlineExceeded — indistinguishable
-// from "the node accepted it and the ack was lost") must NOT be treated as
-// a definite failure. The record must persist as TxBroadcastUnknown (not
-// TxFailed) with the exact signed bytes, and a same-key retry must return
-// that record as-is rather than signing and broadcasting a second time.
+// TestTxManagerSubmitAmbiguousBroadcastMarksUnknown simulates a lost acknowledgement
+// with context.DeadlineExceeded. A same-key retry must return persisted
+// TxBroadcastUnknown without signing or broadcasting again.
 func TestTxManagerSubmitAmbiguousBroadcastMarksUnknown(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -55,9 +51,8 @@ func TestTxManagerSubmitAmbiguousBroadcastMarksUnknown(t *testing.T) {
 	}
 	origHash, origNonce := stored.TxHash, stored.Nonce
 
-	// A same-key retry must NOT sign/broadcast a second transaction while
-	// the outcome is unknown — unlike TxFailed/TxReorged, TxBroadcastUnknown
-	// is not retryable via Submit; it just returns the existing record.
+	// Same-key Submit returns the unresolved record without signing or broadcasting again;
+	// recovery belongs to RefreshStatuses
 	if _, err := mgr.Submit(context.Background(), req); err != nil {
 		t.Fatalf("expected a same-key retry to return the existing ambiguous record without error, got %v", err)
 	}
@@ -73,12 +68,9 @@ func TestTxManagerSubmitAmbiguousBroadcastMarksUnknown(t *testing.T) {
 	}
 }
 
-// TestTxManagerRefreshStatusesResolvesBroadcastUnknownBySameBytes is the
-// other half of the ambiguous-broadcast behavior: once the transport
-// recovers, RefreshStatuses must resolve a TxBroadcastUnknown record by
-// rebroadcasting the EXACT SAME persisted bytes (same hash, same nonce) —
-// never by re-signing or allocating a new nonce — and then, once a receipt
-// appears, advance it normally.
+// TestTxManagerRefreshStatusesResolvesBroadcastUnknownBySameBytes checks byte-identical
+// recovery with the same hash, nonce and signature, followed by normal receipt
+// progression
 func TestTxManagerRefreshStatusesResolvesBroadcastUnknownBySameBytes(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -95,9 +87,8 @@ func TestTxManagerRefreshStatusesResolvesBroadcastUnknownBySameBytes(t *testing.
 		t.Fatal(err)
 	}
 
-	// Transport recovers; RefreshStatuses should rebroadcast the same bytes
-	// (no receipt exists yet, so it stays TxBroadcastUnknown, but the
-	// PendingNonceAt-allocating Submit path must never be involved).
+	// the transport recovers and RefreshStatuses rebroadcasts the same bytes; no
+	// receipt exists yet, so the record stays TxBroadcastUnknown
 	client.SendTransactionErr = nil
 	if err := mgr.RefreshStatuses(context.Background(), 3); err != nil {
 		t.Fatal(err)
@@ -119,7 +110,7 @@ func TestTxManagerRefreshStatusesResolvesBroadcastUnknownBySameBytes(t *testing.
 		t.Fatalf("Status = %s, want still %s until a receipt is observed", afterRebroadcast.Status, models.TxBroadcastUnknown)
 	}
 
-	// A receipt now appears: RefreshStatuses resolves it normally.
+	// a receipt now appears and RefreshStatuses resolves the record normally
 	client.SetReceipt(common.HexToHash(before.TxHash), &types.Receipt{Status: types.ReceiptStatusSuccessful, BlockNumber: big.NewInt(int64(client.BlockNum))})
 	if err := mgr.RefreshStatuses(context.Background(), 3); err != nil {
 		t.Fatal(err)
@@ -136,18 +127,16 @@ func TestTxManagerRefreshStatusesResolvesBroadcastUnknownBySameBytes(t *testing.
 	}
 }
 
-// TestTxManagerReplaceRejectsFeeCapExceededAfterBump is the "fee-cap
-// violation after bump rejected" regression: buildTx's own pre-bump check
-// passes (the base fee is within cap), but bumpPercent pushes the bumped
-// fee over the configured MaxFeePerGas — Replace must reject it and leave
-// the original transaction untouched and unbroadcast.
+// TestTxManagerReplaceRejectsFeeCapExceededAfterBump checks that a post-bump
+// MaxFeePerGas violation leaves the original untouched and sends no replacement,
+// despite passing the unbumped check
 func TestTxManagerReplaceRejectsFeeCapExceededAfterBump(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
 	client.GasPrice = big.NewInt(1_000_000_000) // within the cap below, pre-bump
 	txRepo := memory.NewTransactionRepository()
 	mgr := NewTxManagerWithFeeCaps(client, txRepo, big.NewInt(31337), FeeModeLegacy, FeeCaps{
-		MaxFeePerGas: big.NewInt(1_100_000_000), // a 20% bump pushes 1e9 -> 1.2e9, past this cap
+		MaxFeePerGas: big.NewInt(1_100_000_000), // a 20% bump pushes 1e9 to 1.2e9, past this cap
 	})
 	to := common.HexToAddress("0x0000000000000000000000000000000000dEaD")
 
@@ -177,15 +166,9 @@ func TestTxManagerReplaceRejectsFeeCapExceededAfterBump(t *testing.T) {
 	}
 }
 
-// TestTxManagerReplaceAmbiguousBroadcastRecoversViaRebroadcast is the
-// "replacement crash-after-broadcast recovery" regression: Replace persists
-// the replacement record AND marks the original Replaced BEFORE
-// broadcasting. If the broadcast itself then fails ambiguously (transport
-// error, outcome unknown — the closest a single-process unit test can get
-// to "crashed right after the send call"), the replacement record must
-// stay durable (TxBroadcastUnknown, exact signed bytes persisted) and a
-// later RefreshStatuses must recover it by rebroadcasting those same bytes,
-// never a new nonce/signature.
+// TestTxManagerReplaceAmbiguousBroadcastRecoversViaRebroadcast checks durable
+// replacement bytes and the original's Replaced link before an ambiguous send, then
+// recovery by identical rebroadcast
 func TestTxManagerReplaceAmbiguousBroadcastRecoversViaRebroadcast(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -203,8 +186,8 @@ func TestTxManagerReplaceAmbiguousBroadcastRecoversViaRebroadcast(t *testing.T) 
 		t.Fatal("expected Replace to error while the replacement broadcast outcome is unknown")
 	}
 
-	// The replacement intent (and the original's Replaced link) must
-	// already be durable even though the broadcast itself is unresolved.
+	// the replacement and the original's Replaced link must already be durable
+	// although the broadcast is unresolved
 	updatedOriginal, err := txRepo.Get(context.Background(), original.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -230,9 +213,9 @@ func TestTxManagerReplaceAmbiguousBroadcastRecoversViaRebroadcast(t *testing.T) 
 	if err := mgr.RefreshStatuses(context.Background(), 3); err != nil {
 		t.Fatal(err)
 	}
-	// SentTxs[0] is the ORIGINAL transaction's own successful broadcast
-	// (from Submit, before Replace was ever called); SentTxs[1] must be
-	// exactly one rebroadcast of the replacement's persisted bytes.
+	// SentTxs[0] is the original transaction's broadcast from Submit;
+	// SentTxs[1] must be exactly one rebroadcast of the replacement's persisted
+	// bytes
 	if len(client.SentTxs) != 2 {
 		t.Fatalf("expected the original broadcast plus exactly 1 rebroadcast of the replacement, got %d sent", len(client.SentTxs))
 	}
@@ -242,12 +225,9 @@ func TestTxManagerReplaceAmbiguousBroadcastRecoversViaRebroadcast(t *testing.T) 
 	}
 }
 
-// TestTxManagerReconcileReplacementsRepairsMissingLink is the
-// "reconcile incomplete replacement records" regression: if the original
-// transaction's Replaced/ReplacedBy update never happened (simulating a
-// crash between persisting the replacement record and linking the
-// original), RefreshStatuses must self-heal the link using the
-// replacement's Replaces back-reference.
+// TestTxManagerReconcileReplacementsRepairsMissingLink checks recovery when a crash
+// leaves a persisted replacement without the original's Replaced/ReplacedBy link, using
+// Replaces
 func TestTxManagerReconcileReplacementsRepairsMissingLink(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -260,9 +240,8 @@ func TestTxManagerReconcileReplacementsRepairsMissingLink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate a replacement record that was persisted but whose original
-	// was never marked Replaced (the crash window reconcileReplacements
-	// exists to repair).
+	// Persist a replacement without linking its original, simulating the crash window
+	// reconcileReplacements repairs
 	orphan := &models.Transaction{
 		ID: "replacement-orphan", Kind: original.Kind, ChainID: original.ChainID,
 		From: original.From, To: original.To, Data: original.Data, Value: original.Value,
@@ -281,9 +260,8 @@ func TestTxManagerReconcileReplacementsRepairsMissingLink(t *testing.T) {
 		t.Fatalf("precondition: original should still look Pending, got %s", stillPending.Status)
 	}
 
-	// RefreshStatuses needs a resolvable receipt lookup for the orphan's
-	// bogus hash; give it a receipt so refreshOne doesn't error trying to
-	// rebroadcast undecodable bytes.
+	// RefreshStatuses needs a receipt for the orphan's placeholder hash, or
+	// refreshOne would error while rebroadcasting undecodable bytes
 	client.SetReceipt(common.HexToHash(orphan.TxHash), &types.Receipt{Status: types.ReceiptStatusSuccessful, BlockNumber: big.NewInt(int64(client.BlockNum))})
 
 	if err := mgr.RefreshStatuses(context.Background(), 3); err != nil {
@@ -298,12 +276,8 @@ func TestTxManagerReconcileReplacementsRepairsMissingLink(t *testing.T) {
 	}
 }
 
-// TestTxManagerReconcileReplacementsIgnoresFailedReplacement checks that a
-// FAILED replacement must not let reconcileReplacements mark its original
-// Replaced. A replacement record
-// whose OWN Status is TxFailed never actually reached the mempool — it
-// must never cause reconcileReplacements to (re-)mark a live, still-Pending
-// original as Replaced.
+// TestTxManagerReconcileReplacementsIgnoresFailedReplacement checks that TxFailed
+// replacements cannot mark a live Pending original Replaced
 func TestTxManagerReconcileReplacementsIgnoresFailedReplacement(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -316,10 +290,8 @@ func TestTxManagerReconcileReplacementsIgnoresFailedReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A TxFailed replacement record that still carries Replaces (as
-	// Replace's own definite-rejection branch would produce if its
-	// best-effort revert-to-Pending write on `original` were somehow lost
-	// — e.g. a crash right after persisting newRecord as Failed).
+	// Model a TxFailed replacement whose best-effort restoration of the original to
+	// Pending was interrupted, leaving Replaces intact
 	failedReplacement := &models.Transaction{
 		ID: "replacement-failed", Kind: original.Kind, ChainID: original.ChainID,
 		From: original.From, To: original.To, Data: original.Data, Value: original.Value,
@@ -338,18 +310,16 @@ func TestTxManagerReconcileReplacementsIgnoresFailedReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	if stillPending.Status != models.TxPending {
-		t.Fatalf("original Status = %s, want still Pending — a TxFailed replacement must never mark it Replaced", stillPending.Status)
+		t.Fatalf("original Status = %s, want still Pending: a TxFailed replacement must never mark it Replaced", stillPending.Status)
 	}
 	if stillPending.ReplacedBy != "" {
-		t.Fatalf("original ReplacedBy = %q, want empty — a TxFailed replacement must never link itself", stillPending.ReplacedBy)
+		t.Fatalf("original ReplacedBy = %q, want empty: a TxFailed replacement must never link itself", stillPending.ReplacedBy)
 	}
 }
 
-// TestTxManagerRefreshStatusesConfirmedTxReorgsOnMissingReceipt covers the
-// core reorg case: previously, once a transaction reached TxConfirmed,
-// RefreshStatuses skipped it forever. Now a Confirmed transaction whose
-// receipt later disappears (the classic reorg symptom) must transition to
-// TxReorged, using the already-defined-but-previously-unused state.
+// TestTxManagerRefreshStatusesConfirmedTxReorgsOnMissingReceipt checks that a
+// Confirmed transaction whose receipt later disappears, the usual reorg symptom,
+// moves to TxReorged.
 func TestTxManagerRefreshStatusesConfirmedTxReorgsOnMissingReceipt(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -375,7 +345,7 @@ func TestTxManagerRefreshStatusesConfirmedTxReorgsOnMissingReceipt(t *testing.T)
 		t.Fatalf("precondition: Status = %s, want confirmed", got.Status)
 	}
 
-	// The block (and this transaction's receipt) gets reorged out.
+	// the block, and this transaction's receipt, is reorged out
 	client.RemoveReceipt(txHash)
 	if err := mgr.RefreshStatuses(context.Background(), 3); err != nil {
 		t.Fatal(err)
@@ -389,12 +359,8 @@ func TestTxManagerRefreshStatusesConfirmedTxReorgsOnMissingReceipt(t *testing.T)
 	}
 }
 
-// TestTxManagerRefreshStatusesConfirmedTxReorgsOnBlockHashMismatch covers
-// the other reorg signal: the receipt is still returned, but the
-// CURRENT canonical header at that height no longer has the hash the
-// receipt originally recorded (a shallower/alternate reorg where a
-// DIFFERENT block ended up canonical at the same height, rather than the
-// height disappearing outright).
+// TestTxManagerRefreshStatusesConfirmedTxReorgsOnBlockHashMismatch checks a retained
+// receipt against a different canonical header at the same height
 func TestTxManagerRefreshStatusesConfirmedTxReorgsOnBlockHashMismatch(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -408,10 +374,7 @@ func TestTxManagerRefreshStatusesConfirmedTxReorgsOnBlockHashMismatch(t *testing
 	}
 	txHash := common.HexToHash(rec.TxHash)
 	minedAt := big.NewInt(int64(client.BlockNum))
-	// Pin the pre-reorg canonical header so its hash is known, and record
-	// that same hash on the receipt — exactly what a real node's receipt
-	// would contain for a transaction mined in this (still canonical, for
-	// now) block.
+	// Pin the canonical header and its receipt hash before replacing the block
 	preReorgHeader := &types.Header{Number: minedAt, Extra: []byte("pre-reorg")}
 	client.SetHeader(minedAt.Uint64(), preReorgHeader)
 	client.SetReceipt(txHash, &types.Receipt{
@@ -429,9 +392,7 @@ func TestTxManagerRefreshStatusesConfirmedTxReorgsOnBlockHashMismatch(t *testing
 		t.Fatalf("precondition: Status = %s, want confirmed", got.Status)
 	}
 
-	// A reorg replaces the canonical block at that same height with a
-	// different one — the receipt (still returned, unchanged) now refers
-	// to a non-canonical block.
+	// Replace the block at this height; the retained receipt now references an orphan
 	client.SetHeader(minedAt.Uint64(), &types.Header{Number: minedAt, Extra: []byte("post-reorg-fork")})
 	if err := mgr.RefreshStatuses(context.Background(), 3); err != nil {
 		t.Fatal(err)
@@ -550,11 +511,8 @@ func TestTxManagerSubmitIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestTxManagerSubmitPersistsBeforeBroadcast guards against "broadcast
-// precedes repository Create": a SendTransaction failure
-// must never leave the record un-persisted, and the record it does leave
-// must be TxFailed (retryable), not TxPending (which would look like an
-// in-flight transaction that was never actually sent).
+// TestTxManagerSubmitPersistsBeforeBroadcast checks that a rejected send leaves a
+// persisted, retryable TxFailed record rather than a falsely in-flight TxPending
 func TestTxManagerSubmitPersistsBeforeBroadcast(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -580,11 +538,8 @@ func TestTxManagerSubmitPersistsBeforeBroadcast(t *testing.T) {
 	}
 }
 
-// TestTxManagerSubmitRetriesAfterBroadcastFailure is the other half: a
-// TxFailed record under a given idempotency key must NOT permanently wedge
-// that key — a later Submit call with the same key must actually resubmit
-// (and, on success, overwrite the same record id) rather than replaying the
-// failed result forever.
+// TestTxManagerSubmitRetriesAfterBroadcastFailure checks that same-key Submit retries
+// TxFailed and overwrites the original record ID on success
 func TestTxManagerSubmitRetriesAfterBroadcastFailure(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -619,7 +574,7 @@ func TestTxManagerSubmitRetriesAfterBroadcastFailure(t *testing.T) {
 	}
 }
 
-// TestTxManagerSubmitRejectsFeeAboveCap is the fee-cap enforcement test.
+// TestTxManagerSubmitRejectsFeeAboveCap checks that Submit rejects a fee above the configured cap
 func TestTxManagerSubmitRejectsFeeAboveCap(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -639,7 +594,7 @@ func TestTxManagerSubmitRejectsFeeAboveCap(t *testing.T) {
 	}
 }
 
-// TestTxManagerSubmitAllowsFeeWithinCap is the positive counterpart.
+// TestTxManagerSubmitAllowsFeeWithinCap is the positive counterpart
 func TestTxManagerSubmitAllowsFeeWithinCap(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -662,15 +617,8 @@ func TestTxManagerSubmitSerializesNoncesPerKey(t *testing.T) {
 	from := crypto.PubkeyToAddress(priv.PublicKey)
 	client := NewFakeClient()
 	client.SetNonce(from, 0)
-	// AutoIncrementNonce simulates a real node's mempool, where a pending-
-	// nonce lookup already reflects every broadcast-but-unconfirmed tx —
-	// including one from a racing concurrent caller. Without this, the only
-	// way to advance the fake nonce is a manual post-Submit SetNonce call,
-	// but that necessarily happens after TxManager's own per-key lock has
-	// already been released, leaving a real window for a second Submit to
-	// read the same stale nonce before the first goroutine gets around to
-	// bumping it — a race in the test's own simulation, not in TxManager,
-	// but one that occasionally flakes this test under -race's scheduling.
+	// AutoIncrementNonce advances the fake pending nonce during broadcast under the
+	// manager lock. SetNonce after Submit would leave a stale-nonce race between callers.
 	client.AutoIncrementNonce = true
 	txRepo := memory.NewTransactionRepository()
 	mgr := NewTxManager(client, txRepo, big.NewInt(31337), FeeModeLegacy)
@@ -715,7 +663,7 @@ func TestTxManagerRefreshStatusesTransitions(t *testing.T) {
 	}
 	txHash := common.HexToHash(rec.TxHash)
 
-	// No receipt yet: stays pending.
+	// no receipt yet: stays pending
 	if err := mgr.RefreshStatuses(context.Background(), 3); err != nil {
 		t.Fatal(err)
 	}
@@ -724,8 +672,8 @@ func TestTxManagerRefreshStatusesTransitions(t *testing.T) {
 		t.Fatalf("Status = %s, want pending", got.Status)
 	}
 
-	// Receipt appears at block 100 (current block), success, but not enough
-	// confirmations yet.
+	// the receipt appears at block 100 (the current block) with success but
+	// without enough confirmations
 	client.SetReceipt(txHash, &types.Receipt{Status: types.ReceiptStatusSuccessful, BlockNumber: big.NewInt(int64(client.BlockNum))})
 	if err := mgr.RefreshStatuses(context.Background(), 3); err != nil {
 		t.Fatal(err)
@@ -735,7 +683,7 @@ func TestTxManagerRefreshStatusesTransitions(t *testing.T) {
 		t.Fatalf("Status = %s, want mined", got.Status)
 	}
 
-	// Chain advances past confirmations threshold.
+	// the chain advances past the confirmations threshold
 	client.BlockNum += 3
 	if err := mgr.RefreshStatuses(context.Background(), 3); err != nil {
 		t.Fatal(err)
@@ -808,10 +756,9 @@ func TestTxManagerReplaceBumpsFeeAndMarksOriginalReplaced(t *testing.T) {
 	}
 }
 
-// TestBumpFeeFieldRoundsUpAndBeatsOriginal covers the rounding edge:
-// floor(original*(100+bump)/100) can equal the original for
-// small values (an underpriced replacement the node rejects); ceiling
-// arithmetic plus the +1 guard must always strictly exceed it.
+// TestBumpFeeFieldRoundsUpAndBeatsOriginal checks small fees where
+// floor(original*(100+bump)/100) equals original. Ceiling plus the 1-wei guard must
+// produce a higher fee.
 func TestBumpFeeFieldRoundsUpAndBeatsOriginal(t *testing.T) {
 	cases := []struct {
 		name              string
@@ -825,8 +772,7 @@ func TestBumpFeeFieldRoundsUpAndBeatsOriginal(t *testing.T) {
 		{"falling fee bumps from original", big.NewInt(100), big.NewInt(1), 10, big.NewInt(110)},
 		// no decodable original: bump the current suggestion only.
 		{"nil original bumps current", nil, big.NewInt(100), 10, big.NewInt(110)},
-		// a caller-supplied bump BELOW the chain replacement minimum (10%) is
-		// floored up to it against the original.
+		// A requested 5% bump must meet the 10% floor over the original
 		{"sub-minimum bump floored to 10pct", big.NewInt(1000), big.NewInt(1000), 5, big.NewInt(1100)},
 	}
 	for _, tc := range cases {
@@ -842,11 +788,8 @@ func TestBumpFeeFieldRoundsUpAndBeatsOriginal(t *testing.T) {
 	}
 }
 
-// TestTxManagerReplaceBumpsFromOriginalWhenFeesFell covers the falling-fee
-// case: when the current network suggestion has dropped
-// below the original attempt's fee, the replacement must still beat the
-// ORIGINAL (otherwise the node rejects it as underpriced), not merely bump a
-// now-lower fresh quote.
+// TestTxManagerReplaceBumpsFromOriginalWhenFeesFell checks that falling network
+// suggestions cannot underprice a replacement relative to its original
 func TestTxManagerReplaceBumpsFromOriginalWhenFeesFell(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -861,7 +804,7 @@ func TestTxManagerReplaceBumpsFromOriginalWhenFeesFell(t *testing.T) {
 	}
 	origGasPrice := client.SentTxs[0].GasPrice()
 
-	// Network fees collapse before the replacement.
+	// network fees collapse before the replacement
 	client.GasPrice = big.NewInt(1)
 
 	if _, err := mgr.Replace(context.Background(), original.ID, NewStaticKeySigner(priv), 20); err != nil {
@@ -892,12 +835,8 @@ func TestTxManagerReplaceRejectsWrongKey(t *testing.T) {
 
 // --- Nonce reconciliation, external consumption, stuck-tx intervention ---
 
-// TestTxManagerAllocateNonceReconcilesAgainstLatest is the "RPC providers
-// returning inconsistent pending-nonce results" scenario: a stale/lagging
-// node reports a PENDING nonce below the account's true LATEST (mined)
-// nonce. Submit must never sign at a nonce below latest (that would be an
-// immediate "nonce too low"), so it must use latest instead of blindly
-// trusting the pending view.
+// TestTxManagerAllocateNonceReconcilesAgainstLatest checks that a lagging pending view
+// cannot lower allocation below the mined nonce and cause nonce-too-low rejection
 func TestTxManagerAllocateNonceReconcilesAgainstLatest(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	from := crypto.PubkeyToAddress(priv.PublicKey)
@@ -917,10 +856,8 @@ func TestTxManagerAllocateNonceReconcilesAgainstLatest(t *testing.T) {
 	}
 }
 
-// TestTxManagerAllocateNonceReconcilesAgainstLocalRecords covers the
-// opposite direction: this manager's own outstanding local record for a
-// nonce the node's pending view doesn't (yet) reflect must still be
-// respected, so a fresh Submit does not collide with it.
+// TestTxManagerAllocateNonceReconcilesAgainstLocalRecords checks that a tracked nonce
+// absent from the node's pending view still prevents allocation collisions
 func TestTxManagerAllocateNonceReconcilesAgainstLocalRecords(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	from := crypto.PubkeyToAddress(priv.PublicKey)
@@ -931,8 +868,7 @@ func TestTxManagerAllocateNonceReconcilesAgainstLocalRecords(t *testing.T) {
 	mgr := NewTxManager(client, txRepo, big.NewInt(31337), FeeModeLegacy)
 	to := common.HexToAddress("0x0000000000000000000000000000000000dEaD")
 
-	// A locally tracked TxPending record at nonce 3 that the fake node's
-	// pending/latest views don't know about yet.
+	// Seed local TxPending nonce 3, absent from both fake node views
 	if err := txRepo.Create(context.Background(), &models.Transaction{
 		ID: "local-1", From: from.Hex(), To: to.Hex(), Nonce: 3, Status: models.TxPending,
 	}); err != nil {
@@ -948,12 +884,9 @@ func TestTxManagerAllocateNonceReconcilesAgainstLocalRecords(t *testing.T) {
 	}
 }
 
-// TestTxManagerRefreshStatusesDetectsExternallyConsumedNonce: a TxPending
-// record whose nonce the account's on-chain (latest/mined) count has
-// already passed, with no receipt ever observed for that record's own
-// hash, means some OTHER transaction was mined at that nonce. RefreshStatuses
-// must mark it TxNonceConsumedExternally rather than leaving
-// it TxPending forever, and its Idempotency-Key must become retryable.
+// TestTxManagerRefreshStatusesDetectsExternallyConsumedNonce checks that a mined count
+// beyond an unreceipted TxPending attempt yields TxNonceConsumedExternally. Without
+// AllowReorgRetry, same-key retry and further signer submissions remain blocked.
 func TestTxManagerRefreshStatusesDetectsExternallyConsumedNonce(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	from := crypto.PubkeyToAddress(priv.PublicKey)
@@ -970,9 +903,8 @@ func TestTxManagerRefreshStatusesDetectsExternallyConsumedNonce(t *testing.T) {
 		t.Fatalf("Status = %s, want pending", tx.Status)
 	}
 
-	// Simulate some other transaction (not TxManager's) getting mined at
-	// this same nonce: the account's latest/mined count advances past it,
-	// but no receipt exists for THIS transaction's hash.
+	// Advance the mined count past this nonce without adding its receipt, simulating
+	// external consumption
 	client.SetMinedNonce(from, tx.Nonce+1)
 
 	if err := mgr.RefreshStatuses(context.Background(), 1); err != nil {
@@ -986,12 +918,9 @@ func TestTxManagerRefreshStatusesDetectsExternallyConsumedNonce(t *testing.T) {
 		t.Fatalf("Status = %s, want %s", updated.Status, models.TxNonceConsumedExternally)
 	}
 
-	// By default (AllowReorgRetry unset — the correct
-	// default for a Kind whose on-chain idempotence the generic manager
-	// cannot verify), the SAME idempotency key must NOT silently retry —
-	// an unknown replacement may have already performed this business
-	// action — and this signer must be blocked entirely until an operator
-	// resolves it, exactly like an explicit TxNeedsIntervention record.
+	// AllowReorgRetry defaults to false: an unknown replacement may have performed the
+	// action. Keep the key and signer blocked until operator resolution, as with
+	// TxNeedsIntervention.
 	client.SetNonce(from, tx.Nonce+1)
 	client.SetMinedNonce(from, tx.Nonce+1)
 	if _, err := mgr.Submit(context.Background(), SubmitRequest{IdempotencyKey: "ext-consumed", PrivateKey: priv, To: to}); err == nil {
@@ -1002,11 +931,9 @@ func TestTxManagerRefreshStatusesDetectsExternallyConsumedNonce(t *testing.T) {
 	}
 }
 
-// TestTxManagerSubmitAllowsReorgRetryWhenOptedIn is the opt-in counterpart:
-// a Kind that explicitly sets AllowReorgRetry (e.g.
-// compliance.StatusService's setStatus, which is safely repeatable) may
-// resubmit under the same idempotency key after
-// TxNonceConsumedExternally/TxReorged, and does NOT block the signer.
+// TestTxManagerSubmitAllowsReorgRetryWhenOptedIn checks that AllowReorgRetry permits
+// same-key retries after TxNonceConsumedExternally or TxReorged without blocking the
+// signer; setStatus uses this for repeatable writes
 func TestTxManagerSubmitAllowsReorgRetryWhenOptedIn(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	from := crypto.PubkeyToAddress(priv.PublicKey)
@@ -1047,10 +974,9 @@ func TestTxManagerSubmitAllowsReorgRetryWhenOptedIn(t *testing.T) {
 	}
 }
 
-// TestTxManagerReplaceExhaustsAttemptsMarksNeedsIntervention: once a
-// transaction's replacement attempts hit the configured cap, Replace must
-// stop signing/broadcasting anything further for it and instead mark it
-// TxNeedsIntervention.
+// TestTxManagerReplaceExhaustsAttemptsMarksNeedsIntervention checks that once
+// a transaction's replacement attempts reach the cap, Replace signs and
+// broadcasts nothing further for it and marks it TxNeedsIntervention.
 func TestTxManagerReplaceExhaustsAttemptsMarksNeedsIntervention(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -1063,21 +989,20 @@ func TestTxManagerReplaceExhaustsAttemptsMarksNeedsIntervention(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// First replacement is within the cap (maxReplacementAttempts=1) and succeeds.
+	// the first replacement is within the cap (maxReplacementAttempts=1) and succeeds
 	replacement, err := mgr.Replace(context.Background(), original.ID, NewStaticKeySigner(priv), 20)
 	if err != nil {
 		t.Fatalf("first replacement should succeed: %v", err)
 	}
 	sentBeforeSecond := len(client.SentTxs)
 
-	// Second replacement of the (already-replaced) chain: attempt it on
-	// the replacement record itself, which is TxPending and carries
-	// ReplacementCount 1, exceeding the cap of 1.
+	// the second replacement targets the replacement record itself, which is
+	// TxPending with ReplacementCount 1, over the cap of 1
 	if _, err := mgr.Replace(context.Background(), replacement.ID, NewStaticKeySigner(priv), 20); err == nil {
 		t.Fatal("expected an error once the replacement-attempt cap is exceeded")
 	}
 	if len(client.SentTxs) != sentBeforeSecond {
-		t.Fatalf("expected no further broadcast once the cap is exceeded, sent %d -> %d", sentBeforeSecond, len(client.SentTxs))
+		t.Fatalf("expected no further broadcast once the cap is exceeded, sent %d, then %d", sentBeforeSecond, len(client.SentTxs))
 	}
 
 	stuck, err := txRepo.Get(context.Background(), replacement.ID)
@@ -1089,10 +1014,9 @@ func TestTxManagerReplaceExhaustsAttemptsMarksNeedsIntervention(t *testing.T) {
 	}
 }
 
-// TestTxManagerSubmitBlockedBySignerNeedsIntervention: while ANY transaction
-// for a signer is TxNeedsIntervention, Submit must refuse new submissions
-// for that same signer, to prevent later nonce-dependent transactions from
-// being incorrectly reported as finalized.
+// TestTxManagerSubmitBlockedBySignerNeedsIntervention checks that a signer's
+// TxNeedsIntervention record blocks Submit, avoiding transactions queued behind its
+// stuck nonce
 func TestTxManagerSubmitBlockedBySignerNeedsIntervention(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	from := crypto.PubkeyToAddress(priv.PublicKey)
@@ -1117,13 +1041,9 @@ func TestTxManagerSubmitBlockedBySignerNeedsIntervention(t *testing.T) {
 
 // --- Distributed nonce lease ("mongo-lease" mode) ---
 
-// TestTxManagerLeaseMutualExclusion is the core multi-replica scenario:
-// two TxManager instances sharing ONE NonceLeaseRepository store (as two
-// server replicas sharing one Mongo deployment would) for the SAME signer.
-// Replica A already holds the lease (simulated directly against the shared
-// store, standing in for "A's Submit is mid-flight"); replica B's Submit
-// must fail fast with ErrLeaseUnavailable — no nonce allocated, no
-// transaction record persisted, nothing broadcast.
+// TestTxManagerLeaseMutualExclusion checks two managers sharing one lease store: A's
+// held lease makes B return ErrLeaseUnavailable before nonce allocation, persistence or
+// broadcast
 func TestTxManagerLeaseMutualExclusion(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	from := crypto.PubkeyToAddress(priv.PublicKey)
@@ -1154,10 +1074,8 @@ func TestTxManagerLeaseMutualExclusion(t *testing.T) {
 	}
 }
 
-// TestTxManagerLeaseAllowsSubmitOnceHeld proves the flip side of mutual
-// exclusion: once a signer's lease is free, a "mongo-lease"-mode TxManager
-// acquires it and Submit proceeds normally, stamping the record with the
-// acquired fencing token.
+// TestTxManagerLeaseAllowsSubmitOnceHeld checks that a free mongo-lease permits Submit
+// and stamps the stored transaction with its fencing token
 func TestTxManagerLeaseAllowsSubmitOnceHeld(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	to := common.HexToAddress("0x0000000000000000000000000000000000dEaD")
@@ -1178,11 +1096,9 @@ func TestTxManagerLeaseAllowsSubmitOnceHeld(t *testing.T) {
 	}
 }
 
-// TestNonceLeaseTakeoverAfterExpiryStrictlyIncrementsToken covers two
-// required acceptance criteria directly against the lease store: an
-// expired lease is taken over by another holder with a STRICTLY greater
-// fencing token, and the superseded holder's stale (holder,token) pair is
-// rejected by Renew afterward — "a superseded holder must not overwrite."
+// TestNonceLeaseTakeoverAfterExpiryStrictlyIncrementsToken checks that takeover
+// increases the fencing token and rejects Renew from the superseded (holder, token)
+// pair
 func TestNonceLeaseTakeoverAfterExpiryStrictlyIncrementsToken(t *testing.T) {
 	leases := memory.NewNonceLeaseRepository()
 	key := "31337:0x0000000000000000000000000000000000bEEF"
@@ -1200,8 +1116,7 @@ func TestNonceLeaseTakeoverAfterExpiryStrictlyIncrementsToken(t *testing.T) {
 		t.Fatalf("expected a strictly increasing fencing token, got A=%d B=%d", tokenA, tokenB)
 	}
 
-	// The stale holder's guarded write must be rejected: renewing with the
-	// OLD (holder, token) pair fails now that replica-B holds the lease.
+	// Renew rejects replica A's stale (holder, token) after replica B takes over
 	renewed, err := leases.Renew(context.Background(), key, "replica-A", tokenA, time.Minute)
 	if err != nil {
 		t.Fatal(err)
@@ -1210,7 +1125,7 @@ func TestNonceLeaseTakeoverAfterExpiryStrictlyIncrementsToken(t *testing.T) {
 		t.Fatal("expected replica-A's renew to fail after replica-B's takeover")
 	}
 
-	// replica-B, the current holder, renews successfully.
+	// replica-B, the current holder, renews successfully
 	renewed, err = leases.Renew(context.Background(), key, "replica-B", tokenB, time.Minute)
 	if err != nil {
 		t.Fatal(err)
@@ -1220,9 +1135,8 @@ func TestNonceLeaseTakeoverAfterExpiryStrictlyIncrementsToken(t *testing.T) {
 	}
 }
 
-// TestNonceLeaseReleaseFreesLeaseImmediately proves a well-behaved holder's
-// Release lets another replica acquire immediately, without waiting out
-// the TTL, and that Release itself is fenced (wrong holder/token rejected).
+// TestNonceLeaseReleaseFreesLeaseImmediately checks immediate takeover after Release
+// and rejection of a wrong holder or token
 func TestNonceLeaseReleaseFreesLeaseImmediately(t *testing.T) {
 	leases := memory.NewNonceLeaseRepository()
 	key := "31337:0x0000000000000000000000000000000000bEEF"
@@ -1253,12 +1167,9 @@ func TestNonceLeaseReleaseFreesLeaseImmediately(t *testing.T) {
 	}
 }
 
-// TestTxManagerInProcessModeUnaffectedByLeaseFeature is a smoke check that
-// a plain (non-lease) TxManager, constructed exactly as before this
-// follow-up, needs no NonceLeaseRepository at all and behaves identically —
-// the full pre-existing test suite in this file already proves this in
-// depth; this just makes the "in-process mode is unchanged" claim explicit
-// in one place.
+// TestTxManagerInProcessModeUnaffectedByLeaseFeature checks that a plain
+// TxManager, built without a lease store, needs no NonceLeaseRepository and
+// works as in-process mode.
 func TestTxManagerInProcessModeUnaffectedByLeaseFeature(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	to := common.HexToAddress("0x0000000000000000000000000000000000dEaD")
@@ -1275,14 +1186,9 @@ func TestTxManagerInProcessModeUnaffectedByLeaseFeature(t *testing.T) {
 	}
 }
 
-// versionRacingRepo wraps a repository.TransactionRepository and, the FIRST
-// time Get is called for a specific ID, also bumps that record's Version
-// via a harmless self-referential UpdateConditional before returning —
-// deterministically simulating "another writer raced in and modified this
-// record between the caller's read and its later conditional write"
-// without needing real goroutines (which, given Replace's own in-process
-// per-signer lock, could never actually race within a single txManager
-// anyway — this reproduces the cross-replica case the lock does NOT cover).
+// versionRacingRepo injects a version increment after the first Get, simulating a
+// cross-replica writer without goroutines. The manager's per-signer lock would exclude
+// a local race.
 type versionRacingRepo struct {
 	repository.TransactionRepository
 	raceOnGetID string
@@ -1303,11 +1209,9 @@ func (r *versionRacingRepo) Get(ctx context.Context, id string) (*models.Transac
 	return tx, nil
 }
 
-// TestTxManagerReplaceRejectsConcurrentlyModifiedOriginal exercises the
-// conditional write: stale tokens are rejected at the repository write
-// itself, not only in a prior Renew call. A writer whose
-// read of `old` is stale by the time it tries to mark it Replaced must be
-// rejected by UpdateConditional and must NOT broadcast its replacement.
+// TestTxManagerReplaceRejectsConcurrentlyModifiedOriginal checks that storage rejects a
+// stale Replaced write despite prior lease renewal, and the losing writer never
+// broadcasts
 func TestTxManagerReplaceRejectsConcurrentlyModifiedOriginal(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	client := NewFakeClient()
@@ -1328,11 +1232,11 @@ func TestTxManagerReplaceRejectsConcurrentlyModifiedOriginal(t *testing.T) {
 		t.Fatal("expected Replace to reject a concurrently-modified original")
 	}
 	if len(client.SentTxs) != sentBefore {
-		t.Fatalf("expected no broadcast when the conditional write loses the race, sent %d -> %d", sentBefore, len(client.SentTxs))
+		t.Fatalf("expected no broadcast when the conditional write loses the race, sent %d, then %d", sentBefore, len(client.SentTxs))
 	}
 
-	// The original itself must be untouched by the losing attempt (still
-	// whatever the injected "concurrent" writer left it as: Pending).
+	// the original is untouched by the losing attempt and stays as the injected
+	// concurrent writer left it: Pending
 	stillPending, err := backing.Get(context.Background(), original.ID)
 	if err != nil {
 		t.Fatal(err)

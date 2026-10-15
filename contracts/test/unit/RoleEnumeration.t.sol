@@ -4,22 +4,13 @@ pragma solidity ^0.8.24;
 import {TestBase} from "../helpers/TestBase.sol";
 import {IAccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
 
-/// @notice Regression coverage for `AccessControlEnumerable` on every role-bearing contract in
-///         the stack. The server's post-deploy verifier needs to enumerate role holders
-///         on-chain — most importantly to confirm
-///         `RWAFactory`'s bootstrap `COMPLIANCE_ROLE` grant was actually renounced and that no
-///         unexpected address holds any role — without depending on a complete indexed event
-///         history. These tests exercise `getRoleMemberCount`/`getRoleMember`/`getRoleMembers`
-///         against the exact set the factory is expected to have wired, on every contract that
-///         mixes `AccessControlEnumerable` with `AccessControlDefaultAdminRules` (see
-///         ComplianceRegistry.sol's NatSpec for why that combination needs the diamond
-///         overrides this test also exercises indirectly).
+/// @notice Checks getRoleMemberCount, getRoleMember and getRoleMembers against fixture role holders
+///         on all six role-bearing contracts. Enumeration supports post-deploy verification
+///         without complete event history; see ComplianceRegistry for inheritance overrides.
 contract RoleEnumerationTest is TestBase {
     function test_complianceRegistry_complianceRoleEnumeration_bootstrapRenounced() public view {
         bytes32 role = compliance.COMPLIANCE_ROLE();
-        // Exactly complianceOperator: the factory's own bootstrap grant was renounced in
-        // RWAFactory.deploy(), so it must not appear here even though it was granted at
-        // ComplianceRegistry construction time.
+        // Only complianceOperator remains after the factory renounces its bootstrap grant
         assertEq(compliance.getRoleMemberCount(role), 1);
         assertEq(compliance.getRoleMember(role, 0), complianceOperator);
         address[] memory members = compliance.getRoleMembers(role);
@@ -83,8 +74,7 @@ contract RoleEnumerationTest is TestBase {
         assertEq(income.getRoleMember(income.DEFAULT_ADMIN_ROLE(), 0), admin);
     }
 
-    /// @dev Enumeration must track grants/revokes made after deploy too, not just the
-    ///      factory's initial wiring — e.g. a later `setStatus`-style role grant.
+    /// @dev Enumeration must track post-deploy grants and revokes
     function test_enumeration_tracksGrantsAndRevokesAfterDeploy() public {
         bytes32 role = compliance.COMPLIANCE_ROLE();
 
@@ -100,22 +90,13 @@ contract RoleEnumerationTest is TestBase {
         assertFalse(compliance.hasRole(role, outsider));
     }
 
-    /// @dev The server's post-deploy verifier walks
-    ///      `getRoleMemberCount`/`getRoleMember` on every child contract and rejects any
-    ///      UNEXPECTED holder — not just checks `hasRole` for known candidates. That guarantee
-    ///      is only as strong as "the factory never lingers as a role holder after `deploy()`
-    ///      returns." ComplianceRegistry is the only contract that ever grants the factory a
-    ///      role at all (its constructor bootstrap-grants `COMPLIANCE_ROLE` to `msg.sender` so
-    ///      the factory can call `setSystemAddresses`/`setStatus` before renouncing it in
-    ///      `RWAFactory.deploy()`; every other child's constructor grants roles straight to the
-    ///      `admin`/operational addresses in `ProjectConfig`, never to `address(this)`/factory).
-    ///      This test proves that end-to-end via the enumerable holder set on every role of
-    ///      every contract, so the server's "reject unexpected holder" logic has a concrete
-    ///      on-chain guarantee: the factory is provably absent, not merely unchecked-for.
+    /// @dev Checks every configured role's enumerable holders exclude the factory in this fixture.
+    ///      The registry's bootstrap COMPLIANCE_ROLE is renounced after setStatus; other grants
+    ///      follow ProjectConfig, whose fixture addresses are separate from the factory.
     function test_factory_holdsNoBootstrapRoleOnAnyChildPostDeploy() public view {
         address f = address(factory);
 
-        // ComplianceRegistry: the one contract where the factory ever held a role at all.
+        // Registry: factory's bootstrap role has been renounced
         assertFalse(compliance.hasRole(compliance.COMPLIANCE_ROLE(), f));
         assertFalse(compliance.hasRole(compliance.DEFAULT_ADMIN_ROLE(), f));
         _assertNotAMember(compliance.getRoleMembers(compliance.COMPLIANCE_ROLE()), f);
@@ -143,7 +124,7 @@ contract RoleEnumerationTest is TestBase {
         _assertNotAMember(escrow.getRoleMembers(escrow.REDEMPTION_MANAGER_ROLE()), f);
         _assertNotAMember(escrow.getRoleMembers(escrow.DEFAULT_ADMIN_ROLE()), f);
 
-        // SupplyController (no custom roles beyond DEFAULT_ADMIN_ROLE)
+        // SupplyController (no roles beyond DEFAULT_ADMIN_ROLE)
         assertFalse(supplyController.hasRole(supplyController.DEFAULT_ADMIN_ROLE(), f));
         _assertNotAMember(supplyController.getRoleMembers(supplyController.DEFAULT_ADMIN_ROLE()), f);
 
@@ -166,10 +147,8 @@ contract RoleEnumerationTest is TestBase {
         }
     }
 
-    /// @dev Every `supportsInterface` override in this stack chains through `super` across two
-    ///      sibling `AccessControl` extensions (`AccessControlEnumerable` and
-    ///      `AccessControlDefaultAdminRules`) — this proves that diamond resolution actually
-    ///      advertises `IAccessControlEnumerable`, not just compiles.
+    /// @dev The super chain through both AccessControl extensions must advertise IAccessControlEnumerable;
+    ///      compilation alone does not verify interface support
     function test_supportsInterface_advertisesEnumerable() public view {
         assertTrue(compliance.supportsInterface(type(IAccessControlEnumerable).interfaceId));
         assertTrue(token.supportsInterface(type(IAccessControlEnumerable).interfaceId));

@@ -8,10 +8,9 @@ import {OraclePriceStrategy} from "../pricing/OraclePriceStrategy.sol";
 import {Vault} from "../Vault.sol";
 
 /// @title MarketDeployer
-/// @notice Deploys the strategy selected by config.strategyKind (FixedPriceStrategy or
-///         OraclePriceStrategy) and Vault; see ComplianceTokenDeployer for the creation-code split
-/// @dev Stateless; RWAFactory uses delegatecall consistently across helpers. These child
-///      constructors receive admins/roles explicitly, so call would also preserve permissions.
+/// @notice Stateless helper that deploys the configured price strategy and the Vault
+/// @dev Uses RWAFactory's delegatecall helper pattern; see ComplianceTokenDeployer. These children
+///      take privileged addresses as constructor arguments, so plain call would also work.
 contract MarketDeployer {
     function deploy(IRWAFactory.ProjectConfig calldata config, address token)
         external

@@ -9,11 +9,8 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// TestChainChunkCommitConditionalVersion is the conditional-commit
-// regression at the repository boundary: CommitChunk succeeds only when the
-// stored checkpoint version matches ExpectedCheckpointVersion, bumps it on
-// success, and writes NOTHING (no orphaned events, no checkpoint change) when
-// a concurrent writer already advanced it.
+// TestChainChunkCommitConditionalVersion checks matching-version commits and version
+// increments. Stale commits must write neither events nor checkpoint changes.
 func TestChainChunkCommitConditionalVersion(t *testing.T) {
 	ctx := context.Background()
 	events := NewChainEventRepository()
@@ -28,7 +25,7 @@ func TestChainChunkCommitConditionalVersion(t *testing.T) {
 		return &models.IndexerCheckpoint{ChainID: 1, Address: "ALL", LastBlock: block, LastBlockHash: "0xh", UpdatedAt: time.Now()}
 	}
 
-	// First commit layered on version 0 succeeds and bumps to version 1.
+	// the first commit, built on version 0, succeeds and moves to version 1
 	ok, err := repo.CommitChunk(ctx, repository.ChunkCommit{
 		ChainID: 1, Events: []*models.ChainEvent{ev("0x1")}, Checkpoint: cp(5), ExpectedCheckpointVersion: 0,
 	})
@@ -43,7 +40,7 @@ func TestChainChunkCommitConditionalVersion(t *testing.T) {
 		t.Fatalf("checkpoint = version %d block %d, want version 1 block 5", stored.Version, stored.LastBlock)
 	}
 
-	// A stale commit still expecting version 0 must be rejected and write nothing.
+	// a stale commit that still expects version 0 is rejected and writes nothing
 	ok, err = repo.CommitChunk(ctx, repository.ChunkCommit{
 		ChainID: 1, Events: []*models.ChainEvent{ev("0xorphan")}, Checkpoint: cp(9), ExpectedCheckpointVersion: 0,
 	})
@@ -61,7 +58,7 @@ func TestChainChunkCommitConditionalVersion(t *testing.T) {
 		t.Fatal("a losing commit must not write its events (orphan leak)")
 	}
 
-	// A commit layered on the CURRENT version (1) succeeds again -> version 2.
+	// a commit built on the current version 1 succeeds and moves to version 2
 	ok, err = repo.CommitChunk(ctx, repository.ChunkCommit{
 		ChainID: 1, Events: []*models.ChainEvent{ev("0x2")}, Checkpoint: cp(9), ExpectedCheckpointVersion: 1,
 	})

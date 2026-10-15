@@ -11,10 +11,8 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {IFixedPriceStrategy} from "../interfaces/IFixedPriceStrategy.sol";
 
 /// @title FixedPriceStrategy
-/// @notice Admin/pricer-updatable fixed purchase and redemption prices.
-/// @dev `AccessControlEnumerable` lets an off-chain verifier enumerate
-///      `PRICER_ROLE`/`DEFAULT_ADMIN_ROLE` holders on-chain — see ComplianceRegistry.sol's
-///      NatSpec for the full rationale and the diamond-override pattern reused below.
+/// @notice PRICER_ROLE can update fixed purchase/redemption prices
+/// @dev Enumerable PRICER_ROLE and DEFAULT_ADMIN_ROLE; see ComplianceRegistry for inheritance overrides
 contract FixedPriceStrategy is IFixedPriceStrategy, AccessControlEnumerable, AccessControlDefaultAdminRules {
     bytes32 public constant PRICER_ROLE = keccak256("PRICER_ROLE");
 
@@ -82,7 +80,7 @@ contract FixedPriceStrategy is IFixedPriceStrategy, AccessControlEnumerable, Acc
         return _tokenDecimals;
     }
 
-    // ---- AccessControl diamond resolution — see ComplianceRegistry.sol for rationale ----
+    // ---- AccessControl overrides, see ComplianceRegistry.sol ----
 
     function _grantRole(bytes32 role, address account)
         internal

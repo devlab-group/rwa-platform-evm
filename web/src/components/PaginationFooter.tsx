@@ -1,11 +1,4 @@
-/**
- * Shown under a paginated admin list: makes it visible when the list is
- * truncated at the server's page size rather than hiding older records
- * silently, and offers an explicit "Load more" action instead of unbounded
- * auto-pagination. `totalCount` is omitted by the server for most-recent-N
- * stores (e.g. audit logs); render a plain "more available" notice in that
- * case rather than a fabricated total.
- */
+/** Shows loaded count and Load more; omits unknown totals and indicates available pages */
 export function PaginationFooter({
   loadedCount,
   totalCount,

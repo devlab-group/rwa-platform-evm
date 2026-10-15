@@ -19,13 +19,11 @@ import (
 
 const sampleProjectUUID = "4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61"
 
-// testChainID is the chain every fixture below signs and verifies against.
+// testChainID is the chain used to sign and verify all fixtures
 const testChainID int64 = 31337
 
-// adminKey/attackerKey are the two wallets the adoption tests need: the
-// configured admin whose signature authorizes a deployment, and an unrelated
-// wallet standing in for anyone else who can call the permissionless factory.
-// (anvil accounts 0 and 1.)
+// adminKey/attackerKey are Anvil accounts 0 and 1: the configured deploy admin and an
+// unrelated permissionless-factory caller
 var (
 	adminKey    = mustKey("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
 	attackerKey = mustKey("59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d")
@@ -41,10 +39,8 @@ func mustKey(hexKey string) *ecdsa.PrivateKey {
 
 func keyAddress(k *ecdsa.PrivateKey) common.Address { return crypto.PubkeyToAddress(k.PublicKey) }
 
-// signDeployTx builds the observed deploy transaction — to the factory,
-// carrying the ProjectConfig as calldata — signed by key. Adoption recovers the
-// sender from this signature, so the fixtures must produce genuinely signed
-// transactions rather than bare unsigned ones.
+// signDeployTx signs factory calldata with key; unsigned fixtures cannot test sender
+// authorization
 func signDeployTx(t *testing.T, key *ecdsa.PrivateKey, factoryAddr common.Address, calldata []byte, nonce uint64) *types.Transaction {
 	t.Helper()
 	tx := types.NewTx(&types.LegacyTx{Nonce: nonce, To: &factoryAddr, Gas: 1_000_000, GasPrice: big.NewInt(1), Data: calldata})
@@ -57,9 +53,8 @@ func signDeployTx(t *testing.T, key *ecdsa.PrivateKey, factoryAddr common.Addres
 
 func sampleProfileDigestHex() string { return "0x" + strings.Repeat("11", 32) }
 
-// sampleConfig is the ProjectConfig the admin's wallet would have signed and
-// submitted to RWAFactory.deploy — the exact struct VerifyDeployment recovers
-// from the observed transaction's calldata as its verification allowlist.
+// sampleConfig supplies signed RWAFactory.deploy calldata used as VerifyDeployment's
+// configuration allowlist
 func sampleConfig(t *testing.T) bindings.ProjectConfig {
 	t.Helper()
 	pid, err := projectIDToBytes32(sampleProjectUUID)
@@ -92,10 +87,8 @@ func sampleProfile() *models.AssetProfile {
 	return &models.AssetProfile{ProjectID: sampleProjectUUID, Digest: sampleProfileDigestHex(), TokenDecimals: 18, TokenUnit: "gram"}
 }
 
-// verifyFixture bundles a fully-wired, PASSING VerifyDeployment scenario —
-// every check configured to succeed against the observed deploy tx + stored
-// profile — so a test can mutate exactly one thing and confirm it (and only
-// it) turns the result Failed.
+// verifyFixture supplies a passing transaction/profile scenario so tests can isolate
+// each verification failure
 type verifyFixture struct {
 	svc                                                    *Service
 	client                                                 *perContractClient
@@ -136,8 +129,7 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 		t.Fatal(err)
 	}
 
-	// The observed deploy transaction: to the factory, carrying the signed
-	// ProjectConfig as calldata, broadcast by the admin's own wallet.
+	// Admin-signed factory transaction carrying ProjectConfig calldata
 	calldata, err := factoryABI.PackDeploy(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -245,8 +237,7 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 	}
 }
 
-// seedDeployEvent records the fixture's ProjectDeployed log into chainEvents
-// (as the indexer would), so ReconcileDeployment can find and adopt it.
+// seedDeployEvent indexes the fixture's ProjectDeployed log for ReconcileDeployment
 func (f *verifyFixture) seedDeployEvent(t *testing.T, chainEvents *memory.ChainEventRepository) {
 	t.Helper()
 	if err := chainEvents.Create(context.Background(), &models.ChainEvent{
@@ -426,10 +417,8 @@ func TestVerifyDeploymentFailsOnUnsupportedVersion(t *testing.T) {
 	}
 }
 
-// TestVerifyDeploymentFailsOnUndecodableCalldata: the ProjectDeployed event
-// binds correctly, but the deploy transaction's calldata isn't a decodable
-// RWAFactory.deploy — verification must fail rather than adopt with no
-// recoverable role/config allowlist.
+// Reject undecodable deploy calldata even when ProjectDeployed matches the profile: no
+// role/config allowlist can be recovered
 func TestVerifyDeploymentFailsOnUndecodableCalldata(t *testing.T) {
 	f := newVerifyFixture(t)
 	garbage := types.NewTx(&types.LegacyTx{Nonce: 0, To: &f.factoryAddr, Gas: 1_000_000, GasPrice: big.NewInt(1), Data: []byte{0x01, 0x02, 0x03, 0x04}})
@@ -444,9 +433,7 @@ func TestVerifyDeploymentFailsOnUndecodableCalldata(t *testing.T) {
 	}
 }
 
-// TestVerifyDeploymentFailsOnCalldataProfileMismatch: the deployer submitted a
-// ProjectConfig whose decimals disagree with the stored profile — the signed
-// calldata must be cross-checked against the profile binding.
+// Reject signed calldata whose decimals disagree with the stored profile
 func TestVerifyDeploymentFailsOnCalldataProfileMismatch(t *testing.T) {
 	f := newVerifyFixture(t)
 	badCfg := f.cfg
@@ -661,7 +648,7 @@ func TestVerifyDeploymentFailsOnRedemptionEscrowPointerMismatch(t *testing.T) {
 	}
 }
 
-// --- ReconcileDeployment (observe-only adoption / reorg demotion) ---
+// Deployment adoption and reorg demotion
 
 func TestReconcileDeploymentAdoptsMatchingEvent(t *testing.T) {
 	f := newVerifyFixture(t)
@@ -679,7 +666,7 @@ func TestReconcileDeploymentAdoptsMatchingEvent(t *testing.T) {
 		t.Fatalf("Status = %s, want Active (reason: %s)", p.Status, p.VerificationNote)
 	}
 
-	// Idempotent: a second pass is a no-op, still Active.
+	// A second pass stays Active without changes
 	if err := f.svc.ReconcileDeployment(context.Background(), chainEvents, f.profileRepo); err != nil {
 		t.Fatalf("second ReconcileDeployment: %v", err)
 	}
@@ -691,7 +678,7 @@ func TestReconcileDeploymentAdoptsMatchingEvent(t *testing.T) {
 func TestReconcileDeploymentIgnoresMismatchedEvent(t *testing.T) {
 	f := newVerifyFixture(t)
 	chainEvents := memory.NewChainEventRepository()
-	// An event bound to a DIFFERENT profileDigest than the stored profile.
+	// Event for a different profileDigest
 	if err := chainEvents.Create(context.Background(), &models.ChainEvent{
 		ChainID: 31337, Address: f.factoryAddr.Hex(), TxHash: f.txHash.Hex(), LogIndex: 0, BlockNumber: 1,
 		Name: "ProjectDeployed",
@@ -711,11 +698,8 @@ func TestReconcileDeploymentIgnoresMismatchedEvent(t *testing.T) {
 	}
 }
 
-// seedLookAlikeDeploy stages the deployment-hijack attack: a second, fully real deployment
-// carrying the SAME (public) projectId and profileDigest as the stored profile,
-// broadcast by `key` through the same permissionless factory, at a LATER block
-// than the legitimate one — with its own attacker-controlled addresses and
-// roles. Returns the look-alike's transaction hash.
+// seedLookAlikeDeploy signs an attacker-controlled deployment with key at a later
+// block, reusing the public projectId/profileDigest, and returns its transaction hash
 func (f *verifyFixture) seedLookAlikeDeploy(t *testing.T, chainEvents *memory.ChainEventRepository, key *ecdsa.PrivateKey, mutate func(*bindings.ProjectConfig)) common.Hash {
 	t.Helper()
 	cfg := f.cfg
@@ -768,14 +752,8 @@ func (f *verifyFixture) seedLookAlikeDeploy(t *testing.T, chainEvents *memory.Ch
 	return tx.Hash()
 }
 
-// TestReconcileDeploymentRejectsLookAlikeFromAnotherDeployer is the
-// deployment-hijack regression. RWAFactory.deploy is permissionless and both projectId and
-// profileDigest are public, so anyone can deploy a look-alike stack carrying
-// them. Adoption previously kept the LATEST matching event and recovered every
-// expected role/treasury/auditor value from that transaction's own calldata, so
-// the look-alike verified as internally consistent and replaced the live
-// project — pointing the SPA and every chain read at attacker contracts. The
-// deploy transaction's signer must be the configured admin.
+// Reject a profile-matching deployment from another sender; verifying its own calldata
+// would otherwise let it replace the authorized stack
 func TestReconcileDeploymentRejectsLookAlikeFromAnotherDeployer(t *testing.T) {
 	f := newVerifyFixture(t)
 	chainEvents := memory.NewChainEventRepository()
@@ -797,9 +775,8 @@ func TestReconcileDeploymentRejectsLookAlikeFromAnotherDeployer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The live project must be untouched — neither re-pointed at the attacker's
-	// stack nor knocked out of Active, which would be a denial of service in
-	// place of the takeover.
+	// Keep the legitimate addresses and Active status; rejection must not let an attacker
+	// disrupt the project
 	if after.Status != models.ProjectStatusActive {
 		t.Fatalf("Status = %s (%s), want the legitimate project left Active", after.Status, after.VerificationNote)
 	}
@@ -814,10 +791,8 @@ func TestReconcileDeploymentRejectsLookAlikeFromAnotherDeployer(t *testing.T) {
 	}
 }
 
-// TestReconcileDeploymentIgnoresLookAlikeWithNoLegitimateDeployment: with only
-// an unauthorized deployment on chain, nothing is adopted at all — and no
-// project record is written, so the attacker cannot even force a Failed record
-// into existence.
+// An unauthorized deployment alone must neither be adopted nor create a Failed project
+// record
 func TestReconcileDeploymentIgnoresLookAlikeWithNoLegitimateDeployment(t *testing.T) {
 	f := newVerifyFixture(t)
 	chainEvents := memory.NewChainEventRepository()
@@ -831,10 +806,7 @@ func TestReconcileDeploymentIgnoresLookAlikeWithNoLegitimateDeployment(t *testin
 	}
 }
 
-// TestReconcileDeploymentRejectsAdminSentDeployNamingAnotherAdmin covers the
-// second half of the binding: the transaction is signed by the configured admin
-// but its ProjectConfig hands the roles to someone else, so the resulting stack
-// would not be under the operator's control.
+// Reject an admin-signed deployment whose ProjectConfig.admin names another wallet
 func TestReconcileDeploymentRejectsAdminSentDeployNamingAnotherAdmin(t *testing.T) {
 	f := newVerifyFixture(t)
 	chainEvents := memory.NewChainEventRepository()
@@ -850,9 +822,7 @@ func TestReconcileDeploymentRejectsAdminSentDeployNamingAnotherAdmin(t *testing.
 	}
 }
 
-// TestVerifyDeploymentFailsForUnauthorizedDeployer: the binding is re-checked
-// inside VerifyDeployment, so a direct caller cannot bypass the filter
-// ReconcileDeployment applies.
+// Direct VerifyDeployment calls must enforce ReconcileDeployment's sender binding
 func TestVerifyDeploymentFailsForUnauthorizedDeployer(t *testing.T) {
 	f := newVerifyFixture(t)
 	txHash := f.seedLookAlikeDeploy(t, nil, attackerKey, nil)
@@ -869,10 +839,8 @@ func TestVerifyDeploymentFailsForUnauthorizedDeployer(t *testing.T) {
 	}
 }
 
-// TestVerifyDeploymentUnauthenticatedWhenNoAdminConfigured: with no admin
-// address configured (development — production config refuses to start without
-// one) the binding is disabled and the old adopt-anything behavior is kept, so
-// existing local setups still work.
+// With no admin configured, any profile-matching deployment may be adopted in
+// development; production configuration rejects a missing admin
 func TestVerifyDeploymentUnauthenticatedWhenNoAdminConfigured(t *testing.T) {
 	f := newVerifyFixture(t)
 	f.svc.adminAddress = common.Address{}
@@ -916,7 +884,7 @@ func TestReconcileDeploymentDemotesOnReorg(t *testing.T) {
 		t.Fatalf("precondition: expected Active, got %s", p.Status)
 	}
 
-	// The adopting event is rolled back (indexer deletes it on reorg).
+	// Indexer rollback deletes the adopting event
 	if _, err := chainEvents.DeleteFromBlock(context.Background(), 31337, f.factoryAddr.Hex(), 1); err != nil {
 		t.Fatal(err)
 	}

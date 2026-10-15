@@ -12,7 +12,7 @@ import {FeeOnTransferERC20} from "../mocks/token/FeeOnTransferERC20.sol";
 contract VaultTest is TestBase {
     function setUp() public override {
         super.setUp();
-        // Give the vault 100 RWA of sellable inventory.
+        // Seed Vault with 100 RWA
         ISupplyController.MintAttestation memory a = _mintAttestation(auditor, 100 ether, "REC-1", 1);
         supplyController.mint(a, _signMint(a, AUDITOR_PK));
         quoteToken.mint(investor, 1_000_000_000);
@@ -91,7 +91,7 @@ contract VaultTest is TestBase {
         feeToken.approve(freshVault, type(uint256).max);
 
         vm.prank(investor);
-        vm.expectRevert(); // QuoteDeltaMismatch(expected, actual) — actual < expected
+        vm.expectRevert(); // QuoteDeltaMismatch(expected, actual), with actual < expected
         Vault(freshVault).buy(1 ether, type(uint256).max, investor, uint64(block.timestamp + 1));
     }
 
@@ -118,11 +118,8 @@ contract VaultTest is TestBase {
         vault.withdrawProceeds(1);
     }
 
-    /// @dev `withdrawProceeds` must not trust `safeTransfer`'s success without checking what the
-    ///      treasury actually received. A quote token whose fee turns on only after
-    ///      proceeds were collected must still be caught: measuring the treasury's own delta
-    ///      catches a shortfall that fee-free accounting would silently report as a full
-    ///      withdrawal.
+    /// @dev Enable quote-token fees after collecting proceeds; withdrawProceeds must detect the
+    ///      treasury's shortfall even when safeTransfer succeeds
     function test_withdrawProceeds_feeEnabledAfterProceeds_reverts() public {
         FeeOnTransferERC20 feeToken = new FeeOnTransferERC20(500); // 5% fee, starts enabled
         feeToken.setFeeEnabled(false); // disabled while collecting proceeds via buy
@@ -136,15 +133,14 @@ contract VaultTest is TestBase {
         uint256 proceeds = feeToken.balanceOf(freshVault);
         assertTrue(proceeds > 0);
 
-        // Fee turns on after the Vault already holds the proceeds — a plain `safeTransfer` to
-        // treasury would now silently deliver 5% less than `proceeds`.
+        // Enable the fee after collecting proceeds; safeTransfer alone would deliver 5% less
         feeToken.setFeeEnabled(true);
 
         vm.prank(treasurer);
-        vm.expectRevert(); // QuoteDeltaMismatch(expected, actual) — actual < expected after fee
+        vm.expectRevert(); // QuoteDeltaMismatch(expected, actual), with actual < expected after the fee
         Vault(freshVault).withdrawProceeds(proceeds);
 
-        // Reverted atomically: the Vault still holds its proceeds.
+        // Atomic rollback preserves Vault proceeds
         assertEq(feeToken.balanceOf(freshVault), proceeds);
     }
 

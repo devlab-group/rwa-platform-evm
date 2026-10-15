@@ -34,7 +34,7 @@ const complianceRegistryABIJSON = `[
 // ComplianceRegistry encodes calldata / decodes events for IComplianceRegistry.
 type ComplianceRegistry struct{ ABI abi.ABI }
 
-// NewComplianceRegistry parses the ComplianceRegistry ABI once.
+// NewComplianceRegistry parses the ComplianceRegistry ABI
 func NewComplianceRegistry() ComplianceRegistry {
 	return ComplianceRegistry{ABI: mustABI(complianceRegistryABIJSON)}
 }
@@ -97,7 +97,8 @@ func (c ComplianceRegistry) UnpackGetRecord(data []byte) (ComplianceRecord, erro
 	return *rec, nil
 }
 
-// StatusChangedEvent mirrors the StatusChanged event's non-indexed data.
+// StatusChangedEvent mirrors the StatusChanged event: the previous and new
+// status and expiry (non-indexed), and the indexed account and caller
 type StatusChangedEvent struct {
 	Account            common.Address
 	PreviousStatus     uint8
@@ -107,8 +108,8 @@ type StatusChangedEvent struct {
 	Caller             common.Address
 }
 
-// UnpackStatusChanged decodes a StatusChanged log's data (non-indexed
-// fields) and topics (indexed fields: account, caller).
+// UnpackStatusChanged decodes a StatusChanged log: the statuses and expiries
+// from data, and the indexed account and caller from topics
 func (c ComplianceRegistry) UnpackStatusChanged(data []byte, topics []common.Hash) (StatusChangedEvent, error) {
 	var ev StatusChangedEvent
 	if err := c.ABI.UnpackIntoInterface(&ev, "StatusChanged", data); err != nil {

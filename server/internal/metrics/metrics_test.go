@@ -28,13 +28,13 @@ func TestGinMiddlewareRecordsRequestMetrics(t *testing.T) {
 	Handler().ServeHTTP(metricsRec, metricsReq)
 
 	body := metricsRec.Body.String()
-	// The route TEMPLATE, not the raw path with "42" in it, must appear —
-	// otherwise every distinct redemption id would be its own label value.
+	// Use the route template, not the raw path containing "42", to avoid a label per
+	// redemption ID
 	if !strings.Contains(body, `path="/api/v1/redemptions/:id"`) {
 		t.Errorf("metrics output missing the route-template label; got:\n%s", excerptContaining(body, "rwa_http_requests_total"))
 	}
 	if strings.Contains(body, `path="/api/v1/redemptions/42"`) {
-		t.Error("metrics output used the raw request path (with the id in it) instead of the route template — this would blow up cardinality")
+		t.Error("metrics output used the raw request path (with the id in it) instead of the route template, which would multiply label values")
 	}
 }
 

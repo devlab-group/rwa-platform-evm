@@ -66,7 +66,7 @@ func TestDecodeDefaultAdminTransferScheduled(t *testing.T) {
 	newAdmin := common.HexToAddress("0x00000000000000000000000000000000000000D4")
 	log := types.Log{Topics: []common.Hash{
 		g.EventID("DefaultAdminTransferScheduled"),
-		common.BytesToHash(newAdmin.Bytes()), // newAdmin is indexed → topic1
+		common.BytesToHash(newAdmin.Bytes()), // newAdmin is indexed in topic1
 	}}
 	name, data, err := DecodeLog(log)
 	if err != nil {

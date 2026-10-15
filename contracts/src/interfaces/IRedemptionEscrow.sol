@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 /// @title IRedemptionEscrow
-/// @notice Cash redemption state machine: request -> fund -> permissionless claim.
-/// @dev Stable interface; implementations must match docs/spec/redemption-state-machine.md.
+/// @notice Cash redemption: request -> fund -> permissionless claim
+/// @dev Stable interface; implementations must match docs/spec/redemption-state-machine.md
 interface IRedemptionEscrow {
     enum RedemptionStatus {
         None,

@@ -13,18 +13,13 @@ import (
 var recordIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 var sha256HexPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// decimalAmountPattern is shared/schemas/metadata.schema.json's exact
-// issuance.amount pattern (frozen envelope syntax — must not diverge from
-// it or from the signer's identical check). It alone is not sufficient:
-// "0" satisfies it but SupplyController.mint always `revert ZeroAmount()`s
-// on a zero attestation amount — the regex accepts zero, so without a further
-// check the server could persist a record the contract will always reject.
-// maxIssuanceAmount below adds the semantic (0, 2^256-1] bound the pattern
-// can't express, without changing the pattern itself.
+// decimalAmountPattern matches metadata.schema.json and the signer. It accepts zero and
+// values above uint256, so ValidateRecord also enforces [1, maxIssuanceAmount];
+// on-chain zero minting fails with ZeroAmount.
 var decimalAmountPattern = regexp.MustCompile(`^[0-9]+$`)
 
-// maxIssuanceAmount is uint256's maximum value — every issuance.amount
-// eventually becomes a Solidity uint256 mint amount.
+// maxIssuanceAmount is 2^256-1, the largest uint256, since issuance.amount
+// becomes the mint amount
 var maxIssuanceAmount = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 
 var metadataAllowedTopLevelKeys = map[string]bool{
@@ -32,14 +27,14 @@ var metadataAllowedTopLevelKeys = map[string]bool{
 	"issuance": true, "proofs": true, "createdAt": true,
 }
 
-// ProofRecord mirrors one shared/schemas/metadata.schema.json proofs[] entry.
+// ProofRecord mirrors one shared/schemas/metadata.schema.json proofs[] entry
 type ProofRecord struct {
 	Type   string `json:"type"`
 	SHA256 string `json:"sha256"`
 	URI    string `json:"uri,omitempty"`
 }
 
-// Metadata is the parsed, validated metadata envelope.
+// Metadata is the parsed, validated metadata envelope
 type Metadata struct {
 	PlatformVersion string          `json:"platformVersion"`
 	ProjectID       string          `json:"projectId"`
@@ -55,18 +50,15 @@ type Metadata struct {
 	CID       string
 }
 
-// ValidateRecord parses and validates a raw metadata envelope document
-// against shared/schemas/metadata.schema.json and, for the nested `asset`
-// object, against the project's Asset Profile assetSchema. expectedAmount,
-// if non-empty, must equal issuance.amount (which in turn must equal the
-// EIP-712 amount); expectedProjectID, if non-empty, must equal
-// metadata.projectId (which must equal the immutable project profile).
+// ValidateRecord checks the metadata envelope against metadata.schema.json and, with a
+// non-nil profile, asset against assetSchema. Non-empty expectedAmount and
+// expectedProjectID must match issuance.amount and projectId. Invalid documents return
+// nil *Metadata and ValidationResult.Errors.
 func ValidateRecord(profile *Profile, raw []byte, expectedAmount, expectedProjectID string) (ValidationResult, *Metadata) {
 	var errs []string
 
-	// Same reasoning as ValidateProfile — bound size/depth/string/array/object
-	// BEFORE the nested `asset` object is unmarshaled into a generic `any`
-	// tree for JSON-Schema validation below.
+	// as in ValidateProfile, the limits must hold before the asset object is
+	// decoded into a generic tree for schema validation
 	if err := auditpkg.CheckLimits(raw); err != nil {
 		return ValidationResult{Valid: false, Errors: []string{err.Error()}}, nil
 	}
@@ -123,16 +115,14 @@ func ValidateRecord(profile *Profile, raw []byte, expectedAmount, expectedProjec
 		Amount string `json:"amount"`
 		Unit   string `json:"unit"`
 	}
-	// Strict: shared/schemas/metadata.schema.json declares issuance
-	// additionalProperties:false; see unmarshalStrict's doc comment.
+	// issuance sets additionalProperties to false in the schema, so decode strictly
 	if err := unmarshalStrict(top["issuance"], &issuance); err != nil {
 		errs = append(errs, "issuance must be an object with string amount/unit and no additional fields")
 	} else {
 		if !decimalAmountPattern.MatchString(issuance.Amount) {
 			errs = append(errs, "issuance.amount must match ^[0-9]+$")
 		} else if n, ok := new(big.Int).SetString(issuance.Amount, 10); !ok || n.Sign() <= 0 || n.Cmp(maxIssuanceAmount) > 0 {
-			// Reachable even though the regex above matched — e.g. "0", or a
-			// numeral with more digits than fit in a uint256.
+			// the pattern matched but the value is zero or does not fit in a uint256
 			errs = append(errs, "issuance.amount must be a positive integer no greater than 2^256-1 (the contract rejects a zero mint amount)")
 		} else if expectedAmount != "" && issuance.Amount != expectedAmount {
 			errs = append(errs, "issuance.amount must equal the record's amount / EIP-712 amount")
@@ -146,8 +136,7 @@ func ValidateRecord(profile *Profile, raw []byte, expectedAmount, expectedProjec
 
 	if proofsRaw, ok := top["proofs"]; ok {
 		var proofs []ProofRecord
-		// Strict: shared/schemas/metadata.schema.json declares proofs[] items
-		// additionalProperties:false.
+		// proofs[] items set additionalProperties to false in the schema
 		if err := unmarshalStrict(proofsRaw, &proofs); err != nil {
 			errs = append(errs, "proofs must be an array of {type, sha256, uri?} with no additional fields")
 		} else {
@@ -187,12 +176,12 @@ func ValidateRecord(profile *Profile, raw []byte, expectedAmount, expectedProjec
 	}, m
 }
 
-// DigestHex returns the metadata digest as a 0x-prefixed hex string.
+// DigestHex returns the metadata digest as a 0x-prefixed hex string
 func (m *Metadata) DigestHex() string {
 	return "0x" + hex.EncodeToString(m.Digest[:])
 }
 
-// DigestHex returns the profile digest as a 0x-prefixed hex string.
+// DigestHex returns the profile digest as a 0x-prefixed hex string
 func (p *Profile) DigestHex() string {
 	return "0x" + hex.EncodeToString(p.Digest[:])
 }

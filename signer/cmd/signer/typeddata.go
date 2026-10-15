@@ -11,12 +11,9 @@ import (
 	"github.com/rwa-platform/signer/internal/attestation"
 )
 
-// typedData is the parsed shape of typed-data.json inside a .rwa package.
-//
-// NOTE: there is no frozen schema for typed-data.json yet; this shape was
-// inferred from shared/vectors/mint-eip712.json and shared/eip712/domain.json,
-// the only sources that pin it down today. Treat that as a known
-// specification gap to close later rather than something to paper over here.
+// typedData models typed-data.json under shared/schemas/typed-data.schema.json;
+// parseTypedData enforces mint recordId/recordKey and burn operationId rules left open
+// by that schema
 type typedData struct {
 	PrimaryType string `json:"primaryType"`
 	Domain      struct {

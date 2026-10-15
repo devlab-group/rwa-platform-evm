@@ -4,8 +4,7 @@ pragma solidity ^0.8.24;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /// @title FalseReturnERC20
-/// @notice Quote token whose transfer/transferFrom always return `false` without reverting,
-///         used to prove SafeERC20 makes such tokens revert instead of silently no-op-ing.
+/// @notice transfer and transferFrom return false without reverting, testing SafeERC20 rejection
 contract FalseReturnERC20 is ERC20 {
     constructor() ERC20("False Return", "FALSE") {}
 

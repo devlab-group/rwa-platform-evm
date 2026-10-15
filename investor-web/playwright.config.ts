@@ -1,13 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Two modes, selected by whether BASE_URL is set:
-//  - default (no BASE_URL): serves the production build via `vite preview` and
-//    every spec installs a mocked API + mocked wallet (see tests/fixtures) —
-//    deterministic, no backend required, this is what CI runs.
-//  - live (BASE_URL=http://host:port): points straight at a running
-//    server+SPA (the Go binary embeds the built SPA) for the final
-//    full-stack exit-gate run against real Anvil/Mongo/IPFS. Specs skip
-//    installing mocks in this mode (see tests/fixtures/fixtures.ts).
+// BASE_URL selects the test mode:
+// - Unset: vite preview serves the production build; API and wallet mocks need no
+//   backend and keep tests deterministic.
+// - Set (http://host:port): use a running SPA/API deployment without mocks; skip
+//   mockOnly() specs.
+// See tests/fixtures/fixtures.ts.
 const liveBaseUrl = process.env.BASE_URL;
 const PREVIEW_PORT = 4173;
 
@@ -28,8 +26,8 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  // Only spin up a local static server in mocked mode; a live BASE_URL means
-  // the target server is managed externally (already running against Anvil).
+  // Start a local static server only in mocked mode; with a live BASE_URL the
+  // target is managed externally
   webServer: liveBaseUrl
     ? undefined
     : {

@@ -14,9 +14,9 @@ import (
 	"github.com/rwa-platform/server/internal/eip712"
 )
 
-// loadTypedDataSchema compiles the FROZEN shared/schemas/typed-data.schema.json
-// so this package's TypedDataDoc output is checked against the real schema
-// the offline signer also validates against, not just our own Go structs.
+// loadTypedDataSchema compiles shared/schemas/typed-data.schema.json so
+// TypedDataDoc output is checked against the schema itself and not only against
+// the Go structs
 func loadTypedDataSchema(t *testing.T) *jsonschema.Schema {
 	t.Helper()
 	p := filepath.Join("..", "..", "..", "shared", "schemas", "typed-data.schema.json")
