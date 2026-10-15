@@ -28,6 +28,10 @@ const (
 	// CodeTooManyActiveChallenges is returned by createChallenge when an address
 	// has too many active wallet challenges
 	CodeTooManyActiveChallenges = "too_many_active_challenges"
+	// CodeHolderCapReached reports a new-wallet approval refused by the configured cap
+	CodeHolderCapReached = "holder_cap_reached"
+	// CodeSanctionedAddress reports an Allowed submission refused by sanctions screening
+	CodeSanctionedAddress = "sanctioned_address"
 )
 
 func fail(c *gin.Context, status int, code, message string) {

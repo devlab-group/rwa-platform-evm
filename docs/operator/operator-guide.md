@@ -7,8 +7,9 @@ admin wallet deploys; administration can then move to a multisig (§4a).
 Companion guides cover [redemption operations](redemption-ops.md),
 [auditor signing](../auditor/auditor-guide.md),
 [incident response](../security/incident-response.md),
-[public-testnet qualification](testnet-qualification.md) and
-[shadow replay and soak testing](soak-runbook.md).
+[public-testnet qualification](testnet-qualification.md),
+[shadow replay and soak testing](soak-runbook.md) and
+[paying out at maturity](maturity-runbook.md).
 
 ## 1. Architecture recap
 
@@ -318,18 +319,35 @@ acceptance checks still apply before a decision is relayed:
 | Sumsub   | `applicantReviewed` with answer RED and reject type FINAL                       | RETRY rejections and event types other than `applicantReviewed` |
 | Onfido   | a workflow-run delivery with status `declined` and a valid completion timestamp | nonterminal workflow statuses and non-workflow events           |
 
-Monitoring raises `kyc_monitoring_hit` (§5) for officer review; it does not itself block a wallet:
+Monitoring raises `kyc_monitoring_hit` (§5). With the default `kyc.monitoring_action: alert`,
+it does not submit a block. `block` also queues a Blocked decision for a Sumsub hit on an
+unexpired Allowed wallet. The alert reports whether recording succeeded; on-chain submission
+still goes through the webhook outbox. Walletless Onfido signals stay alert-only:
 
-- Sumsub: `applicantOnHold` or `applicantPending` with `reviewMode` `ongoingAml` raises an alert
-  after accepted, deduplicated delivery when the wallet's read model is still Allowed and unexpired.
-  A first review without existing approval raises none. Review the applicant and issue a FINAL
-  rejection in Sumsub or block it here when warranted. These signals leave registry status unchanged.
+- Sumsub: `applicantOnHold`, or `applicantPending` with `reviewMode` `ongoingAml`, alerts after
+  accepted, deduplicated delivery if the read-model wallet is still Allowed and unexpired.
+  First reviews without approval raise none. In `alert` mode, review and issue a FINAL
+  rejection in Sumsub or block confirmed matches manually.
 - Onfido: `watchlist_monitor.matches_updated` identifies a monitor rather than a wallet.
   Use its ID from the alert to find the applicant in Onfido, then block confirmed matches manually.
   This signal bypasses decision replay checks, so repeated deliveries may repeat the alert.
 
-Wallet-address screening is separate from screening the person. The server has no built-in
-adapter for services such as Chainalysis, TRM Labs or Elliptic. To connect a service:
+Wallet screening is separate from person screening. There is no built-in Chainalysis, TRM Labs
+or Elliptic adapter; you can export compatible addresses from OFAC's SDN list or a vendor:
+
+- Set `compliance.sanctions_list_file` to one `0x` address per line. Case is ignored; blank lines
+  and full-line `#` comments are skipped. Any other line rejects the file. Startup or
+  service-rebuild load errors are fatal in production and logged in development. The server
+  checks modification time every 30 seconds and logs reload errors. Read/parse failures keep
+  the previous list; correct the file and change its modification time to retry. File-stat errors retry on the next
+  check. Initial development-load failures leave screening empty until a valid load.
+- Every Allowed submission for a listed wallet is refused, including renewals: admin API 409
+  `sanctioned_address`; webhook approval `Failed` with a `sanctions_list_match` alert.
+- At service setup and after successful reloads, `sanctions_list_match` reports listed, unexpired
+  Allowed wallets, excluding configured Vault/escrow addresses. List screening does not submit
+  blocks for existing holders; confirm the match and block the wallet manually.
+
+To have a screening service submit blocks:
 
 - With `kyc.provider` set to `none`, post HMAC-signed Blocked decisions to
   `POST /api/v1/compliance/webhook`. The wallet must have proved ownership. The body is the
@@ -357,12 +375,35 @@ approvals have no expiry; manual approval and the generic webhook accept `validU
 periodic review. Once a nonzero expiry passes, ordinary RWA transfers and Pending redemption
 operations require renewed approval. Expiry does not stop an already Funded claim.
 
+## 4d. Holder cap
+
+`compliance.max_allowed_wallets` limits this server's approval count; `0` disables it.
+The count measures wallets, not beneficial owners: one owner may use several wallets, so do
+not treat it as a legal holder count.
+
+Counted addresses are unexpired Allowed wallets in the investor read model, plus distinct
+addresses in recorded Allowed operations/webhooks whose linked transaction was submitted within
+the last hour and is `pending`, `mined`, `confirmed` or `broadcast_unknown`. Configured Vault and
+redemption-escrow addresses are excluded. Reservations for addresses outside the Allowed set
+expire after an hour; a transaction can still settle later.
+
+At the cap, a new-wallet approval returns admin API 409 `holder_cap_reached`. Webhook approvals
+refused by the cap appear as terminal `Failed` events in webhook history and raise
+`holder_cap_reached`. Counted-wallet
+renewals and expiry changes bypass the cap, but still face sanctions screening. Blocked
+submissions bypass both guards; other validation and transaction failures remain possible.
+
+Another `COMPLIANCE_ROLE` holder can approve wallets on-chain directly. Every five minutes,
+`holder_cap_exceeded` reports a read-model count above the cap. `rwa_allowed_wallets` shows that
+read-model count, excluding transaction reservations. Checks and submissions share a lock within
+one process; multiple replicas need shared coordination to avoid racing for the last slot.
+
 ## 5. Monitoring and alerts
 
 Scrape `/metrics` on `http.metrics_addr` (§7a). The platform exports:
 
 - `rwa_http_requests_total` and `rwa_http_request_duration_seconds`;
-- `rwa_sales_inventory_tokens`;
+- `rwa_sales_inventory_tokens` and `rwa_allowed_wallets`;
 - `rwa_redemptions_pending_count`, `rwa_redemptions_pending_oldest_age_seconds` and
   `rwa_redemptions_funded_unclaimed_count`;
 - `rwa_alerts_fired_total{kind}`, `rwa_storage_up` and `rwa_config_drift`;
@@ -381,6 +422,9 @@ audit-log write. Repeated findings are counted on each check rather than dedupli
 | `config_drift`           | contract wiring differs from the expected project state (§7a)                                                                          | 5 minutes                                              |
 | `storage_degraded`       | MongoDB ping fails                                                                                                                     | 30 seconds, when using MongoDB                         |
 | `kyc_monitoring_hit`     | an accepted Sumsub monitoring decision concerns a projected Allowed wallet, or an Onfido monitor reports changed matches (§4c)         | accepted Sumsub decisions; each Onfido signal delivery |
+| `holder_cap_reached`     | webhook approval refused by the cap (§4d) | each refused approval |
+| `holder_cap_exceeded`    | unexpired, non-system Allowed count exceeds the cap (§4d) | 5 minutes |
+| `sanctions_list_match`   | listed Allowed holder or refused webhook approval (§4c) | load/successful reload; each refused approval |
 
 The platform has no dedicated metrics for indexer lag, RPC errors or stuck nonces. Check the
 Security screen's stale-data warning (`securityStale` on `GET /api/v1/project`) and the

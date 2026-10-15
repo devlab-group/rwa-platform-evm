@@ -161,10 +161,32 @@ validation.
 | `ipfs:`                 | `api_url` (`http://127.0.0.1:5001`), `backup_archive_dir`, `backup_kubo_url`, `replication_threshold` (`1`)                                                                                                                                                                         | For production publication, configure backups and `1 <= replication_threshold <= destination count`.                                                                                                                                                                                          |
 | `security:`             | `kyc_webhook_hmac_secret`, `admin_address`, `jwt_secret`, `jwt_ttl` (`24h`), `idempotency_ttl` (`24h`), `wallet_challenge_ttl` (`15m`), `wallet_session_ttl` (`15m`), `rate_limit_rps` (`50`), `rate_limit_burst` (`100`)                                                           | Admin wallet/JWT and webhook credentials; configured generic webhook and JWT secrets require >=32 bytes in every environment. Empty generic secrets disable that webhook outside production; `rate_limit_rps <= 0` disables the global IP limiter.                                            |
 | `keys:`                 | `provider_mode` (`raw`), `compliance_key`, `keystore_dir`, `keystore_password_file`, `vault_addr`, `vault_token`, `vault_key_prefix` (`rwa-`), `kms_mock_seed`                                                                                                                      | See [KeyProvider](#keyprovider-hot-key-backends); empty `compliance_key` disables writes only in raw mode.                                                                                                                                                                                    |
-| `kyc:`                  | `provider` (`none`), `sumsub.*`, `onfido.*`                                                                                                                                                                                                                                         | `none` uses generic HMAC webhooks; `sumsub`/`onfido` require their credentials. See `config.example.yaml`.                                                                                                                                                                                    |
+| `kyc:`                  | `provider` (`none`), `monitoring_action` (`alert`), `sumsub.*`, `onfido.*`                                                                                                                                                                                                                                         | `none` uses generic HMAC webhooks; `sumsub`/`onfido` require their credentials. See `config.example.yaml`.                                                                                                                                                                                    |
+| `compliance:`           | `max_allowed_wallets` (`0`, no cap), `sanctions_list_file` (empty, off) | Holder cap and sanctions screening on new allows; see below. |
 | `tx:`                   | `coordination_mode` (`in-process`), `lease_ttl` (`30s`)                                                                                                                                                                                                                             | Nonce coordination described under [KeyProvider](#keyprovider-hot-key-backends).                                                                                                                                                                                                              |
 | `alerts:`               | `pending_redemption_sla` (`48h`), `funded_claim_failure_sla` (`24h`)                                                                                                                                                                                                                | See [Observability](#observability).                                                                                                                                                                                                                                                          |
 | `production_overrides:` | `allow_unbounded_request_body`, `allow_disabled_rate_limit`, `allow_unbounded_fees` (all `false`)                                                                                                                                                                                   | Emergency overrides for those controls only.                                                                                                                                                                                                                                                  |
+
+## Holder cap and sanctions screening
+
+The guards default off and check Allowed submissions through admin
+`POST /api/v1/compliance/status` and KYC webhook approvals. Blocked submissions bypass them;
+other `COMPLIANCE_ROLE` holders can still approve wallets on-chain directly.
+
+- `compliance.max_allowed_wallets` limits counted wallets; admin refusals return 409
+  `holder_cap_reached`. Counted-wallet renewals bypass the cap, but still face sanctions
+  screening. The lock is process-local; this is not an on-chain or beneficial-owner limit.
+  See [holder cap](../docs/operator/operator-guide.md#4d-holder-cap) for reservations, metrics
+  and replica limits.
+- `compliance.sanctions_list_file` screens every Allowed submission, including renewals;
+  admin refusals return 409 `sanctioned_address`. Refused webhook approvals for either guard
+  become terminal `Failed` events with alerts. Existing listed holders are reported, not
+  automatically blocked by list screening. See
+  [sanctions screening](../docs/operator/operator-guide.md#4c-sanctions-screening) for file format,
+  startup failures and reload behavior.
+- `kyc.monitoring_action` defaults to `alert`. `block` also queues a Blocked decision for a
+  Sumsub monitoring hit on an unexpired Allowed wallet, subject to outbox replay/freshness
+  checks and reconciliation. Onfido watchlist signals name no wallet and remain alert-only.
 
 ## Production hardening
 
@@ -206,8 +228,11 @@ API. It exposes standard Go metrics and:
 - `rwa_sales_inventory_tokens`: raw Vault inventory divided by 1e18, stored as a float for dashboards.
 - `rwa_redemptions_pending_count`, `rwa_redemptions_pending_oldest_age_seconds` and
   `rwa_redemptions_funded_unclaimed_count`.
+- `rwa_allowed_wallets`: wallets Allowed and unexpired in the investor read model, excluding
+  the vault and redemption escrow.
 - `rwa_alerts_fired_total{kind}`: redemption findings and `storage_degraded`, `config_drift`,
-  `kyc_monitoring_hit`; persistent conditions count again on later checks.
+  `kyc_monitoring_hit`, `holder_cap_reached`, `holder_cap_exceeded`, `sanctions_list_match`;
+  persistent conditions count again on later checks.
 - `rwa_storage_up`: last Mongo ping result (0 before checking or in memory mode).
 - `rwa_config_drift`: last successful drift result, 1 for differences and 0 for a match;
   starts at 0 and retains its value on read failure.

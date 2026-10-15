@@ -271,7 +271,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** @description Admin-only ComplianceRegistry.setStatus submission using the server compliance key; returns the tracked transaction. */
+    /** @description Admin-only ComplianceRegistry.setStatus submission through the server compliance key; returns a tracked transaction. Guard refusals return 409 without submitting: holder_cap_reached for a new wallet over compliance.max_allowed_wallets, or sanctioned_address for any listed wallet, including renewals. Counted-wallet renewals bypass the cap; Blocked submissions bypass both guards. */
     post: operations["setComplianceStatus"];
     delete?: never;
     options?: never;
@@ -1300,6 +1300,7 @@ export interface operations {
           "application/json": components["schemas"]["TxRef"];
         };
       };
+      409: components["responses"]["Error"];
     };
   };
   kycWebhook: {

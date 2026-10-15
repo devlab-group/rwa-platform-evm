@@ -54,6 +54,10 @@ type App struct {
 	Challenges *compliance.ChallengeService
 	Webhooks   *compliance.WebhookService
 	Status     *compliance.StatusService
+	// Guard checks Allowed submissions against cap and sanctions rules; nil disables these checks
+	Guard *compliance.Guard
+	// MonitoringBlock queues a Blocked decision for a monitoring hit on an unexpired Allowed wallet
+	MonitoringBlock bool
 	// KYC is the configured provider; nil disables startKYC and kycWebhook with 501
 	KYC         kyc.Provider
 	Sales       *sales.Service

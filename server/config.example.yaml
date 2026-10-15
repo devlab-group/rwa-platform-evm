@@ -126,6 +126,27 @@ kyc:
     region: "eu"               # eu | us | ca (data residency / API host)
     workflow_id: ""            # Onfido Studio workflow to run
     referrer: ""               # SDK token referrer pattern; default "*://*/*"
+  # alert (default) raises kyc_monitoring_hit for an Allowed wallet. block also queues
+  # a Blocked decision; false positives require renewed approval. Walletless Onfido
+  # watchlist signals remain alert-only.
+  monitoring_action: "alert"
+
+# Guards apply to this server's Allowed submissions; direct COMPLIANCE_ROLE calls bypass them.
+# Refusals: admin API 409; webhook Failed with an alert. Blocked bypasses both guards.
+# Details: docs/operator/operator-guide.md sections 4c and 4d.
+compliance:
+  # Count unexpired Allowed wallets plus recent transaction reservations; exclude configured
+  # Vault/escrow addresses. At the cap, refuse new wallets with holder_cap_reached.
+  # Renewals bypass the cap, but still face sanctions checks. 0 disables; negatives fail config.
+  # Locking is process-local; holder_cap_exceeded reports a read-model count above the cap.
+  max_allowed_wallets: 0
+  # One 0x address per line; case-insensitive, blank/full-line # comments ignored.
+  # Invalid lines reject the file. Initial load errors stop production; development logs them.
+  # Check modification time every 30s. Failed reloads keep the previous list; read/parse errors
+  # require another mtime change to retry. Refuse listed approvals with sanctioned_address.
+  # Listed Allowed holders raise sanctions_list_match; list screening does not block them.
+  # Empty disables screening.
+  sanctions_list_file: ""
 
 tx:
   # in-process needs one process per hot key; mongo-lease shares nonce leases

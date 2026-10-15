@@ -114,6 +114,15 @@ type Config struct {
 	KYCOnfidoWorkflowID   string
 	KYCOnfidoReferrer     string
 
+	// KYCMonitoringAction defaults to alert; block also queues Blocked for monitoring hits on
+	// unexpired Allowed wallets
+	KYCMonitoringAction string
+
+	// MaxAllowedWallets caps counted wallets on Allowed submissions; 0 disables the cap
+	MaxAllowedWallets int
+	// SanctionsListFile contains one sanctioned 0x address per line; empty disables screening
+	SanctionsListFile string
+
 	// MaxRequestBodyBytes caps bodies; non-positive values disable it
 	MaxRequestBodyBytes int64
 
@@ -278,7 +287,13 @@ type fileSchema struct {
 			WorkflowID   string `yaml:"workflow_id"`
 			Referrer     string `yaml:"referrer"`
 		} `yaml:"onfido"`
+		MonitoringAction string `yaml:"monitoring_action"`
 	} `yaml:"kyc"`
+
+	Compliance struct {
+		MaxAllowedWallets *int64 `yaml:"max_allowed_wallets"`
+		SanctionsListFile string `yaml:"sanctions_list_file"`
+	} `yaml:"compliance"`
 
 	Tx struct {
 		CoordinationMode string `yaml:"coordination_mode"`
@@ -397,6 +412,9 @@ func (f fileSchema) toEnvMap() map[string]string {
 	setStr("KYC_ONFIDO_REGION", f.KYC.Onfido.Region)
 	setStr("KYC_ONFIDO_WORKFLOW_ID", f.KYC.Onfido.WorkflowID)
 	setStr("KYC_ONFIDO_REFERRER", f.KYC.Onfido.Referrer)
+	setStr("KYC_MONITORING_ACTION", f.KYC.MonitoringAction)
+	setI64("MAX_ALLOWED_WALLETS", f.Compliance.MaxAllowedWallets)
+	setStr("SANCTIONS_LIST_FILE", f.Compliance.SanctionsListFile)
 
 	setStr("TX_COORDINATION_MODE", f.Tx.CoordinationMode)
 	setStr("TX_LEASE_TTL", f.Tx.LeaseTTL)
@@ -450,6 +468,8 @@ func load(lookup envLookup) (Config, error) {
 		KYCOnfidoRegion:        getString(lookup, "KYC_ONFIDO_REGION", "eu"),
 		KYCOnfidoWorkflowID:    getString(lookup, "KYC_ONFIDO_WORKFLOW_ID", ""),
 		KYCOnfidoReferrer:      getString(lookup, "KYC_ONFIDO_REFERRER", ""),
+		KYCMonitoringAction:    getString(lookup, "KYC_MONITORING_ACTION", "alert"),
+		SanctionsListFile:      getString(lookup, "SANCTIONS_LIST_FILE", ""),
 
 		MetricsAddr: getString(lookup, "METRICS_ADDR", "127.0.0.1:9090"),
 
@@ -549,6 +569,15 @@ func load(lookup envLookup) (Config, error) {
 		cfg.CORSAllowedOrigins = origins
 	}
 
+	maxAllowed, err := getInt64(lookup, "MAX_ALLOWED_WALLETS", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	if maxAllowed < 0 {
+		return Config{}, fmt.Errorf("config: MAX_ALLOWED_WALLETS must not be negative, got %d", maxAllowed)
+	}
+	cfg.MaxAllowedWallets = int(maxAllowed)
+
 	pendingSLA, err := getDuration(lookup, "PENDING_REDEMPTION_SLA", 48*time.Hour)
 	if err != nil {
 		return Config{}, err
@@ -611,6 +640,9 @@ func load(lookup envLookup) (Config, error) {
 
 	if cfg.Environment != EnvDevelopment && cfg.Environment != EnvProduction {
 		return Config{}, fmt.Errorf("config: ENVIRONMENT must be %q or %q, got %q", EnvDevelopment, EnvProduction, cfg.Environment)
+	}
+	if cfg.KYCMonitoringAction != "alert" && cfg.KYCMonitoringAction != "block" {
+		return Config{}, fmt.Errorf("config: KYC_MONITORING_ACTION must be %q or %q, got %q", "alert", "block", cfg.KYCMonitoringAction)
 	}
 	if cfg.PersistenceMode != "mongo" && cfg.PersistenceMode != "memory" {
 		return Config{}, fmt.Errorf("config: PERSISTENCE_MODE must be %q or %q, got %q", "mongo", "memory", cfg.PersistenceMode)

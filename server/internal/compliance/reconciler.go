@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -21,6 +22,14 @@ type WebhookReconciler struct {
 	events repository.KYCEventRepository
 	txs    repository.TransactionRepository
 	status *StatusService
+	guard  *Guard
+	alert  AlertFunc
+}
+
+// SetGuard installs approval checks and an optional refusal alert. Cap/list refusals mark events
+// Failed; read errors remain retryable.
+func (r *WebhookReconciler) SetGuard(g *Guard, alert AlertFunc) {
+	r.guard, r.alert = g, alert
 }
 
 // NewWebhookReconciler accepts nil status, leaving Accepted events unsubmitted; see
@@ -117,6 +126,25 @@ func (r *WebhookReconciler) submit(ctx context.Context, e *models.KYCEvent) erro
 		// this covers a malformed record
 		e.ApplyStatus = models.KYCApplyFailed
 		return r.events.Update(ctx, e)
+	}
+	if e.Outcome == "Allowed" && r.guard != nil {
+		// Keep the local lock until the transaction is linked for subsequent cap checks
+		r.guard.Lock()
+		defer r.guard.Unlock()
+		if err := r.guard.CheckAllow(ctx, e.Address, time.Now()); err != nil {
+			kind := refusalAlert(err)
+			if kind == "" {
+				return err
+			}
+			e.ApplyStatus = models.KYCApplyFailed
+			if uerr := r.events.Update(ctx, e); uerr != nil {
+				return uerr
+			}
+			if r.alert != nil {
+				r.alert(ctx, kind, e.Address, "approval from "+e.Provider+" recorded but not applied: "+err.Error())
+			}
+			return nil
+		}
 	}
 	// Derive the key from (provider, eventId) so a crash after SetStatus but before Update
 	// recovers through TxManager's existing idempotency record

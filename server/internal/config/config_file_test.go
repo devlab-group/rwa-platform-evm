@@ -424,3 +424,33 @@ func TestExampleConfigParses(t *testing.T) {
 		t.Fatalf("config.example.yaml failed to load: %v", err)
 	}
 }
+
+// TestLoadFileComplianceGuards covers the holder cap, sanctions list and monitoring action
+func TestLoadFileComplianceGuards(t *testing.T) {
+	cfg, err := LoadFile(writeConfig(t, "compliance:\n  max_allowed_wallets: 99\n  sanctions_list_file: /etc/rwa/sdn.txt\nkyc:\n  monitoring_action: block\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxAllowedWallets != 99 || cfg.SanctionsListFile != "/etc/rwa/sdn.txt" || cfg.KYCMonitoringAction != "block" {
+		t.Errorf("got %d %q %q", cfg.MaxAllowedWallets, cfg.SanctionsListFile, cfg.KYCMonitoringAction)
+	}
+
+	def, err := LoadFromMap(map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.MaxAllowedWallets != 0 || def.SanctionsListFile != "" || def.KYCMonitoringAction != "alert" {
+		t.Errorf("defaults: %d %q %q", def.MaxAllowedWallets, def.SanctionsListFile, def.KYCMonitoringAction)
+	}
+
+	env, err := LoadFromMap(map[string]string{"MAX_ALLOWED_WALLETS": "5", "KYC_MONITORING_ACTION": "block"})
+	if err != nil || env.MaxAllowedWallets != 5 || env.KYCMonitoringAction != "block" {
+		t.Errorf("env override: %+v %v", env.MaxAllowedWallets, err)
+	}
+
+	for key, val := range map[string]string{"MAX_ALLOWED_WALLETS": "-1", "KYC_MONITORING_ACTION": "freeze"} {
+		if _, err := LoadFromMap(map[string]string{key: val}); err == nil {
+			t.Errorf("%s=%s must be rejected", key, val)
+		}
+	}
+}

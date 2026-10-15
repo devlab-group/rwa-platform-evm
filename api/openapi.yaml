@@ -230,14 +230,17 @@ paths:
       tags: [compliance]
       operationId: setComplianceStatus
       description: >
-        Admin-only ComplianceRegistry.setStatus submission using the server compliance key; returns the
-        tracked transaction.
+        Admin-only ComplianceRegistry.setStatus submission through the server compliance key; returns a
+        tracked transaction. Guard refusals return 409 without submitting: holder_cap_reached for a new
+        wallet over compliance.max_allowed_wallets, or sanctioned_address for any listed wallet, including
+        renewals. Counted-wallet renewals bypass the cap; Blocked submissions bypass both guards.
       parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/SetStatusRequest" } } }
       responses:
         "202": { description: Submitted, content: { application/json: { schema: { $ref: "#/components/schemas/TxRef" } } } }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/compliance/webhook:
     post:
       tags: [compliance]

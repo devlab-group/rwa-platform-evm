@@ -13,6 +13,7 @@ import (
 
 	"github.com/rwa-platform/server/internal/api/dto"
 	"github.com/rwa-platform/server/internal/auth"
+	"github.com/rwa-platform/server/internal/bindings"
 	"github.com/rwa-platform/server/internal/compliance"
 	"github.com/rwa-platform/server/internal/dal/models"
 	"github.com/rwa-platform/server/internal/dal/repository"
@@ -192,6 +193,23 @@ func (app *App) setComplianceStatus(c *gin.Context) {
 		return
 	}
 
+	// Serialize the Allowed check and submission until its operation record is written
+	if status == bindings.ComplianceStatusAllowed && app.Guard != nil {
+		app.Guard.Lock()
+		defer app.Guard.Unlock()
+		if err := app.Guard.CheckAllow(c.Request.Context(), body.Address, time.Now()); err != nil {
+			switch {
+			case errors.Is(err, compliance.ErrHolderCapReached):
+				fail(c, http.StatusConflict, CodeHolderCapReached, "the allowed-wallet cap is reached; no new wallet can be allowed until a slot frees up or the cap is raised")
+			case errors.Is(err, compliance.ErrSanctionedAddress):
+				fail(c, http.StatusConflict, CodeSanctionedAddress, "the address is on the sanctions list and cannot be allowed")
+			default:
+				failInternal(c, err)
+			}
+			return
+		}
+	}
+
 	// Persist intent before broadcast; an audit failure must abort the privileged action
 	actor := caller(c)
 	intentID, err := app.recordAuditIntent(c.Request.Context(), "compliance", actor, "compliance.setStatus", body.Address,
@@ -347,10 +365,32 @@ func (app *App) kycWebhook(c *gin.Context) {
 	// Alert after deduplicated acceptance only when the projected wallet is still Allowed
 	if dec.MonitoringHit != "" {
 		if inv, err := app.Repos.Investors.Get(c.Request.Context(), address); err == nil && investorAllowed(inv, time.Now()) {
-			app.alertKYCMonitoringHit(c.Request.Context(), address, dec.MonitoringHit)
+			detail := dec.MonitoringHit
+			if app.MonitoringBlock {
+				if berr := app.recordMonitoringBlock(c.Request.Context(), body, wp); berr != nil {
+					log.Printf("api: monitoring block not recorded (wallet=%s): %v", address, berr)
+					detail += "; a block could not be recorded, block the wallet manually"
+				} else {
+					detail += "; a Blocked decision was recorded"
+				}
+			}
+			app.alertKYCMonitoringHit(c.Request.Context(), address, detail)
 		}
 	}
 	c.Status(http.StatusAccepted)
+}
+
+// recordMonitoringBlock queues a Blocked decision without ownership proof. It preserves provider
+// and occurredAt, appending an event-ID suffix to sort after the original hit on a timestamp tie.
+// Later decisions can supersede it.
+func (app *App) recordMonitoringBlock(ctx context.Context, body []byte, hit compliance.WebhookPayload) error {
+	const suffix = ":monitoring-block"
+	block := hit
+	block.EventID += suffix
+	block.Status = "Blocked"
+	block.ValidUntil = 0
+	_, err := app.Webhooks.ProcessDecision(ctx, append(append([]byte{}, body...), suffix...), block, true)
+	return err
 }
 
 // investorAllowed checks Allowed status and expiry in the read model
@@ -361,9 +401,14 @@ func investorAllowed(inv *models.Investor, now time.Time) bool {
 // alertKYCMonitoringHit logs and counts a monitoring signal and attempts an audit append;
 // address is empty for walletless deliveries
 func (app *App) alertKYCMonitoringHit(ctx context.Context, address, detail string) {
-	log.Printf("api: ALERT [kyc_monitoring_hit] wallet=%q: %s", address, detail)
-	metrics.AlertsFiredTotal.WithLabelValues("kyc_monitoring_hit").Inc()
-	app.recordAudit(ctx, "alerts", "kyc-webhook", "alerts.kyc_monitoring_hit", address, map[string]any{"detail": detail})
+	app.RaiseAlert(ctx, "kyc_monitoring_hit", "kyc-webhook", address, detail)
+}
+
+// RaiseAlert logs and counts kind and attempts an alerts audit append; address may be empty
+func (app *App) RaiseAlert(ctx context.Context, kind, actor, address, detail string) {
+	log.Printf("api: ALERT [%s] wallet=%q: %s", kind, address, detail)
+	metrics.AlertsFiredTotal.WithLabelValues(kind).Inc()
+	app.recordAudit(ctx, "alerts", actor, "alerts."+kind, address, map[string]any{"detail": detail})
 }
 
 // caller reuses the authenticated principal for audit attribution, matching idempotency scope

@@ -43,6 +43,10 @@ var (
 		Name: "rwa_redemptions_funded_unclaimed_count", Help: "Number of redemption requests currently Funded but not yet Completed (claimed).",
 	})
 
+	AllowedWallets = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "rwa_allowed_wallets", Help: "Unexpired Allowed wallets in the investor read model, excluding Vault and redemption escrow.",
+	})
+
 	AlertsFiredTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "rwa_alerts_fired_total", Help: "Alerts raised, by kind. A condition that persists is counted again on every check.",
 	}, []string{"kind"})

@@ -373,6 +373,16 @@ func buildApp(cfg config.Config, addrs models.Addresses, auditor string, repos *
 		TrustedProxies:      cfg.TrustedProxies,
 	}
 	app.Audit = auditlog.New(repos.AuditLogs)
+	app.MonitoringBlock = cfg.KYCMonitoringAction == "block"
+	sanctions := compliance.NewSanctionsList(cfg.SanctionsListFile)
+	if _, err := sanctions.Reload(); err != nil {
+		// Initial list-load errors stop production; development logs them
+		if cfg.Environment == config.EnvProduction {
+			log.Fatalf("platform: %v", err)
+		}
+		log.Printf("platform: %v; no sanctions screening until the file is fixed", err)
+	}
+	app.Guard = compliance.NewGuard(repos, cfg.MaxAllowedWallets, []string{addrs.Vault, addrs.RedemptionEscrow}, sanctions)
 
 	if chainClient == nil {
 		return app, providers // chain-dependent services remain unavailable
@@ -604,6 +614,9 @@ func startBackgroundLoops(ctx context.Context, cfg config.Config, addrs models.A
 	// Relay queued webhook decisions now and on ticks; Accepted decisions need app.Status
 	if app.Webhooks != nil {
 		webhookReconciler := compliance.NewWebhookReconciler(repos.KYCEvents, repos.Transactions, app.Status)
+		webhookReconciler.SetGuard(app.Guard, func(ctx context.Context, kind, address, detail string) {
+			app.RaiseAlert(ctx, kind, "kyc-reconciler", address, detail)
+		})
 		if err := webhookReconciler.Reconcile(ctx); err != nil {
 			log.Printf("platform: webhook reconcile error: %v", err)
 		}
@@ -618,6 +631,10 @@ func startBackgroundLoops(ctx context.Context, cfg config.Config, addrs models.A
 	if app.Project != nil && addrs.Token != "" {
 		go runTicker(ctx, 5*time.Minute, func() { checkConfigDrift(ctx, repos, chainClient, app) })
 	}
+
+	// Screen Allowed holders at startup and after successful list reloads
+	reportSanctionedHolders(ctx, app)
+	go runTicker(ctx, 30*time.Second, func() { rescreenOnSanctionsReload(ctx, app) })
 
 	go runTicker(ctx, 30*time.Second, func() { refreshBusinessGauges(ctx, repos, app) })
 	go runTicker(ctx, 5*time.Minute, func() { evaluateAlerts(ctx, cfg, repos, app) })
@@ -646,6 +663,9 @@ func checkStorageHealth(ctx context.Context, mongoClient *mongodriver.Client, ap
 // refreshBusinessGauges updates metrics from repositories and chain reads;
 // a failed read retains the previous value
 func refreshBusinessGauges(ctx context.Context, repos *repository.Repositories, app *api.App) {
+	if allowed, err := app.Guard.AllowedWallets(ctx, time.Now()); err == nil {
+		metrics.AllowedWallets.Set(float64(len(allowed)))
+	}
 	if app.Sales != nil {
 		if inv, err := app.Sales.GetInventory(ctx); err == nil {
 			if tokens, ok := new(big.Float).SetString(inv.Inventory); ok {
@@ -681,6 +701,16 @@ func refreshBusinessGauges(ctx context.Context, repos *repository.Repositories, 
 
 // evaluateAlerts logs and counts redemption findings and attempts an audit append
 func evaluateAlerts(ctx context.Context, cfg config.Config, repos *repository.Repositories, app *api.App) {
+	// Another COMPLIANCE_ROLE holder can allow wallets past the cap directly
+	if limit := app.Guard.Cap(); limit > 0 {
+		if allowed, err := app.Guard.AllowedWallets(ctx, time.Now()); err != nil {
+			log.Printf("platform: alert evaluation: listing allowed wallets: %v", err)
+		} else if len(allowed) > limit {
+			app.RaiseAlert(ctx, compliance.AlertHolderCapExceeded, "system", "",
+				fmt.Sprintf("%d wallets are Allowed, above the cap of %d", len(allowed), limit))
+		}
+	}
+
 	requests, err := repos.RedemptionRequests.List(ctx, "")
 	if err != nil {
 		log.Printf("platform: alert evaluation: listing redemption requests: %v", err)
@@ -698,6 +728,29 @@ func evaluateAlerts(ctx context.Context, cfg config.Config, repos *repository.Re
 				"message": a.Message, "since": a.Since, "ageSeconds": a.Age.Seconds(),
 			})
 		}
+	}
+}
+
+// rescreenOnSanctionsReload reports listed Allowed holders after a successful file reload
+func rescreenOnSanctionsReload(ctx context.Context, app *api.App) {
+	changed, err := app.Guard.ReloadSanctions()
+	if err != nil {
+		log.Printf("platform: %v", err)
+	}
+	if changed {
+		reportSanctionedHolders(ctx, app)
+	}
+}
+
+// reportSanctionedHolders alerts on listed, unexpired Allowed wallets, excluding system addresses
+func reportSanctionedHolders(ctx context.Context, app *api.App) {
+	listed, err := app.Guard.SanctionedAllowed(ctx, time.Now())
+	if err != nil {
+		log.Printf("platform: sanctions screening: listing allowed wallets: %v", err)
+		return
+	}
+	for _, a := range listed {
+		app.RaiseAlert(ctx, compliance.AlertSanctionsMatch, "system", a, "Allowed wallet is on the sanctions list; review and block it if confirmed")
 	}
 }
 
