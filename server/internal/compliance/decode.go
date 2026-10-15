@@ -6,7 +6,7 @@ import (
 	"github.com/rwa-platform/server/internal/bindings"
 )
 
-// DecodeLog is an indexer.EventDecoder for ComplianceRegistry logs.
+// DecodeLog is an indexer.EventDecoder for ComplianceRegistry logs
 func DecodeLog(log types.Log) (string, map[string]any, error) {
 	registry := bindings.NewComplianceRegistry()
 	if len(log.Topics) == 0 {

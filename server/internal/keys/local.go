@@ -15,11 +15,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// localKeystoreProvider decrypts a password-encrypted go-ethereum keystore
-// JSON file (the same format signer/internal/keystore reads, and what
-// `cast wallet import` produces) once at Load, and again on Reload — the
-// rotation story for this backend is "replace the file + password on
-// disk, then call Reload (or restart)."
+// localKeystoreProvider decrypts go-ethereum JSON at construction/Reload. Rotate the
+// keystore and password files, then Reload or restart.
 type localKeystoreProvider struct {
 	path         string
 	passwordFile string
@@ -56,8 +53,7 @@ func (p *localKeystoreProvider) load() error {
 
 	decrypted, err := keystore.DecryptKey(keyJSON, password)
 	if err != nil {
-		// go-ethereum's error text does not include the password, so this
-		// is safe to surface, but never wrap/log the password itself.
+		// The error is safe to surface; never include the password itself
 		return fmt.Errorf("keys: local-keystore: decrypting %s: %w", p.path, err)
 	}
 
@@ -84,8 +80,7 @@ func (p *localKeystoreProvider) Reload(context.Context) error {
 	return p.load()
 }
 
-// Close zeroes the decrypted in-memory private key. See Provider.Close's
-// doc comment.
+// Close zeroes the decrypted private key
 func (p *localKeystoreProvider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

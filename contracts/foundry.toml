@@ -17,6 +17,9 @@ remappings = [
     "forge-std/=lib/forge-std/src/",
 ]
 
+[fuzz]
+seed = "0x1"
+
 [fmt]
 line_length = 120
 tab_width = 4

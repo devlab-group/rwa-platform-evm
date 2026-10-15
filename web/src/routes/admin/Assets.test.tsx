@@ -3,13 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Assets } from "./Assets";
 import { buildSignerPolicy } from "../../lib/signerPolicy";
 import { api, ApiError } from "../../lib/client";
-import { sendMint, waitForTxReceipt } from "../../lib/wallet";
+import { sendBurn, sendMint, waitForTxReceipt } from "../../lib/wallet";
+import { BURN, signedFor } from "../../test/burnFixtures";
 import { installFakeWallet, renderWithWallet } from "../../test/walletHarness";
 
-// The mint is now broadcast from the admin's wallet (SupplyController.mint),
-// not relayed by the server. The signed-result.json supplies only the auditor
-// signature (bound into the on-chain MintAttestation) + auditor address (cross-
-// checked); every other attestation field comes from the record and project.
+// Mint uses the admin wallet, not server relay. Upload supplies the separate auditor
+// signature/address; the page checks the address and builds attestation fields from record/project.
 vi.mock("../../lib/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/client")>();
   return {
@@ -20,17 +19,19 @@ vi.mock("../../lib/client", async (importOriginal) => {
       getProject: vi.fn(),
       getProfile: vi.fn(),
       createRecord: vi.fn(),
+      listBurns: vi.fn().mockResolvedValue({ items: [] }),
+      createBurn: vi.fn(),
     },
   };
 });
 
-// sendMint/waitForTxReceipt are spied so the mint test can assert the exact
-// broadcast (chain, supplyController, MintAttestation, signature) without a chain.
+// Spy on mint/receipt to check chain, controller, attestation and signature without a chain
 vi.mock("../../lib/wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/wallet")>();
   return {
     ...actual,
     sendMint: vi.fn().mockResolvedValue("0xminthash"),
+    sendBurn: vi.fn().mockResolvedValue("0xburnhash"),
     waitForTxReceipt: vi.fn().mockResolvedValue(undefined),
   };
 });
@@ -62,8 +63,7 @@ const PROJECT = {
 
 const SIGNATURE = `0x${"ab".repeat(65)}`;
 
-// jsdom's File has no .text(); the form reads the upload via file.text(), so a
-// File-like object with a text() method is enough to drive handleFile.
+// Use a File-like text() stub for jsdom upload handling
 function signedResultFile(auditor: string = AUDITOR): File {
   const content = JSON.stringify({
     formatVersion: "1.0",
@@ -88,7 +88,7 @@ describe("Assets signature upload → wallet mint", () => {
       .mockReset()
       .mockResolvedValue({ items: [RECORD] });
     vi.mocked(api.getProject).mockReset().mockResolvedValue(PROJECT);
-    // No stored profile → empty metadata skeleton; irrelevant to the mint path.
+    // No stored profile; metadata skeleton is irrelevant to this mint test
     vi.mocked(api.getProfile)
       .mockReset()
       .mockRejectedValue(
@@ -105,7 +105,7 @@ describe("Assets signature upload → wallet mint", () => {
   it("assembles the MintAttestation from the record + project and broadcasts SupplyController.mint", async () => {
     renderWithWallet(<Assets />, { connected: true });
 
-    // Wait for the record to load (so the form can find it by ID).
+    // Wait for the record to load before selecting its ID
     await screen.findByText("record-001");
 
     fireEvent.change(
@@ -117,7 +117,7 @@ describe("Assets signature upload → wallet mint", () => {
     fireEvent.change(screen.getByLabelText("Signed result"), {
       target: { files: [signedResultFile()] },
     });
-    // The parsed-file summary confirms the file was read before we mint.
+    // Wait for the parsed-file summary before minting
     await screen.findByText(AUDITOR);
 
     fireEvent.click(
@@ -187,7 +187,7 @@ describe("Assets signature upload → wallet mint", () => {
       screen.getByRole("button", { name: "Upload signature & mint" }),
     );
 
-    await screen.findByText(/no loaded record matches that id/i);
+    await screen.findByText(/no loaded record matches this id/i);
     expect(sendMint).not.toHaveBeenCalled();
   });
 });
@@ -198,7 +198,7 @@ describe("Assets signer policy (offline signing trust root)", () => {
   it("buildSignerPolicy emits exactly the six keys, chainId as a decimal string, projectId as the UUID", () => {
     const policy = buildSignerPolicy(PROJECT, POLICY_UUID);
     expect(policy).not.toBeNull();
-    // Exactly the six keys the signer's DisallowUnknownFields loader accepts.
+    // The six required policy keys, and nothing else
     expect(Object.keys(policy!).sort()).toEqual([
       "auditor",
       "chainId",
@@ -207,10 +207,10 @@ describe("Assets signer policy (offline signing trust root)", () => {
       "projectId",
       "vault",
     ]);
-    // chainId is a decimal STRING, not the API's number.
+    // chainId is a decimal string, not the API's number
     expect(policy!.chainId).toBe("31337");
     expect(typeof policy!.chainId).toBe("string");
-    // projectId is the UUID string, NOT the bytes32 profileDigest/hash.
+    // projectId is the UUID string, not the bytes32 profile digest
     expect(policy!.projectId).toBe(POLICY_UUID);
     expect(policy!.projectId).not.toBe(PROJECT.profileDigest);
     // Every other value maps straight off the project.
@@ -223,7 +223,7 @@ describe("Assets signer policy (offline signing trust root)", () => {
   it("returns null when the project isn't deployed or the UUID is missing", () => {
     expect(buildSignerPolicy(undefined, POLICY_UUID)).toBeNull();
     expect(buildSignerPolicy(PROJECT, undefined)).toBeNull();
-    // Deployed addresses absent (pre-deploy) → no partial file.
+    // No policy before deployment addresses exist
     expect(
       buildSignerPolicy({ ...PROJECT, addresses: {} }, POLICY_UUID),
     ).toBeNull();
@@ -277,11 +277,145 @@ describe("Assets signer policy (offline signing trust root)", () => {
 
     renderWithWallet(<Assets />);
 
-    await screen.findByText(
-      /Deploy the project and create the asset profile first/i,
-    );
+    await screen.findByText(/Create the Asset Profile and deploy first/i);
     expect(
       screen.queryByRole("button", { name: "Download policy.json" }),
     ).toBeNull();
+  });
+});
+
+describe("Assets burn flow", () => {
+  let wallet: ReturnType<typeof installFakeWallet>;
+  const MINTED = { ...RECORD, status: "Minted" as const };
+  const REMAINING = "1000000000000000000";
+  const pendingBurn = { ...BURN, remaining: REMAINING };
+
+  function burnFile(content: unknown): File {
+    return {
+      name: "signed-result.json",
+      text: () => Promise.resolve(JSON.stringify(content)),
+    } as unknown as File;
+  }
+
+  beforeEach(() => {
+    wallet = installFakeWallet({ account: ADMIN, chainId: 31337 });
+    vi.mocked(api.listRecords)
+      .mockReset()
+      .mockResolvedValue({ items: [MINTED] });
+    vi.mocked(api.getProject).mockReset().mockResolvedValue(PROJECT);
+    vi.mocked(api.getProfile)
+      .mockReset()
+      .mockRejectedValue(
+        new ApiError(404, { code: "not_found", message: "no profile" }),
+      );
+    vi.mocked(api.listBurns)
+      .mockReset()
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValue({ items: [pendingBurn] });
+    vi.mocked(api.createBurn).mockReset().mockResolvedValue(pendingBurn);
+    vi.mocked(sendBurn).mockClear().mockResolvedValue("0xburnhash");
+    vi.mocked(waitForTxReceipt).mockClear().mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    wallet.uninstall();
+  });
+
+  async function createBurn() {
+    renderWithWallet(<Assets />, { connected: true });
+    await screen.findByText("record-001");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Burn record-001" }),
+    );
+    fireEvent.change(await screen.findByLabelText(/Burn amount/), {
+      target: { value: "0.25" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create burn" }));
+  }
+
+  it("creates a Pending burn in minimal units and sends it after confirmation", async () => {
+    await createBurn();
+    await waitFor(() => expect(api.createBurn).toHaveBeenCalled());
+    const [body, key] = vi.mocked(api.createBurn).mock.calls[0];
+    expect(body).toEqual({
+      recordId: "record-001",
+      amount: "250000000000000000",
+      proofs: [],
+    });
+    expect(key).toBeTruthy();
+
+    // Reload with the Pending burn
+    expect(await screen.findByText("Pending")).toBeInTheDocument();
+    fireEvent.change(
+      await screen.findByLabelText(/Upload signed result for burn 11111111/),
+      { target: { files: [burnFile(signedFor(BURN))] } },
+    );
+
+    // Wait for confirmation before sending
+    await screen.findByText("Confirm burn");
+    expect(screen.getByText(BURN.operationId!)).toBeInTheDocument();
+    expect(sendBurn).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm and burn" }));
+
+    await waitFor(() => expect(sendBurn).toHaveBeenCalled());
+    const [chainId, from, controller, attestation, signature] =
+      vi.mocked(sendBurn).mock.calls[0];
+    expect(chainId).toBe(31337);
+    expect(from).toBe(ADMIN);
+    expect(controller).toBe(SUPPLY_CONTROLLER);
+    expect(signature).toBe(SIGNATURE);
+    expect(attestation).toEqual({
+      auditor: AUDITOR,
+      profileDigest: PROJECT.profileDigest,
+      operationId: BURN.operationId,
+      metadataDigest: BURN.metadataDigest,
+      amount: 250000000000000000n,
+      nonce: 9n,
+      validUntil: 4102444800n,
+      vault: VAULT,
+    });
+    await screen.findByText(/Burn broadcast/);
+  });
+
+  it("rejects a digest for another amount before calling the wallet", async () => {
+    await createBurn();
+    fireEvent.change(
+      await screen.findByLabelText(/Upload signed result for burn 11111111/),
+      {
+        target: {
+          files: [burnFile(signedFor({ ...BURN, amount: "1" }))],
+        },
+      },
+    );
+    await screen.findByText(/different burn/);
+    expect(screen.queryByText("Confirm burn")).not.toBeInTheDocument();
+    expect(sendBurn).not.toHaveBeenCalled();
+  });
+
+  it("shows a server rejection from createBurn", async () => {
+    vi.mocked(api.createBurn).mockRejectedValue(
+      new ApiError(409, {
+        code: "conflict",
+        message: "amount exceeds remaining",
+      }),
+    );
+    await createBurn();
+    await screen.findByText(/amount exceeds remaining/);
+  });
+
+  it("rejects amounts above remaining before calling the server", async () => {
+    vi.mocked(api.listBurns)
+      .mockReset()
+      .mockResolvedValue({ items: [pendingBurn] });
+    renderWithWallet(<Assets />, { connected: true });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Burn record-001" }),
+    );
+    fireEvent.change(await screen.findByLabelText(/Burn amount/), {
+      target: { value: "1.5" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create burn" }));
+    await screen.findByText(/left to burn/);
+    expect(api.createBurn).not.toHaveBeenCalled();
   });
 });

@@ -55,14 +55,11 @@ const factoryABIJSON = `[
     {"name":"version","type":"string","indexed":false}]}
 ]`
 
-// Factory encodes calldata / decodes events for IRWAFactory, plus the
-// concrete RWAFactory contract's public immutable getters for its 4
-// deployment-helper addresses — those aren't part of the
-// frozen IRWAFactory interface, so this is the concrete-contract ABI, same
-// as other "concrete getter" additions elsewhere in this package.
+// Factory binds IRWAFactory plus concrete RWAFactory's four deployer-address getters,
+// which are outside the interface
 type Factory struct{ ABI abi.ABI }
 
-// NewFactory parses the RWAFactory ABI once.
+// NewFactory parses the RWAFactory ABI
 func NewFactory() Factory { return Factory{ABI: mustABI(factoryABIJSON)} }
 
 // ProjectConfig mirrors IRWAFactory.ProjectConfig.
@@ -101,15 +98,11 @@ func (f Factory) PackDeploy(cfg ProjectConfig) ([]byte, error) {
 	return f.ABI.Pack("deploy", cfg)
 }
 
-// UnpackDeployInput decodes the ProjectConfig from a mined RWAFactory.deploy
-// transaction's INPUT calldata. The server observes deployments broadcast from
-// the admin's wallet (it no longer submits them itself), so the intended
-// role/treasury/auditor/price configuration — none of which appears in the
-// ProjectDeployed event — is recovered here from the exact calldata the admin
-// signed, and cross-checked against on-chain state during verification. The
-// leading 4 bytes MUST be RWAFactory.deploy's selector, so calldata for any
-// other function (e.g. a deploy wrapped in an unrecognized call) is rejected
-// rather than mis-decoded.
+// UnpackDeployInput decodes ProjectConfig from RWAFactory.deploy calldata, requiring
+// its four-byte selector and rejecting wrapped or other calls. The admin wallet
+// broadcasts deployment; the server observes it and verifies the calldata's role
+// holders, treasury, auditor and prices against chain state because ProjectDeployed
+// omits them.
 func (f Factory) UnpackDeployInput(calldata []byte) (ProjectConfig, error) {
 	deploy := f.ABI.Methods["deploy"]
 	if len(calldata) < 4 {

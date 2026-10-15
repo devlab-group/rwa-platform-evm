@@ -21,18 +21,17 @@ import (
 	"github.com/rwa-platform/server/internal/eip712"
 )
 
-// ipfsPinner is the subset of internal/ipfs.Client this package needs,
-// declared locally to avoid an import-cycle risk and to keep the workflow
-// testable with a trivial stub.
+// ipfsPinner is the part of ipfs.Client that RecordService uses, declared here
+// so tests can stub it
 type ipfsPinner interface {
 	AddRaw(ctx context.Context, data []byte) (string, error)
 }
 
-// attestationValidUntil bounds how long a mint attestation remains signable
-// after package creation — no more than 30 days.
+// attestationValidUntilWindow is how long after creation or reissue a record's
+// mint attestation stays valid, 30 days
 const attestationValidUntilWindow = 30 * 24 * time.Hour
 
-// CreateRecordRequest mirrors api Schemas.CreateRecordRequest.
+// CreateRecordRequest mirrors Schemas.CreateRecordRequest in api/openapi.yaml
 type CreateRecordRequest struct {
 	RecordID string
 	Asset    json.RawMessage
@@ -40,11 +39,9 @@ type CreateRecordRequest struct {
 	Proofs   []ProofRecord
 }
 
-// RecordService creates and packages asset records.
-// The auditor-signed mint is no longer relayed by the server — it is broadcast
-// from the admin's wallet — so this service holds no relayer hot key; it only
-// builds the .rwa evidence package and projects the on-chain Minted event onto
-// record status (ReconcileMinted).
+// RecordService creates records and .rwa packages, and projects Minted and
+// AuditorChanged events onto record status and auditor address. It holds no signing
+// key; the admin wallet broadcasts auditor-signed mints.
 type RecordService struct {
 	records        repository.AssetRecordRepository
 	packages       repository.AuditPackageRepository
@@ -55,28 +52,17 @@ type RecordService struct {
 	vaultAddr      common.Address
 	eip712Domain   eip712.Domain
 
-	// auditorMu guards auditor: it is set at construction from whatever was
-	// known then, but that value can be empty (factory activation didn't
-	// source it from the deployed project) or stale (an on-chain auditor
-	// rotation via SupplyController.setAuditor, performed outside this server,
-	// otherwise never reaches a running process). SetAuditor/ReconcileAuditor/
-	// ReconcileAuditorLive all update it after construction, concurrently with
-	// BuildPackage/RelaySignedResult reading it — hence the lock rather than a
-	// plain field.
+	// auditorMu guards auditor, which SetAuditor, ReconcileAuditor and
+	// ReconcileAuditorLive change after construction while BuildPackage reads it
 	auditorMu sync.RWMutex
 	auditor   common.Address
-	// baselineAuditor is the constructor's auditor value, held separately from
-	// auditor and NEVER mutated after construction, so mutable authorities can
-	// be reconciled from live contract calls or from this persisted deployment
-	// baseline plus surviving events. ReconcileAuditor falls back to this when
-	// no surviving AuditorChanged event exists (the rotation that set the
-	// current auditor was itself rolled back by a reorg), rather than leaving
-	// auditor stuck at an orphaned value with nothing left to restore it — see
-	// ReconcileAuditor's doc comment.
+	// baselineAuditor is the auditor passed to NewRecordService and is never
+	// changed. ReconcileAuditor restores it when no AuditorChanged event remains.
 	baselineAuditor common.Address
 }
 
-// NewRecordService constructs a RecordService.
+// NewRecordService returns a RecordService whose auditor and baseline auditor
+// are both auditor
 func NewRecordService(
 	records repository.AssetRecordRepository, packages repository.AuditPackageRepository, attestations repository.AttestationRepository,
 	ipfsClient ipfsPinner, controllerAddr, vaultAddr common.Address,
@@ -89,24 +75,24 @@ func NewRecordService(
 	}
 }
 
-// SetAuditor updates the auditor address BuildPackage/RelaySignedResult use
-// for every subsequent call. Safe to call concurrently with those.
+// SetAuditor sets the auditor address that BuildPackage uses from then on. It is
+// safe to call concurrently with BuildPackage.
 func (s *RecordService) SetAuditor(addr common.Address) {
 	s.auditorMu.Lock()
 	defer s.auditorMu.Unlock()
 	s.auditor = addr
 }
 
-// currentAuditor returns the auditor address in effect right now.
+// currentAuditor returns the live auditor address
 func (s *RecordService) currentAuditor() common.Address {
 	s.auditorMu.RLock()
 	defer s.auditorMu.RUnlock()
 	return s.auditor
 }
 
-// CreateRecord validates req against profile, canonicalizes+pins the
-// metadata envelope, and persists a Pending asset record with a freshly
-// generated nonce/recordKey/validUntil ready for package building.
+// CreateRecord validates req's metadata against profile, then stores a Pending record
+// with a random nonce, recordKey and 30-day validUntil before optional IPFS
+// publication. A duplicate recordId returns repository.ErrAlreadyExists.
 func (s *RecordService) CreateRecord(ctx context.Context, profile *Profile, projectID string, req CreateRecordRequest) (*models.AssetRecord, error) {
 	proofs := req.Proofs
 	if proofs == nil {
@@ -154,57 +140,47 @@ func (s *RecordService) CreateRecord(ctx context.Context, profile *Profile, proj
 		RecordKey: recordKey.Hex(), Nonce: nonce.String(), ValidUntil: now.Add(attestationValidUntilWindow).Unix(),
 		CreatedAt: now, UpdatedAt: now,
 	}
-	// Reserve the immutable, create-once asset record BEFORE any external
-	// publication. A duplicate create for an existing RecordID fails here
-	// (ErrAlreadyExists) and never reaches Publish, so it can no longer
-	// overwrite the durable-publication row's CID out from under the original
-	// signed record. The record binds RecordID -> CID immutably, so
-	// every subsequent publish for this id carries the same CID (which the
-	// replication layer additionally enforces — see ipfs.ErrPublicationCIDConflict).
+	// Reserve before Publish to reject duplicate RecordIDs. The replication layer also
+	// rejects changed CIDs; see ipfs.ErrPublicationCIDConflict.
 	if err := s.records.Create(ctx, record); err != nil {
 		return nil, err
 	}
 
-	if s.ipfs != nil {
-		// Prefer Publish (keyed by this record's own RecordID, a
-		// meaningful lookup key) over the bare AddRaw(ctx,data) shape when
-		// the configured client supports it (*ipfs.ReplicationManager
-		// does; a plain Client/FakeClient does not). The mint gate looks up
-		// durable-publication status by RecordID, so this is what makes that
-		// lookup key exist in the first place.
-		if p, ok := s.ipfs.(interface {
-			Publish(ctx context.Context, id string, data []byte) (string, error)
-		}); ok {
-			if _, err := p.Publish(ctx, req.RecordID, meta.Canonical); err != nil {
-				return nil, fmt.Errorf("assets: pin metadata: %w", err)
-			}
-		} else if _, err := s.ipfs.AddRaw(ctx, meta.Canonical); err != nil {
-			return nil, fmt.Errorf("assets: pin metadata: %w", err)
-		}
+	if err := s.publish(ctx, req.RecordID, meta.Canonical); err != nil {
+		return nil, err
 	}
 	return record, nil
 }
 
-// ErrRecordNotFound is returned by ReissueRecord when no record exists for
-// the given id, so the handler can map it to 404 rather than a generic 500.
+// publish sends canonical metadata to IPFS when configured, keyed by id if supported
+// (ReplicationManager, but not a plain Client)
+func (s *RecordService) publish(ctx context.Context, id string, canonical []byte) error {
+	if s.ipfs == nil {
+		return nil
+	}
+	if p, ok := s.ipfs.(interface {
+		Publish(ctx context.Context, id string, data []byte) (string, error)
+	}); ok {
+		if _, err := p.Publish(ctx, id, canonical); err != nil {
+			return fmt.Errorf("assets: pin metadata: %w", err)
+		}
+	} else if _, err := s.ipfs.AddRaw(ctx, canonical); err != nil {
+		return fmt.Errorf("assets: pin metadata: %w", err)
+	}
+	return nil
+}
+
+// ErrRecordNotFound is returned by ReissueRecord when no record has the given id
 var ErrRecordNotFound = errors.New("assets: record not found")
 
-// ErrRecordNotReissuable is returned by ReissueRecord for a record that is
-// not in Pending state. Reissue is audited recovery for a record whose
-// attestation window lapsed BEFORE it was minted; once a record is Signed or
-// Minted, rolling its nonce could strand or double-count a real on-chain mint,
-// and Rejected/Draft records were never eligible to mint in the first place
-// (see api/openapi.yaml reissueRecord).
+// ErrRecordNotReissuable rejects non-Pending reissues. Changing Signed or Minted nonces
+// could strand or double-count a mint; Draft and Rejected records cannot mint.
 var ErrRecordNotReissuable = errors.New("assets: record is not Pending; only a Pending record may be reissued")
 
-// ReissueRecord assigns a fresh nonce and validUntil to an existing Pending
-// record WITHOUT changing its immutable identity (recordId, metadata,
-// digests, recordKey, amount, unit all unchanged), so a record whose
-// attestation window lapsed before it was signed/relayed can be re-attested
-// without violating record-ID uniqueness. Any previously built
-// .rwa package or auditor signature was bound to the OLD nonce and no longer
-// matches; the operator rebuilds the package and the auditor re-signs after
-// this. Admin-only and idempotency-keyed at the HTTP layer.
+// ReissueRecord refreshes a Pending record's nonce and validUntil, allowing recovery
+// after expiry. recordId, metadata, digests, recordKey, amount and unit stay unchanged.
+// Earlier packages and signatures contain the old nonce, so rebuild and re-sign to
+// match the updated record.
 func (s *RecordService) ReissueRecord(ctx context.Context, recordID string) (*models.AssetRecord, error) {
 	record, err := s.records.Get(ctx, recordID)
 	if err != nil {
@@ -226,9 +202,8 @@ func (s *RecordService) ReissueRecord(ctx context.Context, recordID string) (*mo
 	record.Nonce = nonce.String()
 	record.ValidUntil = time.Now().UTC().Add(attestationValidUntilWindow).Unix()
 	record.UpdatedAt = time.Now().UTC()
-	// Conditional on the version read above, so two concurrent reissues can't
-	// both roll the nonce — the loser's conditional update simply fails
-	// instead of clobbering.
+	// conditional on the version read above, so of two concurrent reissues only
+	// one succeeds
 	ok, err := s.records.UpdateConditional(ctx, record, expectedVersion)
 	if err != nil {
 		return nil, err
@@ -240,9 +215,8 @@ func (s *RecordService) ReissueRecord(ctx context.Context, recordID string) (*mo
 	return record, nil
 }
 
-// ErrRecordConcurrentlyModified is returned when a version-conditional record
-// transition (reissue or relay) lost a race to a concurrent one. The caller
-// should re-read the record and decide again rather than blindly retry.
+// ErrRecordConcurrentlyModified signals a lost version-conditional update. Re-read the
+// record before deciding how to proceed.
 var ErrRecordConcurrentlyModified = errors.New("assets: record was concurrently modified; re-read and retry")
 
 func toDomainProofs(proofs []ProofRecord) []models.Proof {
@@ -261,11 +235,8 @@ func randomUint256() (*big.Int, error) {
 	return new(big.Int).SetBytes(b), nil
 }
 
-// packageFields is everything auditpkg.BuildPackage's inputs are derived
-// from — shared by the live (Pending) and frozen (Signed/Minted)
-// reconstruction paths in BuildPackage below, so both build the exact same
-// way from whichever source (live record state, or a frozen
-// models.AuditPackage) supplied them.
+// packageFields holds the values a package and its MintAttestation are built
+// from
 type packageFields struct {
 	auditor        common.Address
 	profileDigest  [32]byte
@@ -277,10 +248,8 @@ type packageFields struct {
 	vault          common.Address
 }
 
-// buildFromFields runs auditpkg.BuildPackage for f, returning the ZIP
-// bytes, its SHA-256, and the hex-encoded EIP-712 typed-data digest it
-// embeds (retained so the frozen path can persist it without a second
-// computation elsewhere).
+// buildFromFields builds the package for f and returns the ZIP bytes, their
+// SHA-256, and the hex EIP-712 digest of the MintAttestation
 func (s *RecordService) buildFromFields(recordID string, f packageFields, profileRaw, metadataRaw []byte) (zipBytes []byte, packageSHA256, typedDataDigestHex string, err error) {
 	attestation := eip712.MintAttestation{
 		Auditor: f.auditor, ProfileDigest: f.profileDigest, RecordKey: f.recordKey, MetadataDigest: f.metadataDigest,
@@ -296,9 +265,8 @@ func (s *RecordService) buildFromFields(recordID string, f packageFields, profil
 	return zipBytes, packageSHA256, "0x" + hex.EncodeToString(digest[:]), nil
 }
 
-// liveFieldsFor derives packageFields from record's CURRENT (possibly
-// reissued) nonce/validUntil and the server's CURRENT auditor — only valid
-// while record is still Pending; see BuildPackage's doc comment.
+// liveFieldsFor takes packageFields from record's stored fields, including its
+// current nonce and validUntil, and from the service's current auditor and vault
 func (s *RecordService) liveFieldsFor(record *models.AssetRecord, profileDigest [32]byte) (packageFields, error) {
 	recordKey, err := hexToBytes32Local(record.RecordKey)
 	if err != nil {
@@ -322,13 +290,11 @@ func (s *RecordService) liveFieldsFor(record *models.AssetRecord, profileDigest 
 	}, nil
 }
 
-// BuildPackage assembles the .rwa audit package for record, using
-// profileRaw (the project's canonicalized Asset Profile bytes) and the
-// record's stored canonical metadata bytes. It rebuilds deterministically
-// from the record's own persisted fields (recordKey, nonce, validUntil,
-// amount, metadataDigest) plus the server's current auditor and vault, so a
-// re-download always yields the same bytes for the same record state (see
-// auditpkg.BuildPackage's determinism, TestBuildPackageIsDeterministic).
+// BuildPackage combines profileRaw and profileDigest with the record's canonical
+// metadata, recordKey, nonce, validUntil, amount and metadataDigest, plus the service's
+// chain ID, controller, current auditor and vault. Identical inputs produce identical
+// .rwa bytes; auditor rotation changes the package. It stores a models.AuditPackage
+// build row.
 func (s *RecordService) BuildPackage(ctx context.Context, record *models.AssetRecord, profileDigest [32]byte, profileRaw []byte) ([]byte, error) {
 	fields, err := s.liveFieldsFor(record, profileDigest)
 	if err != nil {
@@ -344,8 +310,8 @@ func (s *RecordService) BuildPackage(ctx context.Context, record *models.AssetRe
 	return zipBytes, nil
 }
 
-// packageRecordFromFields constructs the models.AuditPackage row BuildPackage
-// persists as evidence, bound to the record version and CID it was built from.
+// packageRecordFromFields returns the models.AuditPackage row for a build,
+// tagged with the record version and CID it was built from
 func packageRecordFromFields(recordID string, f packageFields, packageSHA256, typedDataDigestHex string, size int, recordVersion int, cid string) *models.AuditPackage {
 	return &models.AuditPackage{
 		RecordID: recordID, PackageSHA256: packageSHA256, Size: int64(size),

@@ -42,9 +42,7 @@ func TestReconcileRebuildsReadModelFromEvents(t *testing.T) {
 		t.Errorf("Status = %s, want Funded", r.Status)
 	}
 
-	// Reconcile again after a simulated rollback (event removed) must
-	// reflect the new, smaller event set — proving it truly rebuilds
-	// rather than only ever adding.
+	// After rollback removes an event, rebuilding must reflect the smaller event set
 	if _, err := events.DeleteFromBlock(ctx, 31337, escrowAddr.Hex(), 11); err != nil {
 		t.Fatal(err)
 	}

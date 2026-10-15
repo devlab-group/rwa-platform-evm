@@ -1,16 +1,5 @@
-// Package config loads server configuration from a single YAML file whose
-// path is passed via --config (see LoadFile). ALL configuration — including
-// secrets (the compliance hot key, the KYC webhook HMAC secret, the admin JWT
-// secret, Mongo URI, chain RPC, factory address) — lives
-// in that file; the operator is responsible for its filesystem permissions,
-// exactly as with a .env or supervisor config (secrets-in-file is an
-// accepted deployment posture — see server/config.example.yaml).
-//
-// The YAML is decoded into a flat key/value view (fileSchema.toEnvMap) that
-// the pure, I/O-free validation engine (load) then resolves and validates —
-// so every default and every production fail-closed check is applied
-// identically regardless of how the raw values arrived. That engine is also
-// exposed as LoadFromMap for table-driven tests.
+// Package config loads --config YAML with shared LoadFile/LoadFromMap defaults and
+// validation. Operators must protect the file's secrets with appropriate permissions.
 package config
 
 import (
@@ -19,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -27,11 +17,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Environment selects the deployment-safety policy Load enforces.
-// "production" fails startup on configuration that would otherwise silently
-// degrade a security or durability guarantee (empty/weak webhook secret, no
-// reachable Mongo); "development" keeps the permissive local/dev-friendly
-// defaults.
+// Environment selects validation rules; startup separately checks repository and RPC
+// availability
 type Environment string
 
 const (
@@ -39,17 +26,12 @@ const (
 	EnvProduction  Environment = "production"
 )
 
-// MinWebhookSecretBytes is the documented minimum length for
-// KYC_WEBHOOK_HMAC_SECRET. It's a length floor on the configured string,
-// not a true
-// entropy measurement — good enough to reject trivial/placeholder secrets
-// ("changeme", "secret", ...) without requiring an entropy estimator.
+// MinWebhookSecretBytes bounds configured webhook-secret length, not measured entropy
 const MinWebhookSecretBytes = 32
 
-// Config is the fully resolved server configuration.
+// Config holds resolved server settings
 type Config struct {
-	// Environment gates production-only startup checks (see Environment's
-	// doc comment). Defaults to "development".
+	// Environment defaults to development and selects production validation
 	Environment Environment
 
 	// HTTP
@@ -60,100 +42,54 @@ type Config struct {
 	ChainID       int64
 	Confirmations uint64
 	FeeMode       string // "eip1559" or "legacy"
+	// ExplorerURL supplies the base for transaction links; empty disables them
+	ExplorerURL string
 
-	// Contract bootstrap. Config is BOOTSTRAP-ONLY for the contract stack: it
-	// carries ONLY the factory address (the one-time deploy entry point) and
-	// the block the indexer begins scanning from. Every DEPLOYED contract
-	// address (token/compliance/supply-controller/vault/redemption-escrow/
-	// strategy/quote-token) and the auditor are read from the DB Project
-	// record (models.Project), kept live by the indexer projector — NOT from
-	// config, so a redeploy never requires editing this file. FactoryAddress
-	// may be empty for a server that only serves an already-deployed project
-	// (addresses then come purely from the DB record).
+	// FactoryAddress optionally selects the deployment entry point. Indexed Project
+	// records supply deployed addresses and auditor.
 	FactoryAddress string
-	// StartBlock is the block the indexer begins scanning from when no
-	// checkpoint exists yet — i.e. the factory deploy block. 0 (the default)
-	// scans from genesis, which is correct for a fresh local chain but
-	// wasteful against a long-lived network where the factory was deployed at
-	// a known height.
+	// StartBlock is used before a checkpoint exists; 0 scans from genesis
 	StartBlock uint64
 
-	// ProjectID is the UUID that identifies this deployment's single Asset
-	// Profile. It is set by the operator in config BEFORE the platform runs
-	// and acts as a gate: the server rejects any profile whose projectId does
-	// not match, and the admin web reads it from GET /api/v1/config rather
-	// than minting a fresh one, so the on-chain projectId (keccak256 of this
-	// UUID) is fixed by whoever provisions the server. Empty leaves the gate
-	// off (development/test); EnvProduction requires it.
+	// ProjectID pins profile creation to a configured UUID and is exposed to Setup.
+	// Empty disables the gate outside production; production requires it.
 	ProjectID string
 
 	// Mongo
 	MongoURI string
 	MongoDB  string
 
-	// PersistenceMode is "mongo" (default) or "memory". In-memory
-	// repositories are only permitted behind this development/test flag:
-	// "memory" is an explicit opt-in for local smoke-testing/CI without
-	// docker-compose, and is refused in EnvProduction. It does NOT control
-	// the fallback behavior when a Mongo connection fails while
-	// PersistenceMode=="mongo" — see cmd/platform's connectRepositories,
-	// which fails startup on that instead of falling back, in EnvProduction.
+	// PersistenceMode selects mongo (default) or development-only memory repositories.
+	// Mongo connection failure is handled separately by connectRepositories.
 	PersistenceMode string
 
 	// IPFS (Kubo HTTP API)
 	IPFSAPIURL string
 
-	// IPFS replication: a published asset
-	// package is not treated as durably published (see
-	// ipfs.ReplicationManager) until at least IPFSReplicationThreshold of
-	// the configured backup destinations below have pinned it. Empty
-	// destinations means no replication is configured — the platform then
-	// falls back to a single local-Kubo-node ipfsPinner exactly as before
-	// this existed (a documented, opt-in-to-harden gap, not a silent one:
-	// see docs/operator/operator-guide.md).
-	//
-	// IPFSBackupArchiveDir, if set, adds a local-filesystem reproducible
-	// content archive (ipfs.FileArchiveClient) as one backup destination —
-	// the option that needs no external commercial service.
+	// IPFSBackupArchiveDir adds filesystem replication beyond the primary Kubo node.
+	// Without backups, development uses only the primary pinner.
 	IPFSBackupArchiveDir string
-	// IPFSBackupKuboURL, if set, adds a second, independent Kubo node as
-	// another backup destination.
+	// IPFSBackupKuboURL adds a second Kubo destination
 	IPFSBackupKuboURL string
-	// IPFSReplicationThreshold is how many configured backup destinations
-	// (not counting the primary local node) must succeed before a package
-	// counts as durably published. Meaningless (and ignored) if no backup
-	// destination is configured at all.
+	// IPFSReplicationThreshold sets the required successful backups, excluding the primary.
+	// It is ignored when no backup is configured.
 	IPFSReplicationThreshold int
 
 	// Security
 	KYCWebhookHMACSecret string
 	IdempotencyTTL       time.Duration
 	WalletChallengeTTL   time.Duration
-	// WalletSessionTTL bounds the lifetime of a subject-scoped investor
-	// session minted at challenge-verify. Short by design: a
-	// lapsed session costs the investor one wallet signature to re-prove
-	// ownership, not a lost credential. Mirrors WalletChallengeTTL's knob.
+	// WalletSessionTTL bounds investor sessions issued after ownership verification
 	WalletSessionTTL time.Duration
-	// JWTTTL bounds the lifetime of the admin JWT issued at POST /auth/session
-	// after a successful wallet-signature challenge. Short-by-design: a lapsed
-	// token costs the admin one re-login (a wallet signature), not a lost
-	// credential. Replaces the former operator-session TTL — admin auth is now
-	// a stateless HMAC JWT (see internal/auth.IssueAdminJWT), not a
-	// server-stored operator session.
+	// JWTTTL bounds stateless admin JWTs issued after a wallet-signature challenge
 	JWTTTL time.Duration
 
-	// ComplianceKeyHex is the ONLY server hot key (hex-encoded private key),
-	// used only in KeyProviderMode "raw" (the default — see internal/keys). An
-	// empty string means "not configured"; the compliance status-write feature
-	// is then disabled rather than erroring at startup. Deployment and the
-	// auditor-signed mint moved to the admin's wallet, so the former relayer
-	// and pricer keys no longer exist.
+	// ComplianceKeyHex supplies the compliance key in raw mode; empty disables that signer.
+	// Admin deployment, mint, treasury and pricing calls use operator wallets.
 	ComplianceKeyHex string
 
-	// KeyProviderMode selects internal/keys' backend for every hot-key role
-	// uniformly: "raw" (default, the *KeyHex fields above), "local-keystore",
-	// "vault", or "kms-mock". See internal/keys' package doc for what each
-	// mode needs from the fields below.
+	// KeyProviderMode selects raw, local-keystore, vault or kms-mock;
+	// see internal/keys for required settings
 	KeyProviderMode      string
 	KeystoreDir          string
 	KeystorePasswordFile string
@@ -162,12 +98,8 @@ type Config struct {
 	VaultKeyPrefix       string
 	KMSMockSeedHex       string
 
-	// KYC provider selection (internal/kyc). KYCProvider is "none" (default —
-	// the generic KYCWebhookHMACSecret webhook, no server-initiated flow),
-	// "sumsub", or "onfido". Only the selected provider's fields below are
-	// read; the rest may be empty. The webhook secret for the active provider
-	// gates forged KYC decisions the same way KYCWebhookHMACSecret does for the
-	// generic path, so production validation requires it (see load).
+	// KYCProvider selects none (generic webhook only), sumsub or onfido.
+	// Only selected-provider credentials are required; production checks its webhook secret.
 	KYCProvider string
 
 	KYCSumsubAppToken      string
@@ -182,114 +114,71 @@ type Config struct {
 	KYCOnfidoWorkflowID   string
 	KYCOnfidoReferrer     string
 
-	// MaxRequestBodyBytes bounds every request body. 0 disables the limit.
+	// KYCMonitoringAction defaults to alert; block also queues Blocked for monitoring hits on
+	// unexpired Allowed wallets
+	KYCMonitoringAction string
+
+	// MaxAllowedWallets caps counted wallets on Allowed submissions; 0 disables the cap
+	MaxAllowedWallets int
+	// SanctionsListFile contains one sanctioned 0x address per line; empty disables screening
+	SanctionsListFile string
+
+	// MaxRequestBodyBytes caps bodies; non-positive values disable it
 	MaxRequestBodyBytes int64
 
-	// RateLimitRPS/RateLimitBurst configure the per-client-IP token bucket
-	// (internal/auth.RateLimit). RateLimitRPS<=0 disables rate limiting.
+	// RateLimitRPS and RateLimitBurst set the global per-IP bucket;
+	// non-positive RPS disables it without disabling endpoint login/challenge limits
 	RateLimitRPS   float64
 	RateLimitBurst int
 
-	// TrustedProxies is passed to gin.Engine.SetTrustedProxies (comma-
-	// separated IPs/CIDRs). Empty (the default) trusts NO proxies: Gin's
-	// c.ClientIP() — which the rate limiter keys on — then uses the raw
-	// TCP RemoteAddr only, ignoring X-Forwarded-For entirely. That's the
-	// safe default for a directly internet-facing deployment: trusting
-	// every proxy (gin's own default before SetTrustedProxies is called
-	// explicitly) lets any caller spoof X-Forwarded-For to bypass
-	// per-IP rate limiting outright. Set this to the real reverse
-	// proxy/load balancer's address when running behind one.
+	// TrustedProxies lists trusted forwarding IPs/CIDRs. Empty uses RemoteAddr for rate
+	// limits, ignoring caller-supplied forwarding headers. Behind a reverse proxy,
+	// configure its actual addresses.
 	TrustedProxies []string
 
-	// CORSAllowedOrigins is the exact list of browser origins allowed to call
-	// this API cross-origin (scheme+host+port, e.g.
-	// "http://localhost:5173"), or empty to disable CORS entirely.
-	//
-	// Empty is the right default for a deployment that only serves the
-	// EMBEDDED admin console: that is same-origin and needs no CORS at all.
-	// It exists for the standalone investor SPA (investor-web/), which is a
-	// separate deployable served from its own origin.
-	//
-	// "*" is REFUSED in every environment (see Load): this API accepts an
-	// Authorization bearer, and a wildcard origin combined with that would let
-	// any page on the internet drive an authenticated session from a victim's
-	// browser. List the real origins instead.
+	// CORSAllowedOrigins lists permitted scheme/host/port origins, such as the investor SPA.
+	// Empty disables CORS for same-origin deployments; wildcard origins are rejected.
 	CORSAllowedOrigins []string
 
-	// MetricsAddr, if non-empty, serves Prometheus /metrics on its own
-	// listener (deliberately not the public API port — see cmd/platform).
-	// Defaults to loopback-only so /metrics is not exposed on all interfaces
-	// without auth: /metrics has no authentication
-	// of its own, so the safe-by-default posture is a reverse proxy or
-	// scraper running on the same host/network namespace. Set this to a
-	// non-loopback address explicitly (and put it behind your own
-	// auth/firewall) to scrape remotely.
+	// MetricsAddr serves unauthenticated /metrics on a separate listener, defaulting to loopback.
+	// Protect an explicitly configured remote listener with external access controls.
 	MetricsAddr string
 
-	// HTTP hardening: read/write/idle timeouts and a header-size cap guard
-	// both listeners against slowloris-style slow-client connection
-	// exhaustion. Applied to both
-	// the public API listener and the metrics listener.
+	// HTTP timeouts and header caps limit slow-client resource use on both listeners
 	HTTPReadHeaderTimeout time.Duration
 	HTTPReadTimeout       time.Duration
 	HTTPWriteTimeout      time.Duration
 	HTTPIdleTimeout       time.Duration
 	HTTPMaxHeaderBytes    int
 
-	// Alert evaluator thresholds for the pending-redemption SLA and
-	// funded-claim-failure evaluators — see internal/alerts.
+	// Alert thresholds for pending-redemption and funded-claim evaluators
 	PendingRedemptionSLA  time.Duration
 	FundedClaimFailureSLA time.Duration
 
-	// MaxFeePerGasWei / MaxTipPerGasWei / MaxTxTotalCostWeiStr are absolute
-	// gas-price/fee-cap/tip-cap/total-cost limits the transaction manager
-	// will ever sign for, as base-10 wei strings (unbounded precision,
-	// unlike int64, matters at wei scale). Empty (the default) means "no cap"
-	// for that dimension — appropriate for a local/dev chain; operators on a
-	// real network should set these.
+	// MaxFeePerGasWei, MaxTipPerGasWei and MaxTxTotalCostWei cap signing costs
+	// as base-10 wei strings; empty means no cap for that dimension
 	MaxFeePerGasWei   string
 	MaxTipPerGasWei   string
 	MaxTxTotalCostWei string
 
-	// TxCoordinationMode selects how the transaction manager serializes a
-	// signer's nonce sequence: "in-process"
-	// (default) — an in-process mutex only, safe for exactly one server
-	// process per configured hot key (see operator-guide.md §7a) — or
-	// "mongo-lease" — additionally acquires a distributed lease (with a
-	// strictly-monotonic fencing token) from MongoDB before managing a
-	// signer's nonces, safe for multiple replicas sharing the same hot key.
-	// "in-process" is the single-process default; opting into "mongo-lease"
-	// requires PersistenceMode=="mongo" (a lease with no durable backing
-	// store is not a lease).
+	// TxCoordinationMode selects in-process nonce locking or mongo-lease coordination.
+	// Use in-process with one process per hot key; mongo-lease requires mongo persistence.
 	TxCoordinationMode string
-	// TxLeaseTTL bounds how long a "mongo-lease" holder's lease survives
-	// without renewal before another replica may take over — long enough
-	// to cover one Submit/Replace call's sign+persist+broadcast latency,
-	// short enough that a crashed holder's hot key isn't unusable for long.
+	// TxLeaseTTL controls takeover after a nonce lease stops renewing
 	TxLeaseTTL time.Duration
 
-	// AdminAddress is the single admin wallet (the contract deployer / live
-	// DEFAULT_ADMIN_ROLE holder). Admin auth is wallet-signature based: POST
-	// /auth/challenge issues a single-use message, POST /auth/session recovers
-	// the personal_sign signer and — if it equals this address (case-
-	// insensitive / checksum-normalized) — issues an admin JWT. Empty means no
-	// admin is configured and no admin JWT can ever be issued; production
-	// requires a valid 0x-address here.
+	// AdminAddress is the wallet authorized for signature-based API login.
+	// Empty disables login outside production; production requires a valid address.
 	AdminAddress string
-	// JWTSecret is the HMAC-SHA256 signing key for admin JWTs (internal/auth).
-	// Empty means admin JWTs cannot be issued/verified; production requires at
-	// least MinProductionSecretBytes, same floor as the other secrets.
+	// JWTSecret signs admin tokens with HMAC-SHA256; empty disables JWT authentication
+	// outside production, which requires MinProductionSecretBytes
 	JWTSecret string
 }
 
-// envLookup abstracts os.Getenv so tests can supply a fake environment
-// without mutating process-global state.
+// envLookup supplies values without changing process-global environment
 type envLookup func(key string) (string, bool)
 
-// LoadFile reads and parses the YAML configuration at path, then resolves
-// defaults and runs every validation (including the production fail-closed
-// checks) via the shared engine. Unknown YAML keys are rejected so a typo in
-// a security-relevant key can never silently fall back to a default.
+// LoadFile strictly decodes YAML, then applies shared defaults and validation
 func LoadFile(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -298,30 +187,20 @@ func LoadFile(path string) (Config, error) {
 	var f fileSchema
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
-	// An empty document (Decode returns io.EOF) is valid: it means "use every
-	// default", so fall through with a zero fileSchema.
+	// An empty document uses defaults through a zero fileSchema
 	if err := dec.Decode(&f); err != nil && !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("config: parsing %q: %w", path, err)
 	}
 	return LoadFromMap(f.toEnvMap())
 }
 
-// LoadFromMap builds a Config from an explicit key/value map. It is the pure,
-// I/O-free validation engine shared by LoadFile (which flattens the parsed
-// YAML into such a map) and by the table-driven config tests.
+// LoadFromMap resolves explicit values through the validation engine shared with LoadFile
 func LoadFromMap(env map[string]string) (Config, error) {
 	return load(func(key string) (string, bool) { v, ok := env[key]; return v, ok })
 }
 
-// fileSchema is the on-disk YAML shape. It is decoded and then flattened into
-// the flat key/value view LoadFromMap consumes (toEnvMap), so the YAML can be
-// grouped and human-friendly while the validation engine stays a single flat
-// lookup. Scalars whose zero value is a meaningful configuration (numbers,
-// booleans) use pointers so "omitted" is distinguishable from "explicitly 0/
-// false" — an omitted numeric key must fall through to its documented
-// default, while an explicit 0 must be honored (and, in production, rejected
-// where a zero disables a control). Empty strings are treated as omitted
-// (matching getString), so absent string keys also take their defaults.
+// fileSchema maps YAML to shared validation. Pointers preserve explicit numeric/boolean
+// zeroes; empty strings use defaults.
 type fileSchema struct {
 	Environment string `yaml:"environment"`
 
@@ -343,15 +222,13 @@ type fileSchema struct {
 		ID                *int64  `yaml:"id"`
 		Confirmations     *uint64 `yaml:"confirmations"`
 		FeeMode           string  `yaml:"fee_mode"`
+		ExplorerURL       string  `yaml:"explorer_url"`
 		MaxFeePerGasWei   string  `yaml:"max_fee_per_gas_wei"`
 		MaxTipPerGasWei   string  `yaml:"max_tip_per_gas_wei"`
 		MaxTxTotalCostWei string  `yaml:"max_tx_total_cost_wei"`
 	} `yaml:"chain"`
 
-	// Contract is BOOTSTRAP-ONLY (see Config.FactoryAddress): the factory
-	// deploy entry point, the indexer's start block, and the profile's
-	// projectId. Deployed addresses + auditor live in the DB Project record,
-	// not here.
+	// Bootstrap contract settings; deployed addresses and auditor live in the DB
 	Contract struct {
 		FactoryAddress string  `yaml:"factory_address"`
 		StartBlock     *uint64 `yaml:"start_block"`
@@ -410,7 +287,13 @@ type fileSchema struct {
 			WorkflowID   string `yaml:"workflow_id"`
 			Referrer     string `yaml:"referrer"`
 		} `yaml:"onfido"`
+		MonitoringAction string `yaml:"monitoring_action"`
 	} `yaml:"kyc"`
+
+	Compliance struct {
+		MaxAllowedWallets *int64 `yaml:"max_allowed_wallets"`
+		SanctionsListFile string `yaml:"sanctions_list_file"`
+	} `yaml:"compliance"`
 
 	Tx struct {
 		CoordinationMode string `yaml:"coordination_mode"`
@@ -422,9 +305,7 @@ type fileSchema struct {
 		FundedClaimFailureSLA string `yaml:"funded_claim_failure_sla"`
 	} `yaml:"alerts"`
 
-	// ProductionOverrides map to the narrowly-named PRODUCTION_ALLOW_*
-	// emergency escape hatches. Absent/false means "not overridden"; only an
-	// explicit true opts out of a fail-closed check.
+	// ProductionOverrides require explicit true to relax the named production checks
 	ProductionOverrides struct {
 		AllowUnboundedRequestBody *bool `yaml:"allow_unbounded_request_body"`
 		AllowDisabledRateLimit    *bool `yaml:"allow_disabled_rate_limit"`
@@ -432,13 +313,8 @@ type fileSchema struct {
 	} `yaml:"production_overrides"`
 }
 
-// toEnvMap flattens the parsed YAML into the flat key/value view the
-// validation engine (load) consumes. It emits a key only when the operator
-// actually supplied a value, so every omitted key falls through to its
-// documented default inside load — the one exception being explicit numeric/
-// boolean zero values, which are carried through (via the pointer fields) so
-// they can be honored and, in production, rejected where a zero disables a
-// control.
+// toEnvMap preserves explicit numeric/boolean zeroes and supplied values; omitted
+// settings use defaults
 func (f fileSchema) toEnvMap() map[string]string {
 	m := map[string]string{}
 	setStr := func(key, v string) {
@@ -488,6 +364,7 @@ func (f fileSchema) toEnvMap() map[string]string {
 	setI64("CHAIN_ID", f.Chain.ID)
 	setU64("CHAIN_CONFIRMATIONS", f.Chain.Confirmations)
 	setStr("CHAIN_FEE_MODE", f.Chain.FeeMode)
+	setStr("CHAIN_EXPLORER_URL", f.Chain.ExplorerURL)
 	setStr("TX_MAX_FEE_PER_GAS_WEI", f.Chain.MaxFeePerGasWei)
 	setStr("TX_MAX_TIP_PER_GAS_WEI", f.Chain.MaxTipPerGasWei)
 	setStr("TX_MAX_TOTAL_COST_WEI", f.Chain.MaxTxTotalCostWei)
@@ -535,6 +412,9 @@ func (f fileSchema) toEnvMap() map[string]string {
 	setStr("KYC_ONFIDO_REGION", f.KYC.Onfido.Region)
 	setStr("KYC_ONFIDO_WORKFLOW_ID", f.KYC.Onfido.WorkflowID)
 	setStr("KYC_ONFIDO_REFERRER", f.KYC.Onfido.Referrer)
+	setStr("KYC_MONITORING_ACTION", f.KYC.MonitoringAction)
+	setI64("MAX_ALLOWED_WALLETS", f.Compliance.MaxAllowedWallets)
+	setStr("SANCTIONS_LIST_FILE", f.Compliance.SanctionsListFile)
 
 	setStr("TX_COORDINATION_MODE", f.Tx.CoordinationMode)
 	setStr("TX_LEASE_TTL", f.Tx.LeaseTTL)
@@ -555,6 +435,7 @@ func load(lookup envLookup) (Config, error) {
 		HTTPAddr:             getString(lookup, "HTTP_ADDR", ":8080"),
 		ChainRPCURL:          getString(lookup, "CHAIN_RPC_URL", "http://127.0.0.1:8545"),
 		FeeMode:              getString(lookup, "CHAIN_FEE_MODE", "eip1559"),
+		ExplorerURL:          strings.TrimRight(getString(lookup, "CHAIN_EXPLORER_URL", ""), "/"),
 		MongoURI:             getString(lookup, "MONGO_URI", "mongodb://127.0.0.1:27017"),
 		MongoDB:              getString(lookup, "MONGO_DB", "rwa_platform"),
 		PersistenceMode:      getString(lookup, "PERSISTENCE_MODE", "mongo"),
@@ -587,6 +468,8 @@ func load(lookup envLookup) (Config, error) {
 		KYCOnfidoRegion:        getString(lookup, "KYC_ONFIDO_REGION", "eu"),
 		KYCOnfidoWorkflowID:    getString(lookup, "KYC_ONFIDO_WORKFLOW_ID", ""),
 		KYCOnfidoReferrer:      getString(lookup, "KYC_ONFIDO_REFERRER", ""),
+		KYCMonitoringAction:    getString(lookup, "KYC_MONITORING_ACTION", "alert"),
+		SanctionsListFile:      getString(lookup, "SANCTIONS_LIST_FILE", ""),
 
 		MetricsAddr: getString(lookup, "METRICS_ADDR", "127.0.0.1:9090"),
 
@@ -686,6 +569,15 @@ func load(lookup envLookup) (Config, error) {
 		cfg.CORSAllowedOrigins = origins
 	}
 
+	maxAllowed, err := getInt64(lookup, "MAX_ALLOWED_WALLETS", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	if maxAllowed < 0 {
+		return Config{}, fmt.Errorf("config: MAX_ALLOWED_WALLETS must not be negative, got %d", maxAllowed)
+	}
+	cfg.MaxAllowedWallets = int(maxAllowed)
+
 	pendingSLA, err := getDuration(lookup, "PENDING_REDEMPTION_SLA", 48*time.Hour)
 	if err != nil {
 		return Config{}, err
@@ -723,20 +615,24 @@ func load(lookup envLookup) (Config, error) {
 	if cfg.FeeMode != "eip1559" && cfg.FeeMode != "legacy" {
 		return Config{}, fmt.Errorf("config: CHAIN_FEE_MODE must be %q or %q, got %q", "eip1559", "legacy", cfg.FeeMode)
 	}
+	if cfg.ExplorerURL != "" {
+		// Accept an absolute HTTP(S) base without query, fragment or credentials
+		// before transaction paths are appended
+		u, err := url.Parse(cfg.ExplorerURL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+			return Config{}, fmt.Errorf("config: CHAIN_EXPLORER_URL must be an absolute http(s) URL with no query, fragment or credentials, got %q", cfg.ExplorerURL)
+		}
+	}
 	if cfg.ChainID <= 0 {
 		return Config{}, fmt.Errorf("config: CHAIN_ID must be positive, got %d", cfg.ChainID)
 	}
-	// CORS origins are validated in EVERY environment, not just production:
-	// a wildcard is never a legitimate value for an API that accepts an
-	// Authorization bearer, and a malformed origin silently never matches
-	// (browsers send the exact scheme+host+port), which presents as "CORS is
-	// broken" with nothing in the logs to say why.
+	// Validate explicit browser origins in every environment and reject wildcards
 	for _, origin := range cfg.CORSAllowedOrigins {
 		switch {
 		case origin == "*":
-			return Config{}, errors.New(`config: http.cors_allowed_origins must not contain "*" — this API accepts an Authorization bearer, and a wildcard origin would let any site drive an authenticated session from a victim's browser; list the exact origins instead`)
+			return Config{}, errors.New(`config: http.cors_allowed_origins must not contain "*" - this API accepts an Authorization bearer, and a wildcard origin would let any site drive an authenticated session from a victim's browser; list the exact origins instead`)
 		case strings.HasSuffix(origin, "/"):
-			return Config{}, fmt.Errorf("config: http.cors_allowed_origins %q must not have a trailing slash — a browser's Origin header is scheme+host+port only, so this would never match", origin)
+			return Config{}, fmt.Errorf("config: http.cors_allowed_origins %q must not have a trailing slash - a browser's Origin header is scheme+host+port only, so this would never match", origin)
 		case !strings.HasPrefix(origin, "http://") && !strings.HasPrefix(origin, "https://"):
 			return Config{}, fmt.Errorf("config: http.cors_allowed_origins %q must be a full origin including the scheme, e.g. %q", origin, "http://localhost:5173")
 		}
@@ -744,6 +640,9 @@ func load(lookup envLookup) (Config, error) {
 
 	if cfg.Environment != EnvDevelopment && cfg.Environment != EnvProduction {
 		return Config{}, fmt.Errorf("config: ENVIRONMENT must be %q or %q, got %q", EnvDevelopment, EnvProduction, cfg.Environment)
+	}
+	if cfg.KYCMonitoringAction != "alert" && cfg.KYCMonitoringAction != "block" {
+		return Config{}, fmt.Errorf("config: KYC_MONITORING_ACTION must be %q or %q, got %q", "alert", "block", cfg.KYCMonitoringAction)
 	}
 	if cfg.PersistenceMode != "mongo" && cfg.PersistenceMode != "memory" {
 		return Config{}, fmt.Errorf("config: PERSISTENCE_MODE must be %q or %q, got %q", "mongo", "memory", cfg.PersistenceMode)
@@ -754,10 +653,8 @@ func load(lookup envLookup) (Config, error) {
 	if cfg.TxCoordinationMode == "mongo-lease" && cfg.PersistenceMode != "mongo" {
 		return Config{}, fmt.Errorf("config: TX_COORDINATION_MODE=%q requires PERSISTENCE_MODE=%q (a distributed lease needs a durable shared store)", "mongo-lease", "mongo")
 	}
-	// KYC provider selection + per-provider required fields, enforced in every
-	// environment: picking a provider you haven't configured is a
-	// misconfiguration, not a degrade path. Production additionally enforces
-	// webhook-secret strength below.
+	// Require the selected provider's credentials in every environment;
+	// production applies additional secret checks
 	switch cfg.KYCProvider {
 	case "none":
 		// generic KYCWebhookHMACSecret path; nothing provider-specific required
@@ -801,49 +698,29 @@ func load(lookup envLookup) (Config, error) {
 		}
 	}
 
-	// An empty KYC_WEBHOOK_HMAC_SECRET makes VerifyHMAC's underlying
-	// HMAC-SHA256 computable by anyone (an empty key is still a valid HMAC
-	// key), so an unauthenticated caller could forge a KYC decision. A
-	// configured-but-weak secret (e.g. a placeholder like "changeme") is
-	// never acceptable regardless of environment; an entirely absent secret
-	// is tolerated outside production as "webhook feature disabled" (see
-	// cmd/platform's buildApp, which only wires compliance.WebhookService
-	// when this is non-empty).
+	// Reject short configured webhook secrets; absence disables generic KYC outside production
 	if n := len(cfg.KYCWebhookHMACSecret); n > 0 && n < MinWebhookSecretBytes {
 		return Config{}, fmt.Errorf("config: KYC_WEBHOOK_HMAC_SECRET is %d bytes, below the documented minimum of %d", n, MinWebhookSecretBytes)
 	}
-	// A configured-but-weak JWT signing key is never acceptable regardless of
-	// environment (an admin JWT signed with a short key is trivially forgeable);
-	// an entirely absent secret is tolerated outside production as "admin JWT
-	// auth disabled" (buildApp only wires the admin auth service when it is set).
+	// Reject short configured JWT secrets; absence disables admin authentication outside production
 	if n := len(cfg.JWTSecret); n > 0 && n < MinProductionSecretBytes {
 		return Config{}, fmt.Errorf("config: JWT_SECRET is %d bytes, below the documented minimum of %d", n, MinProductionSecretBytes)
 	}
-	// A malformed ADMIN_ADDRESS can never match a recovered signer, so it would
-	// silently make admin login impossible; reject it up front in any
-	// environment rather than at first login.
+	// Reject malformed admin addresses at configuration load
 	if cfg.AdminAddress != "" && !isHexAddress(cfg.AdminAddress) {
 		return Config{}, fmt.Errorf("config: ADMIN_ADDRESS %q is not a valid 0x-prefixed 20-byte hex address", cfg.AdminAddress)
 	}
-	// A malformed PROJECT_ID would be rejected later at profile create (the gate
-	// compares it against the stored profile's projectId); reject it up front so
-	// a typo is caught at startup, not on the first create attempt.
+	// Reject a malformed project UUID before profile creation
 	if cfg.ProjectID != "" && !isUUID(cfg.ProjectID) {
 		return Config{}, fmt.Errorf("config: PROJECT_ID %q is not a valid UUID", cfg.ProjectID)
 	}
 	if cfg.Environment == EnvProduction {
-		// Whatever KYC path is active must authenticate its webhook: an empty
-		// secret would permit forged KYC decisions once relayed on-chain. For
-		// the generic ("none") path that is KYC_WEBHOOK_HMAC_SECRET; for a real
-		// provider it is that provider's own webhook secret (required in every
-		// environment above, and strength-checked for the operator-chosen
-		// Sumsub secret below). The Onfido webhook token is issued by Onfido, so
-		// it is required non-empty but not held to our operator-secret length
-		// floor.
+		// Validate the active webhook secret. Sumsub uses the operator-secret length floor;
+		// Onfido's provider-issued token must be present and not a known placeholder.
 		switch cfg.KYCProvider {
 		case "none":
 			if cfg.KYCWebhookHMACSecret == "" {
-				return Config{}, errors.New("config: KYC_WEBHOOK_HMAC_SECRET must be set in production (ENVIRONMENT=production) — an empty secret would permit forged KYC decisions once relayed on-chain")
+				return Config{}, errors.New("config: KYC_WEBHOOK_HMAC_SECRET must be set in production (ENVIRONMENT=production) - an empty secret would permit forged KYC decisions once relayed on-chain")
 			}
 		case "sumsub":
 			if len(cfg.KYCSumsubWebhookSecret) < MinProductionSecretBytes {
@@ -860,38 +737,26 @@ func load(lookup envLookup) (Config, error) {
 		if cfg.PersistenceMode != "mongo" {
 			return Config{}, fmt.Errorf("config: PERSISTENCE_MODE=%q is not allowed in production; volatile in-memory repositories would silently drop project guards, idempotency records, and audit history on restart", cfg.PersistenceMode)
 		}
-		// The projectId gate must be armed in production: it fixes which Asset
-		// Profile this deployment will accept before anything is created, so an
-		// unset value would let the first caller choose the projectId.
+		// Production must pin the project UUID before accepting a profile
 		if cfg.ProjectID == "" {
-			return Config{}, errors.New("config: PROJECT_ID must be set in production — it fixes the deployment's projectId and gates which Asset Profile the server will accept")
+			return Config{}, errors.New("config: PROJECT_ID must be set in production - it fixes the deployment's projectId and gates which Asset Profile the server will accept")
 		}
-		// Reject test-only / plaintext hot-key providers in production.
-		// kms-mock is a deterministic mock and never acceptable; raw stores
-		// the private keys in plaintext config, so it is refused whenever any
-		// hot key is actually configured (a keyless raw deployment — all
-		// actions via wallet/multisig — stays allowed).
+		// Reject kms-mock and configured raw keys in production; keyless raw mode remains allowed
 		if cfg.KeyProviderMode == "kms-mock" {
 			return Config{}, errors.New("config: KEY_PROVIDER_MODE=kms-mock is a test-only mock secret provider and must not be used in production; use local-keystore or vault")
 		}
 		if cfg.KeyProviderMode == "raw" && cfg.ComplianceKeyHex != "" {
 			return Config{}, errors.New("config: KEY_PROVIDER_MODE=raw keeps the compliance hot key in plaintext config; use local-keystore or vault in production")
 		}
-		// Admin auth is wallet-signature -> JWT (single-admin model): require a
-		// configured admin wallet to authorize against and an HMAC secret to
-		// sign/verify the JWT with, so admin routes are actually authenticated.
+		// Require the production login wallet and JWT signing secret
 		if cfg.AdminAddress == "" {
-			return Config{}, errors.New("config: ADMIN_ADDRESS must be set in production — admin routes authenticate a wallet-signature JWT against this address")
+			return Config{}, errors.New("config: ADMIN_ADDRESS must be set in production - admin routes authenticate a wallet-signature JWT against this address")
 		}
 		if cfg.JWTSecret == "" {
 			return Config{}, errors.New("config: JWT_SECRET must be set in production so admin JWTs are signed with a real HMAC key")
 		}
-		// In production, require at least one genuinely independent
-		// destination and validate 1 <= threshold <= destination count.
-		// Without a configured backup, IPFS_API_URL
-		// alone falls back to a single bare local Kubo client with no
-		// replication and no durable-publication tracking at all — a
-		// silent single-point-of-failure for mint evidence in production.
+		// For production IPFS publication, require a backup and a threshold within its count.
+		// Operators must ensure destinations are protected independently.
 		if cfg.IPFSAPIURL != "" {
 			backupCount := 0
 			if cfg.IPFSBackupArchiveDir != "" {
@@ -901,25 +766,15 @@ func load(lookup envLookup) (Config, error) {
 				backupCount++
 			}
 			if backupCount == 0 {
-				return Config{}, errors.New("config: IPFS_API_URL is set but no backup destination is configured (IPFS_BACKUP_ARCHIVE_DIR or IPFS_BACKUP_KUBO_URL) — production requires at least one independent replication destination")
+				return Config{}, errors.New("config: IPFS_API_URL is set but no backup destination is configured (IPFS_BACKUP_ARCHIVE_DIR or IPFS_BACKUP_KUBO_URL) - production requires at least one independent replication destination")
 			}
 			if cfg.IPFSReplicationThreshold < 1 || cfg.IPFSReplicationThreshold > backupCount {
 				return Config{}, fmt.Errorf("config: IPFS_REPLICATION_THRESHOLD=%d must be between 1 and the configured backup destination count (%d) in production", cfg.IPFSReplicationThreshold, backupCount)
 			}
 		}
 
-		// A production configuration must not accept disabled safeguards or
-		// trivial privileged credentials. A syntactically
-		// valid production environment must not be able to permit rapid
-		// guessing of weak credentials, unbounded request bodies,
-		// premature transaction finality, uncontrolled fees, or a
-		// self-inflicted denial of service through a zero/negative
-		// duration or limit. Every "disabled control" check below (body
-		// limit, rate limit, fee cap) has a narrowly-named
-		// PRODUCTION_ALLOW_* emergency override; every positive-bound
-		// check does not, since a non-positive duration/burst/
-		// confirmation count is never a legitimate production choice —
-		// only ever a misconfiguration.
+		// Enforce production secret and positive-bound rules.
+		// Only named body, rate and fee controls have explicit emergency overrides.
 		if err := validateProductionSecrets(cfg); err != nil {
 			return Config{}, err
 		}
@@ -938,25 +793,16 @@ func getString(lookup envLookup, key, def string) string {
 	return def
 }
 
-// getBool reads a narrowly-scoped boolean env var — used only for the
-// emergency-override knobs (e.g. PRODUCTION_ALLOW_*): exactly
-// "true" (case-insensitive) opts in, anything else (including unset,
-// empty, or a typo) is treated as false/not-overridden — deliberately
-// fail-safe rather than permissive-by-default parsing.
+// getBool opts in only for case-insensitive true; absent or malformed values mean false
 func getBool(lookup envLookup, key string) bool {
 	v, ok := lookup(key)
 	return ok && strings.EqualFold(strings.TrimSpace(v), "true")
 }
 
-// MinProductionSecretBytes is the documented minimum length for the JWT
-// signing secret in production — randomly generated secrets should be at
-// least 32 bytes. A length floor, same honest limitation as
-// MinWebhookSecretBytes — not a true entropy measurement.
+// MinProductionSecretBytes is the 32-byte production secret floor, not an entropy measurement
 const MinProductionSecretBytes = 32
 
-// weakProductionSecrets are known placeholder/trivial values rejected
-// outright regardless of length (including the obvious single-character
-// cases like "a" and "b"). Matched case-insensitively.
+// weakProductionSecrets lists placeholders checked case-insensitively, regardless of length
 var weakProductionSecrets = map[string]bool{
 	"a": true, "b": true, "admin": true, "operator": true, "password": true,
 	"changeme": true, "change-me": true, "change_me": true, "secret": true,
@@ -964,15 +810,8 @@ var weakProductionSecrets = map[string]bool{
 	"00000000000000000000000000000000": true,
 }
 
-// validateProductionSecrets enforces the production length/placeholder rules
-// for both HMAC secrets the server holds. ADMIN_ADDRESS is a public wallet
-// address, not a secret, so it is not checked here.
-//
-// The placeholder blocklist matters as much for the webhook secret as for the
-// JWT one: every other entry in weakProductionSecrets is shorter than the
-// 32-byte floor and so would be caught by length alone, but the 32-zero string
-// is exactly 32 bytes and sails through it. A forged KYC decision is relayed
-// on-chain by the compliance hot key, so that secret gets the same treatment.
+// validateProductionSecrets enforces JWT and active generic-webhook minimum lengths,
+// rejecting blocklisted placeholders even above the floor
 func validateProductionSecrets(cfg Config) error {
 	if len(cfg.JWTSecret) < MinProductionSecretBytes {
 		return fmt.Errorf("config: JWT_SECRET must be at least %d bytes in production, got %d", MinProductionSecretBytes, len(cfg.JWTSecret))
@@ -980,10 +819,7 @@ func validateProductionSecrets(cfg Config) error {
 	if weakProductionSecrets[strings.ToLower(cfg.JWTSecret)] {
 		return errors.New("config: JWT_SECRET is a known placeholder value and must not be used in production")
 	}
-	// The generic KYC webhook secret is only the active authentication path
-	// when KYC_PROVIDER=none; with a real provider configured its own webhook
-	// secret is checked in load's production block instead, and this value is
-	// unused (and typically empty).
+	// Generic secret validation applies only in none mode
 	if cfg.KYCProvider == "none" {
 		if len(cfg.KYCWebhookHMACSecret) < MinProductionSecretBytes {
 			return fmt.Errorf("config: KYC_WEBHOOK_HMAC_SECRET must be at least %d bytes in production, got %d", MinProductionSecretBytes, len(cfg.KYCWebhookHMACSecret))
@@ -995,9 +831,7 @@ func validateProductionSecrets(cfg Config) error {
 	return nil
 }
 
-// isHexAddress reports whether s is a 0x-prefixed 20-byte hex string (an
-// Ethereum address), case-insensitive. A small local check so the config
-// package stays free of a go-ethereum dependency for one predicate.
+// isHexAddress checks 0x-prefixed 20-byte hex without adding a go-ethereum dependency
 func isHexAddress(s string) bool {
 	if len(s) != 42 || (s[0] != '0') || (s[1] != 'x' && s[1] != 'X') {
 		return false
@@ -1012,10 +846,7 @@ func isHexAddress(s string) bool {
 	return true
 }
 
-// isUUID reports whether s is a canonical 8-4-4-4-12 hex UUID string
-// (case-insensitive, any version). Kept in step with the projectId check the
-// assets package enforces on the profile document, so a projectId accepted at
-// config load is the same shape accepted at profile create.
+// isUUID matches the profile's 8-4-4-4-12 hex identity shape, case-insensitively
 func isUUID(s string) bool {
 	if len(s) != 36 {
 		return false
@@ -1036,10 +867,8 @@ func isUUID(s string) bool {
 	return true
 }
 
-// validateProductionBounds enforces positive lower bounds (and, for the
-// three genuinely "disabled" controls, an explicit narrowly-named
-// emergency override) across every security duration, body/header limit,
-// rate/burst setting, confirmation count, and fee cap.
+// validateProductionBounds checks durations, sizes, rate settings, finality and fee caps,
+// allowing only named overrides for disabled controls
 func validateProductionBounds(lookup envLookup, cfg Config) error {
 	positiveDurations := map[string]time.Duration{
 		"IDEMPOTENCY_TTL":          cfg.IdempotencyTTL,
@@ -1064,20 +893,20 @@ func validateProductionBounds(lookup envLookup, cfg Config) error {
 		return errors.New("config: HTTP_MAX_HEADER_BYTES must be positive in production")
 	}
 	if cfg.Confirmations == 0 {
-		return errors.New("config: CHAIN_CONFIRMATIONS must be positive in production — 0 treats a transaction as final the instant it is mined")
+		return errors.New("config: CHAIN_CONFIRMATIONS must be positive in production - 0 treats a transaction as final the instant it is mined")
 	}
 
 	if cfg.MaxRequestBodyBytes <= 0 && !getBool(lookup, "PRODUCTION_ALLOW_UNBOUNDED_REQUEST_BODY") {
-		return errors.New("config: MAX_REQUEST_BODY_BYTES must be positive in production (<=0 disables the request body limit) — set PRODUCTION_ALLOW_UNBOUNDED_REQUEST_BODY=true to explicitly override")
+		return errors.New("config: MAX_REQUEST_BODY_BYTES must be positive in production (<=0 disables the request body limit) - set PRODUCTION_ALLOW_UNBOUNDED_REQUEST_BODY=true to explicitly override")
 	}
 	if cfg.RateLimitRPS <= 0 && !getBool(lookup, "PRODUCTION_ALLOW_DISABLED_RATE_LIMIT") {
-		return errors.New("config: RATE_LIMIT_RPS must be positive in production (<=0 disables per-IP rate limiting) — set PRODUCTION_ALLOW_DISABLED_RATE_LIMIT=true to explicitly override")
+		return errors.New("config: RATE_LIMIT_RPS must be positive in production (<=0 disables per-IP rate limiting) - set PRODUCTION_ALLOW_DISABLED_RATE_LIMIT=true to explicitly override")
 	}
 	if cfg.RateLimitRPS > 0 && cfg.RateLimitBurst <= 0 {
 		return errors.New("config: RATE_LIMIT_BURST must be positive in production whenever RATE_LIMIT_RPS is enabled")
 	}
 	if cfg.MaxFeePerGasWei == "" && cfg.MaxTxTotalCostWei == "" && !getBool(lookup, "PRODUCTION_ALLOW_UNBOUNDED_FEES") {
-		return errors.New("config: at least one of TX_MAX_FEE_PER_GAS_WEI or TX_MAX_TOTAL_COST_WEI must be set in production (both absent leaves transaction fees uncontrolled) — set PRODUCTION_ALLOW_UNBOUNDED_FEES=true to explicitly override")
+		return errors.New("config: at least one of TX_MAX_FEE_PER_GAS_WEI or TX_MAX_TOTAL_COST_WEI must be set in production (both absent leaves transaction fees uncontrolled) - set PRODUCTION_ALLOW_UNBOUNDED_FEES=true to explicitly override")
 	}
 	return nil
 }

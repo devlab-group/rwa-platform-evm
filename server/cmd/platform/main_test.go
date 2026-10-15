@@ -22,11 +22,7 @@ import (
 
 func init() { gin.SetMode(gin.TestMode) }
 
-// TestRouterHandlerSwapIsAtomic is the regression test for
-// routerHandler: requests served concurrently with a Store must always see
-// one complete engine's response, never a nil pointer or a partially
-// constructed one (the whole point of using atomic.Pointer instead of a
-// bare field).
+// Concurrent requests during a router swap must see one complete engine's response
 func TestRouterHandlerSwapIsAtomic(t *testing.T) {
 	h := &routerHandler{}
 	r1 := gin.New()
@@ -52,7 +48,7 @@ func TestRouterHandlerSwapIsAtomic(t *testing.T) {
 	}
 }
 
-// fakeKeyProvider is a minimal keys.Provider test double that counts Close calls.
+// fakeKeyProvider is a minimal keys.Provider test double that counts Close calls
 type fakeKeyProvider struct {
 	mu     sync.Mutex
 	closed int
@@ -74,10 +70,7 @@ func (f *fakeKeyProvider) Close() error {
 
 var _ keys.Provider = (*fakeKeyProvider)(nil)
 
-// TestProviderRegistryTracksAllGenerations is the regression test for
-// providerRegistry: a provider set added by an initial buildApp call AND a
-// later watchProject rebuild must BOTH be closed at shutdown, not
-// just whichever set was added last.
+// Registry cleanup closes providers from both initial wiring and later rebuilds
 func TestProviderRegistryTracksAllGenerations(t *testing.T) {
 	reg := &providerRegistry{}
 	gen1 := &fakeKeyProvider{}
@@ -95,8 +88,7 @@ func TestProviderRegistryTracksAllGenerations(t *testing.T) {
 	}
 }
 
-// TestAddressesFromProject: the deployed contract set + auditor are sourced
-// directly from the DB Project record (config is bootstrap-only now).
+// Read deployed addresses and auditor from the Project record
 func TestAddressesFromProject(t *testing.T) {
 	p := &models.Project{
 		Addresses: models.Addresses{
@@ -114,22 +106,18 @@ func TestAddressesFromProject(t *testing.T) {
 	}
 }
 
-// TestLoadProjectAddressesOnlyWhenActive: loadProjectAddresses sources
-// addresses from the single Project record ONLY when it is Active — a
-// missing record (factory-only boot) or a not-yet-Active project yields the
-// zero set, leaving every address-dependent service gated until
-// watchProject wires them post-activation.
+// Missing or inactive projects disable address-dependent services; watchProject wires
+// them once Active
 func TestLoadProjectAddressesOnlyWhenActive(t *testing.T) {
 	ctx := context.Background()
 
-	// No record at all: zero set.
+	// No record at all: zero set
 	repos := memory.New()
 	if addrs, auditor := loadProjectAddresses(ctx, repos); addrs != (models.Addresses{}) || auditor != "" {
 		t.Fatalf("no project: got addrs=%+v auditor=%q, want zero", addrs, auditor)
 	}
 
-	// A deploying (not-yet-Active) project with addresses already computed:
-	// still gated (zero set) until it reaches Active.
+	// Computed addresses remain gated until the project becomes Active
 	full := models.Addresses{
 		Token: "0xT001", Compliance: "0xC001", SupplyController: "0xS001",
 		Vault: "0xV001", RedemptionEscrow: "0xE001", Strategy: "0xST01", QuoteToken: "0xQ001",
@@ -142,7 +130,7 @@ func TestLoadProjectAddressesOnlyWhenActive(t *testing.T) {
 		t.Fatalf("deploying project: got addrs=%+v, want zero (gated until Active)", addrs)
 	}
 
-	// Active project: full set + auditor.
+	// Active project: full set + auditor
 	repos = memory.New()
 	if err := repos.Projects.Upsert(ctx, &models.Project{Status: models.ProjectStatusActive, Addresses: full, Auditor: "0xAUD1"}); err != nil {
 		t.Fatal(err)
@@ -156,10 +144,8 @@ func TestLoadProjectAddressesOnlyWhenActive(t *testing.T) {
 	}
 }
 
-// TestIndexerUnsafe is the regression test for the shared
-// safety-state check backing both /readyz and runIndexDependentTicker: no
-// checkpoint yet is NOT unsafe (normal at/just after startup), a normal
-// checkpoint is not unsafe, and a ReconciliationRequired checkpoint is.
+// Missing and normal checkpoints are safe; ReconciliationRequired gates readiness and
+// dependent ticks
 func TestIndexerUnsafe(t *testing.T) {
 	repos := memory.New()
 	ctx := context.Background()
@@ -201,9 +187,7 @@ func TestIndexerUnsafe(t *testing.T) {
 	}
 }
 
-// TestRunIndexDependentTickerSkipsWhileUnsafe proves the reconciler-gating
-// wrapper never invokes fn while the indexer is ReconciliationRequired, and
-// does invoke it once safe again.
+// Skip fn while ReconciliationRequired; resume once safe
 func TestRunIndexDependentTickerSkipsWhileUnsafe(t *testing.T) {
 	repos := memory.New()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -250,13 +234,8 @@ func TestRunIndexDependentTickerSkipsWhileUnsafe(t *testing.T) {
 	cancel()
 }
 
-// TestRunAsReconcilerLeaderSerializesConcurrentReplicas checks that one
-// reconciler leader runs per project/chain in multi-instance mode: while
-// another replica (simulated by acquiring the
-// same lease key directly under a different holder id) currently holds the
-// reconciler's lease, fn must not run; once released, the next tick
-// acquires and runs it, and releases the lease again afterward so a
-// following tick (or another replica) can take over.
+// A held name/chain lease blocks another replica; release allows the next tick to
+// acquire, run fn and release
 func TestRunAsReconcilerLeaderSerializesConcurrentReplicas(t *testing.T) {
 	repos := memory.New()
 	ctx := context.Background()
@@ -282,26 +261,22 @@ func TestRunAsReconcilerLeaderSerializesConcurrentReplicas(t *testing.T) {
 		t.Fatalf("expected fn to run once the lease is free, got %d calls", calls)
 	}
 
-	// The lease must be released again after fn returns, so a subsequent
-	// tick (this replica or another) can acquire it once more.
+	// Returning from fn releases the lease for the next tick
 	_, ok, err = repos.NonceLeases.Acquire(ctx, "reconciler:test/leader:31337", "other-replica", time.Minute)
 	if err != nil || !ok {
 		t.Fatalf("expected the lease to be free again after runAsReconcilerLeader returned: ok=%v err=%v", ok, err)
 	}
 }
 
-// TestAddressesFromProjectPrefersLiveStrategy: Addresses.Strategy is the
-// deploy baseline and is never rewritten, so after a Vault.setStrategy the
-// address the indexer must scan and decode is Security.Strategy — the live
-// pointer folded from StrategyChanged. Without this, a restart quietly
-// resubscribes to the strategy the Vault stopped pricing through.
+// Watch Security.Strategy after Vault.setStrategy, including on restart; retain
+// Addresses.Strategy as the deployment baseline
 func TestAddressesFromProjectPrefersLiveStrategy(t *testing.T) {
 	p := &models.Project{
 		Addresses: models.Addresses{Token: "0xT001", Vault: "0xV001", Strategy: "0xST01"},
 		Auditor:   "0xAUD1",
 	}
 
-	// No projection yet (or no swap recorded): the baseline stands.
+	// No projection yet (or no swap recorded): the baseline stands
 	if got, _ := addressesFromProject(p); got.Strategy != "0xST01" {
 		t.Errorf("strategy = %q with no projection, want the deploy baseline 0xST01", got.Strategy)
 	}
@@ -310,7 +285,7 @@ func TestAddressesFromProjectPrefersLiveStrategy(t *testing.T) {
 		t.Errorf("strategy = %q with an empty projection, want the deploy baseline 0xST01", got.Strategy)
 	}
 
-	// A swap recorded by the projector wins, and nothing else moves.
+	// A swap recorded by the projector wins, and nothing else moves
 	p.Security.Strategy = "0xST02"
 	got, auditor := addressesFromProject(p)
 	if got.Strategy != "0xST02" {

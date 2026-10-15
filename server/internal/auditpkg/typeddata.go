@@ -7,7 +7,7 @@ import (
 )
 
 // NewMintTypedDataDoc builds the typed-data.json document for a mint
-// attestation package, matching shared/schemas/typed-data.schema.json.
+// attestation package, matching shared/schemas/typed-data.schema.json
 func NewMintTypedDataDoc(domain eip712.Domain, recordID string, a eip712.MintAttestation) TypedDataDoc {
 	return TypedDataDoc{
 		PrimaryType: "MintAttestation",
@@ -32,7 +32,7 @@ func NewMintTypedDataDoc(domain eip712.Domain, recordID string, a eip712.MintAtt
 }
 
 // NewBurnTypedDataDoc builds the typed-data.json document for a burn
-// attestation package, matching shared/schemas/typed-data.schema.json.
+// attestation package, matching shared/schemas/typed-data.schema.json
 func NewBurnTypedDataDoc(domain eip712.Domain, a eip712.BurnAttestation) TypedDataDoc {
 	return TypedDataDoc{
 		PrimaryType: "BurnAttestation",

@@ -12,14 +12,12 @@ describe("applySlippageCeil", () => {
   });
 
   it("rounds a fractional result up, never down", () => {
-    // 3 * 1.0001 = 3.0003 -> must round up to 4, never truncate to 3
+    // Round 3 * 1.0001 = 3.0003 up to 4
     expect(applySlippageCeil("3", 1)).toBe("4");
   });
 
   it("caps an unreasonably large slippage value at MAX_SLIPPAGE_BPS", () => {
-    // A fat-fingered/malicious value (1_000_000 bps = 10,000%) must not
-    // silently blow up the ERC-20 approve() amount — clamp to the cap
-    // instead of trusting raw input.
+    // Clamp extreme slippage (1_000_000 bps = 10,000%) to limit approved spend
     const uncapped = applySlippageCeil("1000000", 1_000_000);
     const capped = applySlippageCeil("1000000", MAX_SLIPPAGE_BPS);
     expect(uncapped).toBe(capped);
@@ -36,7 +34,7 @@ describe("applySlippageFloor", () => {
     expect(applySlippageFloor("1000000", 150)).toBe("985000");
   });
 
-  it("clamps at MAX_SLIPPAGE_BPS, so minQuoteOut is never zero", () => {
+  it("caps redemption tolerance at MAX_SLIPPAGE_BPS", () => {
     expect(applySlippageFloor("1000000", 50_000)).toBe("500000");
   });
 

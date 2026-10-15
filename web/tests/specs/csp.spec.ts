@@ -1,8 +1,7 @@
-// Regression check for the CSP meta tag injected at build time (see
-// vite.config.ts's injectCsp plugin) — catches someone accidentally
-// dropping the plugin or loosening a directive. Runs in both modes: it's
-// checking shipped markup, not seeded state, and the live server embeds the
-// same dist/index.html.
+// Checks the CSP meta tag that vite.config.ts's injectCsp plugin adds at build
+// time, so a dropped plugin or a loosened directive fails. It runs in both
+// modes because it reads shipped markup, and the live server embeds the same
+// dist/index.html.
 import { expect, test } from "../fixtures/fixtures";
 
 test("ships a restrictive CSP with no unsafe-inline/unsafe-eval", async ({ page }) => {
@@ -17,8 +16,7 @@ test("ships a restrictive CSP with no unsafe-inline/unsafe-eval", async ({ page 
   expect(csp).toContain("object-src 'none'");
   expect(csp).not.toMatch(/unsafe-inline/);
   expect(csp).not.toMatch(/unsafe-eval/);
-  // frame-ancestors is documented here for the server to also send as a real
-  // header — browsers ignore it in a <meta> tag, so its presence here isn't
-  // itself protective, but its absence would mean nobody thought about it.
+  // Browsers ignore frame-ancestors in a <meta> tag; the server sends the same
+  // policy as a response header, and the directive stays here so both match
   expect(csp).toContain("frame-ancestors");
 });

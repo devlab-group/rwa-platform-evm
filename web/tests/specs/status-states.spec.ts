@@ -4,7 +4,7 @@ import { AdminSecurityPage } from "../pages/AdminSecurityPage";
 import { AdminTransactionsPage } from "../pages/AdminTransactionsPage";
 import type { components } from "../../src/lib/api-types";
 
-/** An affirmative "this WILL be paid" claim — never allowed anywhere on a Pending/Funded view. */
+// An affirmative "this WILL be paid" claim, which no Pending or Funded view may show
 const AFFIRMATIVE_GUARANTEE = /\bis\s+guaranteed\b|\bguaranteed\s+payment\b|\bpayment\s+is\s+guaranteed\b/i;
 
 type TransactionChainStatus = NonNullable<components["schemas"]["Transaction"]["status"]>;
@@ -54,8 +54,7 @@ test.describe("Distinct UI states", () => {
       );
     }
 
-    // Funded (unconfirmed) and Claimable (confirmed) must never share a label —
-    // that's the whole point of splitting them out.
+    // Funded (unconfirmed) and Claimable (confirmed) must not share a label
     await expect(redemptions.row("r-funded").locator(".badge")).not.toHaveText("Claimable");
     await expect(redemptions.row("r-claimable").locator(".badge")).toHaveText("Claimable");
   });
@@ -83,17 +82,15 @@ test.describe("Distinct UI states", () => {
       await expect(transactions.badge(txHash)).toContainText(labelSubstring);
     }
 
-    // Reverted and reorged are visually distinct (danger vs warning tone) —
-    // never collapsed into a single "failed" bucket.
+    // Reverted and reorged keep distinct tones (danger and warning) and are not
+    // merged into one "failed" state
     const revertedClass = await transactions.badge("tx-reverted").getAttribute("class");
     const reorgedClass = await transactions.badge("tx-reorged").getAttribute("class");
     expect(revertedClass).not.toBe(reorgedClass);
 
-    // Beyond the per-row badge, a page-level alert calls out that something
-    // needs attention — a reader shouldn't have to notice one red badge in
-    // a long table to know a reorg happened. The banner covers every
-    // operator-attention state, not just reverted/reorged; here reverted +
-    // reorged are the two flagged rows.
+    // Besides each row's badge, a page-level alert reports that transactions
+    // need attention. It covers every attention status; here the reverted and
+    // reorged rows are the two flagged ones.
     await expect(page.getByRole("alert")).toContainText("2 transactions need operator attention");
   });
 
@@ -114,7 +111,7 @@ test.describe("Distinct UI states", () => {
 
   test("a Pending redemption is never described as guaranteed", async ({ page, api }) => {
     const now = Math.floor(Date.now() / 1000);
-    // Numeric id: funding does BigInt(id) to build the uint256 arg.
+    // Numeric id: funding calls BigInt(id) to build the uint256 argument
     api.redemptions.push({
       id: "7",
       beneficiary: BENEFICIARY,
@@ -128,12 +125,11 @@ test.describe("Distinct UI states", () => {
       confirmations: 0,
     });
 
-    // Admin: the list header carries the disclaimer, and nothing on the admin
-    // funding path — including after the wallet broadcast completes — may make
-    // an affirmative guarantee claim.
+    // The list header carries the disclaimer, and nothing on the funding path,
+    // including after the wallet broadcast completes, may promise payment
     const redemptions = new AdminRedemptionsPage(page);
     await redemptions.goto();
-    await expect(page.getByText(/never guaranteed until claimed/)).toBeVisible();
+    await expect(page.getByText(/do not guarantee\s+payment/)).toBeVisible();
     await expect(page.locator("body")).not.toContainText(AFFIRMATIVE_GUARANTEE);
 
     await redemptions.connectWallet();
@@ -156,11 +152,9 @@ test.describe("Distinct UI states", () => {
     await expect(security.pausedBadge()).toHaveText("Paused");
   });
 
-  // The security snapshot must never be presented as guaranteed-current.
-  // `securityAsOfBlock`/`securityAsOfTime`/`securityStale` may not be present
-  // in api/openapi.yaml's Project schema yet, so they're injected here as loose
-  // extra fields on the mock's Project — exactly how an older/newer server
-  // mismatch would show up against the real client.
+  // The security snapshot must not be presented as current. The mock Project
+  // gets the optional `securityAsOfBlock`, `securityAsOfTime` and
+  // `securityStale` fields through Object.assign.
   test("Security surfaces the source block, as-of time, and a stale warning when the server provides them", async ({
     page,
     api,
@@ -180,11 +174,11 @@ test.describe("Distinct UI states", () => {
     await expect(notice).toContainText("5m ago");
   });
 
-  test("Security omits the staleness banner against an older server that hasn't shipped the fields", async ({
+  test("Security omits the staleness banner when the server omits the snapshot fields", async ({
     page,
     api,
   }) => {
-    // Explicitly absent — simulates an older server response without these fields.
+    // The mock leaves the snapshot fields out by default
     expect((api.project as unknown as Record<string, unknown>).securityAsOfBlock).toBeUndefined();
 
     const security = new AdminSecurityPage(page);

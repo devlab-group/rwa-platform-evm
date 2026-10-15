@@ -11,7 +11,7 @@ func TestSanitizeForTerminal_LeavesPrintableTextAlone(t *testing.T) {
 		"gram",
 		"0xAbC123",
 		"1.500000 USD",
-		"MINT — THIS WILL INCREASE TOKEN SUPPLY",
+		"MINT - THIS WILL INCREASE TOKEN SUPPLY",
 		"Bar serial number (999.9 fine)",
 		"日本語",
 	} {
@@ -24,10 +24,8 @@ func TestSanitizeForTerminal_LeavesPrintableTextAlone(t *testing.T) {
 	}
 }
 
-// TestSanitizeForTerminal_NeutralizesTerminalControls covers each way a
-// package-supplied value could take control of the auditor's terminal: a
-// carriage return rewinding the current line, a newline forging an extra one,
-// an ANSI cursor-up sequence rewriting earlier lines, plus DEL and C1 bytes.
+// Neutralize carriage returns, newlines, ANSI cursor-up, DEL and C1 controls that could
+// rewrite review lines
 func TestSanitizeForTerminal_NeutralizesTerminalControls(t *testing.T) {
 	cases := []struct {
 		name string
@@ -53,8 +51,7 @@ func TestSanitizeForTerminal_NeutralizesTerminalControls(t *testing.T) {
 			if IsPrintable(tc.in) {
 				t.Errorf("IsPrintable(%q) = true, want false", tc.in)
 			}
-			// Whatever the exact escaping, no byte the terminal acts on may
-			// survive, and the result must stay a single line.
+			// Escaping must leave one line without terminal control bytes
 			for _, b := range []string{"\x1b", "\r", "\n", "\x7f"} {
 				if strings.Contains(got, b) {
 					t.Errorf("SanitizeForTerminal(%q) = %q still contains raw %q", tc.in, got, b)
@@ -67,8 +64,7 @@ func TestSanitizeForTerminal_NeutralizesTerminalControls(t *testing.T) {
 	}
 }
 
-// TestSanitizeForTerminal_EscapesEveryC0AndC1 is the exhaustive version: no
-// byte in either control block may pass through, however it is rendered.
+// No C0/C1 control may survive sanitization
 func TestSanitizeForTerminal_EscapesEveryC0AndC1(t *testing.T) {
 	for r := rune(0); r <= 0x9f; r++ {
 		if r >= 0x20 && r < 0x7f {

@@ -12,9 +12,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// repoRoot walks up from the test's working directory to find shared/vectors.
-// Tests run with cwd == package directory, so shared/ lives four levels up
-// (internal/eip712 -> internal -> server -> repo root).
+// vectorPath resolves shared/vectors three levels above the package test working
+// directory
 func vectorPath(t *testing.T, name string) string {
 	t.Helper()
 	p := filepath.Join("..", "..", "..", "shared", "vectors", name)
@@ -145,9 +144,8 @@ func TestMintDigestMatchesGoldenVector(t *testing.T) {
 		t.Fatalf("Digest = %s, want %s", got, want)
 	}
 
-	// Recompute the signature from the vector's private key and confirm
-	// RecoverSigner recovers the auditor address, proving digest correctness
-	// end-to-end (not just against the precomputed intermediate hashes).
+	// Sign with the vector key and recover the auditor, checking the complete digest
+	// rather than only intermediate hashes
 	privBytes, err := hex.DecodeString(trim0x(v.SignerPrivateKey))
 	if err != nil {
 		t.Fatalf("bad private key hex: %v", err)
@@ -172,7 +170,7 @@ func TestMintDigestMatchesGoldenVector(t *testing.T) {
 		t.Errorf("recovered = %s, want auditor %s", recovered.Hex(), m.Auditor.Hex())
 	}
 
-	// Also verify against the vector's own pre-computed signature bytes.
+	// Also verify against the vector's precomputed signature
 	sigBytes, err := hex.DecodeString(trim0x(v.Signature))
 	if err != nil {
 		t.Fatalf("bad signature hex: %v", err)
@@ -193,8 +191,7 @@ func TestRecoverSignerRejectsWrongLength(t *testing.T) {
 	}
 }
 
-// sanity: ensure our own key derivation and signing round-trip works even
-// without the golden vector file present.
+// TestSelfSignedRoundTrip checks signing and recovery without the golden vector file
 func TestSelfSignedRoundTrip(t *testing.T) {
 	priv, err := crypto.GenerateKey()
 	if err != nil {

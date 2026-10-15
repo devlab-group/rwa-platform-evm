@@ -1,9 +1,8 @@
-// Injects a minimal EIP-1193 provider as window.ethereum before any page
-// script runs, so the Buy/Redemption/Transfer/Wallet flows (src/lib/wallet.ts)
-// work without a real browser extension. Return values for eth_call are
-// pre-encoded here (in Node, where viem's full encoder is available) and
-// handed to the injected script as plain data — the in-page script itself
-// stays framework-free.
+// Injects a minimal EIP-1193 provider as window.ethereum before any page script
+// runs, so the wallet flows in src/lib/wallet.ts work without a browser
+// extension. eth_call results are encoded here in Node, where viem is
+// available, and passed to the injected script as plain data, which keeps the
+// in-page script free of imports.
 import type { Page } from "@playwright/test";
 import { encodeFunctionResult, erc20Abi } from "viem";
 
@@ -18,7 +17,7 @@ const APPROVE_SELECTOR = "0x095ea7b3";
 const ALLOWANCE_SELECTOR = "0xdd62ed3e";
 
 export interface InstallMockWalletOptions {
-  /** Chain the mock wallet reports via eth_chainId (default MOCK_CHAIN_ID). */
+  /** Chain ID the mock wallet reports through eth_chainId; defaults to MOCK_CHAIN_ID */
   chainId?: number;
 }
 
@@ -50,9 +49,9 @@ export async function installMockWallet(
     }) => {
       let txNonce = 0;
       let blockNumber = 1000;
-      // token address -> spender -> approved amount, so a later allowance()
-      // read reflects a preceding approve() send — the Buy flow does
-      // approve → confirm receipt → read allowance before enabling Buy.
+      // token address -> spender -> approved amount, so an allowance() read
+      // after an approve() send reflects it; funding waits for sufficient
+      // allowance before it sends fundRedemption
       const allowances = new Map<string, bigint>();
       const receipts = new Map<string, { blockNumber: number; to: string | null }>();
       const sentTransactions: { to: string | null; data: string | null }[] = [];
@@ -71,15 +70,14 @@ export async function installMockWallet(
         _emit(event: string, payload: unknown) {
           for (const handler of this._listeners.get(event) ?? []) handler(payload);
         },
-        // Test-only hook (not part of EIP-1193): specs call this directly via
-        // page.evaluate to simulate the wallet switching networks.
+        // Test-only hook, not part of EIP-1193: specs call it through
+        // page.evaluate to simulate a network switch
         __setChainId(chainId: number) {
           currentChainIdHex = `0x${chainId.toString(16)}`;
           this._emit("chainChanged", currentChainIdHex);
         },
-        // Test-only hook: exposes every eth_sendTransaction payload so specs
-        // can decode and assert on the outgoing calldata (e.g. an approval's
-        // token + spender).
+        // Test-only hook: returns every eth_sendTransaction payload so specs can
+        // decode the outgoing calldata, such as an approval's token and spender
         __getSentTransactions() {
           return sentTransactions;
         },
@@ -176,7 +174,7 @@ export async function installMockWallet(
   );
 }
 
-/** Simulates the wallet switching networks after connect, for the chain-binding tests. */
+/** Simulates the wallet switching networks after connect */
 export async function mockWalletSwitchChain(page: Page, chainId: number): Promise<void> {
   await page.evaluate((id: number) => {
     (window as unknown as { ethereum: { __setChainId: (c: number) => void } }).ethereum.__setChainId(id);
@@ -188,7 +186,7 @@ export interface MockSentTransaction {
   data: string | null;
 }
 
-/** Returns every `eth_sendTransaction` payload submitted so far, for calldata-decode assertions. */
+/** Returns every `eth_sendTransaction` payload submitted so far */
 export async function getMockSentTransactions(page: Page): Promise<MockSentTransaction[]> {
   return page.evaluate(() =>
     (

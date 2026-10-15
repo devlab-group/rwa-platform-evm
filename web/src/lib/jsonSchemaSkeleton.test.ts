@@ -106,7 +106,7 @@ describe("buildMetadataSkeleton", () => {
         },
       },
     };
-    // The cycle guard stops the second visit to #/$defs/node → child becomes null.
+    // Stop a repeated #/$defs/node reference with null for the child
     expect(parse(buildMetadataSkeleton(schema))).toEqual({
       node: { value: "", child: null },
     });

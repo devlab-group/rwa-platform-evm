@@ -8,12 +8,10 @@ import (
 	"testing"
 )
 
-// TestOversizedBodyRejected404s exercises the request-size limit
-// (auth.MaxRequestBody, wired router-wide in NewRouter) end to end: a body
-// larger than App.MaxRequestBodyBytes must be rejected with 413, not
-// silently truncated or accepted, on a route that reads the raw body
-// itself (profile/validate) as well as one that binds JSON into a struct
-// (compliance/challenge).
+// TestOversizedBodyRejected404s checks router-wide auth.MaxRequestBody: exceeding
+// App.MaxRequestBodyBytes returns 413 on both raw-body profile/validate and
+// JSON-binding compliance/challenge routes, rather than truncating or accepting the
+// body
 func TestOversizedBodyRejected(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.MaxRequestBodyBytes = 16 // tiny, so the test doesn't need to send megabytes
@@ -23,17 +21,16 @@ func TestOversizedBodyRejected(t *testing.T) {
 		path string
 		body []byte
 	}{
-		// Raw io.ReadAll body (validateProfile): any bytes past the limit trip it.
+		// Raw io.ReadAll body (validateProfile): any bytes past the limit trip it
 		{"/api/v1/profile/validate", bytes.Repeat([]byte("x"), 1024)},
-		// c.ShouldBindJSON (createChallenge): must be valid-so-far JSON so the
-		// decoder keeps reading (and so hits the MaxBytesReader cutoff) instead
-		// of failing on a syntax error before ever reading enough bytes to
-		// notice the size limit.
+		// Keep JSON valid until the size limit so c.ShouldBindJSON reaches it before any
+		// syntax error
 		{"/api/v1/compliance/challenge", append(append([]byte(`{"address":"`), bytes.Repeat([]byte("x"), 1024)...), []byte(`"}`)...)},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodPost, tc.path, bytes.NewReader(tc.body))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", env.bearer)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		if w.Code != http.StatusRequestEntityTooLarge {
@@ -42,13 +39,8 @@ func TestOversizedBodyRejected(t *testing.T) {
 	}
 }
 
-// TestKYCWebhookOversizedBodyRejectedBeforeHMAC specifically covers the
-// webhook path called out in review: kycWebhook reads the whole body via
-// io.ReadAll BEFORE computing/checking the HMAC signature (it has to — the
-// signature covers the raw body), so an oversized delivery must be
-// rejected by the size limit at read time, never reaching HMAC
-// verification (which would otherwise do real crypto work on attacker-
-// controlled megabytes for every retry of an oversized payload).
+// TestKYCWebhookOversizedBodyRejectedBeforeHMAC checks that raw-body reading rejects an
+// oversized delivery before HMAC verification
 func TestKYCWebhookOversizedBodyRejectedBeforeHMAC(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.MaxRequestBodyBytes = 16
@@ -65,8 +57,7 @@ func TestKYCWebhookOversizedBodyRejectedBeforeHMAC(t *testing.T) {
 	}
 }
 
-// TestUndersizedBodyStillWorks makes sure the limit doesn't clip legitimate
-// small requests.
+// TestUndersizedBodyStillWorks checks that the limit does not clip small requests
 func TestUndersizedBodyStillWorks(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.MaxRequestBodyBytes = 1 << 20 // 1 MiB, comfortably larger than goldGramProfile
@@ -74,6 +65,7 @@ func TestUndersizedBodyStillWorks(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/validate", strings.NewReader(goldGramProfile))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", env.bearer)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -81,8 +73,8 @@ func TestUndersizedBodyStillWorks(t *testing.T) {
 	}
 }
 
-// TestSecurityHeadersPresent checks the baseline security headers land
-// on every response, including a 404 (NoRoute) and a normal 200.
+// TestSecurityHeadersPresent checks that the baseline security headers appear on
+// every response, including a 404 (NoRoute) and a normal 200
 func TestSecurityHeadersPresent(t *testing.T) {
 	env := setupTestApp(t)
 	for _, path := range []string{"/healthz", "/this-path-does-not-exist"} {

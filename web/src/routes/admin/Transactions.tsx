@@ -5,10 +5,11 @@ import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { api } from "../../lib/client";
 import type { components } from "../../lib/api-types";
 import { needsAttention, transactionStatusLabel } from "../../lib/status";
+import { TableWrap } from "../../components/TableWrap";
 
 type Transaction = components["schemas"]["Transaction"];
 
-/** Transactions: pending/final/reorged transactions and explorer links. */
+/** Transactions the server tracks, by lifecycle status, with explorer links */
 export function Transactions() {
   const transactions = usePaginatedList<Transaction>(
     (cursor, signal) => api.listTransactions({ signal, cursor }),
@@ -20,8 +21,7 @@ export function Transactions() {
       <header className="app-main__header">
         <h1>Transactions</h1>
         <p>
-          Indexer-observed transactions. Unconfirmed and reorged states are
-          called out.
+          Indexed transactions, with unconfirmed and reorged states flagged.
         </p>
       </header>
 
@@ -46,13 +46,12 @@ export function Transactions() {
                     <p>
                       {flagged.length} transaction
                       {flagged.length === 1 ? "" : "s"} need
-                      {flagged.length === 1 ? "s" : ""} operator attention —
-                      automated progress is stopped or unsafe. These reverted or
-                      failed on-chain, had their block dropped by a reorg, have
-                      an ambiguous broadcast outcome that must not be blindly
-                      resubmitted, had their nonce consumed elsewhere, or
-                      exhausted automatic replacement and require manual
-                      intervention.
+                      {flagged.length === 1 ? "s" : ""} operator attention:
+                      progress is stopped or unsafe. Check the statuses below
+                      for reverts, pre-mempool rejection, reorgs, unknown
+                      broadcast outcomes, externally consumed nonces or
+                      exhausted replacements. Never blindly resubmit an unknown
+                      broadcast.
                     </p>
                     <ul className="u-mt-2">
                       {flagged.map((tx) => (
@@ -79,9 +78,7 @@ export function Transactions() {
                               </a>
                             </>
                           )}
-                          {/* Operator-intervention detail: sender identity and
-                              replacement lineage, shown only when the server
-                              populates these optional fields. */}
+                          {/* Optional sender, nonce and replacement details */}
                           {(tx.sender != null ||
                             tx.nonce != null ||
                             tx.replacedBy != null ||
@@ -118,7 +115,7 @@ export function Transactions() {
                     </ul>
                   </div>
                 )}
-                <div className="table-wrap">
+                <TableWrap label="Transactions">
                   <table>
                     <thead>
                       <tr>
@@ -133,13 +130,13 @@ export function Transactions() {
                       {data.map((tx) => (
                         <tr key={tx.txHash}>
                           <td className="mono">{tx.txHash}</td>
-                          <td>{tx.kind ?? "—"}</td>
+                          <td>{tx.kind ?? "-"}</td>
                           <td>
                             {tx.status && (
                               <TransactionStatusBadge status={tx.status} />
                             )}
                           </td>
-                          <td>{tx.blockNumber ?? "—"}</td>
+                          <td>{tx.blockNumber ?? "-"}</td>
                           <td>
                             {tx.explorerUrl && (
                               <a
@@ -155,7 +152,7 @@ export function Transactions() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </TableWrap>
                 <PaginationFooter
                   loadedCount={data.length}
                   totalCount={transactions.totalCount}

@@ -12,18 +12,16 @@ import (
 	"strings"
 )
 
-// Package limits, sized to defend against archive traversal, zip bombs,
-// duplicate names, and hash-mismatched entries.
+// Package limits that bound the size of an archive OpenPackage will read
 const (
 	MaxPackageFiles        = 64
 	MaxExpandedPackageSize = 64 << 20 // 64 MiB
 	MaxSingleFileSize      = 32 << 20 // 32 MiB
 )
 
-// BuildPackage assembles a .rwa ZIP container holding manifest.json,
-// profile.json, metadata.json, typed-data.json, and any
-// proof files under proofs/. It returns the raw ZIP bytes and the SHA-256 of
-// those bytes (recorded in models.AuditPackage for later integrity checks).
+// BuildPackage returns a .rwa ZIP and its hex SHA-256 for models.AuditPackage. Contents
+// are manifest.json, profile.json, metadata.json, typed-data.json and optional proofs/
+// files.
 func BuildPackage(primaryType string, profileDigest, metadataDigest [32]byte, profileJSON, metadataJSON []byte, typedData TypedDataDoc, proofs []ProofFile) (zipBytes []byte, sha256Hex string, err error) {
 	if primaryType != "MintAttestation" && primaryType != "BurnAttestation" {
 		return nil, "", fmt.Errorf("auditpkg: primaryType must be MintAttestation or BurnAttestation, got %q", primaryType)
@@ -100,16 +98,16 @@ func writeZipFile(zw *zip.Writer, name string, data []byte) error {
 	return nil
 }
 
-// OpenedPackage is a safely-extracted .rwa package.
+// OpenedPackage is a .rwa package that passed OpenPackage's checks
 type OpenedPackage struct {
 	Manifest Manifest
 	Files    map[string][]byte // path -> contents, including manifest.json
 }
 
-// OpenPackage safely extracts a .rwa ZIP, rejecting path traversal,
-// symlinks/non-regular entries, duplicate names, excessive file/archive
-// count, and expanded-size limits before trusting any content. It also
-// verifies every file's SHA-256 and size against manifest.json.
+// OpenPackage reads a .rwa ZIP in memory, rejecting traversal, non-regular entries
+// (symlinks, directories, devices), duplicates, excessive entry counts and
+// archive/entry size violations. The manifest must exactly match extracted files,
+// including sizes and SHA-256 hashes.
 func OpenPackage(zipBytes []byte) (*OpenedPackage, error) {
 	if len(zipBytes) > MaxExpandedPackageSize {
 		return nil, fmt.Errorf("auditpkg: package exceeds max compressed size")
@@ -171,11 +169,6 @@ func OpenPackage(zipBytes []byte) (*OpenedPackage, error) {
 	if !ok {
 		return nil, fmt.Errorf("auditpkg: package missing manifest.json")
 	}
-	// parseManifestStrict fully validates against
-	// shared/schemas/rwa-manifest.schema.json plus the file-set rules (no
-	// duplicate paths, mandatory files present, every other entry confined to
-	// proofs/) that the schema alone can't express — not a permissive
-	// json.Unmarshal.
 	manifest, err := parseManifestStrict(manifestRaw)
 	if err != nil {
 		return nil, err
@@ -195,12 +188,8 @@ func OpenPackage(zipBytes []byte) (*OpenedPackage, error) {
 			return nil, fmt.Errorf("auditpkg: sha256 mismatch for %q", mf.Path)
 		}
 	}
-	// Require EXACT set-equality between extracted files (excluding
-	// manifest.json itself) and manifest.files — the loop above already
-	// catches a declared file that's missing from the archive; this catches
-	// the inverse (an extracted file the manifest never declared), so a
-	// hidden/unaccounted payload can no longer ride through the audit
-	// workflow undescribed by its own manifest.
+	// the loop above catches a declared file missing from the archive; this
+	// catches an extracted file the manifest does not declare
 	for path := range files {
 		if path == "manifest.json" {
 			continue

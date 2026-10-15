@@ -31,19 +31,16 @@ func (r *redemptionRequestRepo) DeleteAll(ctx context.Context) error {
 	return err
 }
 
-// DeleteStaleGeneration implements the generation-swap rebuild
-// cleanup — see the interface doc comment.
+// DeleteStaleGeneration implements the cleanup step of the generation-swap rebuild,
+// see the interface doc comment
 func (r *redemptionRequestRepo) DeleteStaleGeneration(ctx context.Context, gen int64) error {
 	_, err := r.coll.DeleteMany(ctx, bson.M{"generation": bson.M{"$ne": gen}})
 	return err
 }
 
-// ListPage returns one bounded, repository-level keyset page — see
-// PurchaseRepository.ListPage's doc comment. Sorted (createdAt desc, _id
-// desc); optional status and beneficiary-address filters combine with the
-// keyset $or via $and. The address filter matches the beneficiary
-// case-insensitively (anchored $regex, "i"), mirroring
-// TransactionRepository.ListPage's address query.
+// ListPage sorts (createdAt, _id) descending, combining keyset, status and
+// case-insensitive beneficiary filters with $and. The address uses anchored regex, as
+// in transactionRepo.ListPage.
 func (r *redemptionRequestRepo) ListPage(ctx context.Context, status, address, cursor string, limit int) ([]*models.RedemptionRequest, string, error) {
 	clauses := bson.A{keysetFilter(cursor, "createdAt")}
 	if status != "" {

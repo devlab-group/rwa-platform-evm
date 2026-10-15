@@ -8,27 +8,22 @@ import (
 	"time"
 )
 
-// ResourceSnapshot is one point-in-time resource-usage sample: heap usage,
-// garbage-collection behavior, goroutine count, and open file descriptors —
-// the signals a soak run watches for leaks. DB/RPC connection counts,
-// queue depth, event lag, and DLQ growth are deliberately NOT sampled here
-// — those are already exposed as Prometheus gauges by internal/metrics
-// (RedemptionsPendingCount, StorageUp, ...) and by Report's own
-// EventCount/DLQCount, which is where a soak run should actually watch
-// them from (its own metrics endpoint + this package's Report), rather than
-// this package re-implementing a second metrics system.
+// ResourceSnapshot samples heap, GC, goroutines and open file descriptors for soak leak
+// checks. It excludes database/RPC connections, queues, event lag and DLQ growth.
+// Report provides final event/DLQ counts; internal/metrics exposes live gauges such as
+// RedemptionsPendingCount and StorageUp.
 type ResourceSnapshot struct {
 	Timestamp      time.Time `json:"timestamp"`
 	HeapAllocBytes uint64    `json:"heapAllocBytes"`
 	HeapObjects    uint64    `json:"heapObjects"`
 	NumGC          uint32    `json:"numGC"`
 	NumGoroutine   int       `json:"numGoroutine"`
-	// OpenFDs is best-effort (Linux /proc/self/fd; 0 elsewhere or on error —
-	// not fatal, since it is one signal among several, not the only one).
+	// OpenFDs counts /proc/self/fd entries; 0 means unknown when unavailable or
+	// unreadable, including on non-Linux systems
 	OpenFDs int `json:"openFDs"`
 }
 
-// Sample takes one ResourceSnapshot right now.
+// Sample takes a current ResourceSnapshot
 func Sample() ResourceSnapshot {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -42,10 +37,7 @@ func Sample() ResourceSnapshot {
 	}
 }
 
-// countOpenFDs best-effort counts this process's open file descriptors via
-// /proc/self/fd (Linux only); returns 0 if unavailable (e.g. non-Linux, or
-// the directory can't be read), which callers should treat as "unknown,"
-// not "zero open descriptors."
+// countOpenFDs counts /proc/self/fd entries, returning 0 (unknown) on read failure
 func countOpenFDs() int {
 	entries, err := os.ReadDir(filepath.Join("/proc", "self", "fd"))
 	if err != nil {
@@ -54,15 +46,11 @@ func countOpenFDs() int {
 	return len(entries)
 }
 
-// GrowthCheck compares a resource metric's first and last sample in a
-// series and reports whether it grew by more than tolerancePercent — a
-// mechanical check for the two soak failure modes: memory that keeps
-// climbing without stabilizing, and unbounded goroutine growth. A real
-// soak run should apply this across many samples spread
-// over the full duration, not just first-vs-last, to distinguish "grew
-// once during startup then stabilized" from "still climbing at the end" —
-// see the runbook (docs/operator/soak-runbook.md) for the recommended
-// windowed comparison.
+// GrowthCheck compares first/last samples, reporting growth above tolerancePercent. Use
+// several windows to distinguish sustained memory/goroutine growth from startup growth
+// (docs/operator/soak-runbook.md); one comparison cannot.
+//
+// When first is 0, percent is 100 and grew is last > 0.
 func GrowthCheck(first, last uint64, tolerancePercent float64) (grew bool, percent float64) {
 	if first == 0 {
 		return last > 0, 100
@@ -71,7 +59,7 @@ func GrowthCheck(first, last uint64, tolerancePercent float64) (grew bool, perce
 	return percent > tolerancePercent, percent
 }
 
-// FormatBytes is a small human-readable helper for report/log output.
+// FormatBytes formats b in human-readable binary units for reports and logs
 func FormatBytes(b uint64) string {
 	const unit = 1024
 	if b < unit {

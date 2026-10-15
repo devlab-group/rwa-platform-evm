@@ -1,9 +1,7 @@
 package models
 
-// ComplianceStatus mirrors IComplianceRegistry.ComplianceStatus. It is the
-// shared compliance-state enum used by both the Investor read model and the
-// ComplianceOperation write record, so it lives here on its own rather than in
-// either model's file.
+// ComplianceStatus mirrors IComplianceRegistry.ComplianceStatus and is shared by
+// Investor read models and ComplianceOperation write records
 type ComplianceStatus string
 
 const (

@@ -1,19 +1,11 @@
 #!/usr/bin/env bash
-# Chain reindex rehearsal runbook — proves a running deployment can
-# fully reconstruct its event-derived read models from the chain alone.
-# Wraps `go run ./cmd/reindex` (the actual drop) with a before/after
-# collection-count comparison, polling until the ALREADY-RUNNING platform
-# server's own background reconcile loops (5-15s tickers — see
-# cmd/platform/main.go's startBackgroundLoops) have caught back up.
+# Run go run ./cmd/reindex, then poll until collection counts match their pre-drop
+# values. A platform server must already be running against the same MongoDB and chain;
+# its 5-to-15-second reconcile loops rebuild the data (cmd/platform/main.go).
 #
-# This assumes a platform server is already running against the same
-# MONGO_URI/MONGO_DB/CHAIN_ID/*_ADDRESS env vars this script and cmd/reindex
-# read — reindex only drops data; it does not itself re-scan the chain, the
-# running server's tickers do that, exactly as they would after any
-# incident that left the read model behind the chain.
-#
-# For the same rehearsal proven without any live infrastructure at all, see
-# internal/indexer's TestReindexRehearsalReconstructsIdenticalReadModel.
+# reindex reads addresses from the DB Project and only drops data; it never scans. See
+# internal/indexer's TestReindexRehearsalReconstructsIdenticalReadModel for the
+# fake-chain equivalent.
 #
 # Usage: MONGO_URI=... MONGO_DB=... CHAIN_ID=... bash ops/reindex_rehearsal.sh
 set -euo pipefail
@@ -32,10 +24,9 @@ for tool in mongosh go; do
     fi
 done
 
-# Extracts host[:port] from a mongodb:// URI for `mongosh --host`, since
-# --uri and a bare positional db name don't combine the way this script
-# wants; simplest robust option is a small inline JS snippet run through
-# `mongosh "<uri>"` directly instead of parsing the URI ourselves.
+# runs a JavaScript snippet in mongosh against the database. MONGO_URI and
+# MONGO_DB are joined as "<uri>/<db>", so MONGO_URI must not contain a database name
+# or query options.
 mongo_eval() {
     mongosh "${MONGO_URI}/${MONGO_DB}" --quiet --eval "$1"
 }
@@ -54,10 +45,9 @@ BEFORE="$(collection_counts)"
 echo "before: ${BEFORE}"
 
 echo "=== [2/3] running cmd/reindex (drops chain_events/checkpoints/purchases/redemption_requests) ==="
-# cmd/reindex now reads a single YAML config via --config (internal/config.
-# LoadFile). Materialize a minimal one from this script's env, matching what
-# it previously passed as MONGO_URI/MONGO_DB env vars. environment stays
-# "development" (the default), so no production fail-closed checks apply.
+# cmd/reindex reads a YAML config file (--config, internal/config.LoadFile), so
+# write a minimal one from this script's environment. The environment stays
+# "development" (the default), so the production checks do not apply.
 REINDEX_CONFIG="$(mktemp)"
 trap 'rm -f "${REINDEX_CONFIG}"' EXIT
 cat >"${REINDEX_CONFIG}" <<EOF

@@ -80,8 +80,8 @@ func TestReconcileCreatesInvestorForOnChainOnlyAccount(t *testing.T) {
 	events := memory.NewChainEventRepository()
 	complianceAddr := "0x0000000000000000000000000000000000C0A1"
 
-	// No prior investor record — e.g. a manual compliance action for a
-	// wallet that never went through the challenge flow.
+	// No investor record exists, as for a manual action on a wallet that never
+	// went through the challenge flow
 	if err := events.Create(ctx, &models.ChainEvent{
 		ChainID: 31337, Address: complianceAddr, Name: "StatusChanged", TxHash: "0x01", LogIndex: 0, BlockNumber: 10,
 		Data: map[string]any{"account": "0xBBB", "newStatus": uint8(1), "newValidUntil": uint64(0)},
@@ -105,13 +105,9 @@ func TestReconcileCreatesInvestorForOnChainOnlyAccount(t *testing.T) {
 	}
 }
 
-// TestReconcileResetsSubjectWhenLastStatusEventIsOrphaned covers
-// reversibility: an investor's Status/ValidUntil must be
-// reset to "no known status" once its only/last surviving StatusChanged
-// event disappears from chainEvents — e.g. because internal/indexer rolled
-// it back as orphaned by a reorg. The old reconciler only ever upserted
-// accounts present in states and would leave this investor permanently,
-// incorrectly stuck at its last chain-derived status.
+// TestReconcileResetsSubjectWhenLastStatusEventIsOrphaned checks that deleting an
+// account's last StatusChanged event, as in reorg rollback, restores Unknown and
+// validUntil 0
 func TestReconcileResetsSubjectWhenLastStatusEventIsOrphaned(t *testing.T) {
 	ctx := context.Background()
 	investors := memory.NewInvestorRepository()
@@ -139,7 +135,7 @@ func TestReconcileResetsSubjectWhenLastStatusEventIsOrphaned(t *testing.T) {
 		t.Fatalf("precondition failed: got status=%s validUntil=%d", applied.Status, applied.ValidUntil)
 	}
 
-	// Simulate the indexer rolling back the StatusChanged event as orphaned by a reorg.
+	// Simulate the indexer rolling back the StatusChanged event after a reorg
 	if _, err := events.DeleteFromBlock(ctx, 31337, complianceAddr, 10); err != nil {
 		t.Fatal(err)
 	}
@@ -168,11 +164,11 @@ func TestReconcileReflectsManualStatusChangeOutsideServer(t *testing.T) {
 	events := memory.NewChainEventRepository()
 	complianceAddr := "0x0000000000000000000000000000000000C0A1"
 
-	// Server's own optimistic upsert said Allowed...
+	// The server's own upsert says Allowed
 	if err := investors.Upsert(ctx, &models.Investor{Address: "0xCCC", Status: models.ComplianceAllowed}); err != nil {
 		t.Fatal(err)
 	}
-	// ...but a multisig later blocked the wallet directly on-chain.
+	// A multisig then blocks the wallet directly on-chain
 	if err := events.Create(ctx, &models.ChainEvent{
 		ChainID: 31337, Address: complianceAddr, Name: "StatusChanged", TxHash: "0x02", LogIndex: 0, BlockNumber: 20,
 		Data: map[string]any{"account": "0xCCC", "newStatus": uint8(2), "newValidUntil": uint64(0)},

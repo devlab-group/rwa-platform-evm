@@ -3,6 +3,8 @@ package assets
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -10,12 +12,9 @@ import (
 	"github.com/rwa-platform/server/internal/auditpkg"
 )
 
-// TestDialectLimitsMatchFrozenConstants pins the shared structural-limit
-// contract: shared/schemas/structural-limits.json (mirrored into the vectors
-// file's "limits" object) MUST equal the constants both the server (auditpkg)
-// and the offline signer hardcode. If the two ever drift — say one side keeps
-// depth 32 while the other bumps to 64 — a document one accepts the other
-// rejects, so this test fails loudly instead.
+// TestDialectLimitsMatchFrozenConstants compares auditpkg limits with the conformance
+// vectors' frozen limits, also checked by the offline signer, so both enforce the same
+// bounds
 func TestDialectLimitsMatchFrozenConstants(t *testing.T) {
 	v := loadConformanceVectors(t)
 	got := [5]int{auditpkg.MaxDocumentBytes, auditpkg.MaxObjectDepth, auditpkg.MaxStringLength, auditpkg.MaxArrayLength, auditpkg.MaxObjectKeys}
@@ -25,10 +24,27 @@ func TestDialectLimitsMatchFrozenConstants(t *testing.T) {
 	}
 }
 
-// TestDialectConformanceInstances is the instance-validation gate: a schema
-// compiling is not enough — the two validators must agree on whether a given
-// instance satisfies it. Complements TestDialectConformance (which only checks
-// compile/reject).
+// TestDialectLimitsCopyMatchesStructuralLimits checks the vectors' limits against
+// shared/schemas/structural-limits.json, preventing an outdated copy from hiding
+// changes from either binary's tests
+func TestDialectLimitsCopyMatchesStructuralLimits(t *testing.T) {
+	v := loadConformanceVectors(t)
+	p := filepath.Join("..", "..", "..", "shared", "schemas", "structural-limits.json")
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("reading %s: %v", p, err)
+	}
+	var frozen conformanceVectors
+	if err := json.Unmarshal(raw, &frozen.Limits); err != nil {
+		t.Fatalf("parsing %s: %v", p, err)
+	}
+	if frozen.Limits != v.Limits {
+		t.Fatalf("vectors limits %+v do not match %s %+v", v.Limits, p, frozen.Limits)
+	}
+}
+
+// TestDialectConformanceInstances checks instance validation parity, beyond the schema
+// compilation and rejection verdicts in TestDialectConformance
 func TestDialectConformanceInstances(t *testing.T) {
 	v := loadConformanceVectors(t)
 	if len(v.InstanceCases) == 0 {
@@ -64,11 +80,9 @@ func TestDialectConformanceInstances(t *testing.T) {
 	}
 }
 
-// TestDialectConformanceEnvelope runs every envelopeCases document through
-// the real ValidateProfile/ValidateRecord entry points — not just the bare
-// schema guard/compiler — so a nested-envelope strictness gap (e.g. an extra
-// field slipping through displayFields[]) is caught the same way a real
-// request would hit it.
+// TestDialectConformanceEnvelope sends envelopeCases through ValidateProfile and
+// ValidateRecord to catch nested unknown fields, such as an extra displayFields[]
+// member, beyond schema guard and compiler checks
 func TestDialectConformanceEnvelope(t *testing.T) {
 	v := loadConformanceVectors(t)
 	if len(v.EnvelopeCases) == 0 {
@@ -101,13 +115,9 @@ func TestDialectConformanceEnvelope(t *testing.T) {
 	}
 }
 
-// TestDialectConformanceLimitBoundaries builds, for every limitCases entry,
-// a document sitting exactly AT its declared limit (must be accepted) and
-// exactly one unit past it (must be rejected), and runs both through
-// auditpkg.CheckLimits — the same choke point ValidateProfile/ValidateRecord
-// call before any recursive parsing (see profile.go/record.go). This is the
-// server side of the exact-boundary check for every structural limit; the
-// signer runs the identical construction against its own limit checker.
+// TestDialectConformanceLimitBoundaries sends each limitCases boundary and boundary+1
+// through auditpkg.CheckLimits: accept the former, reject the latter. ValidateProfile
+// and ValidateRecord use this pre-parse check; the signer tests equivalent documents.
 func TestDialectConformanceLimitBoundaries(t *testing.T) {
 	v := loadConformanceVectors(t)
 	if len(v.LimitCases) == 0 {
@@ -129,11 +139,9 @@ func TestDialectConformanceLimitBoundaries(t *testing.T) {
 	}
 }
 
-// buildLimitBoundary constructs two JSON documents for structural-limit kind
-// — one exactly at limit, one exactly limit+1 — using a shape that doesn't
-// itself trip any OTHER structural limit before the one under test (e.g.
-// the "bytes" case pads with insignificant whitespace rather than a long
-// string, since a >32768-char string would trip MaxStringLength first).
+// buildLimitBoundary isolates each structural limit with documents at limit and
+// limit+1. The bytes case pads with whitespace; a string would hit MaxStringLength
+// (32768 bytes) first.
 func buildLimitBoundary(kind string, limit int) (atLimit, overLimit []byte, err error) {
 	switch kind {
 	case "string":
@@ -155,8 +163,7 @@ func buildLimitBoundary(kind string, limit int) (atLimit, overLimit []byte, err 
 	case "depth":
 		return []byte(strings.Repeat("[", limit) + strings.Repeat("]", limit)), []byte(strings.Repeat("[", limit+1) + strings.Repeat("]", limit+1)), nil
 	case "bytes":
-		// "{" + N spaces + "}" is valid (if odd) JSON — an empty object with
-		// insignificant interior whitespace — and has exactly N+2 bytes.
+		// "{", N spaces and "}" is an empty object of exactly N+2 bytes
 		if limit < 2 {
 			return nil, nil, fmt.Errorf("bytes limit %d too small for the {<pad>} construction", limit)
 		}
@@ -166,13 +173,9 @@ func buildLimitBoundary(kind string, limit int) (atLimit, overLimit []byte, err 
 	}
 }
 
-// utf8BytesOfLength returns a string whose UTF-8 encoding is exactly
-// totalBytes long, built from as many whole copies of r as fit and padded
-// with single-byte ASCII filler to hit the exact byte count -- so its rune
-// count is far smaller than totalBytes whenever r is multi-byte. Used by
-// the string-2byte/-3byte/-4byte and object-key-*byte limitCase kinds to pin
-// the length bound as UTF-8 BYTES, not runes, matching
-// signer/internal/jsonschema/dialect_conformance_test.go's identical helper.
+// utf8BytesOfLength fills totalBytes with r and ASCII padding, distinguishing byte
+// limits from rune counts for strings and keys. The signer uses the same helper in
+// dialect_conformance_test.go.
 func utf8BytesOfLength(r rune, totalBytes int) string {
 	width := utf8.RuneLen(r)
 	var b strings.Builder
@@ -185,15 +188,15 @@ func utf8BytesOfLength(r rune, totalBytes int) string {
 	return b.String()
 }
 
-// jsonValueUTF8Bytes returns {"a":"<value>"} where the value's UTF-8-encoded
-// content is exactly totalBytes long, built from rune r.
+// jsonValueUTF8Bytes returns {"a":"<value>"} where the value is totalBytes UTF-8
+// bytes long, built from rune r
 func jsonValueUTF8Bytes(r rune, totalBytes int) []byte {
 	val, _ := json.Marshal(utf8BytesOfLength(r, totalBytes))
 	return []byte(`{"a":` + string(val) + `}`)
 }
 
-// jsonKeyUTF8Bytes returns a single-property JSON object whose key's
-// UTF-8-encoded length is exactly totalBytes, built from rune r.
+// jsonKeyUTF8Bytes returns a one-property JSON object whose key is totalBytes
+// UTF-8 bytes long, built from rune r
 func jsonKeyUTF8Bytes(r rune, totalBytes int) []byte {
 	key, _ := json.Marshal(utf8BytesOfLength(r, totalBytes))
 	return []byte(`{` + string(key) + `:0}`)

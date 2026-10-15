@@ -2,13 +2,8 @@ import { WalletConnectButton } from "./WalletConnectButton";
 import { NetworkSwitcher } from "./NetworkSwitcher";
 
 /**
- * The app's only chrome: a brand label plus the wallet affordances. Both
- * children read the connected account and chain straight from WalletProvider,
- * so there is nothing to thread through — the switcher hides itself until a
- * wallet is connected.
- *
- * The page's own <h1> lives in the Investor route, so this stays a plain
- * banner with no heading of its own.
+ * App navigation shares WalletProvider for connect and network controls; the switcher appears
+ * when connected. The Investor route owns the page's <h1>.
  */
 export function InvestorHeader() {
   return (

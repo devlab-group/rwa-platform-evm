@@ -39,6 +39,8 @@ describe("Login (wallet-signature)", () => {
 
   it("runs challenge → sign → verify and stores the JWT (incl. in IndexedDB)", async () => {
     vi.mocked(api.createAuthChallenge).mockResolvedValue({
+      address: ADMIN,
+      nonce: "nonce-abc",
       message: "sign this: nonce-abc",
       expiresAt: Math.floor(Date.now() / 1000) + 300,
     });
@@ -50,8 +52,7 @@ describe("Login (wallet-signature)", () => {
     });
 
     renderWithWallet(<Login />, { connected: true });
-    // The harness connects the wallet on mount (as the real admin does during
-    // login), so the sign-in button (not the connect button) appears.
+    // Auto-connect the fake wallet to show Sign in
     const signIn = await screen.findByRole("button", {
       name: /sign in with wallet/i,
     });
@@ -59,12 +60,13 @@ describe("Login (wallet-signature)", () => {
 
     await waitFor(() => expect(getSession()?.token).toBe("admin-jwt"));
     expect(api.createAuthChallenge).toHaveBeenCalledWith({ address: ADMIN });
-    // The wallet signed the challenge message; the signature went to /auth/session.
+    // Sign the challenge and send its signature to /auth/session
     const [sessionBody] = vi.mocked(api.createSession).mock.calls[0];
     expect(sessionBody.address).toBe(ADMIN);
+    expect(sessionBody.nonce).toBe("nonce-abc");
     expect(sessionBody.signature).toBe(wallet.signature);
 
-    // Persisted to IndexedDB, not localStorage/sessionStorage.
+    // Stored in IndexedDB, not in localStorage or sessionStorage
     await flush();
     expect(await idbGet<{ token: string }>("authSession")).toMatchObject({
       token: "admin-jwt",
@@ -75,6 +77,8 @@ describe("Login (wallet-signature)", () => {
 
   it("shows an admin-mismatch message on 401 and creates no session", async () => {
     vi.mocked(api.createAuthChallenge).mockResolvedValue({
+      address: ADMIN,
+      nonce: "n",
       message: "sign this",
       expiresAt: Math.floor(Date.now() / 1000) + 300,
     });
@@ -98,6 +102,8 @@ describe("Login (wallet-signature)", () => {
       signRejection: { code: 4001, message: "User rejected the request" },
     });
     vi.mocked(api.createAuthChallenge).mockResolvedValue({
+      address: ADMIN,
+      nonce: "n",
       message: "sign this",
       expiresAt: Math.floor(Date.now() / 1000) + 300,
     });

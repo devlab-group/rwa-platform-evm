@@ -1,15 +1,6 @@
-// Package serverwiring holds the chain-client, transaction-manager, and
-// event-decoder construction shared by BOTH the platform server
-// (cmd/platform) and the recovery CLI (cmd/opsctl), so a privileged recovery
-// action taken from opsctl uses the EXACT same chain-safety, nonce
-// coordination, and typed event dispatch the running server does. Before
-// this package these were built independently in each
-// command's package main: opsctl dialed the RPC without checking its chain
-// ID, always constructed a lease-bypassing TxManager, and passed a nil
-// decoder that fell back to a generic topic-only decode — so a DLQ retry
-// could resolve a typed-decode failure with a meaningless generic event, and
-// a `tx replace` could race a live replica on the same nonce or run against
-// the wrong chain entirely.
+// Package serverwiring shares chain clients, transaction managers and event decoders
+// between cmd/platform and cmd/opsctl, keeping recovery chain checks, nonce
+// coordination, fee caps and typed dispatch consistent
 package serverwiring
 
 import (
@@ -36,9 +27,8 @@ import (
 	"github.com/rwa-platform/server/internal/token"
 )
 
-// FeeCaps builds blockchain.FeeCaps from cfg's wei-string fields. config.Load
-// already validated they parse as non-negative base-10 integers when
-// non-empty, so SetString's ok result is only re-checked defensively here.
+// FeeCaps converts cfg's validated, non-negative base-10 wei strings to
+// blockchain.FeeCaps; empty strings mean no cap
 func FeeCaps(cfg config.Config) blockchain.FeeCaps {
 	parse := func(s string) *big.Int {
 		if s == "" {
@@ -57,14 +47,11 @@ func FeeCaps(cfg config.Config) blockchain.FeeCaps {
 	}
 }
 
-// IndexerAddresses is the ordered set of addresses the indexer scans — the
-// deployed project's contracts (compliance, supply controller, vault,
-// redemption escrow, token for Pausable pause/unpause, strategy for price
-// updates) PLUS the factory (from bootstrap config, not the Project record)
-// whose ProjectDeployed event the deployment projector adopts. Any unset
-// address is skipped. The factory address is known from config at startup,
-// unlike the deployed addresses which only exist once RWAFactory.deploy runs,
-// so watching it is what lets the server OBSERVE a wallet-broadcast deployment.
+// IndexerAddresses lists configured compliance, supply controller, Vault, escrow,
+// token, strategy and factory addresses, skipping unset values. The token emits
+// enforcement/governance events; the strategy emits price updates. Watching the
+// startup-configured factory allows wallet-deployment adoption before child addresses
+// exist.
 func IndexerAddresses(addrs models.Addresses, factoryAddr string) []common.Address {
 	var out []common.Address
 	for _, a := range []string{addrs.Compliance, addrs.SupplyController, addrs.Vault, addrs.RedemptionEscrow, addrs.Token, addrs.Strategy, factoryAddr} {
@@ -75,19 +62,13 @@ func IndexerAddresses(addrs models.Addresses, factoryAddr string) []common.Addre
 	return out
 }
 
-// ErrWrongChain is returned by DialChain when the RPC endpoint reports a
-// chain ID other than the configured CHAIN_ID.
+// ErrWrongChain is returned when the RPC endpoint reports a chain ID other than
+// the configured CHAIN_ID
 var ErrWrongChain = fmt.Errorf("serverwiring: RPC endpoint is on the wrong chain")
 
-// DialChain connects cfg.ChainRPCURL and verifies the RPC-reported chain ID
-// equals cfg.ChainID BEFORE returning the client. The
-// configured CHAIN_ID is what transactions are signed against and the
-// namespace the indexer labels logs under; an endpoint on a different chain
-// would sign for / query the wrong network while otherwise looking healthy.
-// A mismatch (or a dial/ChainID RPC failure) closes any opened connection and
-// returns an error rather than handing back a client the caller might mutate
-// state through. Every chain-touching opsctl command goes through this, so
-// none can act against the wrong chain.
+// DialChain connects to cfg.ChainRPCURL, requires cfg.ChainID and closes on mismatch or
+// RPC failure. cmd/platform and chain-touching opsctl commands use it so indexed events
+// and signed transactions target the configured chain.
 func DialChain(ctx context.Context, cfg config.Config) (*blockchain.RPCClient, error) {
 	if cfg.ChainRPCURL == "" {
 		return nil, fmt.Errorf("serverwiring: CHAIN_RPC_URL is not configured")
@@ -103,10 +84,8 @@ func DialChain(ctx context.Context, cfg config.Config) (*blockchain.RPCClient, e
 	return client, nil
 }
 
-// CheckChainID verifies that client's RPC-reported chain ID equals
-// wantChainID, returning ErrWrongChain on a mismatch. Split
-// out from DialChain so the exact safety condition every chain-touching
-// command relies on is unit-testable against a fake client.
+// CheckChainID returns ErrWrongChain on an ID mismatch or propagates RPC errors;
+// separating it from DialChain allows fake-client tests
 func CheckChainID(ctx context.Context, client blockchain.Client, wantChainID int64) error {
 	id, err := client.ChainID(ctx)
 	if err != nil {
@@ -118,13 +97,9 @@ func CheckChainID(ctx context.Context, client blockchain.Client, wantChainID int
 	return nil
 }
 
-// NewTxManager builds the TxManager per cfg.TxCoordinationMode, identically in
-// both binaries: "in-process" (default) constructs it with no
-// nonce lease, while "mongo-lease" wires repos.NonceLeases so concurrent
-// replicas (and now opsctl's own `tx replace`) coordinate through a
-// distributed, fenced lease instead of racing the same signer/nonce. Both
-// paths honor the configured fee caps and DefaultMaxReplacementAttempts
-// replacement policy.
+// NewTxManager uses cfg.TxCoordinationMode: "in-process" has no nonce lease;
+// "mongo-lease" coordinates replicas and opsctl `tx replace` via repos.NonceLeases.
+// Both apply configured fee caps and DefaultMaxReplacementAttempts.
 func NewTxManager(cfg config.Config, chainClient blockchain.Client, repos *repository.Repositories) blockchain.TxManager {
 	chainID := big.NewInt(cfg.ChainID)
 	feeMode := blockchain.FeeMode(cfg.FeeMode)
@@ -136,19 +111,13 @@ func NewTxManager(cfg config.Config, chainClient blockchain.Client, repos *repos
 	return blockchain.NewTxManagerWithFeeCaps(chainClient, repos.Transactions, chainID, feeMode, feeCaps)
 }
 
-// BuildDecoder dispatches each log to the right contract's typed decoder by
-// address (compliance / supply-controller / vault / redemption-escrow /
-// strategy / token), so the indexer populates every read model. Because every
-// project contract can also emit the generic OZ governance events
-// (RoleGranted/RoleRevoked, and the token's Paused/Unpaused), each
-// contract-specific decoder is wrapped so a log its own switch returns as
-// "unknown" falls back to the shared governance decoder before the final
-// generic topic0-only decode. The token's own decoder covers its ERC-7943
-// enforcement events, with Paused/Unpaused and the role events reached through
-// that same governance fallback. This is the
-// SAME production dispatch the running platform uses; the recovery CLI must
-// use it too, or a DLQ retry would replay through a generic decoder that never
-// reaches the typed projectors.
+// BuildDecoder dispatches by configured contract address for cmd/platform and opsctl.
+// Child-contract decoders fall back to shared governance decoding only on "unknown";
+// errors propagate. Governance covers role/admin transfers and token pause/unpause.
+//
+// Unknown child events remain "unknown". Unrecognized factory events and logs from
+// unconfigured addresses use generic topic0 names ("unknown" without topics). DLQ
+// retries share the live decoder's typing.
 func BuildDecoder(addrs models.Addresses, factoryAddr string) indexer.EventDecoder {
 	complianceAddr := strings.ToLower(addrs.Compliance)
 	controllerAddr := strings.ToLower(addrs.SupplyController)
@@ -158,10 +127,7 @@ func BuildDecoder(addrs models.Addresses, factoryAddr string) indexer.EventDecod
 	tokenAddr := strings.ToLower(addrs.Token)
 	factory := strings.ToLower(factoryAddr)
 
-	// withGovernance runs a contract-specific decoder first and, only when it
-	// returns "unknown" (its own switch didn't recognize the topic0), retries
-	// through the shared governance decoder — so a RoleGranted/RoleRevoked on
-	// any contract is typed rather than falling through to the generic bucket.
+	// withGovernance tries governance only when primary returns "unknown" without error
 	withGovernance := func(primary indexer.EventDecoder) indexer.EventDecoder {
 		return func(log types.Log) (string, map[string]any, error) {
 			name, data, err := primary(log)
@@ -211,12 +177,9 @@ func BuildDecoder(addrs models.Addresses, factoryAddr string) indexer.EventDecod
 	}
 }
 
-// decodeProjectDeployed types the factory's ProjectDeployed event into a
-// ChainEvent the deployment projector (project.ReconcileDeployment) consumes.
-// projectId/profileDigest are emitted as 0x-hex so the projector can match
-// them against the stored profile's derived values; the six deployed addresses
-// and version round out the data. The factory emits no other event the server
-// tracks, so anything else routes to the generic bucket.
+// decodeProjectDeployed types the factory event for project.ReconcileDeployment: 0x-hex
+// projectId/profileDigest, six deployed addresses and version. Other factory logs use
+// generic decoding.
 func decodeProjectDeployed(log types.Log) (string, map[string]any, error) {
 	f := bindings.NewFactory()
 	if len(log.Topics) == 0 || log.Topics[0] != f.EventID("ProjectDeployed") {
@@ -239,19 +202,13 @@ func decodeProjectDeployed(log types.Log) (string, map[string]any, error) {
 	}, nil
 }
 
-// complianceEventNames are the ComplianceRegistry event names
-// compliance.DecodeLog produces. Unlike the other workflow packages,
-// internal/compliance exposes no EventNames var, so the single known name is
-// listed here (kept next to the other KnownEventNames sources so a future
-// addition is obvious).
+// complianceEventNames lists compliance.DecodeLog outputs; internal/compliance has no
+// EventNames variable
 var complianceEventNames = []string{"StatusChanged"}
 
-// KnownEventNames is the set of typed event names the deployed contracts can
-// produce — the union across whichever addresses are set. An
-// empty result means NO typed contract is configured, i.e. only the generic
-// decoder is available. Every project contract can also emit the generic OZ
-// governance events (RoleGranted/RoleRevoked), so those are known whenever any
-// contract address is set; the token additionally emits Paused/Unpaused.
+// KnownEventNames lists typed events for configured contracts; empty means only generic
+// decoding is available. Any child enables role/admin-transfer events; only the token
+// enables Paused/Unpaused.
 func KnownEventNames(addrs models.Addresses, factoryAddr string) map[string]bool {
 	set := map[string]bool{}
 	add := func(addr string, names []string) {
@@ -269,28 +226,20 @@ func KnownEventNames(addrs models.Addresses, factoryAddr string) map[string]bool
 	add(addrs.RedemptionEscrow, redemption.EventNames)
 	add(addrs.Strategy, strategy.EventNames)
 	add(addrs.Token, append([]string{"Paused", "Unpaused"}, token.EventNames...))
-	// RoleGranted/RoleRevoked and the two-step DEFAULT_ADMIN transfer events
-	// can appear on any project contract.
+	// Every child can emit role and two-step admin-transfer events
 	for _, a := range []string{addrs.Compliance, addrs.SupplyController, addrs.Vault, addrs.RedemptionEscrow, addrs.Strategy, addrs.Token} {
 		add(a, []string{"RoleGranted", "RoleRevoked", "DefaultAdminTransferScheduled", "DefaultAdminTransferCanceled"})
 	}
 	return set
 }
 
-// ErrGenericDecode is returned by StrictDecoder for a log that BuildDecoder
-// could only resolve to a generic/topic-only event — i.e. NOT one of the
-// configured contracts' known typed events.
+// ErrGenericDecode means StrictDecoder found no known typed event name for the
+// configured contracts
 var ErrGenericDecode = fmt.Errorf("serverwiring: log did not decode to a known typed contract event")
 
-// StrictDecoder wraps BuildDecoder so that a log which only decodes to a
-// generic/topic-only result returns an ERROR instead of a nameless event
-// result. opsctl uses this for DLQ retry: because indexer.
-// RetryDeadLetter re-records (does NOT resolve) a DLQ entry whose decode
-// errors, this makes "the decoded event name must be one of the configured
-// contract's known events" a precondition for resolving the entry — without
-// touching indexer.go. A DLQ entry that still cannot be typed stays in the
-// queue for further investigation rather than being resolved with a
-// meaningless generic event that never reaches a typed projector.
+// StrictDecoder wraps BuildDecoder, rejecting names outside KnownEventNames. opsctl
+// uses it for DLQ retry: RetryDeadLetter re-records decode failures instead of
+// resolving them, keeping generic events out of typed-projector recovery.
 func StrictDecoder(addrs models.Addresses, factoryAddr string) indexer.EventDecoder {
 	base := BuildDecoder(addrs, factoryAddr)
 	known := KnownEventNames(addrs, factoryAddr)
@@ -306,13 +255,9 @@ func StrictDecoder(addrs models.Addresses, factoryAddr string) indexer.EventDeco
 	}
 }
 
-// IndexerUnsafe reports whether chainID's indexer checkpoint is currently in
-// ReconciliationRequired state — a reorg deeper than the automatic-recovery
-// policy left the chain-derived read models frozen mid-divergence. opsctl
-// consults this to refuse chain mutations while the platform's indexer is
-// unsafe, except for the specific recovery command that exists to clear that
-// state. No checkpoint yet is NOT unsafe — that is
-// the normal pre-first-poll state, not a divergence.
+// IndexerUnsafe reads chainID's ReconciliationRequired checkpoint flag; opsctl refuses
+// mutations while it is set after a deep reorg. A missing checkpoint returns false
+// (normal before polling); repository errors propagate.
 func IndexerUnsafe(ctx context.Context, repos *repository.Repositories, chainID int64) (bool, error) {
 	cp, err := repos.IndexerCheckpoints.Get(ctx, chainID, indexer.CheckpointAddress)
 	if err != nil {

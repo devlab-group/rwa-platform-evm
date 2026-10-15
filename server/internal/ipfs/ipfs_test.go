@@ -10,9 +10,8 @@ import (
 	"time"
 )
 
-// TestKuboClientTimesOutOnSlowServer checks that a wedged endpoint does not
-// hang a call indefinitely, which it would with an http.Client{} that has no
-// timeout at all.
+// TestKuboClientTimesOutOnSlowServer checks that an unresponsive endpoint
+// fails the call at the client timeout instead of hanging it
 func TestKuboClientTimesOutOnSlowServer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(500 * time.Millisecond)
@@ -33,7 +32,7 @@ func TestKuboClientTimesOutOnSlowServer(t *testing.T) {
 	}
 }
 
-// TestKuboClientRejectsOversizedResponse checks the bounded-read limit.
+// TestKuboClientRejectsOversizedResponse checks the response-size limit
 func TestKuboClientRejectsOversizedResponse(t *testing.T) {
 	const limit = 16
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,9 +47,8 @@ func TestKuboClientRejectsOversizedResponse(t *testing.T) {
 	}
 }
 
-// TestFileArchiveClientAddRawLeavesNoTempFiles proves the crash-safe write
-// path (temp file -> fsync -> atomic rename) never leaves a stray
-// `.tmp-*` file behind on the successful path.
+// TestFileArchiveClientAddRawLeavesNoTempFiles checks that a successful AddRaw
+// leaves no `.tmp-*` file behind
 func TestFileArchiveClientAddRawLeavesNoTempFiles(t *testing.T) {
 	dir := t.TempDir()
 	archive, err := NewFileArchiveClient(dir)
@@ -79,5 +77,32 @@ func TestFileArchiveClientAddRawLeavesNoTempFiles(t *testing.T) {
 	}
 	if !sawFinal {
 		t.Fatalf("expected the final block file for CID %s, got directory entries %v", cid, names)
+	}
+}
+
+// TestKuboClientAddRawUsesSingleBlockChunker checks that the add request asks for
+// a 1 MiB chunker and that larger data is refused before any request is made
+func TestKuboClientAddRawUsesSingleBlockChunker(t *testing.T) {
+	var query string
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		query = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"Hash":"bafkstub"}`))
+	}))
+	defer srv.Close()
+
+	client := NewKuboClient(srv.URL)
+	if _, err := client.AddRaw(context.Background(), make([]byte, 1<<20)); err != nil {
+		t.Fatalf("AddRaw at the limit: %v", err)
+	}
+	for _, want := range []string{"cid-version=1", "raw-leaves=true", "pin=true", "chunker=size-1048576"} {
+		if !strings.Contains(query, want) {
+			t.Errorf("query %q lacks %q", query, want)
+		}
+	}
+	calls = 0
+	if _, err := client.AddRaw(context.Background(), make([]byte, 1<<20+1)); err == nil || calls != 0 {
+		t.Fatalf("expected an over-limit error without a request, err=%v calls=%d", err, calls)
 	}
 }

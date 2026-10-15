@@ -9,7 +9,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// --- admin challenges (single-use admin wallet login) ---
+// Nonce-keyed, single-use admin login challenges
 
 type AdminChallengeRepository struct {
 	mu sync.Mutex
@@ -20,33 +20,33 @@ func NewAdminChallengeRepository() *AdminChallengeRepository {
 	return &AdminChallengeRepository{m: map[string]*models.AdminChallenge{}}
 }
 
-func (r *AdminChallengeRepository) Upsert(ctx context.Context, c *models.AdminChallenge) error {
+func (r *AdminChallengeRepository) Insert(ctx context.Context, c *models.AdminChallenge) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cp := *c
-	r.m[c.Address] = &cp
+	r.m[c.Nonce] = &cp
 	return nil
 }
 
-func (r *AdminChallengeRepository) Get(ctx context.Context, address string) (*models.AdminChallenge, error) {
+func (r *AdminChallengeRepository) Get(ctx context.Context, nonce string) (*models.AdminChallenge, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	c, ok := r.m[address]
+	c, ok := r.m[nonce]
 	if !ok {
 		return nil, repository.ErrNotFound
 	}
 	if time.Now().UTC().After(c.ExpiresAt) {
-		delete(r.m, address) // opportunistic eviction, same pattern as the session repos
+		delete(r.m, nonce) // opportunistic eviction, same pattern as the session repos
 		return nil, repository.ErrNotFound
 	}
 	cp := *c
 	return &cp, nil
 }
 
-func (r *AdminChallengeRepository) MarkUsed(ctx context.Context, address string) error {
+func (r *AdminChallengeRepository) MarkUsed(ctx context.Context, nonce string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	c, ok := r.m[address]
+	c, ok := r.m[nonce]
 	if !ok {
 		return repository.ErrNotFound
 	}

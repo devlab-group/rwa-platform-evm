@@ -103,9 +103,7 @@ contract ComplianceRegistryTest is TestBase {
         assertTrue(compliance.isAllowed(address(escrow)));
     }
 
-    // ---- Vault/RedemptionEscrow are pinned system addresses ----
-    // A fat-fingered or compromised COMPLIANCE_ROLE must not be able to self-DoS the
-    // deployment by blocking the contracts that move RWA on every buy/claim.
+    // System-address pin: COMPLIANCE_ROLE cannot block Vault or RedemptionEscrow
 
     function test_isSystemAddress() public view {
         assertTrue(compliance.isSystemAddress(address(vault)));
@@ -131,7 +129,7 @@ contract ComplianceRegistryTest is TestBase {
     }
 
     function test_setStatus_settingVaultToUnknownReverts() public {
-        // Pinned to Allowed means ANY non-Allowed status is rejected, not just Blocked.
+        // Reject every non-Allowed status
         vm.prank(complianceOperator);
         vm.expectRevert(
             abi.encodeWithSelector(IComplianceRegistry.SystemAddressCannotBeBlocked.selector, address(vault))
@@ -140,8 +138,7 @@ contract ComplianceRegistryTest is TestBase {
     }
 
     function test_setStatus_reAllowingVaultSucceeds() public {
-        // Setting a pinned system address back to Allowed is not blocked by the pin — only
-        // non-Allowed statuses are rejected.
+        // Reapplying Allowed with zero expiry remains valid
         vm.prank(complianceOperator);
         compliance.setStatus(address(vault), IComplianceRegistry.ComplianceStatus.Allowed, 0);
         assertTrue(compliance.isAllowed(address(vault)));
@@ -162,20 +159,15 @@ contract ComplianceRegistryTest is TestBase {
         );
         compliance.setStatuses(accounts, statuses, validUntil);
 
-        // Reverted atomically: the first (valid) entry in the batch was not applied either.
+        // Batch rollback also undoes the first, valid entry
         assertFalse(compliance.isAllowed(outsider));
     }
 
-    // ---- an expired `Allowed` record must not be able to disable a system address ----
-    // Blocking the pin to non-Allowed statuses (above) was not sufficient: `Allowed` with a
-    // nonzero `validUntil` still makes `isAllowed` go false once that timestamp passes, which
-    // disables the Vault/RedemptionEscrow exactly like `Blocked` would, without ever touching
-    // `SystemAddressCannotBeBlocked`'s original guard. Both setter variants must reject any
-    // nonzero `validUntil` for a system address, whether already-expired or still in the future.
+    // Both setters reject past and future expiry for system addresses: Allowed must stay
+    // non-expiring so isAllowed cannot disable Vault or escrow
 
     function test_setStatus_expiredValidUntilOnVaultReverts() public {
-        // warp first so `block.timestamp - 1` is a nonzero past timestamp, not 0 (which means
-        // "no expiry" and is exactly the one permitted value).
+        // Ensure timestamp - 1 is nonzero; zero means no expiry
         vm.warp(1000);
         vm.prank(complianceOperator);
         vm.expectRevert(
@@ -185,7 +177,7 @@ contract ComplianceRegistryTest is TestBase {
     }
 
     function test_setStatus_futureValidUntilOnVaultReverts() public {
-        // Not yet expired at the time of the call — still rejected, because it *will* expire.
+        // Reject future expiry too
         vm.prank(complianceOperator);
         vm.expectRevert(
             abi.encodeWithSelector(IComplianceRegistry.SystemAddressCannotBeBlocked.selector, address(vault))
@@ -222,7 +214,7 @@ contract ComplianceRegistryTest is TestBase {
         );
         compliance.setStatuses(accounts, statuses, validUntil);
 
-        // Reverted atomically: the first (valid) entry in the batch was not applied either.
+        // Batch rollback also undoes the first, valid entry
         assertFalse(compliance.isAllowed(outsider));
     }
 
@@ -242,10 +234,8 @@ contract ComplianceRegistryTest is TestBase {
     }
 
     function test_buyRequestClaimRejectCancel_stillWorkAfterPermittedSystemAddressUpdates() public {
-        // Every permitted update to a system address (re-Allowed, validUntil == 0, any number
-        // of times) must leave buy/request/claim/reject/cancel fully usable —
-        // the system-address guarantee, exercised end to end rather than just
-        // re-checking isAllowed.
+        // Repeated Allowed/zero-expiry updates preserve buy, request, claim, reject and cancel;
+        // exercise the flows rather than only querying isAllowed
         vm.startPrank(complianceOperator);
         compliance.setStatus(address(vault), IComplianceRegistry.ComplianceStatus.Allowed, 0);
         compliance.setStatus(address(escrow), IComplianceRegistry.ComplianceStatus.Allowed, 0);
@@ -272,7 +262,7 @@ contract ComplianceRegistryTest is TestBase {
         vault.buy(buyAmount, quote, investor, uint64(block.timestamp + 1 hours));
         assertEq(token.balanceOf(investor), buyAmount);
 
-        // buy (second beneficiary, on-chain purchase — there is no off-chain distribute)
+        // buy (second beneficiary, on-chain purchase)
         uint256 quote2 = strategy.quotePurchase(5 ether);
         quoteToken.mint(investor2, quote2);
         vm.prank(investor2);
@@ -333,8 +323,7 @@ contract ComplianceRegistryTest is TestBase {
     }
 
     function test_setSystemAddresses_zeroAddressReverts() public {
-        // Exercise a fresh, unwired registry directly (the shared fixture's is already wired) —
-        // deployed by this test contract itself, so it is the recorded `_deployer`.
+        // Deploy an unwired registry from this test, making it the recorded deployer
         ComplianceRegistry fresh = new ComplianceRegistry(0, admin, complianceOperator);
 
         vm.expectRevert(IComplianceRegistry.ZeroAddressAccount.selector);
@@ -342,9 +331,7 @@ contract ComplianceRegistryTest is TestBase {
     }
 
     function test_buyClaim_stillWorkAfterAttemptedVaultBlock() public {
-        // An attempted (and rejected) block of the Vault
-        // or RedemptionEscrow must not disturb the normal buy/claim paths — proven here by
-        // actually driving each of them to completion, not just re-checking isAllowed.
+        // Complete buy and claim after a rejected system-address block attempt
         vm.prank(complianceOperator);
         vm.expectRevert(
             abi.encodeWithSelector(IComplianceRegistry.SystemAddressCannotBeBlocked.selector, address(vault))
@@ -357,11 +344,11 @@ contract ComplianceRegistryTest is TestBase {
         );
         compliance.setStatus(address(escrow), IComplianceRegistry.ComplianceStatus.Blocked, 0);
 
-        // Give the Vault inventory to sell.
+        // Give the Vault inventory to sell
         ISupplyController.MintAttestation memory a = _mintAttestation(auditor, 100 ether, "SYSADDR-REC", 1);
         supplyController.mint(a, _signMint(a, AUDITOR_PK));
 
-        // buy still works.
+        // buy still works
         uint256 buyAmount = 10 ether;
         uint256 quote = strategy.quotePurchase(buyAmount);
         quoteToken.mint(investor, quote);
@@ -371,7 +358,7 @@ contract ComplianceRegistryTest is TestBase {
         vault.buy(buyAmount, quote, investor, uint64(block.timestamp + 1 hours));
         assertEq(token.balanceOf(investor), buyAmount);
 
-        // claim (via request -> fund -> claim) still works.
+        // request -> fund -> claim still works
         vm.prank(investor);
         token.approve(address(escrow), buyAmount);
         vm.prank(investor);

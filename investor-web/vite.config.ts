@@ -2,15 +2,8 @@ import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
 /**
- * The app's own content is entirely same-origin: no CDN scripts/fonts, no
- * external stylesheets, no images. This is the standalone investor example — a
- * client forks it and serves the built `dist/` from their own static host;
- * unlike the admin console it is NOT embedded in the platform's Go binary.
- * Wallet RPC calls go through the extension's own out-of-page channel
- * (window.ethereum), not fetch/XHR, so they aren't subject to connect-src at
- * all. `frame-ancestors` is included for documentation but browsers only honor
- * it via an HTTP header, never a <meta> tag — whatever host serves this should
- * also set it (recommend 'none').
+ * The static host serves this SPA; wallet RPC uses the extension channel outside connect-src.
+ * Send CSP as an HTTP header too: meta ignores frame-ancestors; recommend 'none'.
  */
 const BASE_CSP: Record<string, string[]> = {
   "default-src": ["'self'"],
@@ -27,44 +20,22 @@ const BASE_CSP: Record<string, string[]> = {
 };
 
 /**
- * The one exception to "same-origin only": a KYC provider's web SDK, which
- * necessarily loads code from and streams captures to the provider. Widening
- * the policy for a provider a deployment doesn't use would be pure attack
- * surface, so it is opt-in per build via `VITE_KYC_PROVIDER` — leave it unset
- * (the default, and the right setting for a deployment with no KYC provider)
- * and the policy stays exactly as strict as it was.
- *
- * The entries below are what each SDK, as shipped in node_modules, actually
- * reaches for:
- *
- * - Sumsub is an iframe and nothing else: `@sumsub/websdk` creates an
- *   `<iframe>` at `<baseUrl>/websdk/websdk.html` (default baseUrl
- *   `https://in.sumsub.com`) and talks to it over postMessage. No script, no
- *   fetch, no worker runs in this origin, so `frame-src` carries the load.
- *   That iframe requests camera/microphone/geolocation through its `allow`
- *   attribute, so the serving host must NOT send a Permissions-Policy denying
- *   them — Sumsub's docs call for
- *   `camera=(self "https://api.sumsub.com"), microphone=(self "https://api.sumsub.com")`.
- * - Onfido runs *in this origin*: `onfido-sdk-ui` is a thin loader that
- *   dynamically imports `https://sdk.onfido.com/<version>/Onfido.js`, and the
- *   real SDK it pulls in does its own API calls, camera capture and
- *   cross-device handoff. Because that bundle is fetched at runtime, its hosts
- *   can't be read off node_modules — the entries below are Onfido's own
- *   published CSP guide (documentation.onfido.com/sdk/sdk-csp-guide/), which
- *   lists the regional API hosts explicitly. The four regional `connect-src`
- *   hosts cover every account region; drop the ones your account doesn't use.
- *
- * The `img-src`/`media-src`/`worker-src` blob: entries are NOT in Onfido's
- * guide — they're the usual needs of in-browser camera capture and are included
- * so a document/selfie step doesn't fail closed. Onfido also warns that the
- * guide omits some hosts, so run a real capture flow behind
- * Content-Security-Policy-Report-Only before trusting this in enforcing mode.
+ * VITE_KYC_PROVIDER opts a build into SDK hosts; unset keeps BASE_CSP.
+ * Sumsub's packaged SDK embeds a token-selected iframe (default https://in.sumsub.com):
+ * <baseUrl>/websdk/websdk.html, or /idensic/websdk.html for legacy tokens. It uses
+ * postMessage and requests camera, microphone and geolocation; host Permissions-Policy
+ * must permit the capture permissions. Sumsub's example is
+ * camera=(self "https://api.sumsub.com"), microphone=(self "https://api.sumsub.com").
+ * Onfido's loader imports https://sdk.onfido.com/<version>/Onfido.js at runtime.
+ * The host list follows documentation.identity.entrust.com/sdk/sdk-csp-guide/;
+ * remove unused API regions. img-src, media-src and worker-src are capture additions
+ * outside that guide. Test a full capture flow under Content-Security-Policy-Report-Only
+ * before enforcement; the guide covers common issues, not an exhaustive policy.
  */
 const KYC_CSP: Record<string, Record<string, string[]>> = {
   sumsub: {
-    // Sumsub publishes no CSP guide and no domain allowlist, and the iframe
-    // origin varies by account region (in./api./api.uae. …), so this stays a
-    // wildcard rather than a guess at one host.
+    // Token-selected iframe origins require a Sumsub wildcard; connect-src is precautionary
+    // for the packaged iframe loader
     "frame-src": ["https://*.sumsub.com"],
     "connect-src": ["https://*.sumsub.com"],
   },
@@ -87,9 +58,8 @@ const KYC_CSP: Record<string, Record<string, string[]>> = {
 };
 
 /**
- * Serializes BASE_CSP with the named provider's additions merged in. A
- * directive the provider adds to replaces `'none'` outright rather than
- * appending to it — `frame-src 'none' https://…` would be self-contradicting.
+ * Merges provider sources into BASE_CSP, removing 'none' from extended directives before
+ * serializing
  */
 function buildCsp(provider: string | undefined): string {
   const extra = provider ? KYC_CSP[provider] : undefined;
@@ -115,12 +85,8 @@ function buildCsp(provider: string | undefined): string {
 }
 
 /**
- * Injects the CSP as a <meta> tag into the BUILT index.html only — never in
- * `vite dev`, whose HMR client needs a WebSocket connection and injects its
- * own inline bootstrap script that a strict CSP would break. `vite preview`
- * (and whatever static host serves the built `dist/`) serves the built file, so
- * the tag still applies there. That host should additionally set the CSP as a
- * real response header (frame-ancestors is only honored as a header, not a tag).
+ * Injects CSP into builds; dev HMR needs WebSockets and React's inline script.
+ * Preview/static hosts serve the tagged output; add an HTTP header for frame-ancestors.
  */
 function injectCsp(csp: string): Plugin {
   return {
@@ -140,9 +106,6 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "VITE_");
   return {
     plugins: [react(), injectCsp(buildCsp(env.VITE_KYC_PROVIDER || undefined))],
-    // Sass preprocessing needs no options: Vite 7 dropped the legacy Sass API
-    // entirely and always uses the modern compiler API now, so the previous
-    // `css.preprocessorOptions.scss.api: "modern-compiler"` opt-in is gone.
     build: {
       outDir: "dist",
       emptyOutDir: true,

@@ -14,9 +14,8 @@ const (
 	fxOtherOrigin   = "http://evil.example"
 )
 
-// corsRouter builds a minimal router with the CORS middleware in front of a
-// handler that records whether it ran — several of the assertions below are
-// about whether the chain CONTINUED, not just which headers came back.
+// corsRouter records handler execution behind CORS so tests can check whether
+// middleware continued the chain
 func corsRouter(t *testing.T, origins []string, reached *bool) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -57,9 +56,8 @@ func TestCORSAllowsListedOrigin(t *testing.T) {
 	}
 }
 
-// TestCORSEchoesNeverWildcards: the header must carry the request's exact
-// origin, never "*". A wildcard alongside an Authorization bearer is the whole
-// reason config.Load refuses "*" — the middleware must not reintroduce it.
+// TestCORSEchoesNeverWildcards checks that the header carries the request's
+// exact origin and never "*", which config.Load also refuses
 func TestCORSEchoesNeverWildcards(t *testing.T) {
 	reached := false
 	r := corsRouter(t, []string{fxAllowedOrigin, "https://investor.example"}, &reached)
@@ -73,10 +71,9 @@ func TestCORSEchoesNeverWildcards(t *testing.T) {
 	}
 }
 
-// TestCORSUnlistedOriginGetsNoHeaders: an unlisted origin gets NO CORS headers,
-// which is what makes the browser block it. The request itself still runs —
-// CORS is browser-enforced, and rejecting server-side would change behaviour for
-// non-browser clients that are not subject to it at all.
+// TestCORSUnlistedOriginGetsNoHeaders checks that an unlisted origin gets no
+// CORS headers, so the browser blocks it, while the request still runs for
+// non-browser clients
 func TestCORSUnlistedOriginGetsNoHeaders(t *testing.T) {
 	reached := false
 	r := corsRouter(t, []string{fxAllowedOrigin}, &reached)
@@ -90,10 +87,9 @@ func TestCORSUnlistedOriginGetsNoHeaders(t *testing.T) {
 	}
 }
 
-// TestCORSPreflightIsAnsweredAndStops is the case that motivated putting this
-// middleware ahead of Authenticate: a preflight carries no Authorization header
-// by design, so if it continued down the chain it would be rejected as
-// unauthenticated and the real request would never be attempted.
+// TestCORSPreflightIsAnsweredAndStops checks that a preflight is answered by
+// the middleware and does not continue down the chain, where it would be
+// treated as unauthenticated
 func TestCORSPreflightIsAnsweredAndStops(t *testing.T) {
 	reached := false
 	r := corsRouter(t, []string{fxAllowedOrigin}, &reached)
@@ -112,8 +108,7 @@ func TestCORSPreflightIsAnsweredAndStops(t *testing.T) {
 			t.Errorf("%s = %q, want %q", header, got, want)
 		}
 	}
-	// Every header a real request may send must be listed, or the browser
-	// fails the preflight and the call never happens.
+	// Every header a real request may send must be listed
 	allowHeaders := w.Header().Get("Access-Control-Allow-Headers")
 	for _, h := range []string{"Authorization", "Content-Type", "Idempotency-Key", WalletSessionHeader} {
 		if !strings.Contains(allowHeaders, h) {
@@ -131,8 +126,8 @@ func TestCORSPreflightIsAnsweredAndStops(t *testing.T) {
 	}
 }
 
-// TestCORSPreflightFromUnlistedOriginIsNotAnswered: an unlisted origin must not
-// get a 204 with CORS headers — otherwise the allowlist would be decorative.
+// TestCORSPreflightFromUnlistedOriginIsNotAnswered checks that an unlisted
+// origin gets no 204 with CORS headers
 func TestCORSPreflightFromUnlistedOriginIsNotAnswered(t *testing.T) {
 	reached := false
 	r := corsRouter(t, []string{fxAllowedOrigin}, &reached)
@@ -146,9 +141,8 @@ func TestCORSPreflightFromUnlistedOriginIsNotAnswered(t *testing.T) {
 	}
 }
 
-// TestCORSNoCredentialsHeader: this API authenticates with Authorization /
-// X-Wallet-Session headers, never cookies, so credentialed mode is neither
-// needed nor safe to enable alongside an echoed origin.
+// TestCORSNoCredentialsHeader checks that Access-Control-Allow-Credentials is
+// not sent, since the API authenticates with headers and not cookies
 func TestCORSNoCredentialsHeader(t *testing.T) {
 	reached := false
 	r := corsRouter(t, []string{fxAllowedOrigin}, &reached)
@@ -159,9 +153,8 @@ func TestCORSNoCredentialsHeader(t *testing.T) {
 	}
 }
 
-// TestCORSSetsVaryOnEveryResponse: the response now depends on Origin, so a
-// shared cache that ignored that could serve one origin the headers computed
-// for another. It must be present even when the origin does NOT match.
+// TestCORSSetsVaryOnEveryResponse checks that Vary: Origin is present even
+// when the origin does not match
 func TestCORSSetsVaryOnEveryResponse(t *testing.T) {
 	reached := false
 	r := corsRouter(t, []string{fxAllowedOrigin}, &reached)
@@ -174,10 +167,8 @@ func TestCORSSetsVaryOnEveryResponse(t *testing.T) {
 	}
 }
 
-// TestCORSDisabledByDefault: with no origins configured the middleware is inert
-// — no headers, and a preflight is left to the router (404/405). That is the
-// correct posture for a deployment serving only the embedded, same-origin
-// console.
+// TestCORSDisabledByDefault checks that with no origins configured the
+// middleware adds no headers and leaves a preflight to the router (404/405)
 func TestCORSDisabledByDefault(t *testing.T) {
 	reached := false
 	r := corsRouter(t, nil, &reached)
@@ -194,8 +185,8 @@ func TestCORSDisabledByDefault(t *testing.T) {
 	}
 }
 
-// TestCORSIgnoresEmptyEntries: a YAML list with a stray blank entry must not
-// make the empty string a matchable origin.
+// TestCORSIgnoresEmptyEntries checks that a blank list entry does not make the
+// empty string a matchable origin
 func TestCORSIgnoresEmptyEntries(t *testing.T) {
 	reached := false
 	r := corsRouter(t, []string{"", "   ", fxAllowedOrigin}, &reached)

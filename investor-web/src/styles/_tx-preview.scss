@@ -74,8 +74,7 @@
   gap: var(--space-2);
 }
 
-// Operator-intervention detail shown for a flagged transaction on the
-// Transactions page: nonce, sender, and replacement lineage.
+// Operator details for flagged transactions: nonce, sender and replacement lineage
 .tx-intervention-detail {
   display: grid;
   grid-template-columns: auto 1fr;

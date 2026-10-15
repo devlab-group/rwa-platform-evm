@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// Investor is a wallet's known status (collection: investors).
+// Investor is a wallet's known status (collection: investors)
 type Investor struct {
 	Address           string           `json:"address" bson:"_id"`
 	Status            ComplianceStatus `json:"status" bson:"status"`

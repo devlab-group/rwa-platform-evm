@@ -1,27 +1,27 @@
-// Short-lived, wallet-scoped session token minted by
-// POST /api/v1/compliance/challenge/verify (X-Wallet-Session; see
-// api/openapi.yaml VerifyChallengeResult). It grants read access to a single
-// address's own compliance status and nothing else — no issuer capability —
-// which is what makes it safe to keep in an investor's browser at all.
-// Stored per-address so a returning investor who reconnects the same wallet
-// doesn't need to re-sign every page load until it expires.
+// Per-address localStorage sessions authorize own-status reads and KYC, without admin authority.
+// Expired entries (15-minute default TTL) are cleared on read; Disconnect clears the current wallet.
+// Same-origin scripts can read them; wallet scope limits exposure.
 const STORAGE_PREFIX = "rwa.walletSession.";
 
 export interface WalletSession {
   token: string;
-  expiresAt: string; // ISO8601
+  expiresAt: string; // ISO 8601
 }
 
 function storageKey(address: string): string {
   return `${STORAGE_PREFIX}${address.toLowerCase()}`;
 }
 
-/** Returns the stored session for `address` if present and not yet expired (clearing it if expired). */
+// Reading window.localStorage itself throws when the browser blocks site storage
+function storage(): Storage | undefined {
+  return typeof window === "undefined" ? undefined : window.localStorage;
+}
+
+/** Returns a stored session unless expired; clears expired entries */
 export function getWalletSession(address: string): WalletSession | undefined {
-  if (typeof window === "undefined") return undefined;
-  const raw = window.localStorage.getItem(storageKey(address));
-  if (!raw) return undefined;
   try {
+    const raw = storage()?.getItem(storageKey(address));
+    if (!raw) return undefined;
     const session = JSON.parse(raw) as WalletSession;
     if (!session.token || !session.expiresAt) return undefined;
     if (new Date(session.expiresAt).getTime() <= Date.now()) {
@@ -34,13 +34,26 @@ export function getWalletSession(address: string): WalletSession | undefined {
   }
 }
 
+/**
+ * Stores a per-address session; blocked/full storage is ignored, so a later visit may
+ * require another ownership challenge
+ */
 export function setWalletSession(
   address: string,
   session: WalletSession,
 ): void {
-  window.localStorage.setItem(storageKey(address), JSON.stringify(session));
+  try {
+    storage()?.setItem(storageKey(address), JSON.stringify(session));
+  } catch {
+    // not persisted
+  }
 }
 
+/** Removes the session, ignoring blocked storage */
 export function clearWalletSession(address: string): void {
-  window.localStorage.removeItem(storageKey(address));
+  try {
+    storage()?.removeItem(storageKey(address));
+  } catch {
+    // nothing to clear
+  }
 }

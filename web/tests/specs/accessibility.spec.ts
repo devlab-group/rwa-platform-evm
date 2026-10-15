@@ -1,9 +1,8 @@
-// Automated axe-core scans on every screen. Catches missing labels/roles,
-// contrast regressions, and landmark/heading structure issues that manual
-// review tends to miss. Runs in both mocked and live mode — it's a
-// static-markup check, not a state-dependent one, so mockOnly() doesn't apply.
+// axe-core scans of every admin screen for missing labels and roles, contrast
+// problems, and landmark and heading structure issues. The scans check markup,
+// not seeded state, so mockOnly() does not apply.
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "../fixtures/fixtures";
+import { expect, requireAdminSession, test } from "../fixtures/fixtures";
 
 const ROUTES = [
   "/admin/setup",
@@ -15,10 +14,13 @@ const ROUTES = [
   "/admin/security",
 ];
 
+// Every test here scans an admin screen
+test.beforeEach(() => requireAdminSession());
+
 for (const path of ROUTES) {
   test(`${path} has no serious/critical axe violations`, async ({ page }) => {
     await page.goto(path);
-    // Let the lazy-loaded route chunk finish mounting before scanning.
+    // Wait for the lazy-loaded route chunk to mount before scanning
     await page.waitForLoadState("networkidle");
 
     const results = await new AxeBuilder({ page })
@@ -37,8 +39,7 @@ for (const path of ROUTES) {
 
 test("skip link moves focus to main content", async ({ page }) => {
   await page.goto("/admin/setup");
-  // Tab once from the top of the page — the skip link is the first
-  // focusable element and must be reachable/visible on focus.
+  // The first Tab from the top of the page must focus the skip link
   await page.keyboard.press("Tab");
   await expect(page.getByRole("link", { name: "Skip to main content" })).toBeFocused();
   await page.keyboard.press("Enter");
@@ -51,7 +52,7 @@ test("client-side navigation moves focus to the new page's main content", async 
 
   await page.getByRole("link", { name: "Assets" }).click();
   await expect(page).toHaveURL(/\/admin\/assets$/);
-  // React Router doesn't reload the page, so without explicit focus
-  // management a screen reader user gets no signal the route changed.
+  // A client-side route change does not reload the page, so the app moves
+  // focus explicitly to signal the change to screen reader users
   await expect(page.locator("#main-content")).toBeFocused();
 });

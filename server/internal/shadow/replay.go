@@ -1,12 +1,7 @@
-// Package shadow implements the shadow-replay / soak-test harness: drive
-// the SAME indexer/reconciliation logic the production server runs against
-// a scripted replay of chain
-// state, in an isolated in-memory database, with no signing key and no
-// ability to submit a state-changing production transaction — structurally
-// guaranteed by never constructing a blockchain.TxManager, keys.Provider,
-// or anything else capable of signing, not merely by configuration. See
-// docs/operator/soak-runbook.md for how to run this against a real
-// recorded testnet history for a release-candidate soak.
+// Package shadow runs the production indexer against scripted chain replay in isolated
+// in-memory repositories. It constructs no blockchain.TxManager, keys.Provider or
+// signer and cannot sign or submit transactions. See docs/operator/soak-runbook.md for
+// release-candidate soak runs.
 package shadow
 
 import (
@@ -20,8 +15,7 @@ import (
 	"github.com/rwa-platform/server/internal/indexer"
 )
 
-// LogSpec is one scripted log entry, the JSON-friendly shape of a
-// types.Log.
+// LogSpec is one scripted log entry, a JSON-friendly form of types.Log
 type LogSpec struct {
 	Address     string   `json:"address"`
 	BlockNumber uint64   `json:"blockNumber"`
@@ -29,11 +23,7 @@ type LogSpec struct {
 	LogIndex    uint     `json:"logIndex"`
 	Topics      []string `json:"topics"`
 	Data        string   `json:"data,omitempty"`
-	// Decodable, when explicitly set false, makes this log fail EventDecoder
-	// (see Runner's decoder) — a scripted "malformed RPC response" /
-	// undecodable-event scenario exercising the indexer's DLQ path end to end,
-	// rather than taking the indexer's own unit-tested decode-failure path on
-	// faith here too.
+	// Decodable=false makes Runner reject the log into the indexer's dead-letter path
 	Decodable *bool `json:"decodable,omitempty"`
 }
 
@@ -53,47 +43,43 @@ func (s LogSpec) decodable() bool {
 	return s.Decodable == nil || *s.Decodable
 }
 
-// HeaderSpec is one scripted block header. A reorg is expressed by two
-// steps setting the SAME Number with a different Seed — indexer.FakeSource
-// derives the header's hash from Seed, so this changes what the "canonical"
-// block at that height hashes to, exactly like a real reorg would.
+// HeaderSpec describes a block header; setting the same Number with different Seeds
+// across steps changes FakeSource's derived hash, modeling a reorg
 type HeaderSpec struct {
 	Number uint64 `json:"number"`
 	Seed   byte   `json:"seed"`
 }
 
-// FaultKind names a scripted RPC fault to inject before a step's Poll call.
+// FaultKind names an RPC fault injected before a step's Poll
 type FaultKind string
 
 const (
-	FaultNone           FaultKind = ""
-	FaultRangeTooLarge  FaultKind = "range_too_large"
-	FaultTransient      FaultKind = "transient"
+	FaultNone          FaultKind = ""
+	FaultRangeTooLarge FaultKind = "range_too_large"
+	FaultTransient     FaultKind = "transient"
+	// FaultMalformedNoise injects the same error as FaultTransient
 	FaultMalformedNoise FaultKind = "malformed"
 )
 
-// Step is one scripted unit of replay: chain-state mutations to apply
-// before the next Poll cycle, plus what's expected to happen.
+// Step specifies chain-state changes before the next Poll and whether that Poll should
+// fail
 type Step struct {
 	Description string       `json:"description"`
 	Headers     []HeaderSpec `json:"headers,omitempty"`
-	// RemoveLogsFrom, if set, drops every previously-added log at/after
-	// this block number before adding this step's new Logs — models a
-	// reorg's old-chain logs disappearing.
+	// RemoveLogsFrom drops prior logs at or above this block before adding step.Logs,
+	// modeling reorg removal
 	RemoveLogsFrom *uint64   `json:"removeLogsFrom,omitempty"`
 	Logs           []LogSpec `json:"logs,omitempty"`
 	Head           uint64    `json:"head"`
-	// Fault, if set, is injected as this step's FIRST FilterLogs response
-	// (see indexer.FakeSource.FilterLogsErrors) — the indexer's own bounded
-	// retry/backoff must recover from it within the same Poll call.
+	// Fault makes the first FilterLogs call fail; the same Poll can recover within the
+	// indexer's retry budget (see FakeSource.FilterLogsErrors)
 	Fault FaultKind `json:"fault,omitempty"`
-	// ExpectPollError documents that THIS step's Poll call is scripted to
-	// fail outright (e.g. a reorg deeper than the configured automatic
-	// policy) — Runner does not treat that as a harness failure when set.
+	// ExpectPollError requires Poll to fail, for example on a deep reorg; failure passes
+	// and success becomes a report error
 	ExpectPollError bool `json:"expectPollError,omitempty"`
 }
 
-// Scenario is a complete scripted replay dataset.
+// Scenario is a complete scripted replay dataset
 type Scenario struct {
 	ChainID     int64    `json:"chainId"`
 	Addresses   []string `json:"addresses"`
@@ -102,10 +88,8 @@ type Scenario struct {
 	Steps       []Step   `json:"steps"`
 }
 
-// LoadScenario reads a Scenario from a JSON file — the on-disk form of a
-// replay of real testnet blocks, logs, and transactions. A real
-// recorded-testnet-history exporter is an ops-side concern outside this
-// package's scope.
+// LoadScenario reads JSON; this package cannot export recorded testnet history into
+// that format
 func LoadScenario(path string) (*Scenario, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -118,7 +102,7 @@ func LoadScenario(path string) (*Scenario, error) {
 	return &sc, nil
 }
 
-// addressList converts Scenario.Addresses to common.Address.
+// addressList converts Scenario.Addresses to common.Address values
 func (sc *Scenario) addressList() []common.Address {
 	out := make([]common.Address, len(sc.Addresses))
 	for i, a := range sc.Addresses {
@@ -127,7 +111,7 @@ func (sc *Scenario) addressList() []common.Address {
 	return out
 }
 
-// applyStep mutates source per step, ahead of the caller's next idx.Poll.
+// applyStep applies step to source before the caller's next Poll
 func applyStep(source *indexer.FakeSource, step Step) {
 	for _, h := range step.Headers {
 		source.SetHeader(h.Number, h.Seed)

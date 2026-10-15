@@ -3,15 +3,9 @@ pragma solidity ^0.8.24;
 
 import {TestBase} from "../helpers/TestBase.sol";
 
-/// @notice EIP-170 restricts deployed (runtime) contract bytecode to 24,576 bytes; any
-///         attempt to deploy something larger reverts on every EIP-170-enforcing chain
-///         (mainnet and virtually every L2 — anvil is a notable exception and does NOT enforce
-///         this by default, so a purely-anvil-based E2E run can silently hide a violation).
-///         RWAFactory originally embedded all 6 child contracts' full creation bytecode
-///         directly (every contract a `new`-calling function can reach at runtime must carry
-///         that code), landing at 53,571 bytes — over double the limit. Fixed by splitting the
-///         `new` calls across four stateless deployer helpers invoked via `delegatecall`; this
-///         test pins that fix so it can't silently regress.
+/// @notice Asserts the factory, helpers and project contracts fit EIP-170's 24,576-byte runtime
+///         limit, which forge test does not enforce by default. Factory creation code is split
+///         across delegatecall helpers; see ComplianceTokenDeployer.
 contract ContractSizeLimitTest is TestBase {
     uint256 internal constant EIP_170_LIMIT = 24_576;
 
@@ -26,9 +20,7 @@ contract ContractSizeLimitTest is TestBase {
         _assertUnderLimit(factory.redemptionEscrowDeployer(), "RedemptionEscrowDeployer");
     }
 
-    /// @dev Regression coverage for every other production contract too, so a future change
-    ///      that bloats one of them (e.g. adding a big struct-returning view, more inherited
-    ///      OZ mixins) fails CI immediately instead of only surfacing during a real deploy.
+    /// @dev Check all six project contracts so runtime growth fails CI before deployment
     function test_deployedProjectContractsUnderSizeLimit() public view {
         _assertUnderLimit(address(token), "RWAToken");
         _assertUnderLimit(address(compliance), "ComplianceRegistry");

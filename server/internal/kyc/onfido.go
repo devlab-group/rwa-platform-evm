@@ -12,11 +12,7 @@ import (
 	"time"
 )
 
-// OnfidoConfig configures the Onfido (Entrust) provider. APIToken authenticates
-// outbound API calls; WebhookToken verifies inbound webhooks (the token shown
-// when you register the webhook in the Onfido dashboard). WorkflowID is the
-// Onfido Studio workflow the verification runs. Region selects the data
-// residency / API host.
+// OnfidoConfig supplies API and webhook credentials, Studio WorkflowID, and API region
 type OnfidoConfig struct {
 	APIToken     string
 	WebhookToken string
@@ -28,8 +24,7 @@ type OnfidoConfig struct {
 const (
 	onfidoHTTPTimeout    = 15 * time.Second
 	onfidoDefaultReferer = "*://*/*"
-	// onfidoSigHeader carries the hex HMAC-SHA256 of the raw body under the
-	// webhook token.
+	// onfidoSigHeader carries the raw-body HMAC-SHA256 under WebhookToken
 	onfidoSigHeader = "X-Sha2-Signature"
 )
 
@@ -71,16 +66,11 @@ func onfidoBaseURL(region string) (string, error) {
 
 func (p *onfidoProvider) Name() string { return "onfido" }
 
-// StartVerification creates the applicant, an Onfido Studio workflow run, and
-// an SDK token, then returns the token plus the workflow-run id as Ref. Onfido
-// webhooks carry only that workflow-run id (no custom field), so the caller
-// persists the (onfido, workflowRunId) -> address binding to resolve the
-// subject later.
+// StartVerification creates an applicant, workflow and SDK token; the caller binds
+// returned workflow Ref to the wallet
 func (p *onfidoProvider) StartVerification(ctx context.Context, address string) (Session, error) {
-	// Onfido requires a name on applicant creation; the real identity is
-	// captured from the document/biometrics during the flow. We store a
-	// placeholder plus the wallet address as the last name for operator
-	// traceability in the Onfido dashboard.
+	// Use placeholder identity plus wallet address for dashboard tracing; verification
+	// captures the applicant's identity
 	var applicant struct {
 		ID string `json:"id"`
 	}
@@ -117,7 +107,7 @@ func (p *onfidoProvider) StartVerification(ctx context.Context, address string) 
 	return Session{
 		Provider: p.Name(),
 		Token:    tok.Token,
-		Ref:      run.ID, // workflow-run id — the identifier the webhook carries
+		Ref:      run.ID, // workflow-run ID carried by the webhook
 	}, nil
 }
 
@@ -154,7 +144,7 @@ func (p *onfidoProvider) do(ctx context.Context, method, path string, body any, 
 	return json.Unmarshal(respBody, out)
 }
 
-// onfidoWebhook is the subset of a webhook payload we consume.
+// onfidoWebhook contains the delivery fields used by this adapter
 type onfidoWebhook struct {
 	Payload struct {
 		ResourceType string `json:"resource_type"`
@@ -179,9 +169,12 @@ func (p *onfidoProvider) VerifyWebhook(rawBody []byte, headers http.Header) (Dec
 	}
 	obj := wh.Payload.Object
 
-	// Only a completed workflow run with a terminal decision changes on-chain
-	// state. Every other delivery (status_changed, non-terminal status, report
-	// or check events) is acknowledged and ignored.
+	// Watchlist monitoring reports a changed match against a monitor, not a wallet
+	if wh.Payload.Action == "watchlist_monitor.matches_updated" {
+		return Decision{}, fmt.Errorf("%w: onfido watchlist monitor %s reported changed matches %s", ErrMonitoringSignal, obj.ID, obj.Href)
+	}
+
+	// Only approved or declined workflow-run deliveries produce a status decision
 	if !strings.HasPrefix(wh.Payload.Action, "workflow_run.") || obj.ID == "" {
 		return Decision{}, ErrUnhandledEvent
 	}
@@ -192,8 +185,7 @@ func (p *onfidoProvider) VerifyWebhook(rawBody []byte, headers http.Header) (Dec
 	case "declined":
 		status = "Blocked"
 	default:
-		// review / abandoned / error / processing / awaiting_input: nothing to
-		// apply on-chain.
+		// Ignore nonterminal or unsupported workflow statuses
 		return Decision{}, ErrUnhandledEvent
 	}
 
@@ -211,10 +203,8 @@ func (p *onfidoProvider) VerifyWebhook(rawBody []byte, headers http.Header) (Dec
 	}, nil
 }
 
-// onfidoOccurredAt parses the workflow run's own completion timestamp. A
-// missing or unparseable value is an error, never a substituted time.Now() —
-// see ErrMissingTimestamp for why fabricating one silently defeats both the
-// delivery-freshness window and the newest-decision-wins ordering downstream.
+// onfidoOccurredAt requires a parseable workflow completion timestamp,
+// preserving provider ordering instead of substituting local time
 func onfidoOccurredAt(iso string) (int64, error) {
 	if iso == "" {
 		return 0, fmt.Errorf("%w: onfido workflow run carries no completed_at_iso8601", ErrMissingTimestamp)

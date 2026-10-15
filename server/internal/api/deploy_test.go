@@ -8,16 +8,15 @@ import (
 	"github.com/rwa-platform/server/internal/api/dto"
 )
 
-// TestGetConfigReturnsChainAndFactory covers the PUBLIC GET /api/v1/config
-// bootstrap endpoint the admin's web wallet reads to broadcast RWAFactory.deploy
-// itself (deployment moved off the server — it now only observes the
-// ProjectDeployed event; see project.ReconcileDeployment).
+// TestGetConfigReturnsChainAndFactory covers the public GET /api/v1/config
+// endpoint, which the admin's web wallet reads to broadcast RWAFactory.deploy; the
+// server only observes the ProjectDeployed event (see project.ReconcileDeployment)
 func TestGetConfigReturnsChainAndFactory(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.FactoryAddress = "0x0000000000000000000000000000000000FACE"
 	env.app.ProjectID = "11111111-2222-3333-4444-555555555555"
 
-	// No auth header: /config is public.
+	// No auth header: /config is public
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/config", nil, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("config status = %d, body=%s", w.Code, w.Body.String())

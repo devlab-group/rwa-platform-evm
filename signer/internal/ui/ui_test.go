@@ -33,10 +33,7 @@ func TestConfirm_RejectsAnythingElse(t *testing.T) {
 	}
 }
 
-// TestRenderActionBanner_MintAndBurnAreDistinguishable checks that a mint
-// banner can't be mistaken for a burn banner. The two must not merely differ
-// somewhere -- each must independently and unambiguously say what it is, with
-// no shared distinguishing word and no accidental overlap.
+// Mint/burn banners must each name their action without the other's keyword
 func TestRenderActionBanner_MintAndBurnAreDistinguishable(t *testing.T) {
 	var mintOut, burnOut bytes.Buffer
 	RenderActionBanner(&mintOut, "MintAttestation")
@@ -58,8 +55,7 @@ func TestRenderActionBanner_MintAndBurnAreDistinguishable(t *testing.T) {
 	if !strings.Contains(burn, "DECREASE") {
 		t.Errorf("burn banner does not state the supply effect:\n%s", burn)
 	}
-	// The two banners must not even share a border glyph, so a terminal
-	// scrollback skim catches the difference before reading any word.
+	// Distinct borders distinguish actions while skimming scrollback
 	if mint[0] == burn[0] {
 		t.Error("mint and burn banners use the same border glyph")
 	}
@@ -82,23 +78,18 @@ func TestRender_IncludesFieldsAndWarnings(t *testing.T) {
 	}
 }
 
-// TestRender_CraftedFieldCannotRewriteOtherLines is the review screen's core
-// guarantee: what the auditor sees is what they sign. A tokenUnit is appended
-// to the normalized-amount line and comes straight from the untrusted package,
-// so it is the natural place to smuggle a carriage return or a cursor-up
-// escape and repaint the amount, vault and digest lines with a smaller,
-// friendlier attestation. None of it may reach the terminal.
+// Escape tokenUnit controls so carriage returns/cursor escapes cannot repaint
+// normalized amount, Vault or digest lines
 func TestRender_CraftedFieldCannotRewriteOtherLines(t *testing.T) {
 	craftedUnit := "USD\r  amount (normalized)  : 1.500000 USD\x1b[4A\x1b[2K"
 	var out bytes.Buffer
-	Render(&out, "Review MintAttestation — pkg.rwa", []Field{
+	Render(&out, "Review MintAttestation - pkg.rwa", []Field{
 		{Label: "vault", Value: "0x1111111111111111111111111111111111111111"},
 		{Label: "amount (raw, smallest unit)", Value: "9000000000000000000000"},
 		{Label: "amount (normalized)", Value: "9000.000000 " + craftedUnit},
 		{Label: "EIP-712 digest", Value: "0xdeadbeef"},
 	}, []Field{
-		// displayFields values are free-form by design, so they get the same
-		// treatment as the critical fields.
+		// Sanitize free-form displayFields like critical fields
 		{Label: "Serial\x1b[31m", Value: "12345\nSerial : 99999"},
 	})
 	s := out.String()
@@ -108,12 +99,11 @@ func TestRender_CraftedFieldCannotRewriteOtherLines(t *testing.T) {
 			t.Errorf("rendered screen contains raw %q:\n%s", raw, s)
 		}
 	}
-	// Every field occupies exactly one line: an injected newline must not be
-	// able to add a row, so the screen has the same shape it would have with
-	// four critical fields and one display field of ordinary text.
+	// Injected newlines must not add rows; retain the layout for four critical and one
+	// display field
 	lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
 	var benign bytes.Buffer
-	Render(&benign, "Review MintAttestation — pkg.rwa", []Field{
+	Render(&benign, "Review MintAttestation - pkg.rwa", []Field{
 		{Label: "vault", Value: "0x1"},
 		{Label: "amount (raw, smallest unit)", Value: "9"},
 		{Label: "amount (normalized)", Value: "9 USD"},
@@ -123,8 +113,8 @@ func TestRender_CraftedFieldCannotRewriteOtherLines(t *testing.T) {
 	if len(lines) != len(wantLines) {
 		t.Fatalf("crafted fields changed the screen from %d lines to %d:\n%s", len(wantLines), len(lines), s)
 	}
-	// The lines the auditor reads the attestation from must be byte-identical
-	// to what their own field values say, with nothing appended or overwritten.
+	// Attestation lines must retain their own values without injected additions or
+	// overwrites
 	for i, want := range map[int]string{
 		5: "  vault                       : 0x1111111111111111111111111111111111111111",
 		6: "  amount (raw, smallest unit) : 9000000000000000000000",
@@ -137,8 +127,7 @@ func TestRender_CraftedFieldCannotRewriteOtherLines(t *testing.T) {
 	if !strings.HasPrefix(lines[7], "  amount (normalized)         : 9000.000000 ") {
 		t.Errorf("amount line was rewritten: %q\n---\n%s", lines[7], s)
 	}
-	// The escaped bytes stay visible, so the auditor can see the value tried
-	// to do something rather than the tool quietly cleaning it up.
+	// Visible escapes must expose attempted terminal manipulation
 	if !strings.Contains(s, `\x0d`) || !strings.Contains(s, `\x1b`) {
 		t.Errorf("control bytes were dropped instead of shown as escapes:\n%s", s)
 	}
@@ -146,7 +135,7 @@ func TestRender_CraftedFieldCannotRewriteOtherLines(t *testing.T) {
 
 func TestRenderActionBanner_SanitizesUnrecognizedType(t *testing.T) {
 	var out bytes.Buffer
-	RenderActionBanner(&out, "Mint\rBURN — THIS WILL DECREASE TOKEN SUPPLY")
+	RenderActionBanner(&out, "Mint\rBURN - THIS WILL DECREASE TOKEN SUPPLY")
 	s := out.String()
 	if strings.ContainsAny(s, "\r\x1b") {
 		t.Errorf("banner passed through a raw control byte:\n%s", s)
@@ -156,10 +145,8 @@ func TestRenderActionBanner_SanitizesUnrecognizedType(t *testing.T) {
 	}
 }
 
-// TestRender_NonASCIILabelColumnWidth covers the column measurement. fmt's
-// %-*s pads by rune count, so a byte-measured width doesn't misalign the ':'
-// column — it just pads every label out to the byte length of the widest one,
-// leaving a gap of phantom spaces whenever a label contains a multi-byte rune.
+// Measure columns by rune count to match fmt's %-*s padding; byte widths would over-pad
+// multibyte labels
 func TestRender_NonASCIILabelColumnWidth(t *testing.T) {
 	var buf bytes.Buffer
 	Render(&buf, "Review", []Field{

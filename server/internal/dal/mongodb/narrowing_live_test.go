@@ -3,14 +3,14 @@ package mongodb
 import (
 	"context"
 	"testing"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// idSet collapses a query result to the ids it returned, which is all these
-// tests assert on.
+// idSet reduces a query result to its ids, which is all these tests compare
 func idSet[T any](items []*T, id func(*T) string) map[string]bool {
 	out := map[string]bool{}
 	for _, it := range items {
@@ -19,14 +19,8 @@ func idSet[T any](items []*T, id func(*T) string) map[string]bool {
 	return out
 }
 
-// TestLiveTransactionNarrowingQueries is the live-Mongo half of
-// internal/dal/memory's transaction_narrowing_test. The reconcile tickers
-// query for their work instead of reading whole collections, and every one
-// of those filters leans on BSON semantics the in-memory adapter cannot
-// reproduce: $nin over a named string type, a missing (omitempty) field
-// versus $gt "", and a status/blockNumber $or. The keyset-pagination bug
-// pageAll above was written for is exactly this failure mode — correct in
-// memory, silently empty on Mongo — so the filters are pinned here too.
+// TestLiveTransactionNarrowingQueries checks MongoDB $nin, missing-field/$gt and
+// status/blockNumber $or behavior beyond memory's transaction_narrowing_test
 func TestLiveTransactionNarrowingQueries(t *testing.T) {
 	db := liveDB(t)
 	ctx := context.Background()
@@ -64,8 +58,7 @@ func TestLiveTransactionNarrowingQueries(t *testing.T) {
 		}
 	}
 
-	// Replaces is omitempty, so the six non-replacement documents have no
-	// such field at all — a missing field must not satisfy $gt "".
+	// Non-replacement documents omit Replaces; missing fields must not satisfy $gt ""
 	replacements, err := repo.ListReplacements(ctx)
 	if err != nil {
 		t.Fatalf("ListReplacements: %v", err)
@@ -91,10 +84,8 @@ func TestLiveTransactionNarrowingQueries(t *testing.T) {
 	}
 }
 
-// TestLiveKYCEventListAppliedWithTx pins the deep-reorg reopen scan's
-// filter: terminal-Applied events are the only ones a reorg can force back
-// open, and only those that actually carry a transaction id — TxID is
-// omitempty, so the "no tx" case is a missing field again.
+// TestLiveKYCEventListAppliedWithTx checks that the reopen scan selects Applied events
+// with TxID, excluding omitted IDs
 func TestLiveKYCEventListAppliedWithTx(t *testing.T) {
 	db := liveDB(t)
 	ctx := context.Background()
@@ -122,10 +113,8 @@ func TestLiveKYCEventListAppliedWithTx(t *testing.T) {
 	}
 }
 
-// TestLiveEnsureIndexesDeclaresNarrowingIndexes runs the real index
-// bootstrap and asserts the two indexes the narrowing queries were added
-// with actually exist — a malformed spec is a server-side error nothing
-// else in the suite would surface.
+// TestLiveEnsureIndexesDeclaresNarrowingIndexes validates the narrowing-query index
+// specs against MongoDB, including their generated names
 func TestLiveEnsureIndexesDeclaresNarrowingIndexes(t *testing.T) {
 	db := liveDB(t)
 	ctx := context.Background()
@@ -141,9 +130,7 @@ func TestLiveEnsureIndexesDeclaresNarrowingIndexes(t *testing.T) {
 	if err := cur.All(ctx, &specs); err != nil {
 		t.Fatalf("decode indexes: %v", err)
 	}
-	// Mongo names an unnamed index after its key spec, so the name is the
-	// thing to assert on — nested documents decode to bson.D here, not to
-	// a map worth digging through.
+	// Compare key-derived index names; nested index documents decode as bson.D
 	names := map[string]bool{}
 	for _, spec := range specs {
 		name, _ := spec["name"].(string)
@@ -153,5 +140,31 @@ func TestLiveEnsureIndexesDeclaresNarrowingIndexes(t *testing.T) {
 		if !names[want] {
 			t.Errorf("transactions has no %s index; got %v", want, names)
 		}
+	}
+}
+
+func TestLiveDeadLetterRecordIsAtomicUpsert(t *testing.T) {
+	db := liveDB(t)
+	ctx := context.Background()
+	repo := &deadLetterRepo{coll: db.Collection(collIndexerDeadLetters)}
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	if err := repo.Record(ctx, &models.DeadLetterEntry{ID: "$k", ErrorMessage: "$first", FirstFailedAt: t0, LastFailedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Resolve(ctx, "$k"); err != nil {
+		t.Fatal(err)
+	}
+	t1 := t0.Add(time.Hour)
+	if err := repo.Record(ctx, &models.DeadLetterEntry{ID: "$k", ErrorMessage: "second", FirstFailedAt: t1, LastFailedAt: t1}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(ctx, "$k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RetryCount != 1 || got.Resolved || got.ErrorMessage != "second" ||
+		!got.FirstFailedAt.Equal(t0) || !got.LastFailedAt.Equal(t1) {
+		t.Errorf("unexpected entry after repeat: %+v", got)
 	}
 }

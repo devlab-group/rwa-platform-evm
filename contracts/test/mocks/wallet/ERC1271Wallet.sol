@@ -5,9 +5,8 @@ import {IERC1271} from "@openzeppelin/contracts/interfaces/IERC1271.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /// @title ERC1271Wallet
-/// @notice Minimal smart-contract wallet that delegates signature validation to a single
-///         owner key, with a `revoked` flag to simulate a wallet that stops honoring
-///         previously-valid signatures (e.g. after a key rotation).
+/// @notice Single-owner signature-validation mock; revoked simulates rejection of previously valid
+///         signatures, as after key rotation
 contract ERC1271Wallet is IERC1271 {
     bytes4 private constant MAGIC_VALUE = IERC1271.isValidSignature.selector;
 

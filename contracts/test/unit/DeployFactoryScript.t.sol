@@ -5,27 +5,21 @@ import {Test} from "forge-std/Test.sol";
 import {DeployFactory} from "../../script/DeployFactory.s.sol";
 import {RWAFactory} from "../../src/RWAFactory.sol";
 
-/// @notice Coverage for the standalone factory-only deploy script: it must produce a usable
-///         `RWAFactory` — non-empty runtime code, the expected `version()`, and all four child
-///         deployer addresses wired non-zero.
-/// @dev The script's other half, the `DEPLOYER_PK` anvil-key-fallback guard it inherits from
-///      `DeployBase`, is covered by `test_deployScripts_anvilKeyFallbackAndAdminDelayGuards` in
-///      `DeployScript.t.sol`. Asserting on that guard means writing `DEPLOYER_PK`, `vm.setEnv`
-///      writes the real process environment, and forge runs test functions concurrently — so every
-///      such write in this suite is kept inside that one test function, and none happen here. The
-///      test below writes no env and asserts nothing about the deployer, so it holds for any
-///      `DEPLOYER_PK` value — set, unset, or changing underneath it — and needs no coordination.
+/// @notice Checks factory runtime code/version and all four deployed helper addresses
+/// @dev Key-guard coverage and env writes stay in DeployScript.t.sol's single guard test to
+///      avoid process-environment races (see its NatSpec). This test writes no env and makes
+///      no assertion about the deployer.
 contract DeployFactoryScriptTest is Test {
     function test_deployFactory_anvilChainProducesUsableFactory() public {
         assertEq(block.chainid, 31337);
         DeployFactory script = new DeployFactory();
         RWAFactory factory = script.run();
 
-        // A usable factory: real runtime code and the frozen version string.
+        // Check factory runtime and version
         assertTrue(address(factory).code.length > 0, "factory has no code");
         assertEq(factory.version(), "rwa-v2");
 
-        // All four child deployers wired, each with its own deployed code.
+        // Check all four helpers have deployed code
         assertTrue(factory.complianceTokenDeployer() != address(0));
         assertTrue(factory.marketDeployer() != address(0));
         assertTrue(factory.supplyControllerDeployer() != address(0));

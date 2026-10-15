@@ -9,7 +9,7 @@ interface Props<T> {
   children: (data: T) => ReactNode;
 }
 
-/** Renders one of loading / error / empty / content for any useAsync() result. */
+/** Renders loading, error, empty or content from useAsync() */
 export function AsyncSection<T>({
   state,
   onRetry,

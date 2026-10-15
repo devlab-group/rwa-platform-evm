@@ -11,7 +11,7 @@ import (
 	"github.com/rwa-platform/server/internal/eip712"
 )
 
-// SignedResult mirrors shared/schemas/signed-result.schema.json / api Schemas.SignedResult.
+// SignedResult mirrors shared/schemas/signed-result.schema.json / api Schemas.SignedResult
 type SignedResult struct {
 	FormatVersion   string `json:"formatVersion"`
 	Auditor         string `json:"auditor"`
@@ -21,12 +21,9 @@ type SignedResult struct {
 	SignedAt        string `json:"signedAt"`
 }
 
-// VerifyMintSignedResult recomputes the MintAttestation EIP-712 digest
-// server-side (never trusting the client-supplied typedDataDigest alone),
-// checks it matches the signed result, recovers the signature's signer, and
-// requires the signer to equal both the signed result's declared auditor
-// and the configured project auditor. This MUST pass before the server
-// relays a mint/burn.
+// VerifyMintSignedResult recomputes the MintAttestation EIP-712 digest, checks
+// sr.TypedDataDigest, and recovers the signer. That signer must equal sr.Auditor, the
+// attestation's auditor and configuredAuditor.
 func VerifyMintSignedResult(sr SignedResult, domain eip712.Domain, attestation eip712.MintAttestation, configuredAuditor common.Address) error {
 	if sr.FormatVersion != "1.0" {
 		return fmt.Errorf("auditpkg: unsupported formatVersion %q", sr.FormatVersion)
@@ -38,7 +35,7 @@ func VerifyMintSignedResult(sr SignedResult, domain eip712.Domain, attestation e
 	return verifyCommon(sr, digest, attestation.Auditor, configuredAuditor)
 }
 
-// VerifyBurnSignedResult is the burn-attestation analogue of VerifyMintSignedResult.
+// VerifyBurnSignedResult is VerifyMintSignedResult for a BurnAttestation
 func VerifyBurnSignedResult(sr SignedResult, domain eip712.Domain, attestation eip712.BurnAttestation, configuredAuditor common.Address) error {
 	if sr.FormatVersion != "1.0" {
 		return fmt.Errorf("auditpkg: unsupported formatVersion %q", sr.FormatVersion)

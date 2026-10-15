@@ -56,11 +56,8 @@ func (r *WalletChallengeRepository) MarkUsed(ctx context.Context, id string) err
 	return nil
 }
 
-// CountActive is the memory-backed half of the per-address active-
-// challenge cap: a linear scan is fine here since the in-memory repository
-// only ever backs unit tests / local dev, never a production deployment's
-// actual traffic volume (Mongo's indexed CountDocuments handles that case —
-// see internal/dal/mongodb/compliance.go).
+// CountActive scans unused, unexpired challenges for address. MongoDB uses indexed
+// CountDocuments; see walletChallengeRepo.CountActive.
 func (r *WalletChallengeRepository) CountActive(ctx context.Context, address string, now time.Time) (int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -33,10 +33,10 @@ const TRANSACTION_TONE: Record<TransactionChainStatus, string> = {
   needs_intervention: "badge--danger",
 };
 
-/** Tone for an unrecognized/forward-compat status: visible, not silently neutral. */
+// Warn on unrecognized statuses
 const TRANSACTION_UNKNOWN_TONE = "badge--warning";
 
-/** Redemption status badge. Derives Pending/Funded/Claimable/Completed/Rejected/Cancelled. */
+/** Displays the status derived by redemptionDisplayStatus */
 export function RedemptionStatusBadge({
   status,
   claimable,
@@ -61,11 +61,8 @@ export function RedemptionStatusBadge({
 }
 
 /**
- * Shown alongside the status badge when a Pending redemption's beneficiary
- * has lost compliance eligibility, so funding would revert.
- * Renders nothing once the request is Funded/Completed/etc. (compliance no
- * longer blocks it) or if `beneficiaryAllowed` isn't present on the
- * response (defensive — degrades to no indicator rather than a guess).
+ * Warns when a Pending beneficiary is explicitly ineligible, which blocks funding;
+ * hidden for other statuses or absent beneficiaryAllowed
  */
 export function RedemptionComplianceBadge({
   status,
@@ -79,7 +76,7 @@ export function RedemptionComplianceBadge({
     <span
       className="badge badge--danger"
       data-status="compliance-blocked"
-      title="The recorded beneficiary is not currently Allowed. Funding will revert until compliance status is restored."
+      title="The beneficiary is not Allowed. Restore compliance before funding."
     >
       Blocked by compliance
     </span>
@@ -87,11 +84,8 @@ export function RedemptionComplianceBadge({
 }
 
 /**
- * Transaction confirmation/lifecycle-state badge covering every
- * `domain.TxStatus` the server can emit. Accepts a plain `string` (not just
- * the generated union) so a forward-compat status a newer server sends renders
- * a clear "Unknown" badge with a visible tone and an `attention` marker,
- * rather than an empty label or an undefined CSS class.
+ * Displays known transaction statuses; unknown strings get a warning-toned Unknown badge
+ * and attention marker, including statuses introduced by newer servers
  */
 export function TransactionStatusBadge({ status }: { status: string }) {
   const known = isKnownTransactionStatus(status);
@@ -104,7 +98,7 @@ export function TransactionStatusBadge({ status }: { status: string }) {
       title={
         known
           ? undefined
-          : `Unrecognized transaction status "${status}". This client build may be older than the server; treat it as needing operator review.`
+          : `Unrecognized transaction status "${status}". This build may predate the server; ask an operator to review it.`
       }
     >
       {transactionStatusLabel(status)}

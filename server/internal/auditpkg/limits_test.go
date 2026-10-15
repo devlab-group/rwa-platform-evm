@@ -6,10 +6,9 @@ import (
 	"testing"
 )
 
-// TestCanonicalizeRejectsExcessiveObjectKeys distinguishes MaxObjectKeys from
-// MaxArrayLength: they are separate bounds, and conflating them would
-// effectively double the object limit by counting each key AND its value as a
-// separate "element".
+// TestCanonicalizeRejectsExcessiveObjectKeys checks that MaxObjectKeys counts
+// key-value pairs, not each key and each value as separate elements, which
+// would halve the effective limit
 func TestCanonicalizeRejectsExcessiveObjectKeys(t *testing.T) {
 	var b strings.Builder
 	b.WriteByte('{')
@@ -17,7 +16,9 @@ func TestCanonicalizeRejectsExcessiveObjectKeys(t *testing.T) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		b.WriteString(`"k` + strconv.Itoa(i) + `":1`)
+		b.WriteString(`"k`)
+		b.WriteString(strconv.Itoa(i))
+		b.WriteString(`":1`)
 	}
 	b.WriteByte('}')
 	if _, err := Canonicalize([]byte(b.String())); err == nil {
@@ -25,10 +26,9 @@ func TestCanonicalizeRejectsExcessiveObjectKeys(t *testing.T) {
 	}
 }
 
-// TestCanonicalizeAcceptsObjectAtHalfNaiveTokenCount proves the fix: an
-// object with MaxObjectKeys key-value pairs has 2*MaxObjectKeys raw JSON
-// tokens (key + value each), and must still be accepted — a naive
-// per-token count would have rejected it at MaxObjectKeys/2 pairs.
+// TestCanonicalizeAcceptsObjectAtExactlyMaxObjectKeys checks that an object with
+// MaxObjectKeys pairs, which is 2*MaxObjectKeys JSON tokens, is accepted. A
+// per-token count would reject it at MaxObjectKeys/2 pairs.
 func TestCanonicalizeAcceptsObjectAtExactlyMaxObjectKeys(t *testing.T) {
 	var b strings.Builder
 	b.WriteByte('{')
@@ -36,7 +36,9 @@ func TestCanonicalizeAcceptsObjectAtExactlyMaxObjectKeys(t *testing.T) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		b.WriteString(`"k` + strconv.Itoa(i) + `":1`)
+		b.WriteString(`"k`)
+		b.WriteString(strconv.Itoa(i))
+		b.WriteString(`":1`)
 	}
 	b.WriteByte('}')
 	if _, err := Canonicalize([]byte(b.String())); err != nil {
@@ -73,8 +75,8 @@ func TestCanonicalizeAcceptsStringAtMaxLength(t *testing.T) {
 	}
 }
 
-// TestCanonicalizeRejectsUnsafeInteger enforces the cross-language safe
-// integer range [-(2^53-1), 2^53-1].
+// TestCanonicalizeRejectsUnsafeInteger checks the safe integer range
+// [-(2^53-1), 2^53-1]
 func TestCanonicalizeRejectsUnsafeInteger(t *testing.T) {
 	tooBig := `{"n":9007199254740992}` // 2^53
 	if _, err := Canonicalize([]byte(tooBig)); err == nil {
@@ -97,10 +99,8 @@ func TestCanonicalizeAcceptsIntegerAtSafeBoundary(t *testing.T) {
 	}
 }
 
-// TestCanonicalizeDoesNotRangeCheckFloats: the safe-integer rule only
-// governs JSON integers; a float literal (has '.' or exponent) is not
-// range-checked by this guard (amount-affecting values must be strings
-// regardless, which is enforced elsewhere).
+// TestCanonicalizeDoesNotRangeCheckFloats checks that the safe-integer rule
+// applies only to integer literals, not to literals with a fraction or exponent
 func TestCanonicalizeDoesNotRangeCheckFloats(t *testing.T) {
 	if _, err := Canonicalize([]byte(`{"n":1.5}`)); err != nil {
 		t.Fatalf("expected float literal to be accepted: %v", err)

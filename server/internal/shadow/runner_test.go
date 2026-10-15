@@ -15,12 +15,9 @@ var testAddr = "0x0000000000000000000000000000000000A001"
 
 func falseVal() *bool { f := false; return &f }
 
-// TestRunnerReplaysScriptedScenarioAndReconciles is the proof-of-concept
-// end-to-end run: a representative scripted history
-// (ordinary ingestion, a duplicate log redelivery, a reorg, a transient RPC
-// fault, and an undecodable event) replayed against the real indexer logic
-// in an isolated in-memory database, with resource sampling and an
-// independent final reconciliation.
+// Replay ingestion, duplicate delivery, reorg, transient RPC failure and undecodable
+// logs through the real indexer in memory, sampling resources and reconciling final
+// counts
 func TestRunnerReplaysScriptedScenarioAndReconciles(t *testing.T) {
 	sc := &Scenario{
 		ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1,
@@ -90,8 +87,8 @@ func TestRunnerReplaysScriptedScenarioAndReconciles(t *testing.T) {
 	if !report.Reconciled {
 		t.Fatalf("expected Reconciled=true, got report: %+v", report)
 	}
-	// 5 canonical decodable events: block1(0x01), block2(0x02), block3(0x03),
-	// the WINNING block4(0x04b) — 0x04 was reorged out — and block5(0x05b).
+	// Five canonical events: blocks 1(0x01), 2(0x02), 3(0x03), 4(0x04b, replacing 0x04),
+	// 5(0x05b)
 	if report.FinalEventCount != 5 {
 		t.Fatalf("FinalEventCount = %d, want 5", report.FinalEventCount)
 	}
@@ -100,17 +97,14 @@ func TestRunnerReplaysScriptedScenarioAndReconciles(t *testing.T) {
 	}
 }
 
-// TestRunnerExpectPollErrorForDeepReorg proves a step scripted to fail
-// (e.g. a reorg deeper than the automatic-recovery policy) is not itself
-// treated as a harness failure when ExpectPollError is set, while an
-// UNEXPECTED failure still is — exercised via the max-log-range knob,
-// which is simpler to force deterministically here than a real deep reorg.
+// A transient fault recovered within one Poll with ExpectPollError=false adds no report
+// errors
 func TestRunnerExpectPollErrorForDeepReorg(t *testing.T) {
 	sc := &Scenario{
 		ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1, MaxLogRange: 10,
 		Steps: []Step{
 			{
-				Description:     "malformed/exhausted-retry RPC failure surfaces, does not corrupt state",
+				Description:     "transient RPC fault recovered by the indexer's retry",
 				Headers:         []HeaderSpec{{Number: 1, Seed: 1}},
 				Head:            1,
 				Fault:           FaultTransient,
@@ -127,9 +121,7 @@ func TestRunnerExpectPollErrorForDeepReorg(t *testing.T) {
 	}
 }
 
-// TestRunnerRespectsContextCancellation proves a long-running (or hung)
-// replay can be stopped promptly rather than running unbounded — relevant
-// for a real extended-duration soak run driven by the CLI.
+// Run returns the context error when already cancelled
 func TestRunnerRespectsContextCancellation(t *testing.T) {
 	sc := &Scenario{ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1, Steps: []Step{
 		{Description: "one", Headers: []HeaderSpec{{Number: 1, Seed: 1}}, Head: 1},
@@ -143,8 +135,7 @@ func TestRunnerRespectsContextCancellation(t *testing.T) {
 	}
 }
 
-// TestLoadScenarioRoundTrips proves a Scenario written to disk (the shadow
-// CLI's expected input format) parses back correctly.
+// Loading a saved Scenario preserves its chain ID and step count
 func TestLoadScenarioRoundTrips(t *testing.T) {
 	sc := &Scenario{ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1, Steps: []Step{
 		{Description: "genesis", Headers: []HeaderSpec{{Number: 1, Seed: 1}}, Head: 1},
@@ -168,8 +159,7 @@ func TestLoadScenarioRoundTrips(t *testing.T) {
 
 func uint64Ptr(v uint64) *uint64 { return &v }
 
-// TestSampleReturnsPlausibleValues is a light sanity check on the resource
-// sampler itself.
+// Sample reports positive goroutines and a timestamp no later than now
 func TestSampleReturnsPlausibleValues(t *testing.T) {
 	s := Sample()
 	if s.NumGoroutine <= 0 {

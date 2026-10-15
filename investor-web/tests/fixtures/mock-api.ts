@@ -1,11 +1,6 @@
-// Stateful mock of the investor-facing slice of api/openapi.yaml, via
-// Playwright route interception. Each spec gets a fresh in-memory store
-// (installMockApi returns it) so it can both drive the UI and mutate
-// server-side state directly — e.g. simulate the issuer funding a redemption
-// that the investor then sees as Claimable after a reload.
-//
-// Only the endpoints this app calls are mocked; anything else 501s loudly so
-// an un-mocked route can never silently pass a spec.
+// Stateful Playwright mock for the investor API, with a fresh mutable store
+// per test. Specs can change server state, such as funding a redemption before
+// reload. Unhandled routes return 501 to expose unexpected calls.
 import type { Page, Route } from "@playwright/test";
 import type { components } from "../../src/lib/api-types";
 
@@ -29,8 +24,9 @@ export const ADDRESSES = {
 
 export const CHAIN_ID = 31337;
 
-// Buy/redemption prices are not part of this store: the app quotes them from
-// the Vault/escrow preview views, which the mock wallet answers (mock-wallet.ts).
+// Buy and redemption prices are not part of this store: the app reads them from
+// the Vault and escrow preview views, which the mock wallet answers
+// (mock-wallet.ts).
 export interface MockState {
   project: Project;
   wallets: WalletStatus[];
@@ -129,9 +125,8 @@ export async function installMockApi(
         state.wallets.push(wallet);
       }
       wallet.ownershipVerified = true;
-      // Session token deliberately encodes the address so the mock's
-      // GET /api/v1/me/wallet-status handler below can resolve it without a
-      // real server-side session store.
+      // The session token encodes the address so the GET /api/v1/me/wallet-status
+      // handler below can resolve it without a session store
       return json({
         ...wallet,
         sessionToken: `mock-session:${wallet.address?.toLowerCase()}`,
@@ -169,8 +164,8 @@ export async function installMockApi(
     // --- redemptions (specific routes before the generic /{id}) --------
     if (path === "/api/v1/redemptions" && method === "GET") {
       const status = url.searchParams.get("status");
-      // Public list: filter by status and/or by beneficiary address (the
-      // investor page passes its connected wallet), case-insensitive.
+      // Public list: filters by status and by beneficiary address (the page
+      // passes the connected wallet), case-insensitively
       const address = url.searchParams.get("address")?.toLowerCase();
       const list = state.redemptions.filter(
         (r) =>
@@ -179,10 +174,9 @@ export async function installMockApi(
       );
       return json(list);
     }
-    // No redemption call is a server calldata endpoint — request, claim,
-    // cancel, fund and reject are all encoded in the browser and broadcast
-    // from the connected wallet (approve→fund for funding), asserted via the
-    // mock wallet's __getSentTransactions.
+    // There is no calldata endpoint to mock: request, claim and cancel are
+    // encoded in the browser and sent from the connected wallet, and specs
+    // assert them through the mock wallet's __getSentTransactions
     const idMatch = path.match(/^\/api\/v1\/redemptions\/([^/]+)$/);
     if (idMatch && method === "GET") {
       const redemption = state.redemptions.find(
@@ -207,7 +201,7 @@ export async function installMockApi(
       return json(list);
     }
 
-    // Fail loudly rather than let an un-mocked route silently pass a spec.
+    // Fail loudly so an unmocked route can't pass a spec silently
     return route.fulfill({
       status: 501,
       contentType: "application/json",

@@ -15,10 +15,8 @@ import (
 	"github.com/rwa-platform/signer/internal/ui"
 )
 
-// normalizedAmount renders a raw smallest-unit token amount as a
-// human-readable decimal string with decimals fractional digits. Showing
-// only the raw integer amount made a wrong tokenDecimals -- or an auditor
-// misreading the integer's magnitude -- easy to miss, so we display both.
+// normalizedAmount renders smallest units with decimals fractional digits beside the
+// raw amount, helping reviewers spot wrong tokenDecimals or magnitudes
 func normalizedAmount(amount *big.Int, decimals int) string {
 	if decimals <= 0 {
 		return amount.String()
@@ -40,13 +38,11 @@ func normalizedAmount(amount *big.Int, decimals int) string {
 	return out
 }
 
-// resolvePointer resolves an RFC 6901 JSON pointer (e.g. "/serialNumber")
-// against a parsed canonical.Value document. It is intentionally lenient:
-// an unresolvable pointer renders as "(not present)" on the review screen
-// rather than aborting the review, since displayFields is documentation
-// only and must never block signing on its own.
+// resolvePointer follows RFC 6901: "" selects the document, "/" the empty-name member,
+// and array indices match 0|[1-9][0-9]*, excluding "-". Unresolved optional
+// displayFields return not found without blocking signing.
 func resolvePointer(root canonical.Value, pointer string) (canonical.Value, bool) {
-	if pointer == "" || pointer == "/" {
+	if pointer == "" {
 		return root, true
 	}
 	if !strings.HasPrefix(pointer, "/") {
@@ -64,8 +60,11 @@ func resolvePointer(root canonical.Value, pointer string) (canonical.Value, bool
 			}
 			cur = v
 		case []canonical.Value:
+			if !validIndex(tok) {
+				return nil, false
+			}
 			idx, err := strconv.Atoi(tok)
-			if err != nil || idx < 0 || idx >= len(t) {
+			if err != nil || idx >= len(t) {
 				return nil, false
 			}
 			cur = t[idx]
@@ -76,7 +75,20 @@ func resolvePointer(root canonical.Value, pointer string) (canonical.Value, bool
 	return cur, true
 }
 
-// displayString renders a canonical.Value for the human review screen.
+// validIndex reports whether tok matches the RFC 6901 array index grammar 0|[1-9][0-9]*
+func validIndex(tok string) bool {
+	if tok == "" || (len(tok) > 1 && tok[0] == '0') {
+		return false
+	}
+	for _, c := range tok {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// displayString renders a canonical.Value for the review screen
 func displayString(v canonical.Value) string {
 	switch t := v.(type) {
 	case nil:
@@ -99,9 +111,8 @@ func displayString(v canonical.Value) string {
 	}
 }
 
-// buildDisplayFields resolves a profile's displayFields against the parsed
-// asset object, for the offline review screen only -- never used for hashing
-// or validation.
+// buildDisplayFields resolves profile pointers against asset for review only, without
+// affecting hashing/validation; missing pointers show "(not present)" with a warning
 func buildDisplayFields(p *profile.Profile, asset canonical.Value) []ui.Field {
 	fields := make([]ui.Field, 0, len(p.DisplayFields))
 	for _, df := range p.DisplayFields {
@@ -115,16 +126,42 @@ func buildDisplayFields(p *profile.Profile, asset canonical.Value) []ui.Field {
 	return fields
 }
 
-// proofFields renders one review-screen line per metadata proof, clearly
-// warning when no attached file's content hashes to the recorded value --
-// the auditor needs to know when only a hash is present and the proof file
-// itself is missing.
+// legalFields displays profileDigest-bound legal members without fetching document
+// references
+func legalFields(l *profile.Legal) []ui.Field {
+	if l == nil {
+		return nil
+	}
+	fields := []ui.Field{{Label: "legal wrapper", Value: l.Wrapper}}
+	if l.IssuerLEI != "" {
+		fields = append(fields, ui.Field{Label: "legal issuerLei", Value: l.IssuerLEI})
+	}
+	if l.HolderRights != "" {
+		fields = append(fields, ui.Field{Label: "legal holderRights", Value: l.HolderRights})
+	}
+	if r := l.RedemptionTerms; r != nil {
+		fields = append(fields, ui.Field{Label: "legal redemptionTerms", Value: fmt.Sprintf("uri:%s sha256:%s", r.URI, r.SHA256)})
+	}
+	if l.MaturityDate != "" {
+		fields = append(fields, ui.Field{Label: "legal maturityDate", Value: l.MaturityDate})
+	}
+	if r := l.Rating; r != nil {
+		v := "provider:" + r.Provider
+		if r.Grade != "" {
+			v += " grade:" + r.Grade
+		}
+		fields = append(fields, ui.Field{Label: "legal rating", Value: fmt.Sprintf("%s uri:%s sha256:%s", v, r.Ref.URI, r.Ref.SHA256)})
+	}
+	return fields
+}
+
+// proofFields renders each metadata proof, warning when no attached file matches its
+// hash
 func proofFields(meta *metadata.Metadata, files map[string][]byte) []ui.Field {
 	if len(meta.Proofs) == 0 {
 		return nil
 	}
-	// Index attached files by content hash so a proof can be matched
-	// regardless of its filename inside proofs/.
+	// Match proofs by content hash, independent of filenames in proofs/
 	byHash := make(map[string]string, len(files))
 	for name, data := range files {
 		if !strings.HasPrefix(name, "proofs/") {
@@ -144,7 +181,7 @@ func proofFields(meta *metadata.Metadata, files map[string][]byte) []ui.Field {
 		} else {
 			fields = append(fields, ui.Field{
 				Label: "proof: " + p.Type,
-				Value: fmt.Sprintf("sha256:%s -- NO ATTACHED FILE MATCHES THIS HASH", p.SHA256),
+				Value: fmt.Sprintf("sha256:%s, NO ATTACHED FILE MATCHES THIS HASH", p.SHA256),
 				Warn:  true,
 			})
 		}

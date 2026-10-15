@@ -2,9 +2,9 @@ import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { InvestorHeader } from "./components/InvestorHeader";
 
-// One screen, still code-split: the shell (header, skip link) paints while the
-// investor bundle loads. The route file keeps its named-export convention, so
-// it's re-wrapped as a default for lazy()'s sake.
+// The investor screen is code-split so the shell (header, skip link) paints
+// while its bundle loads. lazy() needs a default export, so the route's named
+// export is wrapped as one.
 const Investor = lazy(() =>
   import("./routes/investor/Investor").then((m) => ({ default: m.Investor })),
 );

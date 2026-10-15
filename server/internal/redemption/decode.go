@@ -6,17 +6,16 @@ import (
 	"github.com/rwa-platform/server/internal/bindings"
 )
 
-// EventNames are the RedemptionEscrow events the projector understands, in
-// the fixed order defined by IRedemptionEscrow.
+// EventNames are the RedemptionEscrow events the projector understands, in the
+// order IRedemptionEscrow declares them
 var EventNames = []string{
 	"RedemptionRequested", "RedemptionFunded", "RedemptionCompleted", "RedemptionRejected", "RedemptionCancelled",
 }
 
-// DecodeLog is an indexer.EventDecoder for RedemptionEscrow logs: it
-// recognizes topic0 against the five redemption events and returns fields
-// as JSON-friendly strings (decimal for numbers, 0x-hex for
-// addresses/hashes) so they round-trip through models.ChainEvent.Data
-// (map[string]any, persisted as-is by the Mongo/memory repositories).
+// DecodeLog is an indexer.EventDecoder for RedemptionEscrow's five redemption events.
+// IDs/amounts become decimal strings, addresses/hashes 0x-hex strings, and createdAt
+// stays numeric in models.ChainEvent.Data. Other logs return "unknown" for
+// serverwiring's governance fallback.
 func DecodeLog(log types.Log) (string, map[string]any, error) {
 	escrow := bindings.NewRedemptionEscrow()
 	if len(log.Topics) == 0 {

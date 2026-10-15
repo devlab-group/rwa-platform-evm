@@ -8,9 +8,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// BearerToken extracts the token from an "Authorization: Bearer <token>"
-// header, or "" if the header is absent or not a bearer credential. Shared by
-// the admin JWT middleware (Authenticate) and any other bearer consumer.
+// BearerToken returns the token from an "Authorization: Bearer <token>"
+// header, or "" if the header is absent or not a bearer credential
 func BearerToken(c *gin.Context) string {
 	h := c.GetHeader("Authorization")
 	const prefix = "Bearer "
@@ -20,10 +19,8 @@ func BearerToken(c *gin.Context) string {
 	return ""
 }
 
-// PrincipalDigest is the stable, non-reversible per-credential identity used
-// for idempotency scoping and audit-actor attribution — a SHA-256 digest of
-// the input, never the input itself. Used by opsctl to derive an audit actor
-// label from a chosen actor string without persisting it verbatim.
+// PrincipalDigest returns the hex SHA-256 digest of s, a stable identity label
+// that does not reveal s
 func PrincipalDigest(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])

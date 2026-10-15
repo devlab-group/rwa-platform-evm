@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwa-platform/schemas/safe-signature-share.schema.json",
+  "title": "Safe Signature Share",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["formatVersion", "safe", "chainId", "owner", "primaryType", "typedDataDigest", "safeMessageHash", "signature", "signedAt"],
+  "properties": {
+    "formatVersion": { "type": "string", "const": "1.0" },
+    "safe": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+    "chainId": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+    "owner": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+    "primaryType": { "type": "string", "enum": ["MintAttestation", "BurnAttestation"] },
+    "typedDataDigest": { "type": "string", "pattern": "^0x[0-9a-fA-F]{64}$" },
+    "safeMessageHash": { "type": "string", "pattern": "^0x[0-9a-fA-F]{64}$" },
+    "signature": { "type": "string", "pattern": "^0x[0-9a-fA-F]{130}$" },
+    "signedAt": { "type": "string", "format": "date-time" }
+  }
+}

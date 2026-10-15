@@ -6,21 +6,14 @@ import (
 	"github.com/rwa-platform/server/internal/bindings"
 )
 
-// EventNames are the Vault events decoded from Vault logs: Purchased (the
-// sales read model), TreasuryChanged and StrategyChanged (the governance-
-// authority changes the project security projector folds), and
-// ProceedsWithdrawn (a treasury withdrawal, surfaced by the stack-transactions
-// projector). The off-chain distribution feature (Vault.Distributed) has been
-// removed from the platform — only on-chain purchases remain.
+// EventNames lists Vault events: Purchased feeds sales, TreasuryChanged/StrategyChanged
+// feed project security, and ProceedsWithdrawn feeds txindex's treasury-withdrawal
+// history
 var EventNames = []string{"Purchased", "TreasuryChanged", "StrategyChanged", "ProceedsWithdrawn"}
 
-// DecodeLog is an indexer.EventDecoder for Vault logs: it recognizes topic0
-// against Purchased (the sales read model), TreasuryChanged and
-// StrategyChanged (the security projector's live treasury/strategy), and
-// ProceedsWithdrawn (treasury withdrawals), and returns JSON-friendly fields,
-// the same convention as internal/redemption.DecodeLog. Any other Vault log
-// falls through to the generic "unknown" bucket (serverwiring then tries the
-// shared governance decoder for RoleGranted/RoleRevoked).
+// DecodeLog is an indexer.EventDecoder for Vault EventNames, using JSON-friendly fields
+// as in internal/redemption.DecodeLog; other logs return "unknown" for serverwiring's
+// governance fallback
 func DecodeLog(log types.Log) (string, map[string]any, error) {
 	vault := bindings.NewVault()
 	if len(log.Topics) == 0 {

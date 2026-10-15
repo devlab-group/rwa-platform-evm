@@ -12,18 +12,16 @@ import (
 )
 
 // statusNames maps the on-chain uint8 ComplianceStatus encoding
-// (IComplianceRegistry.ComplianceStatus) to the domain string enum.
+// (IComplianceRegistry.ComplianceStatus) to the domain string enum
 var statusNames = map[uint8]models.ComplianceStatus{
 	0: models.ComplianceUnknown,
 	1: models.ComplianceAllowed,
 	2: models.ComplianceBlocked,
 }
 
-// BuildStatuses replays ComplianceRegistry StatusChanged events in
-// (blockNumber, logIndex) order and derives each account's current
-// on-chain status. Chain state is the only source of truth for Status/
-// ValidUntil; it says nothing about OwnershipVerified,
-// which Reconcile preserves from the existing investor record.
+// BuildStatuses replays StatusChanged by (blockNumber, logIndex) into account
+// status/validUntil. OwnershipVerified is off-chain and preserved separately by
+// Reconcile.
 func BuildStatuses(events []*models.ChainEvent) map[string]struct {
 	Status     models.ComplianceStatus
 	ValidUntil int64
@@ -66,13 +64,8 @@ func toString(v any) string {
 	return s
 }
 
-// toUint8 and toInt64 accept every numeric shape a ChainEvent.Data value can
-// actually arrive in: the original Go type (uint8/uint64/...) when it comes
-// straight from the indexer within the same process, but int32 (small ints)
-// or int64 (large/unsigned ints, via bson.Long) once it has round-tripped
-// through MongoDB's Go driver, which decodes a stored BSON int32/int64 into
-// exactly those two Go types regardless of the field's original width —
-// never uint8, even for a value the indexer wrote as a Go uint8.
+// toUint8 and toInt64 handle ChainEvent.Data numbers from direct indexer types and
+// MongoDB decoding, including int32/int64
 func toUint8(v any) uint8 {
 	switch t := v.(type) {
 	case uint8:
@@ -109,24 +102,12 @@ func toInt64(v any) int64 {
 	}
 }
 
-// Reconcile rebuilds each account's Status/ValidUntil from indexed
-// ComplianceRegistry StatusChanged events, so a manual/multisig compliance
-// action taken outside this server (a compliance operator and/or legal
-// multisig may share COMPLIANCE_ROLE) is
-// reflected — chain is the source of truth, never the server's own
-// optimistic upsert-on-submit alone. OwnershipVerified is preserved from
-// whatever investor record already exists (or defaults to false for an
-// account the server has never seen a challenge for); it is off-chain data
-// the registry knows nothing about.
-//
-// The rebuild is exact and reversible: states is rebuilt from ALL currently
-// persisted StatusChanged events on every call (not incrementally), so an
-// account whose only/last such event was orphaned by an indexer reorg
-// rollback (internal/indexer) simply won't appear in states anymore. Such
-// accounts are reset here — Status/ValidUntil back to "no known status" —
-// rather than left at whatever stale value a prior call upserted;
-// otherwise a rolled-back compliance action would leave a wallet
-// permanently (and incorrectly) Allowed or Blocked.
+// Reconcile rebuilds Status and ValidUntil from persisted ComplianceRegistry
+// StatusChanged events, including multisig actions outside the server. It preserves
+// off-chain OwnershipVerified, defaulting false for new accounts.
+// When no event survives for an account, including after indexer reorg rollback, it
+// resets Status to Unknown and ValidUntil to 0 so orphaned actions cannot leave stale
+// Allowed/Blocked state.
 func Reconcile(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, complianceAddr string, investors repository.InvestorRepository) error {
 	events, err := chainEvents.ListByName(ctx, chainID, complianceAddr, "StatusChanged")
 	if err != nil {
@@ -164,9 +145,8 @@ func Reconcile(ctx context.Context, chainEvents repository.ChainEventRepository,
 		if inv.Status == models.ComplianceUnknown && inv.ValidUntil == 0 {
 			continue // already at the no-event default; nothing to reset
 		}
-		// No surviving StatusChanged event backs this account's on-chain
-		// status anymore. Status/ValidUntil are chain-derived, so reset
-		// them; OwnershipVerified/CreatedAt are off-chain and preserved.
+		// No remaining StatusChanged event backs this account. Reset the
+		// chain-derived fields and keep the off-chain ones.
 		inv.Status = models.ComplianceUnknown
 		inv.ValidUntil = 0
 		inv.UpdatedAt = now

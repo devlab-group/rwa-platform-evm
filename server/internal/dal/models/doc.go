@@ -1,6 +1,4 @@
-// Package models holds the persistence-agnostic data model shared by
-// internal/dal/repository, internal/api, and the workflow packages. Types here
-// mirror the persisted collections and the api/openapi.yaml schemas.
-// Amounts that are on-chain uint256 values are always decimal strings, never
-// JSON numbers, to avoid precision loss.
+// Package models defines persistence-independent records shared by repositories, API
+// and workflows, reflecting collections and API schemas. On-chain uint256 amounts use
+// decimal strings to preserve JSON precision.
 package models

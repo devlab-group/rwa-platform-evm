@@ -5,17 +5,11 @@ import { api } from "../../lib/client";
 import { readPreviewBuy, sendWithdrawProceeds } from "../../lib/wallet";
 import { installFakeWallet, renderWithWallet } from "../../test/walletHarness";
 
-// The Treasury withdrawal form is gated on the connected wallet holding
-// TREASURER_ROLE (a UX gate — the on-chain onlyRole check is the real
-// authorization). The fake wallet connects as this account, and the project
-// grants it the role, so the form renders and can broadcast directly.
+// The role-bearing fake wallet enables direct withdrawal; contracts enforce TREASURER_ROLE
+// authorization
 const CONNECTED = "0x1111111111111111111111111111111111111111";
 
-// The admin sales forms must scale each amount by the RIGHT token's decimals:
-// a buy preview is an RWA-token amount (Project.decimals,
-// 6 here), but a treasury withdrawal pays out the QUOTE token, whose decimals
-// (18 here) differ. Using the wrong one silently mis-scales money — these
-// tests pin each field to its own decimals.
+// Assert separate scales: RWA previews use 6 decimals; quote withdrawals use 18
 vi.mock("../../lib/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/client")>();
   return {
@@ -29,10 +23,8 @@ vi.mock("../../lib/client", async (importOriginal) => {
   };
 });
 
-// Quote-token decimals are read on-chain (return 18 so a correct withdrawal
-// conversion is distinguishable from the RWA token's 6 decimals); the purchase
-// quote is a Vault.previewBuy read, and the withdraw broadcast + receipt wait
-// are stubbed so the tests assert the exact calls without a chain.
+// Stub 18-decimal quote data versus 6-decimal RWA, previews and writes to check conversions without
+// a chain
 vi.mock("../../lib/wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/wallet")>();
   return {
@@ -81,8 +73,7 @@ describe("InventorySales amount conversion", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Preview quote" }));
 
-    // 1 whole RWA unit at 6 decimals -> 1000000n, quoted by Vault.previewBuy
-    // on the project's chain — no server round-trip.
+    // Preview 1 whole RWA as 1000000n on the project Vault/chain
     await waitFor(() =>
       expect(readPreviewBuy).toHaveBeenCalledWith(
         31337,
@@ -102,8 +93,7 @@ describe("InventorySales amount conversion", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Withdraw" }));
 
-    // 1 whole quote-token unit at 18 decimals -> 1000000000000000000n, NOT the
-    // RWA token's 1000000n; sent to the vault from the connected wallet.
+    // Withdraw 1 whole quote unit as 1000000000000000000n, independent of RWA decimals
     await waitFor(() =>
       expect(sendWithdrawProceeds).toHaveBeenCalledWith(
         31337,
@@ -127,8 +117,7 @@ describe("InventorySales amount conversion", () => {
       { target: { value: "10" } },
     );
 
-    // Once the quote decimals resolve (18), 10 > 5 disables the button and shows
-    // the inline error — the withdrawal is never broadcast.
+    // After resolving 18 decimals, 10 > 5 disables withdrawal and shows an error
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Withdraw" })).toBeDisabled(),
     );

@@ -5,13 +5,13 @@ import { FACTORY_ADDRESS } from "../fixtures/mock-api";
 import { getMockSentTransactions } from "../fixtures/mock-wallet";
 import { rwaFactoryAbi } from "../../src/lib/abis";
 
-// Valid 20-byte addresses — the deploy now ABI-encodes these as `address`, so a
-// malformed length would throw before broadcasting.
+// 20-byte addresses; the deploy ABI-encodes them as `address`, so a wrong
+// length throws before broadcast
 const ADMIN = `0x${"aa".repeat(20)}`;
 const AUDITOR = "0x9999999999999999999999999999999999999999";
 const QUOTE_TOKEN = "0x8888888888888888888888888888888888888888";
 
-test.describe("Setup — profile then deploy", () => {
+test.describe("Setup - profile then deploy", () => {
   mockOnly();
 
   test("goes from no project through a persisted profile to a wallet-broadcast RWAFactory.deploy", async ({
@@ -20,9 +20,9 @@ test.describe("Setup — profile then deploy", () => {
     const setup = new AdminSetupPage(page);
     await setup.goto();
 
-    // Deployment is not usable before a profile is persisted.
+    // Deployment is locked until a profile is stored
     await expect(
-      page.getByText(/Create and persist an Asset Profile above/),
+      page.getByText(/Create the Asset Profile above/),
     ).toBeVisible();
 
     await setup.createProfileFor({
@@ -31,16 +31,16 @@ test.describe("Setup — profile then deploy", () => {
     });
     await expect(setup.createdProfileStatus()).toContainText("Persisted");
     await expect(setup.createdProfileStatus()).toContainText("gram");
-    // projectId comes from the server config (a UUID), not hand-typed — capture
-    // it so the on-chain projectId and confirmation can be asserted against it.
+    // projectId comes from the server config, not from the operator; capture it
+    // to assert the on-chain projectId and the confirmation against it
     const projectId = await setup.generatedProjectId();
     expect(projectId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     );
     await expect(setup.createdProfileStatus()).toContainText(projectId);
 
-    // The deploy form now renders (derived project ID/decimals/digest, plus
-    // every RWAFactory-required role field — not just Admin/Auditor).
+    // The deploy form shows the derived project ID, decimals and digest, and
+    // every role field RWAFactory requires
     await setup.fillDeployForm({
       name: "Gold Bar Token",
       symbol: "GOLD",
@@ -58,9 +58,8 @@ test.describe("Setup — profile then deploy", () => {
     await expect(page.getByText("Confirm deployment")).toBeVisible();
     await setup.confirmDeploy();
 
-    // Deployment is now broadcast from the admin's wallet to the RWAFactory
-    // (from GET /api/v1/config), not POSTed to the server; the server observes
-    // the on-chain ProjectDeployed event.
+    // The admin's wallet broadcasts the deployment to the RWAFactory address
+    // from GET /api/v1/config; the server only observes ProjectDeployed
     await expect(setup.deployedConfirmation()).toBeVisible();
     await expect(setup.deployedConfirmation()).toContainText(projectId);
 
@@ -76,10 +75,10 @@ test.describe("Setup — profile then deploy", () => {
     });
     expect(functionName).toBe("deploy");
     const config = args[0] as Record<string, unknown>;
-    // projectId is the keccak256 of the profile's UUID string — CRITICAL
-    // PARITY with the server, which derives the on-chain bytes32 the same way.
+    // projectId is the keccak256 of the profile's UUID string; the server
+    // derives the on-chain bytes32 the same way
     expect(config.projectId).toBe(keccak256(toBytes(projectId)));
-    // decimals is derived from the persisted profile, not re-typed.
+    // decimals comes from the stored profile
     expect(config.decimals).toBe(18);
     // Every RWAFactory-required role address is present and non-zero.
     for (const field of [
@@ -114,9 +113,9 @@ test.describe("Setup — profile then deploy", () => {
     });
     await expect(reviewButton).toBeDisabled();
 
-    // Name/symbol/quoteToken/admin/auditor alone isn't enough — the compliance
-    // operator, pricer, treasurer, redemption manager, and treasury fields all
-    // have to be filled too, and they used to not even be rendered.
+    // Name, symbol, quote token, admin and auditor are not enough; the
+    // compliance operator, pricer, treasurer, redemption manager and treasury
+    // fields must be filled too
     await page.locator("#name").fill("Gold Bar Token");
     await page.locator("#symbol").fill("GOLD");
     await page.locator("#quoteToken").fill(QUOTE_TOKEN);
@@ -148,11 +147,8 @@ test.describe("Setup — profile then deploy", () => {
     await expect(setup.createdProfileStatus()).toContainText("Persisted");
     const projectId = await setup.generatedProjectId();
 
-    // A fresh page load now repopulates the persisted profile from the server
-    // (GET /api/v1/profile) rather than showing the empty create form. This
-    // both preserves the create-once contract (the immutable profile can't be
-    // re-created/overwritten from the UI) and unlocks Deployment without
-    // re-doing the create step.
+    // Reload must restore GET /api/v1/profile, prevent a second profile creation and
+    // keep Deployment unlocked
     await setup.goto();
     await expect(setup.createdProfileStatus()).toContainText("Persisted");
     await expect(page.getByLabel("Stored Asset Profile JSON")).toHaveValue(

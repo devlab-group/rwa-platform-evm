@@ -15,15 +15,14 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// leakyErr stands in for what the Mongo driver, the chain RPC client and the
-// IPFS client actually put in an error: hosts, ports, endpoint URLs, collection
-// names. None of it may reach an HTTP response.
+// leakyErr models Mongo, RPC and IPFS errors containing hosts, ports, endpoint URLs or
+// collection names. None may appear in HTTP responses.
 var leakyErr = errors.New(
 	`server selection error: connection() error occurred during connection handshake: ` +
 		`dial tcp 10.4.2.17:27017: connect: connection refused, rs: rwa-rs0, db: rwa_platform, collection: transactions`)
 
-// failingTxRepo fails only ListPage; embedding the interface supplies the rest
-// (nil, so anything else would panic loudly rather than silently pass).
+// failingTxRepo fails only ListPage; embedding the interface supplies the other
+// methods as nil, so any other call panics
 type failingTxRepo struct {
 	repository.TransactionRepository
 	err error
@@ -33,9 +32,8 @@ func (r *failingTxRepo) ListPage(ctx context.Context, address, cursor string, li
 	return nil, "", r.err
 }
 
-// A 500 on a PUBLIC route must not describe the failure. GET /api/v1/transactions
-// is unauthenticated by design, so anything failInternal echoes is readable by
-// anyone who polls it while a backend is unhealthy.
+// A 500 on a public route must not describe the failure. GET /api/v1/transactions
+// is unauthenticated, so anything failInternal echoed would be readable by anyone.
 func TestInternalErrorOnPublicRouteLeaksNothing(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.Repos.Transactions = &failingTxRepo{err: leakyErr}
@@ -54,7 +52,7 @@ func TestInternalErrorOnPublicRouteLeaksNothing(t *testing.T) {
 		}
 	}
 
-	// The stable machine-readable code is part of the contract and must survive.
+	// The stable machine-readable code is part of the contract and must survive
 	var resp struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
@@ -65,14 +63,13 @@ func TestInternalErrorOnPublicRouteLeaksNothing(t *testing.T) {
 	if resp.Code != CodeInternal {
 		t.Fatalf("code = %q, want %q", resp.Code, CodeInternal)
 	}
-	// An opaque message is useless for support unless the operator can tie it
-	// back to the logged error, which is what the reference is for.
+	// The reference lets an operator tie the opaque message to the logged error
 	if !strings.Contains(resp.Message, "reference ") {
 		t.Fatalf("message carries no log reference: %q", resp.Message)
 	}
 }
 
-// Two 500s must not reuse a reference, or it cannot identify a log line.
+// Two 500s must not reuse a reference, or it cannot identify a log line
 func TestInternalErrorReferenceIsPerRequest(t *testing.T) {
 	env := setupTestApp(t)
 	env.app.Repos.Transactions = &failingTxRepo{err: leakyErr}
@@ -84,8 +81,8 @@ func TestInternalErrorReferenceIsPerRequest(t *testing.T) {
 	}
 }
 
-// failInternal must not swallow an oversized-body failure into an opaque 500 —
-// that one IS the caller's fault and stays a 413 they can act on.
+// failInternal must not turn an oversized-body failure into an opaque 500; the
+// caller caused it, so it stays a 413 they can act on
 func TestInternalErrorKeepsOversizedBodyAs413(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)

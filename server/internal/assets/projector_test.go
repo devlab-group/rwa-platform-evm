@@ -79,12 +79,8 @@ func TestReconcileMintedIgnoresNonMatchingRecords(t *testing.T) {
 	}
 }
 
-// TestReconcileMintedDemotesOrphanedMint checks reversibility: a record
-// already flipped to Minted by a prior ReconcileMinted call must be demoted
-// back to Signed (and MintTxHash cleared) if its backing Minted event later
-// disappears from chainEvents — e.g. because internal/indexer rolled it back
-// as orphaned by a reorg. A purely append-only reconciler would only ever
-// promote records and leave this one permanently, incorrectly stuck at Minted.
+// TestReconcileMintedDemotesOrphanedMint checks that removing a Minted event, as in a
+// reorg rollback, restores Signed and clears MintTxHash
 func TestReconcileMintedDemotesOrphanedMint(t *testing.T) {
 	records := memory.NewAssetRecordRepository()
 	events := memory.NewChainEventRepository()
@@ -117,7 +113,7 @@ func TestReconcileMintedDemotesOrphanedMint(t *testing.T) {
 		t.Fatalf("precondition failed: got status=%s mintTxHash=%s", promoted.Status, promoted.MintTxHash)
 	}
 
-	// Simulate the indexer rolling back the Minted event as orphaned by a reorg.
+	// the indexer rolls back the Minted event in a reorg
 	if _, err := events.DeleteFromBlock(ctx, 31337, controllerAddr, 10); err != nil {
 		t.Fatal(err)
 	}
@@ -137,9 +133,8 @@ func TestReconcileMintedDemotesOrphanedMint(t *testing.T) {
 	}
 }
 
-// TestReconcileMintedNeverDemotesRejected ensures the demotion pass only
-// ever touches Minted records — Rejected is a terminal, non-chain-derived
-// status this reconciler never set, and must never flip it back to Signed.
+// TestReconcileMintedNeverDemotesRejected checks that a Rejected record is left
+// as it is, since the reconciler does not derive that status from chain events
 func TestReconcileMintedNeverDemotesRejected(t *testing.T) {
 	records := memory.NewAssetRecordRepository()
 	events := memory.NewChainEventRepository()
@@ -192,11 +187,8 @@ func TestReconcileMintedIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestReconcileAuditorRestoresBaselineWhenOnlyRotationIsRolledBack rolls back
-// the first/only auditor rotation: once the sole surviving AuditorChanged
-// event disappears (a deep reorg the indexer rolled back past), the live
-// auditor must not stay stuck at the now-orphaned rotated-to address forever —
-// ReconcileAuditor restores the deployment-time baseline instead.
+// TestReconcileAuditorRestoresBaselineWhenOnlyRotationIsRolledBack requires removing
+// the only AuditorChanged event to restore the baseline auditor
 func TestReconcileAuditorRestoresBaselineWhenOnlyRotationIsRolledBack(t *testing.T) {
 	events := memory.NewChainEventRepository()
 	ctx := context.Background()
@@ -206,7 +198,7 @@ func TestReconcileAuditorRestoresBaselineWhenOnlyRotationIsRolledBack(t *testing
 
 	svc := &RecordService{auditor: baseline, baselineAuditor: baseline}
 
-	// The rotation happens on-chain.
+	// the rotation happens on-chain
 	if err := events.Create(ctx, &models.ChainEvent{
 		ChainID: 31337, Address: controllerAddr, Name: "AuditorChanged", TxHash: "0xrotate1", LogIndex: 0, BlockNumber: 10,
 		Data: map[string]any{"newAuditor": rotated.Hex()},
@@ -220,8 +212,8 @@ func TestReconcileAuditorRestoresBaselineWhenOnlyRotationIsRolledBack(t *testing
 		t.Fatalf("currentAuditor() = %s, want the rotated-to address %s", svc.currentAuditor().Hex(), rotated.Hex())
 	}
 
-	// A deep reorg rolls back past block 10 — the indexer deletes the
-	// underlying chain_events row entirely (not merely Removed=true).
+	// a reorg rolls back past block 10, and the indexer deletes the chain_events
+	// row instead of setting Removed
 	if _, err := events.DeleteFromBlock(ctx, 31337, controllerAddr, 10); err != nil {
 		t.Fatal(err)
 	}

@@ -1,13 +1,10 @@
-import { sha256, toBytes, type Hex } from "viem";
+import { sha256, toBytes, type Address, type Hex } from "viem";
+import type { ContractCall } from "./safeBatch";
+import { erc20ApproveCall, escrowCall } from "./wallet";
 
 /**
- * Encodes a rejection reason into the bytes32 the RedemptionEscrow expects,
- * matching the old server encoder (internal/redemption EncodeReasonCode):
- *
- * - A `0x` + exactly 64 hex chars input is already a bytes32 → used verbatim.
- * - Any other non-empty text is hashed: `sha256(utf8Bytes(text))`.
- *
- * Empty input is rejected — a reason code is required on-chain.
+ * Passes through exact 0x-prefixed bytes32 hex; hashes other non-empty reasons with SHA-256,
+ * matching server EncodeReasonCode
  */
 export function encodeReasonCode(input: string): Hex {
   if (!input) {
@@ -17,4 +14,22 @@ export function encodeReasonCode(input: string): Hex {
     return input as Hex;
   }
   return sha256(toBytes(input));
+}
+
+/**
+ * Orders exact-amount approval, funding and optional claim; atomic execution rolls back funding on
+ * payout failure
+ */
+export function fundBatchCalls(
+  quoteToken: Address,
+  escrow: Address,
+  id: bigint,
+  quoteAmount: bigint,
+  claim: boolean,
+): ContractCall[] {
+  return [
+    erc20ApproveCall(quoteToken, escrow, quoteAmount),
+    escrowCall(escrow, "fundRedemption", id),
+    ...(claim ? [escrowCall(escrow, "claimRedemption", id)] : []),
+  ];
 }

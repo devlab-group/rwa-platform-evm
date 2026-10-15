@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Full backup — mongodump of the platform database + an IPFS pin
-# export (CAR archives, kubo's standard portable format: `ipfs dag export`)
-# of every currently-pinned CID, into one timestamped directory. Restore
-# with server/ops/restore.sh.
+# Back up MongoDB and recursively pinned IPFS CIDs as CARv1 archives in one
+# timestamped directory. Restore with ops/restore.sh.
 #
 # Usage: MONGO_URI=... MONGO_DB=... IPFS_API_URL=... bash ops/backup.sh [output-dir]
-# Defaults match internal/config's own defaults, so running this against a
-# local/dev stack needs no env vars at all.
+# The defaults match internal/config, so a local development stack needs no
+# environment variables.
+#
+# Stop the server for a consistent copy: mongodump runs without --oplog and
+# cannot capture a single point in time while writes continue.
 set -euo pipefail
 
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
@@ -27,10 +28,9 @@ echo "=== [1/2] mongodump ${MONGO_DB} -> ${OUT_DIR}/mongodump ==="
 mongodump --uri="${MONGO_URI}" --db="${MONGO_DB}" --out="${OUT_DIR}/mongodump"
 
 echo "=== [2/2] exporting IPFS pins -> ${OUT_DIR}/ipfs ==="
-# --type=recursive: the pin kind everything this platform pins uses (see
-# internal/ipfs's Kubo client, which calls the recursive add/pin endpoint);
-# excludes the implicit "indirect" pins of a recursive pin's own DAG
-# children, which don't need their own separate export.
+# --type=recursive lists the pins made by `ipfs add` (the Kubo client in
+# internal/ipfs adds with pin=true), and leaves out the indirect pins of a recursive
+# pin's own blocks, which need no separate export
 ipfs --api="${IPFS_API_URL}" pin ls --type=recursive -q > "${OUT_DIR}/ipfs/pinned-cids.txt"
 while read -r cid; do
     [ -z "${cid}" ] && continue

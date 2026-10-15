@@ -16,11 +16,8 @@ import {IRWAToken} from "./interfaces/IRWAToken.sol";
 import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 
 /// @title Vault
-/// @notice Holds inventory, sells for one quote token (on-chain purchase only), and
-///         withdraws sale proceeds.
-/// @dev `AccessControlEnumerable` lets an off-chain verifier enumerate
-///      `TREASURER_ROLE`/`DEFAULT_ADMIN_ROLE` holders on-chain — see ComplianceRegistry's
-///      NatSpec for the full rationale and the diamond-override pattern reused below.
+/// @notice Sells RWA inventory for a quote token through buy; withdraws proceeds to treasury
+/// @dev Enumerable TREASURER_ROLE and DEFAULT_ADMIN_ROLE; see ComplianceRegistry for inheritance overrides
 contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRules, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -87,10 +84,8 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
     function withdrawProceeds(uint256 amount) external nonReentrant onlyRole(TREASURER_ROLE) {
         if (IRWAToken(token).paused()) revert ProjectPaused();
 
-        // quoteToken is an arbitrary configured ERC-20 whose transfer behavior (fee, blacklist,
-        // etc.) can change after deployment. Measure treasury's own delta rather
-        // than trusting `safeTransfer`'s success, so a silently underpaid withdrawal can never
-        // be reported to the caller/event log as the full requested `amount`.
+        // Quote-token behavior can change after deployment. Check the treasury's balance delta
+        // so a short payment reverts even if safeTransfer succeeds.
         uint256 before = IERC20(quoteToken).balanceOf(treasury);
         IERC20(quoteToken).safeTransfer(treasury, amount);
         uint256 received = IERC20(quoteToken).balanceOf(treasury) - before;
@@ -123,7 +118,7 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
         return IPriceStrategy(strategy).quotePurchase(tokenAmount);
     }
 
-    // ---- AccessControl diamond resolution — see ComplianceRegistry.sol for rationale ----
+    // ---- AccessControl overrides, see ComplianceRegistry.sol ----
 
     function _grantRole(bytes32 role, address account)
         internal

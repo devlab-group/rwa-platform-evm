@@ -42,8 +42,7 @@ func forcedTransferLog(t *testing.T, from, to common.Address, amount *big.Int) t
 
 func TestDecodeFrozen(t *testing.T) {
 	account := common.HexToAddress("0x00000000000000000000000000000000000000a1")
-	// Well past 2^64, to prove the amount never round-trips through a float or
-	// a fixed-width int on its way to the projection.
+	// Exceed 2^64 to catch float or fixed-width integer conversions before projection
 	amount, _ := new(big.Int).SetString("123456789012345678901234567890", 10)
 
 	name, data, err := DecodeLog(frozenLog(t, account, amount))
@@ -77,8 +76,8 @@ func TestDecodeForcedTransfer(t *testing.T) {
 	}
 }
 
-// A log whose indexed topics are missing must fail rather than decode into the
-// zero address, which would project a freeze against nobody.
+// Reject missing indexed topics; zero-address decoding would project a freeze against
+// nobody
 func TestDecodeFailsClosedOnMissingTopics(t *testing.T) {
 	full := frozenLog(t, common.HexToAddress("0xa1"), big.NewInt(1))
 
@@ -91,13 +90,12 @@ func TestDecodeFailsClosedOnMissingTopics(t *testing.T) {
 		t.Error("ForcedTransfer log without its recipient topic should not decode")
 	}
 
-	// Truncated data is a decode error too, not a zero amount.
+	// Reject truncated data rather than decoding zero
 	if _, _, err := DecodeLog(types.Log{Topics: full.Topics, Data: full.Data[:16]}); err == nil {
 		t.Error("Frozen log with truncated data should not decode")
 	}
 
-	// An unrelated topic0 is not an error: it falls through to the shared
-	// governance decoder, the same as every other contract-specific decoder.
+	// An unrelated topic0 returns "unknown" for serverwiring's shared governance fallback
 	unrelated := bindings.NewGovernance().EventID("Paused")
 	name, _, err := DecodeLog(types.Log{Topics: []common.Hash{unrelated}, Data: nil})
 	if err != nil || name != "unknown" {

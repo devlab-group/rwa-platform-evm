@@ -71,12 +71,9 @@ func TestChallengeVerifyRejectsReplay(t *testing.T) {
 	}
 }
 
-// TestChallengeVerifyConcurrentReplaySucceedsOnce is the MarkUsed CAS
-// regression test: N goroutines Verify the exact same (nonce, signature)
-// pair at once. Exactly one may observe success; every other must get
-// ErrChallengeUsed, never a duplicate success — see
-// WalletChallengeRepository.MarkUsed's doc comment for why an
-// unconditional "set used=true" isn't enough on its own.
+// TestChallengeVerifyConcurrentReplaySucceedsOnce checks concurrent verification of one
+// nonce/signature: exactly one succeeds; others return ErrChallengeUsed through atomic
+// MarkUsed
 func TestChallengeVerifyConcurrentReplaySucceedsOnce(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	addr := crypto.PubkeyToAddress(priv.PublicKey)
@@ -196,19 +193,15 @@ func TestVerifyOwnershipRejectsAddressMismatch(t *testing.T) {
 	hash := accounts.TextHash([]byte(c.Message))
 	sig, _ := crypto.Sign(hash, priv)
 
-	// Caller claims a different address than the one that actually signed.
+	// The caller claims a different address than the one that signed
 	if _, err := svc.VerifyOwnership(context.Background(), otherAddr, c.Nonce, sig); err != ErrAddressMismatch {
 		t.Fatalf("err = %v, want ErrAddressMismatch", err)
 	}
 }
 
-// TestChallengeCreateEnforcesActiveCap covers the active-challenge cap: any
-// unauthenticated caller can create a new challenge for any valid address,
-// and every call makes a new nonce/document, so the number of ACTIVE
-// (unexpired, unused) challenges per normalized address is capped. Once an
-// address has MaxActiveChallengesPerAddress currently-active challenges
-// outstanding, one more Create must be rejected rather than growing
-// storage unboundedly.
+// TestChallengeCreateEnforcesActiveCap checks that once an address has
+// MaxActiveChallengesPerAddress unused, unexpired challenges, one more Create
+// is rejected
 func TestChallengeCreateEnforcesActiveCap(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	addr := crypto.PubkeyToAddress(priv.PublicKey)
@@ -224,7 +217,7 @@ func TestChallengeCreateEnforcesActiveCap(t *testing.T) {
 		t.Fatalf("4th Create: err = %v, want ErrTooManyActiveChallenges", err)
 	}
 
-	// A DIFFERENT address must be unaffected by another address's cap.
+	// A different address is unaffected by another address's cap
 	otherPriv, _ := crypto.GenerateKey()
 	otherAddr := crypto.PubkeyToAddress(otherPriv.PublicKey)
 	if _, err := svc.Create(context.Background(), otherAddr.Hex()); err != nil {
@@ -232,11 +225,8 @@ func TestChallengeCreateEnforcesActiveCap(t *testing.T) {
 	}
 }
 
-// TestChallengeCreateCapCountsOnlyActiveChallenges pins the "unexpired,
-// unused" qualifier on the cap: a challenge that has already been
-// USED must free up a cap slot for a fresh Create, exactly like an
-// expired one would (the cap counts standing storage exposure, not
-// lifetime request volume).
+// TestChallengeCreateCapCountsOnlyActiveChallenges checks that a used challenge
+// frees a cap slot, as an expired one does
 func TestChallengeCreateCapCountsOnlyActiveChallenges(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	addr := crypto.PubkeyToAddress(priv.PublicKey)
@@ -251,7 +241,7 @@ func TestChallengeCreateCapCountsOnlyActiveChallenges(t *testing.T) {
 		t.Fatalf("second Create while first is still active: err = %v, want ErrTooManyActiveChallenges", err)
 	}
 
-	// Use the first challenge — it should no longer count as active.
+	// Use the first challenge, which should then stop counting as active
 	hash := accounts.TextHash([]byte(c.Message))
 	sig, _ := crypto.Sign(hash, priv)
 	if _, err := svc.Verify(context.Background(), c.Nonce, sig); err != nil {
@@ -263,9 +253,8 @@ func TestChallengeCreateCapCountsOnlyActiveChallenges(t *testing.T) {
 	}
 }
 
-// TestChallengeCreateCapExpiredChallengesDontCount pins the "unexpired"
-// half of the same qualifier: a challenge whose TTL has already elapsed
-// must not keep occupying a cap slot forever.
+// TestChallengeCreateCapExpiredChallengesDontCount checks that an expired
+// challenge does not occupy a cap slot
 func TestChallengeCreateCapExpiredChallengesDontCount(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	addr := crypto.PubkeyToAddress(priv.PublicKey)
@@ -285,8 +274,8 @@ func TestChallengeCreateCapExpiredChallengesDontCount(t *testing.T) {
 	}
 }
 
-// TestWalletChallengeRepositoryCountActive exercises the memory repository
-// method directly, independent of ChallengeService's cap enforcement above.
+// TestWalletChallengeRepositoryCountActive exercises the memory repository's
+// CountActive directly, without ChallengeService
 func TestWalletChallengeRepositoryCountActive(t *testing.T) {
 	repo := memory.NewWalletChallengeRepository()
 	ctx := context.Background()
@@ -331,7 +320,7 @@ func TestVerifyOwnershipPreservesExistingComplianceStatus(t *testing.T) {
 	addr := crypto.PubkeyToAddress(priv.PublicKey)
 	svc, _, investors := newTestChallengeService(time.Hour)
 
-	// Investor already has a compliance status from a prior manual action.
+	// The investor already has a compliance status from an earlier manual action
 	if err := investors.Upsert(context.Background(), &models.Investor{Address: addr.Hex(), Status: models.ComplianceAllowed}); err != nil {
 		t.Fatal(err)
 	}

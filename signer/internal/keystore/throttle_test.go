@@ -16,7 +16,7 @@ func TestThrottle_FreeAttemptsDoNotLockOut(t *testing.T) {
 			t.Fatalf("attempt %d: RecordUnlockFailure: %v", i, err)
 		}
 	}
-	// Exactly throttleFreeAttempts failures recorded; still not locked.
+	// Exactly throttleFreeAttempts failures recorded; still not locked
 	if err := CheckThrottle(path); err != nil {
 		t.Errorf("expected no lockout after exactly %d failures, got: %v", throttleFreeAttempts, err)
 	}
@@ -38,7 +38,7 @@ func TestThrottle_BackoffGrowsWithRepeatedFailures(t *testing.T) {
 	pathA := filepath.Join(t.TempDir(), "a.json")
 	pathB := filepath.Join(t.TempDir(), "b.json")
 
-	// pathA gets exactly one failure past the free budget; pathB gets several.
+	// pathA gets exactly one failure past the free budget; pathB gets several
 	for i := 0; i < throttleFreeAttempts+1; i++ {
 		RecordUnlockFailure(pathA)
 	}

@@ -13,7 +13,7 @@ export interface AmountField {
   symbol: string;
 }
 
-/** Client-side wallet-submission lifecycle; distinct from indexer TransactionChainStatus. */
+/** Browser wallet-submission state, separate from server TransactionChainStatus */
 export type ConfirmationState =
   | "draft"
   | "awaiting-signature"
@@ -28,16 +28,15 @@ const CONFIRMATION_LABEL: Record<ConfirmationState, string> = {
   submitted: "Submitted, unconfirmed",
   confirmed: "Confirmed",
   reverted: "Reverted",
-  reorged: "Reorged — resubmission required",
+  reorged: "Reorged - resubmission required",
 };
 
 export interface TransactionPreviewProps {
   title: string;
   chainId: number;
   /**
-   * The contracts involved, one of which is the transaction's target. The
-   * calldata is encoded in the browser from these very addresses (lib/abis.ts
-   * + lib/wallet.ts), so what the preview shows is what the wallet is handed.
+   * Project contract addresses, including the target; lib/abis.ts and lib/wallet.ts encode calldata
+   * locally
    */
   addresses: AddressField[];
   amounts: AmountField[];
@@ -45,15 +44,14 @@ export interface TransactionPreviewProps {
   quoteTokenSymbol?: string;
   slippageBps?: number;
   confirmationState: ConfirmationState;
-  /** Extra call-specific caveat, appended after the standard non-guarantee notice. */
+  /** Call-specific caveat appended to the payment disclaimer */
   notice?: string;
   children?: ReactNode;
 }
 
 /**
- * Mandatory pre-approval summary: every wallet or Safe transaction must be
- * previewed with chainId, addresses, amounts + units, price side, quote token,
- * slippage bounds, and confirmation state before the user can approve it.
+ * Shows chain, addresses, amounts/units, price side, quote token, slippage bounds and
+ * confirmation state before wallet approval
  */
 export function TransactionPreview({
   title,
@@ -130,9 +128,9 @@ export function TransactionPreview({
       </dl>
 
       <p className="tx-preview__notice">
-        This is a preview of an on-chain transaction. Values are not final until
-        the transaction is mined and has passed the platform&apos;s finality
-        threshold; a pending or funded redemption is not a guarantee of payment.
+        Wait for mining and the platform&apos;s finality threshold before
+        treating amounts as final. A pending or funded redemption does not
+        guarantee payment.
         {notice ? ` ${notice}` : ""}
       </p>
 

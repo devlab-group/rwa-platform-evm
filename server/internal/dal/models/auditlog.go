@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// AuditLogEntry is an append-only operational audit record (collection: audit_logs).
+// AuditLogEntry is an append-only operational audit record (collection: audit_logs)
 type AuditLogEntry struct {
 	ID        string         `json:"id" bson:"_id"`
 	Category  string         `json:"category" bson:"category"`

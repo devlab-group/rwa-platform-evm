@@ -26,7 +26,7 @@ func TestRecordAndRecent(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("got %d entries, want 2", len(entries))
 	}
-	// Recent() returns newest first.
+	// Recent returns the newest entry first
 	if entries[0].Action != "mint.relay" {
 		t.Errorf("entries[0].Action = %q, want mint.relay", entries[0].Action)
 	}

@@ -18,13 +18,8 @@ type KYCEventRepository struct {
 	byHash    map[string]bool
 	byEventID map[string]bool // key: provider + "|" + eventId
 
-	// claims tracks, per address, which event currently holds the
-	// "latest decision" claim. It is the atomic
-	// analogue of the removed LatestForAddress query: instead of racing
-	// a read-then-write against concurrent webhook deliveries, callers
-	// CAS into this map via ClaimLatestForAddress using the deterministic
-	// (occurredAt, eventKey) ordering, the same
-	// singleton-claim pattern used elsewhere.
+	// claims stores each address's latest (occurredAt, eventKey), updated by
+	// ClaimLatestForAddress
 	claims map[string]claimState
 }
 
@@ -106,9 +101,7 @@ func (r *KYCEventRepository) ListPending(ctx context.Context) ([]*models.KYCEven
 	defer r.mu.RUnlock()
 	out := make([]*models.KYCEvent, 0)
 	for _, v := range r.byID {
-		// Claiming is included so the reconciler picks up an event whose
-		// claim was never resolved because Process died at the claim/finalize
-		// boundary.
+		// Include Claiming so the reconciler can finish interrupted claim finalization
 		if v.ApplyStatus != models.KYCApplyClaiming && v.ApplyStatus != models.KYCApplyAccepted && v.ApplyStatus != models.KYCApplyApplying {
 			continue
 		}
@@ -119,15 +112,8 @@ func (r *KYCEventRepository) ListPending(ctx context.Context) ([]*models.KYCEven
 	return out, nil
 }
 
-// ClaimLatestForAddress atomically decides whether the event described by
-// (occurredAt, eventKey) is the newest decision seen so far for address,
-// using the deterministic tie-break (occurredAt first, eventKey as a
-// stable secondary key so two events with an identical timestamp resolve
-// the same way everywhere). It replaces
-// the removed LatestForAddress-then-Create race: the caller never reads
-// the current latest and separately writes: the compare-and-set happens
-// under a single lock acquisition, so concurrent webhook deliveries for
-// the same address cannot both believe they "won".
+// ClaimLatestForAddress atomically compares and stores under one lock. Later occurredAt wins;
+// lexicographically greater eventKey breaks ties. Increasing decisions may win successively.
 func (r *KYCEventRepository) ClaimLatestForAddress(ctx context.Context, address string, occurredAt time.Time, eventKey string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -149,11 +135,8 @@ func (r *KYCEventRepository) CurrentClaimEventKey(ctx context.Context, address s
 	return cur.eventKey, nil
 }
 
-// claimIsNewer reports whether (at, key) strictly outranks (curAt, curKey)
-// under the (occurredAt, eventKey) ordering: later occurredAt wins; on an
-// exact tie, the lexicographically greater eventKey wins. This must match
-// the Mongo implementation's comparison exactly so memory- and
-// Mongo-backed deployments make identical claim decisions.
+// claimIsNewer orders by occurredAt, then eventKey lexicographically, matching the
+// MongoDB comparison
 func claimIsNewer(at time.Time, key string, curAt time.Time, curKey string) bool {
 	if at.After(curAt) {
 		return true

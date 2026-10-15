@@ -43,8 +43,8 @@ func TestSessionManagerValidateRejectsUnknownToken(t *testing.T) {
 	}
 }
 
-// TestSessionManagerValidateRejectsExpiredToken pins the TTL enforcement: a
-// WalletSession is a ~15 minute bearer, not a forever-valid one.
+// TestSessionManagerValidateRejectsExpiredToken checks that a session stops
+// validating once its TTL elapses
 func TestSessionManagerValidateRejectsExpiredToken(t *testing.T) {
 	ctx := context.Background()
 	sm := NewSessionManager(memory.NewWalletSessionRepository(), 10*time.Millisecond)
@@ -58,9 +58,8 @@ func TestSessionManagerValidateRejectsExpiredToken(t *testing.T) {
 	}
 }
 
-// TestSessionManagerIssueIsIndependentPerCall pins that Issue is not
-// exclusive/single-use the way idempotency reservation is — two sessions
-// for the same address coexist (e.g. two open browser tabs).
+// TestSessionManagerIssueIsIndependentPerCall checks that two sessions for the
+// same address coexist, for example in two browser tabs
 func TestSessionManagerIssueIsIndependentPerCall(t *testing.T) {
 	ctx := context.Background()
 	sm := NewSessionManager(memory.NewWalletSessionRepository(), time.Hour)
@@ -77,15 +76,9 @@ func TestSessionManagerIssueIsIndependentPerCall(t *testing.T) {
 	}
 }
 
-// TestSessionManagerCrossReplicaValidateAndLogout covers the shared-store
-// behavior: two SessionManager instances that each simulate a
-// separate server replica but share the SAME backing repository (exactly
-// what repository/mongodb gives every real replica in production) must see
-// each other's sessions — a token minted by "replica A" validates on
-// "replica B", and deleting it through the shared store makes it stop
-// validating on "replica A" too. With a process-local map, each
-// SessionManager held its own tokens, so this was impossible: a
-// second replica could never see a first replica's tokens at all.
+// TestSessionManagerCrossReplicaValidateAndLogout shares a repository between two
+// managers, as MongoDB replicas do. Each validates the other's token; deleting it
+// invalidates it on both.
 func TestSessionManagerCrossReplicaValidateAndLogout(t *testing.T) {
 	ctx := context.Background()
 	sharedStore := memory.NewWalletSessionRepository()
@@ -105,11 +98,8 @@ func TestSessionManagerCrossReplicaValidateAndLogout(t *testing.T) {
 		t.Errorf("address = %q", address)
 	}
 
-	// SessionManager itself has no Revoke (wallet sessions expire on TTL
-	// only) — exercise the shared store's Delete directly to prove
-	// replica-independence of revocation too. The stored id is the token's
-	// digest, so revocation through the store keys off the same digest, not
-	// the raw token.
+	// SessionManager has no revoke method, since sessions expire on TTL, so
+	// call the store's Delete directly. The stored id is the token's digest.
 	if err := sharedStore.Delete(ctx, hashSessionToken(token)); err != nil {
 		t.Fatal(err)
 	}
@@ -174,9 +164,8 @@ func TestRequireWalletSessionAcceptsValidTokenAndSetsAddress(t *testing.T) {
 	}
 }
 
-// TestRequireWalletSessionNilManagerReturns501 pins App's documented
-// nil-dependency contract: a reduced deployment without a SessionManager
-// wired disables this route cleanly (501) instead of panicking.
+// TestRequireWalletSessionNilManagerReturns501 checks that a nil SessionManager
+// answers 501 instead of panicking
 func TestRequireWalletSessionNilManagerReturns501(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -190,9 +179,8 @@ func TestRequireWalletSessionNilManagerReturns501(t *testing.T) {
 	}
 }
 
-// TestWalletSessionAddressWithoutMiddlewareReturnsFalse pins that a
-// handler can never fabricate/inherit an address without
-// RequireWalletSession having actually run and validated a token.
+// TestWalletSessionAddressWithoutMiddlewareReturnsFalse checks that no address
+// is available unless RequireWalletSession ran and validated a token
 func TestWalletSessionAddressWithoutMiddlewareReturnsFalse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

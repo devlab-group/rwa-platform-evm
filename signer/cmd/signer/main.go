@@ -1,6 +1,5 @@
-// Command signer is the air-gapped CLI auditor tool: it validates a .rwa
-// audit package end-to-end and produces a signed-result.json. It never makes
-// a network request while signing.
+// Command signer reviews and signs .rwa audit packages offline, producing
+// signed results or Safe owner shares without network requests
 package main
 
 import (
@@ -40,6 +39,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "signer: error:", err)
 			os.Exit(1)
 		}
+	case "combine":
+		if err := runCombine(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "signer: error:", err)
+			os.Exit(1)
+		}
 	case "keystore":
 		if err := runKeystoreCmd(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "signer: error:", err)
@@ -56,47 +60,41 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `Usage: signer sign <package.rwa> --keystore <path> [flags]
+       signer combine --policy <path> [--out <path>] <share.json>...
        signer keystore <create|import> --out <path> [flags]
 
-Air-gapped .rwa audit package review and EIP-712 signing tool.
-Makes zero network requests.
+Review and sign .rwa audit packages offline. Makes no network requests.
 
-Flags:
-  --keystore <path>          password-encrypted keystore file (required unless --hardware); accepts
-                              either a standard Ethereum V3 JSON keystore or this signer's own
-                              Argon2id-based format (internal/keystore), auto-detected
-  --password <password>      DEPRECATED, INSECURE: keystore password on the command line, visible in
-                              process listings and shell history. Prefer --password-file or the
-                              interactive prompt. May be removed in a future version.
-  --password-file <path>     file containing the keystore password (first line, trailing newline
-                              trimmed). The file must not be group- or world-readable.
-  --hardware <device>        sign with a hardware-wallet/HSM adapter instead of a keystore file;
-                              <device> is one of: ledger, trezor, yubikey, hsm. No device has a
-                              working integration in this V1 build (see internal/hardware) -- this
-                              always errors today, but is the recommended production signing path
-                              once wired up.
-  --out <path>                output path for signed-result.json (default: <package-dir>/signed-result.json)
-  --policy <path>            REQUIRED. Independently-provisioned deployment trust root (JSON):
-                              chainId, controller, vault, auditor, projectId, profileDigest, and
-                              optionally maxAttestationLifetimeHours. Every value must match the
-                              package or the signer refuses to sign -- see internal/policy and
-                              docs/auditor/auditor-guide.md.
-  --yes                      skip the interactive confirmation prompt. Requires --unsafe-test-mode.
-  --unsafe-test-mode         required alongside --yes; noninteractive signing removes the human
-                              confirmation step and is restricted to scripted test/CI use. --policy
-                              is still fully enforced even with this flag -- it never permits signing
-                              from package-supplied values alone. It also relaxes the keystore
-                              audit-log write failures below from fail-closed to warn-and-continue.
-  --audit-anchor <path>      path to the keystore's independent audit-log anchor (default:
-                              <keystore>.auditlog.anchor.jsonl, next to the keystore file). Every
-                              unlock/sign verifies the keystore's audit log against this anchor
-                              before proceeding and refuses to continue if it detects truncation or
-                              rewritten history. Point this at separate media (a different mounted
-                              drive) for real protection -- an anchor on the same disk as the
-                              keystore cannot resist an attacker who can write to that disk. See
-                              docs/auditor/auditor-guide.md §5.
+With a "safe" policy block, sign writes an owner's signature share, defaulting to
+signature-share-<owner>.json. combine needs no key and assembles shares from at least
+the policy's threshold of distinct owners into signed-result.json. It verifies the
+shares, but does not repeat package or expiry checks.
 
-Run "signer keystore --help" for the keystore-creation subcommand.`)
+Flags for sign:
+  --keystore <path>          encrypted keystore (required unless --hardware); accepts
+                              Ethereum V3 or the native Argon2id format, auto-detected
+  --password <password>      DEPRECATED: visible in process listings and shell history.
+                              Prefer the interactive prompt or --password-file.
+  --password-file <path>     plaintext password file, with trailing newlines trimmed;
+                              must allow no group or other access (chmod 600)
+  --hardware <device>        ledger, trezor, yubikey or hsm; all integrations are stubs
+                              and currently fail. Hardware signing is recommended
+                              for production once an integration is available.
+  --out <path>              result or Safe-share path; defaults to the package directory
+  --policy <path>            REQUIRED: independent deployment policy (JSON): chainId,
+                              controller, vault, auditor, projectId, profileDigest;
+                              optional maxAttestationLifetimeHours and safe block.
+                              Package values must match. See docs/auditor/auditor-guide.md.
+  --yes                     skip confirmation (requires --unsafe-test-mode)
+  --unsafe-test-mode         permit --yes and warn on successful-unlock/signature audit
+                              or throttle-clear failures. For tests and CI only;
+                              policy checks still run.
+  --audit-anchor <path>      audit watermark, default: <keystore>.auditlog.anchor.jsonl.
+                              Checked with the main log before unlocking. An intact
+                              anchor detects deleted recent entries; protect it
+                              independently from the main log. See the auditor guide §5.
+
+Run "signer keystore --help" for key creation and import.`)
 }
 
 type signFlags struct {
@@ -112,11 +110,8 @@ type signFlags struct {
 }
 
 func runSign(args []string) error {
-	// The package path is a fixed leading positional argument, not parsed
-	// by the flag package: Go's flag.Parse stops consuming flags at the
-	// first non-flag token, so "signer sign <package.rwa> --keystore X"
-	// (package path before flags, per usage()) would otherwise leave
-	// --keystore unparsed.
+	// Read the leading package path before flags because flag.Parse stops at
+	// the first positional argument
 	if len(args) == 0 {
 		usage()
 		return fmt.Errorf("expected a <package.rwa> argument")
@@ -125,15 +120,15 @@ func runSign(args []string) error {
 
 	fs := flag.NewFlagSet("sign", flag.ContinueOnError)
 	var f signFlags
-	fs.StringVar(&f.keystorePath, "keystore", "", "password-encrypted Ethereum keystore file")
+	fs.StringVar(&f.keystorePath, "keystore", "", "encrypted Ethereum V3 or native Argon2id keystore file")
 	fs.StringVar(&f.password, "password", "", "DEPRECATED, INSECURE: keystore password on the command line")
 	fs.StringVar(&f.passwordFile, "password-file", "", "file containing the keystore password")
 	fs.StringVar(&f.hardware, "hardware", "", "sign with a hardware-wallet adapter (ledger, trezor, yubikey, hsm)")
-	fs.StringVar(&f.out, "out", "", "output path for signed-result.json")
-	fs.StringVar(&f.policyPath, "policy", "", "REQUIRED: path to the independently-provisioned deployment policy file")
+	fs.StringVar(&f.out, "out", "", "output path for signed-result.json or a Safe owner share")
+	fs.StringVar(&f.policyPath, "policy", "", "REQUIRED: path to the independent deployment policy file")
 	fs.BoolVar(&f.yes, "yes", false, "skip interactive confirmation (requires --unsafe-test-mode)")
-	fs.BoolVar(&f.unsafeTestMode, "unsafe-test-mode", false, "required alongside --yes for noninteractive signing")
-	fs.StringVar(&f.auditAnchor, "audit-anchor", "", "path to the keystore's independent audit-log anchor (default: <keystore>.auditlog.anchor.jsonl); point this at separate media for real truncation resistance -- see docs/auditor/auditor-guide.md §5")
+	fs.BoolVar(&f.unsafeTestMode, "unsafe-test-mode", false, "permit --yes and warn on audit-write failures (tests and CI only)")
+	fs.StringVar(&f.auditAnchor, "audit-anchor", "", "audit anchor path (default: <keystore>.auditlog.anchor.jsonl); protect independently from the main log; see docs/auditor/auditor-guide.md §5")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -148,12 +143,8 @@ func runSign(args []string) error {
 	if f.policyPath == "" {
 		return fmt.Errorf("--policy is required: the signer refuses to sign without an independently-provisioned deployment trust root; see internal/policy and docs/auditor/auditor-guide.md")
 	}
-	// --yes removes the human confirmation step entirely, so a scripted or
-	// automated invocation has to opt in explicitly. Passing --yes by accident
-	// (a copy-pasted command, a CI template) must never silently start signing
-	// package-declared values with nobody looking at the review screen.
-	// --policy is checked regardless of these two flags; this gate only
-	// concerns interactive confirmation, not the trust-root check.
+	// --yes skips only the confirmation prompt and needs the explicit test-mode flag;
+	// policy checks still apply
 	if f.yes && !f.unsafeTestMode {
 		return fmt.Errorf("--yes requires --unsafe-test-mode: noninteractive signing bypasses the human confirmation step and is restricted to scripted test/CI use")
 	}
@@ -181,7 +172,7 @@ func runSign(args []string) error {
 	if err != nil {
 		return fmt.Errorf("manifest.json: %w", err)
 	}
-	// manifest.json itself is not listed among its own "files".
+	// The manifest does not list itself in its file inventory
 	filesExceptManifest := make(map[string][]byte, len(files))
 	for k, v := range files {
 		if k != "manifest.json" {
@@ -214,12 +205,8 @@ func runSign(args []string) error {
 		return fmt.Errorf("metadata.json: asset does not conform to the project's Asset Profile: %w", err)
 	}
 
-	// Cross-document binding: profile.json and metadata.json are otherwise
-	// validated independently, so nothing above stops a package from pairing
-	// an audited profile with metadata that actually describes a different
-	// project or legal unit. The contract only checks hashes and the auditor
-	// signature -- not JSON semantics -- so an unbound mismatch here could
-	// authorize minting under the wrong project or unit.
+	// Bind project and unit across profile/metadata; the contract checks hashes and
+	// signatures, not JSON semantics
 	if meta.ProjectID != prof.ProjectID {
 		return fmt.Errorf("metadata.json projectId %q does not match profile.json projectId %q", meta.ProjectID, prof.ProjectID)
 	}
@@ -284,11 +271,7 @@ func runSign(args []string) error {
 		}
 	}
 
-	// Each of these was once an optional --expect-* flag, so omitting them all
-	// meant the signer would sign using only values the .rwa package itself
-	// supplied. --policy is mandatory now (see above), so these checks always
-	// run against an independently provisioned trust root, never against
-	// anything read from the package.
+	// Compare deployment values with the independent policy, never package-supplied defaults
 	if pol.ChainID != td.Domain.ChainID.String() {
 		return fmt.Errorf("typed-data chainId %s does not match policy chainId %s", td.Domain.ChainID.String(), pol.ChainID)
 	}
@@ -302,25 +285,17 @@ func runSign(args []string) error {
 		return fmt.Errorf("typed-data auditor %s does not match policy auditor %s", td.Message.Auditor, pol.Auditor)
 	}
 
-	// Enforce now < validUntil AND a documented maximum horizon, rather than
-	// merely displaying validUntil for the auditor to eyeball. The ceiling is
-	// the MORE RESTRICTIVE of "now + max lifetime" and "metadata.createdAt +
-	// max lifetime": metadata.createdAt is itself package-supplied
-	// (untrusted), so bounding only against it would let a forged far-future
-	// createdAt excuse an equally far-future validUntil. Bounding against
-	// wall-clock "now" as well closes that gap regardless of what createdAt
-	// claims.
+	// Bound expiry by both now and metadata.createdAt; a future creation time must not
+	// extend policy lifetime
 	createdAt, err := time.Parse(time.RFC3339, meta.CreatedAt)
 	if err != nil {
-		// metadata.Validate already enforces RFC3339, so this should be
-		// unreachable, but never trust a re-derivation to silently
-		// succeed against unvalidated input.
+		// Keep this conversion checked even though metadata.Validate requires RFC3339
 		return fmt.Errorf("internal error: metadata.json createdAt %q failed to re-parse: %w", meta.CreatedAt, err)
 	}
 	now := time.Now().UTC()
 	validUntil := time.Unix(int64(td.Message.ValidUntil), 0).UTC()
 	if !validUntil.After(now) {
-		return fmt.Errorf("typed-data validUntil %s is not after the current time %s -- refusing to sign a zero, already-expired, or non-future validUntil", validUntil.Format(time.RFC3339), now.Format(time.RFC3339))
+		return fmt.Errorf("typed-data validUntil %s is not after the current time %s; refusing to sign a zero, already-expired or non-future validUntil", validUntil.Format(time.RFC3339), now.Format(time.RFC3339))
 	}
 	maxValidUntil := now.Add(pol.MaxAttestationLifetime)
 	if fromCreated := createdAt.Add(pol.MaxAttestationLifetime); fromCreated.Before(maxValidUntil) {
@@ -341,14 +316,18 @@ func runSign(args []string) error {
 	if err != nil {
 		return fmt.Errorf("computing EIP-712 digest: %w", err)
 	}
+	// Safe owners sign the Safe message hash wrapping the attestation digest
+	signHash := digest
+	if pol.Safe != nil {
+		signHash, err = attestation.SafeMessageHash(domain.ChainID, common.HexToAddress(td.Message.Auditor), digest)
+		if err != nil {
+			return fmt.Errorf("computing the Safe message hash: %w", err)
+		}
+	}
 
 	critical := []ui.Field{
 		{Label: "primaryType", Value: td.PrimaryType},
-		// Both project IDs and the unit/decimals/normalized amount are shown
-		// here even though they are already enforced equal above -- an auditor
-		// who trusts only the on-screen confirmation (not the CLI's exit code)
-		// must still be able to see and independently confirm the binding this
-		// signature authorizes.
+		// Show the project and amount binding so the auditor can verify it independently
 		{Label: "profile.json projectId", Value: prof.ProjectID},
 		{Label: "metadata.json projectId", Value: meta.ProjectID},
 		{Label: "tokenUnit (profile) / issuance.unit (metadata)", Value: prof.TokenUnit},
@@ -364,11 +343,7 @@ func runSign(args []string) error {
 		{Label: "nonce", Value: td.Message.Nonce},
 		{Label: "validUntil (unix seconds)", Value: fmt.Sprintf("%d (%s, checked against policy: now < validUntil <= %s)", td.Message.ValidUntil, validUntil.Format(time.RFC3339), maxValidUntil.Format(time.RFC3339))},
 		{Label: "EIP-712 digest", Value: digest.Hex()},
-		// chainId/controller/vault/auditor/projectId/profileDigest are not
-		// optional to display -- they were all just checked, hard-fail-closed,
-		// against --policy above. Shown here so the human reviewer sees the
-		// same independently-provisioned trust root the tool already enforced,
-		// not just its verdict.
+		// Display the policy path alongside the deployment values checked above
 		{Label: "policy file", Value: f.policyPath},
 	}
 	if td.PrimaryType == "MintAttestation" {
@@ -379,16 +354,25 @@ func runSign(args []string) error {
 	} else {
 		critical = append(critical, ui.Field{Label: "operationId", Value: td.Message.OperationID})
 	}
+	if pol.Safe != nil {
+		owners := make([]string, len(pol.Safe.Owners))
+		for i, owner := range pol.Safe.Owners {
+			owners[i] = owner.Hex()
+		}
+		critical = append(critical,
+			ui.Field{Label: "auditor type", Value: fmt.Sprintf("Safe multisig, %d of %d owners (policy)", pol.Safe.Threshold, len(pol.Safe.Owners))},
+			ui.Field{Label: "Safe owners (policy)", Value: strings.Join(owners, ", ")},
+			ui.Field{Label: "Safe message hash (this key signs it)", Value: signHash.Hex()},
+		)
+	}
 
 	critical = append(critical, proofFields(meta, filesExceptManifest)...)
 
-	displayFields := buildDisplayFields(prof, meta.Asset)
+	displayFields := append(legalFields(prof.Legal), buildDisplayFields(prof, meta.Asset)...)
 
-	// Render an unmistakable mint/burn banner before the field-by-field
-	// review screen, so the action type is established up front rather than
-	// buried as one row among many.
+	// Establish the mint or burn action before showing individual fields
 	ui.RenderActionBanner(os.Stdout, td.PrimaryType)
-	ui.Render(os.Stdout, fmt.Sprintf("Review %s — %s", td.PrimaryType, pkgPath), critical, displayFields)
+	ui.Render(os.Stdout, fmt.Sprintf("Review %s - %s", td.PrimaryType, pkgPath), critical, displayFields)
 
 	if !f.yes {
 		confirmed, err := ui.Confirm(os.Stdout, os.Stdin, "Sign this attestation")
@@ -400,17 +384,35 @@ func runSign(args []string) error {
 		}
 	}
 
-	sig, auditorAddr, err := signDigest(digest, f)
+	sig, signerAddr, err := signDigest(signHash, f)
 	if err != nil {
 		return err
 	}
 
 	declaredAuditor := common.HexToAddress(td.Message.Auditor)
-	if auditorAddr != declaredAuditor {
-		return fmt.Errorf("signing key address %s does not match typed-data auditor %s; refusing to write a signature that would not recover to the declared auditor", auditorAddr.Hex(), declaredAuditor.Hex())
+	if pol.Safe != nil {
+		if !pol.Safe.IsOwner(signerAddr) {
+			return fmt.Errorf("signing key address %s is not an owner of the auditor Safe %s in the policy; refusing to write a share the Safe would reject", signerAddr.Hex(), declaredAuditor.Hex())
+		}
+		share, err := output.NewShare(declaredAuditor.Hex(), domain.ChainID.String(), signerAddr.Hex(), td.PrimaryType, digest.Hex(), signHash.Hex(), "0x"+hex.EncodeToString(sig))
+		if err != nil {
+			return fmt.Errorf("building the signature share: %w", err)
+		}
+		outPath := f.out
+		if outPath == "" {
+			outPath = filepath.Join(filepath.Dir(pkgPath), "signature-share-"+strings.ToLower(signerAddr.Hex())+".json")
+		}
+		if err := output.WriteShare(outPath, share); err != nil {
+			return fmt.Errorf("writing the signature share: %w", err)
+		}
+		fmt.Fprintf(os.Stdout, "\nSigned as Safe owner %s. Wrote %s\nCollect shares from at least %d owners, then run: signer combine --policy <policy.json> <share.json>...\n", signerAddr.Hex(), outPath, pol.Safe.Threshold)
+		return nil
+	}
+	if signerAddr != declaredAuditor {
+		return fmt.Errorf("signing key address %s does not match typed-data auditor %s; refusing to write a signature that would not recover to the declared auditor", signerAddr.Hex(), declaredAuditor.Hex())
 	}
 
-	result, err := output.New(auditorAddr.Hex(), td.PrimaryType, digest.Hex(), "0x"+hex.EncodeToString(sig))
+	result, err := output.New(signerAddr.Hex(), td.PrimaryType, digest.Hex(), "0x"+hex.EncodeToString(sig))
 	if err != nil {
 		return fmt.Errorf("building signed-result.json: %w", err)
 	}
@@ -427,9 +429,98 @@ func runSign(args []string) error {
 	return nil
 }
 
-// signDigest signs digest using either a keystore key or a hardware
-// adapter, per f, and returns the signature and the recovered signer
-// address.
+// runCombine verifies Safe shares against policy chain, Safe, owners and threshold,
+// then writes signed-result.json. It checks common digests, message hashes and
+// signature recovery without a key, package or expiry revalidation.
+func runCombine(args []string) error {
+	fs := flag.NewFlagSet("combine", flag.ContinueOnError)
+	policyPath := fs.String("policy", "", "REQUIRED: policy file naming the auditor Safe, its owners and threshold")
+	out := fs.String("out", "", "output path for signed-result.json (default: next to the first share)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	sharePaths := fs.Args()
+	if *policyPath == "" {
+		return fmt.Errorf("--policy is required")
+	}
+	if len(sharePaths) == 0 {
+		return fmt.Errorf("expected one or more <share.json> arguments after the flags")
+	}
+	pol, err := policy.Load(*policyPath)
+	if err != nil {
+		return fmt.Errorf("loading --policy: %w", err)
+	}
+	if pol.Safe == nil {
+		return fmt.Errorf("policy %s has no safe block; combine only applies to a Safe auditor", *policyPath)
+	}
+	safe := common.HexToAddress(pol.Auditor)
+	chainID, _ := new(big.Int).SetString(pol.ChainID, 10) // policy.Load already checked it is decimal
+
+	var first output.SignatureShare
+	sigs := map[common.Address][]byte{}
+	for i, path := range sharePaths {
+		share, err := output.ReadShare(path)
+		if err != nil {
+			return err
+		}
+		if i == 0 {
+			first = share
+		}
+		if common.HexToAddress(share.Safe) != safe || share.ChainID != pol.ChainID {
+			return fmt.Errorf("%s: share is for Safe %s on chain %s, but the policy names Safe %s on chain %s", path, share.Safe, share.ChainID, safe.Hex(), pol.ChainID)
+		}
+		if share.PrimaryType != first.PrimaryType || !strings.EqualFold(share.TypedDataDigest, first.TypedDataDigest) {
+			return fmt.Errorf("%s: share signs %s %s, but %s signs %s %s", path, share.PrimaryType, share.TypedDataDigest, sharePaths[0], first.PrimaryType, first.TypedDataDigest)
+		}
+		safeHash, err := attestation.SafeMessageHash(chainID, safe, common.HexToHash(share.TypedDataDigest))
+		if err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		if !strings.EqualFold(share.SafeMessageHash, safeHash.Hex()) {
+			return fmt.Errorf("%s: safeMessageHash %s is not the Safe message hash %s of its digest", path, share.SafeMessageHash, safeHash.Hex())
+		}
+		sig, _ := hex.DecodeString(strings.TrimPrefix(share.Signature, "0x")) // ReadShare validated the hex
+		signer, err := attestation.Recover(safeHash, sig)
+		if err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		owner := common.HexToAddress(share.Owner)
+		if signer != owner {
+			return fmt.Errorf("%s: signature recovers to %s, not the share's owner %s", path, signer.Hex(), owner.Hex())
+		}
+		if !pol.Safe.IsOwner(owner) {
+			return fmt.Errorf("%s: %s is not an owner of the Safe in the policy", path, owner.Hex())
+		}
+		if _, dup := sigs[owner]; dup {
+			return fmt.Errorf("%s: a second share from owner %s", path, owner.Hex())
+		}
+		sigs[owner] = sig
+	}
+	if len(sigs) < pol.Safe.Threshold {
+		return fmt.Errorf("have shares from %d owner(s), but the Safe needs %d", len(sigs), pol.Safe.Threshold)
+	}
+
+	combined, err := attestation.CombineSafeSignatures(sigs)
+	if err != nil {
+		return err
+	}
+	result, err := output.New(safe.Hex(), first.PrimaryType, first.TypedDataDigest, "0x"+hex.EncodeToString(combined))
+	if err != nil {
+		return fmt.Errorf("building signed-result.json: %w", err)
+	}
+	outPath := *out
+	if outPath == "" {
+		outPath = filepath.Join(filepath.Dir(sharePaths[0]), "signed-result.json")
+	}
+	if err := output.Write(outPath, result); err != nil {
+		return fmt.Errorf("writing signed-result.json: %w", err)
+	}
+	fmt.Fprintf(os.Stdout, "Combined %d owner signatures (threshold %d) for Safe %s. Wrote %s\n", len(sigs), pol.Safe.Threshold, safe.Hex(), outPath)
+	return nil
+}
+
+// signDigest signs through the selected keystore or hardware adapter, returning
+// signature and key address
 func signDigest(digest common.Hash, f signFlags) ([]byte, common.Address, error) {
 	if f.hardware != "" {
 		hw, err := hardware.Open(hardware.DeviceKind(f.hardware))
@@ -452,30 +543,17 @@ func signDigest(digest common.Hash, f signFlags) ([]byte, common.Address, error)
 	if anchorPath == "" {
 		anchorPath = keystore.DefaultAnchorPath(f.keystorePath)
 	}
-	// Verify the WHOLE audit chain -- not just that the last append succeeded
-	// -- before this process unlocks or signs anything against this keystore.
-	// A broken or (if --audit-anchor points at genuinely separate media)
-	// truncated log is itself evidence of tampering; signing anyway would
-	// extend an audit trail that can no longer be trusted to reflect a
-	// complete history.
+	// Verify the full chain and its anchor before unlocking or signing
 	if err := keystore.VerifyAuditLogAnchored(f.keystorePath, anchorPath); err != nil {
 		return nil, common.Address{}, fmt.Errorf("audit log integrity check failed, refusing to unlock or sign against this keystore: %w", err)
 	}
 
-	// A locked-out keystore must be rejected before any password is read or a
-	// decrypt is even attempted -- checking after prompting would let an
-	// operator (or a script) burn a real attempt against the file during the
-	// lockout window.
+	// Enforce lockout before prompting or attempting decryption
 	if err := keystore.CheckThrottle(f.keystorePath); err != nil {
 		return nil, common.Address{}, err
 	}
 
-	// --password puts the keystore password in process listings (ps, /proc)
-	// and shell history for the life of the shell session. It cannot be
-	// zeroized -- by the time this process sees it, it is already a copy owned
-	// by the OS/shell -- so it stays deprecated rather than removed outright
-	// (some scripted deployments still depend on it), but every use is loudly
-	// flagged.
+	// Command-line passwords remain visible in process listings and shell history
 	password := f.password
 	if password != "" {
 		fmt.Fprintln(os.Stderr, "signer: WARNING: --password exposes the keystore password via process listings and shell history; prefer --password-file or the interactive prompt. This flag is deprecated and may be removed in a future version.")
@@ -504,15 +582,8 @@ func signDigest(digest common.Hash, f signFlags) ([]byte, common.Address, error)
 
 	priv, addr, err := keystore.Load(f.keystorePath, password)
 	if err != nil {
-		// Every failed unlock attempt counts toward the lockout and is
-		// recorded in the tamper-evident audit log, including a KDF-policy or
-		// file-permission rejection -- those are just as much a signal of an
-		// attacker probing the file as a wrong password would be. This
-		// particular pair (throttle/audit for a failed attempt) stays
-		// warn-and-continue even in production: the substantive failure below
-		// is already returned to the caller, so there is no "operation
-		// succeeded but wasn't recorded" gap here -- the fail-closed rule is
-		// about the success-path writes below, not this one.
+		// Record Load failures, including permission/KDF refusals, for throttle and audit
+		// tracking; bookkeeping failures warn because unlock already failed
 		if throttleErr := keystore.RecordUnlockFailure(f.keystorePath); throttleErr != nil {
 			fmt.Fprintln(os.Stderr, "signer: WARNING: failed to record unlock failure for throttling:", throttleErr)
 		}
@@ -523,14 +594,8 @@ func signDigest(digest common.Hash, f signFlags) ([]byte, common.Address, error)
 	}
 	defer keystore.Zero(priv)
 
-	// Fail closed in production for the writes on this success path. Unlike
-	// the failure path above, silently continuing here means the sensitive
-	// operation (unlock, then a signature) proceeds with no durable record of
-	// it -- exactly the audit-trail-fails-open trap. --unsafe-test-mode is this
-	// signer's existing, already-required marker for "restricted to scripted
-	// test/CI use" (main.go's --yes gate), so it doubles as the fail-open
-	// escape hatch for exactly that use case; every other invocation fails
-	// closed.
+	// Success-path bookkeeping must complete before releasing a signature,
+	// unless test mode explicitly permits warnings
 	auditFailure := func(step string, err error) error {
 		return fmt.Errorf("recording %s to the audit trail failed, refusing to continue without a durable record: %w", step, err)
 	}
@@ -554,11 +619,7 @@ func signDigest(digest common.Hash, f signFlags) ([]byte, common.Address, error)
 	}
 	if err := keystore.AppendAuditEventTo(f.keystorePath, anchorPath, "signed", map[string]string{"address": addr.Hex(), "digest": digest.Hex()}); err != nil {
 		if !f.unsafeTestMode {
-			// The signature was computed but is deliberately discarded here:
-			// per this signer's existing invariant ("any failure at any step
-			// exits non-zero and writes nothing," README), a signature that
-			// cannot be durably recorded as having been produced must never
-			// reach output.Write.
+			// Discard the signature if its audit entry cannot be durably recorded
 			return nil, common.Address{}, auditFailure("signed", err)
 		}
 		fmt.Fprintln(os.Stderr, "signer: WARNING (--unsafe-test-mode): failed to append signed audit event:", err)
@@ -566,46 +627,32 @@ func signDigest(digest common.Hash, f signFlags) ([]byte, common.Address, error)
 	return sig, addr, nil
 }
 
-// checkPasswordFilePermissions rejects a --password-file that is group- or
-// world-readable: such a file leaks the keystore password to any other local
-// account, defeating the point of using a file instead of a command-line
-// argument.
+// checkPasswordFilePermissions requires owner-only access to a plaintext password or
+// private key file
 func checkPasswordFilePermissions(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return fmt.Errorf("stat --password-file %s: %w", path, err)
 	}
 	if info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("--password-file %s is group- or world-readable (mode %s); refusing to read it -- run: chmod 600 %s", path, info.Mode().Perm(), path)
+		return fmt.Errorf("--password-file %s is group- or world-readable (mode %s); refusing to read it; run: chmod 600 %s", path, info.Mode().Perm(), path)
 	}
 	return nil
 }
 
-// readPassword reads a keystore password from stdin, suppressing terminal
-// echo via golang.org/x/term when stdin is an interactive terminal.
+// readPassword reads from stdin and suppresses echo on a terminal
 func readPassword(stdin *os.File) ([]byte, error) {
 	return readPasswordPrompt(stdin, newStdinLineReader(stdin), "Keystore password: ")
 }
 
-// stdinLineReader wraps a single, shared bufio.Reader over stdin for the
-// non-terminal fallback path. It must be created once and reused across
-// every readPasswordPrompt call in a process: bufio.Reader reads ahead in
-// chunks, so creating a fresh one per call (as an earlier version of this
-// function did) can silently swallow a second piped line into a buffer
-// that gets discarded when that call returns -- exactly the failure mode
-// that would break "signer keystore create"'s two-prompt (password +
-// confirmation) piped-stdin tests.
+// newStdinLineReader shares buffered stdin across password prompts so read-ahead
+// preserves later input lines
 func newStdinLineReader(stdin *os.File) *bufio.Reader {
 	return bufio.NewReader(stdin)
 }
 
-// readPasswordPrompt is readPassword generalized to a caller-supplied
-// prompt and a shared line reader, so "signer keystore create"/"import" can
-// ask for a new password twice (with distinct prompts) against the same
-// underlying stdin stream. When stdin is not a terminal -- piped input
-// from a script or test harness -- there is no echo to suppress, so it
-// falls back to a plain line read via br; term.ReadPassword itself would
-// simply fail on a non-tty file descriptor.
+// readPasswordPrompt hides terminal input or reads piped stdin through the shared
+// buffer
 func readPasswordPrompt(stdin *os.File, br *bufio.Reader, prompt string) ([]byte, error) {
 	fmt.Fprint(os.Stdout, prompt)
 	if term.IsTerminal(int(stdin.Fd())) {

@@ -5,17 +5,9 @@ import (
 	"testing"
 )
 
-// TestBuildPackageIsDeterministic proves BuildPackage is a pure function of
-// its inputs — no embedded wall-clock timestamp or other non-deterministic
-// state — the property the package-reconstruction path relies on:
-// server/internal/assets.RecordService.BuildPackage reconstructs the .rwa
-// package from FROZEN inputs (auditor/nonce/expiry/digests captured once,
-// at first build) rather than retaining the package's raw bytes anywhere
-// (including IPFS — package bytes are deliberately kept out of IPFS per
-// the platform's existing storage policy). That reconstruction is only
-// safe to treat as "the same package the auditor actually signed" if two
-// calls with identical inputs always produce byte-identical output, which
-// this test pins.
+// TestBuildPackageIsDeterministic checks identical inputs produce identical bytes
+// without variable timestamps, since RecordService rebuilds downloads from stored
+// fields
 func TestBuildPackageIsDeterministic(t *testing.T) {
 	td := TypedDataDoc{}
 	b1, h1, err := BuildPackage("MintAttestation", [32]byte{1}, [32]byte{2}, []byte(`{"a":1}`), []byte(`{"b":2}`), td, nil)

@@ -7,11 +7,9 @@ import (
 	"testing"
 )
 
-// conformanceVectors mirrors shared/vectors/schema-dialect-conformance.json
-// (frozen). The corpus is differential rather than compile-only: schema
-// compilation, instance validation, exact structural-limit boundaries, and
-// nested-envelope decoding all have dedicated vector sets — see
-// dialect_differential_test.go for the tests that consume those fields.
+// conformanceVectors mirrors shared/vectors/schema-dialect-conformance.json:
+// compilation, instance validation, structural boundaries and nested envelopes.
+// dialect_differential_test.go covers the non-compilation cases.
 type conformanceVectors struct {
 	Dialect string `json:"dialect"`
 	Cases   []struct {
@@ -20,8 +18,8 @@ type conformanceVectors struct {
 		Schema json.RawMessage `json:"schema"`
 	} `json:"cases"`
 
-	// Limits mirrors shared/schemas/structural-limits.json; both binaries
-	// MUST hardcode these exact values (asserted in TestDialectLimitsMatchFrozenConstants).
+	// Limits mirrors shared/schemas/structural-limits.json; both binaries must
+	// hardcode these values (checked in TestDialectLimitsMatchFrozenConstants)
 	Limits struct {
 		MaxUncompressedBytes int `json:"maxUncompressedBytes"`
 		MaxDepth             int `json:"maxDepth"`
@@ -30,8 +28,7 @@ type conformanceVectors struct {
 		MaxObjectProperties  int `json:"maxObjectProperties"`
 	} `json:"limits"`
 
-	// InstanceCases validate a concrete JSON instance against a compiled
-	// assetSchema (not merely whether the schema compiles).
+	// InstanceCases validate a JSON instance against a compiled assetSchema
 	InstanceCases []struct {
 		Name        string          `json:"name"`
 		Schema      json.RawMessage `json:"schema"`
@@ -39,10 +36,8 @@ type conformanceVectors struct {
 		ExpectValid string          `json:"expectValid"` // "valid" | "invalid"
 	} `json:"instanceCases"`
 
-	// LimitCases describe a structural boundary to construct programmatically
-	// (see dialect_differential_test.go's buildLimitBoundary) rather than a
-	// literal document, since an exact 1 MiB/4096-item document isn't
-	// practical to check into the repo.
+	// LimitCases describe a boundary that buildLimitBoundary constructs in code,
+	// since a document of exactly 1 MiB or 4096 items is impractical to store
 	LimitCases []struct {
 		Name  string `json:"name"`
 		Kind  string `json:"kind"` // "string" | "string-2byte" | "string-3byte" | "string-4byte" | "array" | "object" | "object-key" | "object-key-4byte" | "depth" | "bytes"
@@ -50,10 +45,9 @@ type conformanceVectors struct {
 		Note  string `json:"note"`
 	} `json:"limitCases"`
 
-	// EnvelopeCases feed a full profile/metadata envelope document through
-	// the real ValidateProfile/ValidateRecord entry points, catching
-	// unknown-field/strict-decoding gaps that a bare schema-compile check
-	// can't see (e.g. an extra field in displayFields[]/issuance/proofs[]).
+	// EnvelopeCases test full profiles and metadata through ValidateProfile or
+	// ValidateRecord, catching unknown fields in displayFields[], issuance and proofs[]
+	// beyond schema compilation
 	EnvelopeCases []struct {
 		Name        string          `json:"name"`
 		Target      string          `json:"target"` // "profile" | "metadata"
@@ -80,14 +74,10 @@ func loadConformanceVectors(t *testing.T) conformanceVectors {
 	return v
 }
 
-// TestDialectConformance is a release gate: every vector's "expect" must match
-// what guardAssetSchema + the server's Draft-2020-12 compiler actually do with
-// the vector's schema. The signer runs the identical vectors against its own
-// compiler (signer package jsonschema) under the same test name; a mismatch on
-// either side is release-blocking. Name and package are load-bearing:
-// the root `make dialect-check`/`make vectors-check` gate runs
-// `go test ./internal/assets/... -run TestDialectConformance -count=1` —
-// do not rename without updating that gate too.
+// TestDialectConformance compares each vector's expect with the guard and Draft 2020-12
+// compiler. The signer tests the same vectors; either mismatch blocks release. Keep
+// "Dialect" in test names: make dialect-check runs go test ./internal/assets/... -run
+// Dialect.
 func TestDialectConformance(t *testing.T) {
 	vectors := loadConformanceVectors(t)
 	if vectors.Dialect != "rwa-profile-assetSchema/1" {
@@ -120,5 +110,18 @@ func TestDialectConformance(t *testing.T) {
 				t.Fatalf("unknown expect %q", c.Expect)
 			}
 		})
+	}
+}
+
+// TestGuardRejectsEmptyAndDuplicateTypeArray checks the guard on its own, without
+// the jsonschema compiler
+func TestGuardRejectsEmptyAndDuplicateTypeArray(t *testing.T) {
+	for _, raw := range []string{`{"type":[]}`, `{"type":["string","string"]}`} {
+		if err := guardAssetSchema([]byte(raw)); err == nil {
+			t.Errorf("guardAssetSchema(%s) accepted, want reject", raw)
+		}
+	}
+	if err := guardAssetSchema([]byte(`{"type":["string","null"]}`)); err != nil {
+		t.Errorf("valid type array rejected: %v", err)
 	}
 }

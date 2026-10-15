@@ -66,8 +66,8 @@ func (r *TransactionRepository) GetByTxHash(ctx context.Context, chainID int64, 
 		if v.ChainID != chainID || v.TxHash != txHash {
 			continue
 		}
-		// Prefer a manager-submitted (non-EventDerived) record when several
-		// share the hash, so the projector's dedup triggers deterministically.
+		// Prefer manager-submitted records over event-derived duplicates for deterministic
+		// projector deduplication
 		if match == nil || (!models.IsEventDerived(v) && models.IsEventDerived(match)) {
 			cp := *v
 			match = &cp
@@ -129,8 +129,8 @@ func (r *TransactionRepository) ListByStatuses(ctx context.Context, statuses ...
 	})
 }
 
-// ListUnfinalized mirrors transactionRepo's Mongo filter — see the
-// interface doc comment.
+// ListUnfinalized applies the same filter as mongodb.transactionRepo, see the
+// interface doc comment
 func (r *TransactionRepository) ListUnfinalized(ctx context.Context, confirmedFromBlock uint64) ([]*models.Transaction, error) {
 	return r.filter(func(tx *models.Transaction) bool {
 		switch tx.Status {
@@ -148,8 +148,8 @@ func (r *TransactionRepository) ListReplacements(ctx context.Context) ([]*models
 	return r.filter(func(tx *models.Transaction) bool { return tx.Replaces != "" })
 }
 
-// filter returns the copies List would return, keeping only those keep
-// accepts, in the same SubmittedAt order.
+// filter returns the copies List would return that keep accepts, in the same
+// SubmittedAt order
 func (r *TransactionRepository) filter(keep func(*models.Transaction) bool) ([]*models.Transaction, error) {
 	all, _ := r.List(context.Background())
 	out := make([]*models.Transaction, 0)
@@ -161,11 +161,8 @@ func (r *TransactionRepository) filter(keep func(*models.Transaction) bool) ([]*
 	return out, nil
 }
 
-// ListPage returns one bounded page — see the interface doc
-// comment. Ascending-SubmittedAt-first, matching transactionRepo's mongodb
-// sort; address, when non-empty, is matched case-insensitively against
-// From OR To before the keyset walk (mirrors what api.listTransactions
-// used to do in the handler).
+// ListPage orders by SubmittedAt ascending and applies case-insensitive From/To
+// filtering before keyset pagination, matching MongoDB
 func (r *TransactionRepository) ListPage(ctx context.Context, address, cursor string, limit int) ([]*models.Transaction, string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

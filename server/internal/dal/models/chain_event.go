@@ -3,7 +3,7 @@ package models
 import "time"
 
 // ChainEvent is one indexed log, identified by (chainId, address, txHash,
-// logIndex) (collection: chain_events).
+// logIndex) (collection: chain_events)
 type ChainEvent struct {
 	ChainID     int64          `json:"chainId" bson:"chainId"`
 	Address     string         `json:"address" bson:"address"`
@@ -17,7 +17,7 @@ type ChainEvent struct {
 	IndexedAt   time.Time      `json:"indexedAt" bson:"indexedAt"`
 }
 
-// EventKey uniquely identifies a chain event for idempotent ingestion.
+// EventKey uniquely identifies a chain event for idempotent ingestion
 type EventKey struct {
 	ChainID  int64
 	Address  string

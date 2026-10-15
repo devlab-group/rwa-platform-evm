@@ -30,9 +30,8 @@ func testOpsCtx(repos *repository.Repositories) opsCtx {
 
 func newTestRepos() *repository.Repositories { return memory.New() }
 
-// TestRunTxReplace is a smoke test: submit an original transaction,
-// then replace it via the same code path opsctl's `tx replace` subcommand
-// calls, against in-memory repos and a fake chain client.
+// Submit a transaction, then replace it through opsctl's command path using memory
+// stores and a fake chain
 func TestRunTxReplace(t *testing.T) {
 	repos := newTestRepos()
 	client := blockchain.NewFakeClient()
@@ -60,8 +59,7 @@ func TestRunTxReplace(t *testing.T) {
 		t.Fatalf("runTxReplace: %v", err)
 	}
 
-	// Each audited invocation writes an intent AND a linked
-	// result (both under the same action), the intent durably before op runs.
+	// Each audited call writes intent before op and a linked result under the same action
 	entries, err := repos.AuditLogs.List(ctx, "opsctl", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +70,7 @@ func TestRunTxReplace(t *testing.T) {
 	}
 }
 
-// countPhases counts the intent/result entries for one action.
+// countPhases counts the intent/result entries for one action
 func countPhases(entries []*models.AuditLogEntry, action string) (intents, results int) {
 	for _, e := range entries {
 		if e.Action != action {
@@ -88,10 +86,8 @@ func countPhases(entries []*models.AuditLogEntry, action string) (intents, resul
 	return intents, results
 }
 
-// TestRunIndexerResetCheckpoint is a smoke test: a reset with the
-// operator-supplied trusted hash matching the chain source succeeds and
-// clears events after the trusted block; a mismatched hash is rejected
-// WITHOUT deleting anything.
+// A matching trusted hash resets the checkpoint and deletes later events; a mismatch
+// must delete nothing
 func TestRunIndexerResetCheckpoint(t *testing.T) {
 	repos := newTestRepos()
 	client := blockchain.NewFakeClient()
@@ -113,7 +109,7 @@ func TestRunIndexerResetCheckpoint(t *testing.T) {
 	idx := indexer.New(client, repos.IndexerCheckpoints, repos.ChainEvents, 31337, []common.Address{addr}, 0, nil)
 	o := testOpsCtx(repos)
 
-	// Wrong hash: rejected, nothing deleted.
+	// Wrong hash: rejected, nothing deleted
 	if err := runIndexerResetCheckpoint(o, idx, client, 10, "0xdeadbeef"); err == nil {
 		t.Fatal("expected a mismatched trusted hash to be rejected")
 	}
@@ -122,7 +118,7 @@ func TestRunIndexerResetCheckpoint(t *testing.T) {
 		t.Fatalf("expected the event to survive a rejected reset, got %d", len(evs))
 	}
 
-	// Correct hash: succeeds, deletes the event past the trusted block.
+	// Correct hash: succeeds, deletes the event past the trusted block
 	if err := runIndexerResetCheckpoint(o, idx, client, 10, trustedHash); err != nil {
 		t.Fatalf("runIndexerResetCheckpoint: %v", err)
 	}
@@ -135,9 +131,7 @@ func TestRunIndexerResetCheckpoint(t *testing.T) {
 		t.Fatalf("checkpoint = %+v err=%v, want LastBlock=10", cp, err)
 	}
 
-	// Two invocations (one rejected, one applied), each writing
-	// an intent AND a result = 4 entries; both invocations have one intent and
-	// one result under the same action.
+	// Rejected and applied resets each write intent/result pairs: four entries
 	entries, err := repos.AuditLogs.List(ctx, "opsctl", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +142,7 @@ func TestRunIndexerResetCheckpoint(t *testing.T) {
 	}
 }
 
-// TestRunDLQListAndInspect is the DLQ read-path smoke test.
+// List and inspect DLQ entries
 func TestRunDLQListAndInspect(t *testing.T) {
 	repos := newTestRepos()
 	ctx := context.Background()
@@ -172,10 +166,8 @@ func TestRunDLQListAndInspect(t *testing.T) {
 	}
 }
 
-// TestRunDLQRetry is the smoke test for the canonical-hash-checked
-// retry path: a DLQ entry whose retained BlockHash still matches the
-// chain source's current header at that block is re-ingested and marked
-// Resolved.
+// Retry a DLQ log whose retained BlockHash matches the canonical header; re-ingest it
+// and mark Resolved
 func TestRunDLQRetry(t *testing.T) {
 	repos := newTestRepos()
 	client := blockchain.NewFakeClient()
@@ -219,7 +211,7 @@ func TestRunDLQRetry(t *testing.T) {
 	}
 }
 
-// TestRunDLQDismiss is the smoke test for manual dismissal.
+// Manually dismiss a DLQ entry
 func TestRunDLQDismiss(t *testing.T) {
 	repos := newTestRepos()
 	ctx := context.Background()
@@ -241,10 +233,7 @@ func TestRunDLQDismiss(t *testing.T) {
 	}
 }
 
-// TestRunIPFSRetry is a smoke test: a backup destination that has
-// never seen the content gets it added and pinned, and the publication
-// record's state advances to Replicated once the configured threshold is
-// met.
+// Add and pin content at a fresh backup, then mark Replicated when the threshold is met
 func TestRunIPFSRetry(t *testing.T) {
 	repos := newTestRepos()
 	ctx := context.Background()
@@ -276,8 +265,7 @@ func TestRunIPFSRetry(t *testing.T) {
 	}
 }
 
-// TestRunIPFSRestoreLocal is a smoke test: content present on a
-// backup but missing locally is restored to the local client.
+// Restore locally missing content from a backup
 func TestRunIPFSRestoreLocal(t *testing.T) {
 	repos := newTestRepos()
 	ctx := context.Background()
@@ -306,9 +294,7 @@ func TestRunIPFSRestoreLocal(t *testing.T) {
 	}
 }
 
-// TestAuditActor pins that the audit-actor label is attributable and
-// "opsctl:"-prefixed: an explicit --actor wins, and it never falls through to
-// an empty label (opsctl is not credential-gated — this is attribution only).
+// Audit labels must be nonempty, start with "opsctl:" and prefer explicit --actor
 func TestAuditActor(t *testing.T) {
 	if got := auditActor("alice"); got != "opsctl:alice" {
 		t.Errorf("auditActor(alice) = %q, want opsctl:alice", got)
@@ -316,8 +302,7 @@ func TestAuditActor(t *testing.T) {
 	if got := auditActor("  spaced  "); got != "opsctl:spaced" {
 		t.Errorf("auditActor trims whitespace: got %q", got)
 	}
-	// With no flag, it derives from the OS user or falls back to "opsctl";
-	// either way the label is non-empty and prefixed.
+	// Without --actor, use the OS user or "opsctl"
 	got := auditActor("")
 	if got == "opsctl:" || len(got) <= len("opsctl:") {
 		t.Errorf("auditActor(\"\") = %q, want a non-empty opsctl:<label>", got)

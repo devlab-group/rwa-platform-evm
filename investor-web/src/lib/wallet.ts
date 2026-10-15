@@ -1,10 +1,6 @@
-// Minimal, abstracted wallet integration. Every call the app broadcasts is
-// encoded here from a pinned ABI fragment (lib/abis.ts) — the standard ERC-20
-// approve/transfer plus the investor's own Vault.buy and RedemptionEscrow
-// request/claim/cancel. Nothing is ever submitted from server-supplied
-// calldata, and the buy/redeem prices are read from the same contracts rather
-// than quoted by the server. Deliberately isolated behind this module so the rest of the app —
-// and the production build — never needs a live wallet to run.
+// Injected-provider wallet integration: encodes ERC-20 approve/transfer, Vault.buy and escrow
+// request/claim/cancel with viem/pinned ABIs. Reads contract prices and accepts no server calldata.
+// Wallet RPC runs at call time, so builds need no live wallet.
 import {
   createPublicClient,
   createWalletClient,
@@ -41,12 +37,7 @@ export function getInjectedProvider(): InjectedProvider | undefined {
   return window.ethereum;
 }
 
-/**
- * Thrown by every chain-touching wallet call when the wallet's
- * currently-connected chain doesn't match the project's configured chain.
- * Never silently retarget a tx — the caller must ask the wallet to switch
- * (see requestSwitchChain) and retry.
- */
+/** Wallet-read error for project-chain mismatch; requestSwitchChain lets the caller switch and retry */
 export class ChainMismatchError extends Error {
   constructor(
     public readonly expectedChainId: number,
@@ -66,7 +57,7 @@ async function getInjectedChainId(provider: InjectedProvider): Promise<number> {
   return Number(chainIdHex);
 }
 
-/** Throws ChainMismatchError unless the wallet is currently on `expectedChainId`. */
+/** Throws ChainMismatchError when the wallet is not on expectedChainId */
 export async function assertChain(
   provider: InjectedProvider,
   expectedChainId: number,
@@ -77,11 +68,8 @@ export async function assertChain(
 }
 
 /**
- * A minimal viem Chain descriptor for the project's configured chain.
- * Transport is always the injected provider (never a direct RPC), so
- * `rpcUrls` is unused; the object exists so the wallet client can assert
- * the wallet's actual chain against it (see the `chain` param below) instead
- * of passing `chain: null`, which disables that check entirely.
+ * Project chain for viem's send-time chain check; RPC uses the injected transport,
+ * so rpcUrls stays empty
  */
 function projectChain(chainId: number): Chain {
   return defineChain({
@@ -106,11 +94,7 @@ export async function connectWallet(): Promise<ConnectedWallet> {
   return { address, chainId };
 }
 
-/**
- * True when a wallet_switchEthereumChain rejection is EIP-3326's 4902
- * ("chain not added to the wallet"). MetaMask sometimes nests the code under
- * `data.originalError`, so check both.
- */
+// Recognizes unknown-chain code 4902 at top level or data.originalError, as used by MetaMask
 function isChainNotAddedError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
   const top = (err as { code?: unknown }).code;
@@ -121,11 +105,8 @@ function isChainNotAddedError(err: unknown): boolean {
 }
 
 /**
- * Requests that the wallet switch to `expectedChainId` (EIP-3326). If the
- * wallet doesn't know that chain yet (4902 — e.g. a local anvil node absent
- * from MetaMask by default), add it via wallet_addEthereumChain using the
- * allow-listed network params (lib/networks.ts) and retry the switch. An
- * unknown chain (not in the allow-list) or any other error propagates.
+ * Requests EIP-3326 switching; on 4902, adds an allowlisted network via EIP-3085 and retries.
+ * Unknown allowlist entries and other errors propagate.
  */
 export async function requestSwitchChain(
   expectedChainId: number,
@@ -141,13 +122,12 @@ export async function requestSwitchChain(
   } catch (err) {
     if (!isChainNotAddedError(err)) throw err;
     const network = findNetwork(expectedChainId);
-    if (!network) throw err; // not something we know how to add
+    if (!network) throw err; // Propagate unsupported-network errors
     await provider.request({
       method: "wallet_addEthereumChain",
       params: [toAddChainParams(network)],
     });
-    // Adding usually leaves the wallet on the new chain, but not guaranteed —
-    // re-issue the switch so the final state is deterministic.
+    // Switch explicitly; EIP-3085 add-chain need not switch
     await provider.request({
       method: "wallet_switchEthereumChain",
       params: [{ chainId: chainIdHex }],
@@ -186,11 +166,7 @@ export async function readErc20Balance(
   return balance.toString();
 }
 
-/**
- * Project.decimals is not exposed by GET /api/v1/project (only present on
- * the deploy request), so it's read directly from the token contract —
- * standard ERC-20, robust regardless of that API gap.
- */
+/** ERC-20 decimals() fallback when project metadata omits decimals */
 export async function readErc20Decimals(
   expectedChainId: number,
   token: Address,
@@ -206,7 +182,7 @@ export async function readErc20Decimals(
   });
 }
 
-/** Reads the current on-chain allowance(owner, spender) for `token`. */
+/** Reads token allowance(owner, spender) */
 export async function readErc20Allowance(
   expectedChainId: number,
   token: Address,
@@ -226,10 +202,8 @@ export async function readErc20Allowance(
 }
 
 /**
- * Vault.previewBuy(tokenAmount) — what buying `tokenAmount` RWA costs at the
- * current on-chain price, in quote-token minimal units. Read straight from the
- * vault: the figure the slippage ceiling (and therefore the approved spend) is
- * derived from never passes through the server.
+ * Reads Vault.previewBuy(tokenAmount) in quote-token minimal units;
+ * the on-chain quote supplies the slippage ceiling and approved spend
  */
 export async function readPreviewBuy(
   expectedChainId: number,
@@ -248,11 +222,7 @@ export async function readPreviewBuy(
   });
 }
 
-/**
- * RedemptionEscrow.previewRedeem(rwaAmount) — the quote-token payout for
- * redeeming `rwaAmount`, in quote-token minimal units. The counterpart of
- * readPreviewBuy; feeds the slippage floor carried in `minQuoteOut`.
- */
+/** Reads escrow.previewRedeem(rwaAmount) in quote-token minimal units for the minQuoteOut floor */
 export async function readPreviewRedeem(
   expectedChainId: number,
   escrow: Address,
@@ -274,12 +244,7 @@ export function formatWithDecimals(raw: string, decimals: number): string {
   return formatUnits(BigInt(raw), decimals);
 }
 
-/**
- * Blocks until a submitted transaction is mined — the buy approval must be
- * confirmed on-chain before the UI trusts it and enables Buy. A short polling
- * interval is fine here: the platform targets a single, fast
- * local/permissioned chain, not mainnet.
- */
+/** Waits for mining (250 ms polls, 60 s timeout) before the UI rechecks approval allowance */
 export async function waitForTxReceipt(hash: Hex): Promise<void> {
   const provider = getInjectedProvider();
   if (!provider) throw new Error("No injected wallet found.");
@@ -290,7 +255,7 @@ export async function waitForTxReceipt(hash: Hex): Promise<void> {
   await client.waitForTransactionReceipt({ hash, timeout: 60_000 });
 }
 
-/** Sends an ERC-20 `approve(spender, amount)` from the connected wallet. */
+/** Sends ERC-20 approve(spender, amount) through the wallet */
 export async function sendErc20Approve(
   expectedChainId: number,
   owner: Address,
@@ -306,8 +271,7 @@ export async function sendErc20Approve(
     chain,
     transport: custom(provider),
   });
-  // `chain` (not null) makes viem assert the wallet's live chain against it
-  // immediately before sending — a mismatch throws instead of broadcasting.
+  // Setting chain enables viem's live-chain check before sending
   return client.sendTransaction({
     account: owner,
     chain,
@@ -320,7 +284,7 @@ export async function sendErc20Approve(
   });
 }
 
-/** Sends an ERC-20 `transfer(to, amount)` from the connected wallet. */
+/** Sends ERC-20 transfer(to, amount) through the wallet */
 export async function sendErc20Transfer(
   expectedChainId: number,
   owner: Address,
@@ -349,9 +313,8 @@ export async function sendErc20Transfer(
 }
 
 /**
- * Sends an encoded contract write from the connected wallet on the project's
- * chain. Shared by every buy/redemption helper below. Mirrors
- * sendErc20Approve's chain-assertion.
+ * Sends an encoded project-chain write with the same chain check as sendErc20Approve;
+ * shared by buy and redemption helpers
  */
 async function sendWrite(
   expectedChainId: number,
@@ -371,9 +334,8 @@ async function sendWrite(
 }
 
 /**
- * The Vault.buy(tokenAmount, maxQuoteAmount, recipient, deadline) argument.
- * `tokenAmount` is in RWA minimal units, `maxQuoteAmount` the slippage-bounded
- * spend ceiling in quote-token minimal units, and `deadline` unix seconds.
+ * Vault.buy arguments: tokenAmount in RWA minimal units, maxQuoteAmount in quote-token
+ * minimal units (slippage ceiling), deadline in Unix seconds
  */
 export interface BuyInput {
   tokenAmount: bigint;
@@ -383,10 +345,8 @@ export interface BuyInput {
 }
 
 /**
- * Broadcasts Vault.buy(...) from the connected investor wallet. The vault pulls
- * up to `maxQuoteAmount` of the quote token via safeTransferFrom, so the buyer
- * must have approved the vault for at least that much first (see the Investor
- * page's approve→buy flow). Both the caller and `recipient` must be Allowed.
+ * Broadcasts Vault.buy; caller and recipient must be Allowed. Vault pulls at most maxQuoteAmount
+ * of quote tokens; the Investor page approves that ceiling first.
  */
 export async function sendBuy(
   expectedChainId: number,
@@ -412,10 +372,8 @@ export async function sendBuy(
 }
 
 /**
- * The RedemptionEscrow.requestRedemption(rwaAmount, minQuoteOut, deadline)
- * argument. `rwaAmount` is in RWA minimal units, `minQuoteOut` the
- * slippage-bounded payout floor in quote-token minimal units, `deadline` unix
- * seconds.
+ * Escrow request arguments: rwaAmount in RWA minimal units, minQuoteOut in quote-token
+ * minimal units (slippage floor), deadline in Unix seconds
  */
 export interface RequestRedemptionInput {
   rwaAmount: bigint;
@@ -424,10 +382,8 @@ export interface RequestRedemptionInput {
 }
 
 /**
- * Broadcasts RedemptionEscrow.requestRedemption(...) from the connected
- * investor wallet. The escrow pulls `rwaAmount` of the RWA token via
- * safeTransferFrom, so the caller must have approved the escrow first. The
- * request id is assigned on-chain; the UI picks it up from the indexed list.
+ * Broadcasts requestRedemption after RWA approval; escrow pulls rwaAmount and assigns
+ * the request ID, which appears in the server list after indexing
  */
 export async function sendRequestRedemption(
   expectedChainId: number,
@@ -447,11 +403,7 @@ export async function sendRequestRedemption(
   );
 }
 
-/**
- * RedemptionEscrow.claimRedemption(id) — permissionless once the request is
- * funded. Anyone may broadcast it; the escrow always pays the beneficiary
- * recorded at request time, never the caller.
- */
+/** Permissionless funded claim; pays the recorded beneficiary regardless of caller */
 export async function sendClaimRedemption(
   expectedChainId: number,
   from: Address,
@@ -470,11 +422,7 @@ export async function sendClaimRedemption(
   );
 }
 
-/**
- * RedemptionEscrow.cancelRedemption(id) — refunds the escrowed RWA to the
- * beneficiary of a still-Pending request whose timeout has elapsed. Reverts
- * before then, and (like every RWA transfer) needs both parties Allowed.
- */
+/** Returns a Pending request's RWA after timeout; caller must be its Allowed beneficiary */
 export async function sendCancelRedemption(
   expectedChainId: number,
   from: Address,
@@ -494,11 +442,8 @@ export async function sendCancelRedemption(
 }
 
 /**
- * Turns a failed transaction into a sentence an investor can act on. The
- * calls here are posted as raw calldata, so viem has no ABI attached and
- * cannot name a revert by itself; the revert bytes still travel on the error
- * object, and a frozen balance is the one refusal that otherwise looks like a
- * broken app (the wallet shows the full balance, the transfer just fails).
+ * Decodes token revert bytes for raw sends, whose viem errors lack an ABI.
+ * Frozen-balance detail explains why the full wallet balance may not be spendable.
  */
 export function describeTxError(err: unknown, fallback: string): string {
   const data = revertData(err);
@@ -507,20 +452,20 @@ export function describeTxError(err: unknown, fallback: string): string {
       const decoded = decodeErrorResult({ abi: tokenErrorsAbi, data });
       switch (decoded.errorName) {
         case "ERC7943InsufficientUnfrozenBalance":
-          return `Part of your balance is frozen by the issuer: only ${String(decoded.args[2])} (in minimal units) can be moved right now. Contact the issuer if you were not expecting this.`;
+          return `Part of your balance is frozen by the issuer: only ${String(decoded.args[2])} minimal units are available. Contact the issuer about an unexpected hold.`;
         case "SenderNotAllowed":
-          return "Your wallet is not currently Allowed in the compliance registry, so it cannot send tokens.";
+          return "Your wallet is not Allowed in the compliance registry and cannot send tokens.";
         case "RecipientNotAllowed":
           return "The destination wallet is not Allowed in the compliance registry.";
       }
     } catch {
-      // Not one of the token's errors: fall through to the raw message.
+      // Unknown token error; use the raw message
     }
   }
   return err instanceof Error ? err.message : fallback;
 }
 
-/** Digs the `0x`-prefixed revert payload out of whatever shape the wallet threw. */
+// Finds 0x revert data on the error or cause chain, examining up to six objects
 function revertData(err: unknown): Hex | undefined {
   let current: unknown = err;
   for (let depth = 0; current && depth < 6; depth++) {

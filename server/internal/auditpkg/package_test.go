@@ -111,7 +111,7 @@ func TestOpenPackageRejectsHashMismatch(t *testing.T) {
 	}
 
 	// Tamper: rebuild the zip with profile.json's content changed but
-	// manifest.json (and its recorded hash) left untouched.
+	// manifest.json (and its recorded hash) left untouched
 	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
 	if err != nil {
 		t.Fatal(err)
@@ -137,9 +137,8 @@ func TestOpenPackageRejectsHashMismatch(t *testing.T) {
 	}
 }
 
-// rawZip builds a .rwa-shaped zip archive directly from an entry-name ->
-// content map, bypassing BuildPackage so a test can construct a
-// deliberately non-conformant manifest.json.
+// rawZip builds a zip from an entry-name to content map without BuildPackage,
+// so a test can supply a non-conformant manifest.json
 func rawZip(t *testing.T, entries map[string]string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -159,10 +158,8 @@ func rawZip(t *testing.T, entries map[string]string) []byte {
 	return buf.Bytes()
 }
 
-// validManifestEntries returns a self-consistent set of {manifest.json,
-// profile.json, metadata.json, typed-data.json} zip entries (correct
-// sha256/size for every manifest.files entry), so each test below can mutate
-// exactly the one thing it's probing and still pass every OTHER check.
+// validManifestEntries supplies the manifest and three required files with correct
+// sizes and hashes, letting tests vary one constraint at a time
 func validManifestEntries(t *testing.T) map[string]string {
 	t.Helper()
 	profile := `{"a":1}`
@@ -186,9 +183,8 @@ func validManifestEntries(t *testing.T) map[string]string {
 	}
 }
 
-// TestOpenPackageRejectsUndeclaredExtractedFile checks set-equality: an extra
-// file present in the archive but never mentioned in manifest.json must be
-// rejected, not silently accepted alongside the declared files.
+// TestOpenPackageRejectsUndeclaredExtractedFile checks that a file in the
+// archive that manifest.json does not declare is rejected
 func TestOpenPackageRejectsUndeclaredExtractedFile(t *testing.T) {
 	entries := validManifestEntries(t)
 	entries["proofs/hidden-payload.bin"] = "surprise"
@@ -197,9 +193,8 @@ func TestOpenPackageRejectsUndeclaredExtractedFile(t *testing.T) {
 	}
 }
 
-// TestOpenPackageRejectsDuplicateManifestPath pins "duplicate paths in
-// manifest.files" rejection — a manifest can otherwise describe the same
-// archive entry twice with two different claimed hashes/sizes.
+// TestOpenPackageRejectsDuplicateManifestPath checks that a manifest listing
+// one path twice, possibly with different hashes or sizes, is rejected
 func TestOpenPackageRejectsDuplicateManifestPath(t *testing.T) {
 	entries := validManifestEntries(t)
 	sum := func(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
@@ -220,10 +215,8 @@ func TestOpenPackageRejectsDuplicateManifestPath(t *testing.T) {
 	}
 }
 
-// TestOpenPackageRejectsMissingMandatoryManifestEntry pins "require the 3
-// mandatory JSON files exactly once" — a manifest that never declares
-// typed-data.json (even if the archive happens to contain the file) must
-// be rejected.
+// TestOpenPackageRejectsMissingMandatoryManifestEntry checks that a manifest
+// that omits typed-data.json is rejected even when the archive contains the file
 func TestOpenPackageRejectsMissingMandatoryManifestEntry(t *testing.T) {
 	entries := validManifestEntries(t)
 	sum := func(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
@@ -241,10 +234,8 @@ func TestOpenPackageRejectsMissingMandatoryManifestEntry(t *testing.T) {
 	}
 }
 
-// TestOpenPackageRejectsManifestEntryOutsideProofs pins "restrict other
-// entries to declared proofs/ files" — a manifest declaring an extra file
-// at the archive root (not proofs/, not one of the 3 mandatory names) must
-// be rejected even though it's otherwise well-formed and hash-consistent.
+// TestOpenPackageRejectsManifestEntryOutsideProofs rejects extra root files even with
+// correct hashes and sizes; only the three mandatory files may appear there
 func TestOpenPackageRejectsManifestEntryOutsideProofs(t *testing.T) {
 	entries := validManifestEntries(t)
 	sum := func(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
@@ -268,10 +259,9 @@ func TestOpenPackageRejectsManifestEntryOutsideProofs(t *testing.T) {
 	}
 }
 
-// TestOpenPackageRejectsUnknownManifestField pins strict manifest.json
-// decoding (audit: "manifest parsing also uses permissive json.Unmarshal
-// without full schema validation" — shared/schemas/rwa-manifest.schema.json
-// declares additionalProperties:false).
+// TestOpenPackageRejectsUnknownManifestField checks that manifest.json with an
+// unknown field is rejected, as rwa-manifest.schema.json sets
+// additionalProperties to false
 func TestOpenPackageRejectsUnknownManifestField(t *testing.T) {
 	entries := validManifestEntries(t)
 	sum := func(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
@@ -290,10 +280,8 @@ func TestOpenPackageRejectsUnknownManifestField(t *testing.T) {
 	}
 }
 
-// TestOpenPackageAcceptsSelfConsistentManifest is the control: the fixture
-// validManifestEntries builds above must be accepted unmodified, so a
-// failure in one of the mutation tests above is known to come from the
-// specific mutation, not from the shared fixture being invalid.
+// TestOpenPackageAcceptsSelfConsistentManifest validates the unmodified fixture,
+// confirming mutation-test failures come from their changes
 func TestOpenPackageAcceptsSelfConsistentManifest(t *testing.T) {
 	if _, err := OpenPackage(rawZip(t, validManifestEntries(t))); err != nil {
 		t.Fatalf("expected the self-consistent fixture to be accepted: %v", err)

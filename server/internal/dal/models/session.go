@@ -2,18 +2,10 @@ package models
 
 import "time"
 
-// WalletSession is an investor's short-lived self-service session
-// (collection: wallet_sessions). Sessions live in the shared store rather
-// than in auth.SessionManager's process-local map, so a token minted by one
-// server replica validates on every other replica sharing the store, and a
-// logout on ANY replica revokes it everywhere — see
-// repository.WalletSessionRepository's doc comment.
-//
-// Token holds the SHA-256 DIGEST of the opaque bearer token,
-// not the token itself — the raw token is returned to the caller once at
-// issue and never persisted, so read access to this collection cannot
-// reconstruct a usable credential. auth.SessionManager derives the digest on
-// both issue and lookup (see auth.hashSessionToken).
+// WalletSession stores investor sessions in wallet_sessions, shared across server
+// replicas using MongoDB or local to a memory process. auth.SessionManager stores and
+// looks up SHA-256 digests; raw bearer tokens are returned only at issuance, keeping
+// collection access from yielding usable credentials.
 type WalletSession struct {
 	Token     string    `json:"-" bson:"_id"`
 	Address   string    `json:"address" bson:"address"`

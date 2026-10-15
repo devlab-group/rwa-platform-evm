@@ -10,32 +10,24 @@ import (
 	"github.com/rwa-platform/server/internal/api/dto"
 )
 
-// getHealth implements GET /healthz (operationId getHealth).
-// Public liveness probe: always 200 with the chain id and the indexer's last
-// processed block — it asserts nothing about dependencies (see getReady).
+// getHealth serves public GET /healthz: always 200 with chain ID and indexer block,
+// without dependency checks; see getReady
 func (app *App) getHealth(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.NewHealth("ok", app.ChainID, app.lastIndexedBlock()))
 }
 
-// getReady implements GET /readyz (operationId getReady).
-// Public readiness probe: 200 only when the configured chain/storage/indexer
-// checks all pass, 503 with a coarse reason otherwise.
+// getReady serves public GET /readyz: 200 if chain, storage and indexer checks pass,
+// otherwise 503 with a coarse reason
 func (app *App) getReady(c *gin.Context) {
-	// Default-deny. A nil ReadyCheck means the chain-dependent services were
-	// never wired (no/failed/wrong-chain RPC), which is NOT ready. Treating a
-	// nil check as success would report "ready" and let an instance with no
-	// chain connectivity pass orchestration health checks. Never report ready
-	// by omission.
+	// A nil ReadyCheck means the chain-dependent services were never wired (no,
+	// failed or wrong-chain RPC), so the instance must not report ready
 	if app.ReadyCheck == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "reason": "readiness check not configured (chain services unavailable)"})
 		return
 	}
 	if err := app.ReadyCheck(); err != nil {
-		// /readyz is public and unauthenticated, so the client gets only a
-		// coarse category — the underlying errors wrap RPC dial and Mongo ping
-		// failures and would otherwise hand out backend host:port and RPC
-		// endpoint details to anyone who can reach the probe. The operator
-		// still gets the full text, in the log.
+		// Public /readyz returns only a coarse category. Full errors, which may expose Mongo
+		// hosts or RPC endpoints, go to the log.
 		log.Printf("api: readiness check failed: %v", err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "reason": readinessReason(err)})
 		return
@@ -43,10 +35,9 @@ func (app *App) getReady(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.NewHealth("ready", app.ChainID, app.lastIndexedBlock()))
 }
 
-// readinessReason classifies a readiness failure into a fixed, non-revealing
-// label. The readiness closure (see cmd/platform's buildApp) tags each check it
-// runs with a stable prefix; anything unrecognized degrades to the generic
-// "not ready" rather than leaking the raw text.
+// readinessReason maps cmd/platform's "chain:", "storage:" and "indexer:" error
+// prefixes to fixed labels. Other errors become "not ready"; backend details remain
+// private.
 func readinessReason(err error) string {
 	switch {
 	case err == nil:

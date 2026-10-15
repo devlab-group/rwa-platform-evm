@@ -6,12 +6,7 @@ export type AsyncState<T> =
   | { status: "error"; data?: undefined; error: string }
   | { status: "success"; data: T; error?: undefined };
 
-/**
- * Runs `fetcher` on mount and whenever `deps` change, tracking loading/error/
- * success so every admin/investor screen renders consistent states against a
- * not-yet-running server (connection refused surfaces as an error state, not
- * a crash).
- */
+/** Runs fetcher on mount, deps changes or reload; rejected requests become error state */
 export function useAsync<T>(
   fetcher: (signal: AbortSignal) => Promise<T>,
   deps: unknown[],

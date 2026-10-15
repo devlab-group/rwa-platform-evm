@@ -4,12 +4,8 @@ pragma solidity ^0.8.24;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /// @title FeeOnTransferERC20
-/// @notice Quote token that burns a fee on every transfer, so the recipient always receives
-///         less than the amount requested. Used to prove exact balance-delta checks revert.
-/// @dev `feeEnabled` (default `true`, toggleable) lets a test simulate a fee that
-///      turns on only after an escrow has already pulled in the full, un-feed amount — e.g.
-///      via `fundRedemption` — so a later outbound leg (`claimRedemption`, `withdrawProceeds`)
-///      is the one that must catch the shortfall.
+/// @notice Burns transfer fees to test exact balance-delta checks
+/// @dev Fees start enabled; toggle off for funding and on for claimRedemption/withdrawProceeds shortfall tests
 contract FeeOnTransferERC20 is ERC20 {
     uint256 public immutable feeBps;
     bool public feeEnabled = true;
