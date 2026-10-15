@@ -21,6 +21,7 @@ import {
   redemptionEscrowAbi,
   rwaFactoryAbi,
   supplyControllerAbi,
+  supplyControllerErrorsAbi,
   vaultAbi,
 } from "./abis";
 import { findNetwork, toAddChainParams } from "./networks";
@@ -241,7 +242,10 @@ export function describeWalletError(err: unknown): string {
   const data = revertData(err);
   if (data) {
     try {
-      const decoded = decodeErrorResult({ abi: rwaTokenErrorsAbi, data });
+      const decoded = decodeErrorResult({
+        abi: [...rwaTokenErrorsAbi, ...supplyControllerErrorsAbi],
+        data,
+      });
       const named = explainTokenError(decoded.errorName, decoded.args);
       if (named) return named;
     } catch {
@@ -290,6 +294,24 @@ function explainTokenError(
       return "A forced transfer must have different sender and recipient.";
     case "ZeroAddress":
       return "The zero address is not a valid party to this call.";
+    case "InsufficientVaultInventory":
+      return `The Vault holds ${String(args?.[1])} minimal units, less than the ${String(first)} requested. Nothing was burned.`;
+    case "OperationIdAlreadyUsed":
+      return "This burn was already executed; its operation ID cannot be reused.";
+    case "NonceAlreadyUsed":
+      return "This attestation's nonce was already used.";
+    case "AttestationExpired":
+      return "The auditor's attestation has expired. Obtain a new signed attestation.";
+    case "InvalidSignature":
+      return "The signature does not match this attestation's auditor.";
+    case "WrongAuditor":
+    case "WrongProfileDigest":
+    case "WrongVault":
+      return `The attestation does not match this deployment (${name}).`;
+    case "ProjectPaused":
+      return "The project is paused. Unpause it before changing supply.";
+    case "ZeroAmount":
+      return "The attestation amount is zero.";
     case "AccessControlUnauthorizedAccount":
       return `${first} does not hold the role this call requires.`;
     default:
@@ -733,5 +755,48 @@ export async function sendMint(
       functionName: "mint",
       args: [attestation, signature],
     }),
+  );
+}
+
+/** BurnAttestation with hex addresses/bytes32 and bigint uint fields */
+export interface BurnAttestationInput {
+  auditor: Address;
+  profileDigest: Hex;
+  operationId: Hex;
+  metadataDigest: Hex;
+  amount: bigint;
+  nonce: bigint;
+  validUntil: bigint;
+  vault: Address;
+}
+
+/** Encodes SupplyController.burn(attestation, signature) */
+export function burnCall(
+  supplyControllerAddress: Address,
+  attestation: BurnAttestationInput,
+  signature: Hex,
+): ContractCall {
+  return {
+    to: supplyControllerAddress,
+    data: encodeFunctionData({
+      abi: supplyControllerAbi,
+      functionName: "burn",
+      args: [attestation, signature],
+    }),
+  };
+}
+
+/** Submits a permissionless burn of Vault inventory using the auditor's attestation */
+export function sendBurn(
+  expectedChainId: number,
+  from: Address,
+  supplyControllerAddress: Address,
+  attestation: BurnAttestationInput,
+  signature: Hex,
+): Promise<Hex> {
+  return sendCall(
+    expectedChainId,
+    from,
+    burnCall(supplyControllerAddress, attestation, signature),
   );
 }

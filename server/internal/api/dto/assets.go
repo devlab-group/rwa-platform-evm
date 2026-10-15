@@ -51,3 +51,32 @@ func ToAssetRecordResponse(r *models.AssetRecord) AssetRecordResponse {
 		CreatedAt: r.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
+
+// BurnResponse mirrors components.schemas.Burn; Remaining is computed for the
+// response and omitted if unavailable (see assets.BurnService.Remaining)
+type BurnResponse struct {
+	BurnID         string `json:"burnId"`
+	RecordID       string `json:"recordId"`
+	OperationID    string `json:"operationId"`
+	Amount         string `json:"amount"`
+	Unit           string `json:"unit"`
+	Status         string `json:"status"`
+	MetadataDigest string `json:"metadataDigest"`
+	CID            string `json:"cid,omitempty"`
+	Nonce          string `json:"nonce"`
+	ValidUntil     int64  `json:"validUntil"`
+	BurnTxHash     string `json:"burnTxHash,omitempty"`
+	Remaining      string `json:"remaining,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
+}
+
+// ToBurnResponse maps one stored burn onto its API view; remaining may be empty
+func ToBurnResponse(b *models.Burn, remaining string) BurnResponse {
+	return BurnResponse{
+		BurnID: b.BurnID, RecordID: b.RecordID, OperationID: b.OperationID, Amount: b.Amount, Unit: b.Unit,
+		Status: string(b.Status), MetadataDigest: b.MetadataDigest, CID: b.CID, Nonce: b.Nonce, ValidUntil: b.ValidUntil,
+		BurnTxHash: b.BurnTxHash, Remaining: remaining,
+		CreatedAt: b.CreatedAt.Format("2006-01-02T15:04:05Z07:00"), UpdatedAt: b.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+}

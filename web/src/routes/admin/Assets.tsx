@@ -21,9 +21,12 @@ import {
   type MintAttestationInput,
 } from "../../lib/wallet";
 import { TableWrap } from "../../components/TableWrap";
+import { parseSignedResult } from "../../lib/signedResult";
+import { BurnForm, BurnsSection } from "./Burns";
 
 type AssetRecord = components["schemas"]["AssetRecord"];
 type SignedResult = components["schemas"]["SignedResult"];
+type Burn = components["schemas"]["Burn"];
 type Project = components["schemas"]["Project"];
 type StoredProfile = components["schemas"]["StoredProfile"];
 
@@ -43,6 +46,10 @@ const RECORD_TONE: Record<NonNullable<AssetRecord["status"]>, string> = {
  * editors
  */
 export function Assets() {
+  const burns = usePaginatedList<Burn>(
+    (cursor, signal) => api.listBurns({ signal, cursor }),
+    [],
+  );
   const records = usePaginatedList<AssetRecord>(
     (cursor, signal) => api.listRecords({ signal, cursor }),
     [],
@@ -143,6 +150,13 @@ export function Assets() {
                         key={r.recordId}
                         record={r}
                         rwaDecimals={rwaDecimals}
+                        remaining={
+                          burns.status === "success"
+                            ? burns.data.find((b) => b.recordId === r.recordId)
+                                ?.remaining
+                            : undefined
+                        }
+                        onBurnCreated={burns.reload}
                       />
                     ))}
                   </tbody>
@@ -159,6 +173,24 @@ export function Assets() {
             </>
           )}
         </AsyncSection>
+      </section>
+
+      <section className="card">
+        <h2>Burns</h2>
+        <p className="field__hint">
+          Retire supply against a Minted record: create a burn above, download
+          its package for the auditor, then upload the signed result and confirm
+          the wallet transaction.
+        </p>
+        <BurnsSection
+          burns={burns}
+          project={project.status === "success" ? project.data : undefined}
+          rwaDecimals={rwaDecimals}
+          onBurned={() => {
+            burns.reload();
+            records.reload();
+          }}
+        />
       </section>
 
       <section className="card">
@@ -256,10 +288,15 @@ async function loadProfile(signal: AbortSignal): Promise<StoredProfile | null> {
 function RecordRow({
   record,
   rwaDecimals,
+  remaining,
+  onBurnCreated,
 }: {
   record: AssetRecord;
   rwaDecimals: number | undefined;
+  remaining: string | undefined;
+  onBurnCreated: () => void;
 }) {
+  const [burning, setBurning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
 
@@ -289,39 +326,67 @@ function RecordRow({
   }
 
   return (
-    <tr>
-      <td className="mono">{record.recordId}</td>
-      <td>
-        {record.status && (
-          <span className={`badge ${RECORD_TONE[record.status]}`}>
-            {record.status}
-          </span>
-        )}
-      </td>
-      <td>{formatTokenAmount(record.amount ?? "", rwaDecimals)}</td>
-      <td className="mono">{record.metadataDigest ?? "-"}</td>
-      <td className="mono">{record.cid ?? "-"}</td>
-      <td>{formatIsoTimestamp(record.createdAt)}</td>
-      <td>
-        {record.recordId && (
-          <>
-            <button
-              type="button"
-              className="button button--secondary"
-              onClick={handleDownload}
-              disabled={downloading}
-            >
-              {downloading ? "Downloading…" : "Download .rwa"}
-            </button>
-            {error && (
-              <p className="async-state--error" role="alert">
-                {error}
-              </p>
-            )}
-          </>
-        )}
-      </td>
-    </tr>
+    <>
+      <tr>
+        <td className="mono">{record.recordId}</td>
+        <td>
+          {record.status && (
+            <span className={`badge ${RECORD_TONE[record.status]}`}>
+              {record.status}
+            </span>
+          )}
+        </td>
+        <td>{formatTokenAmount(record.amount ?? "", rwaDecimals)}</td>
+        <td className="mono">{record.metadataDigest ?? "-"}</td>
+        <td className="mono">{record.cid ?? "-"}</td>
+        <td>{formatIsoTimestamp(record.createdAt)}</td>
+        <td>
+          {record.recordId && (
+            <>
+              <button
+                type="button"
+                className="button button--secondary"
+                onClick={handleDownload}
+                disabled={downloading}
+              >
+                {downloading ? "Downloading…" : "Download .rwa"}
+              </button>
+              {record.status === "Minted" && (
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  aria-expanded={burning}
+                  aria-label={`Burn ${record.recordId}`}
+                  onClick={() => setBurning((v) => !v)}
+                >
+                  Burn
+                </button>
+              )}
+              {error && (
+                <p className="async-state--error" role="alert">
+                  {error}
+                </p>
+              )}
+            </>
+          )}
+        </td>
+      </tr>
+      {burning && (
+        <tr>
+          <td colSpan={7}>
+            <BurnForm
+              record={record}
+              rwaDecimals={rwaDecimals}
+              remaining={remaining}
+              onCreated={() => {
+                setBurning(false);
+                onBurnCreated();
+              }}
+            />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -491,46 +556,6 @@ function CreateRecordForm({
       )}
     </div>
   );
-}
-
-// Required fields from shared/schemas/signed-result.schema.json
-const SIGNED_RESULT_FIELDS = [
-  "formatVersion",
-  "auditor",
-  "primaryType",
-  "typedDataDigest",
-  "signature",
-  "signedAt",
-] as const;
-
-// parseSignedResult requires non-empty string fields without checking signature validity
-function parseSignedResult(text: string): SignedResult {
-  let obj: unknown;
-  try {
-    obj = JSON.parse(text);
-  } catch {
-    throw new Error("The selected file is not valid JSON.");
-  }
-  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
-    throw new Error("signed-result.json must be a JSON object.");
-  }
-  const rec = obj as Record<string, unknown>;
-  const missing = SIGNED_RESULT_FIELDS.filter(
-    (k) => typeof rec[k] !== "string" || rec[k] === "",
-  );
-  if (missing.length > 0) {
-    throw new Error(
-      `Not a signed-result.json - missing field(s): ${missing.join(", ")}.`,
-    );
-  }
-  return {
-    formatVersion: String(rec.formatVersion),
-    auditor: String(rec.auditor),
-    primaryType: String(rec.primaryType),
-    typedDataDigest: String(rec.typedDataDigest),
-    signature: String(rec.signature),
-    signedAt: String(rec.signedAt),
-  };
 }
 
 function SignatureUploadForm({

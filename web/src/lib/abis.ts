@@ -275,6 +275,91 @@ export const supplyControllerAbi = [
     outputs: [],
     stateMutability: "nonpayable",
   },
+  {
+    type: "function",
+    name: "burn",
+    inputs: [
+      {
+        name: "attestation",
+        type: "tuple",
+        components: [
+          { name: "auditor", type: "address" },
+          { name: "profileDigest", type: "bytes32" },
+          { name: "operationId", type: "bytes32" },
+          { name: "metadataDigest", type: "bytes32" },
+          { name: "amount", type: "uint256" },
+          { name: "nonce", type: "uint256" },
+          { name: "validUntil", type: "uint64" },
+          { name: "vault", type: "address" },
+        ],
+      },
+      { name: "signature", type: "bytes" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+] as const satisfies Abi;
+
+/** Mint and burn errors displayed as plain-language messages */
+export const supplyControllerErrorsAbi = [
+  {
+    type: "error",
+    name: "AttestationExpired",
+    inputs: [
+      { name: "validUntil", type: "uint64" },
+      { name: "nowTs", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "InsufficientVaultInventory",
+    inputs: [
+      { name: "amount", type: "uint256" },
+      { name: "balance", type: "uint256" },
+    ],
+  },
+  { type: "error", name: "InvalidSignature", inputs: [] },
+  {
+    type: "error",
+    name: "NonceAlreadyUsed",
+    inputs: [{ name: "nonce", type: "uint256" }],
+  },
+  {
+    type: "error",
+    name: "OperationIdAlreadyUsed",
+    inputs: [{ name: "operationId", type: "bytes32" }],
+  },
+  { type: "error", name: "ProjectPaused", inputs: [] },
+  {
+    type: "error",
+    name: "RecordKeyAlreadyUsed",
+    inputs: [{ name: "recordKey", type: "bytes32" }],
+  },
+  {
+    type: "error",
+    name: "WrongAuditor",
+    inputs: [
+      { name: "expected", type: "address" },
+      { name: "provided", type: "address" },
+    ],
+  },
+  {
+    type: "error",
+    name: "WrongProfileDigest",
+    inputs: [
+      { name: "expected", type: "bytes32" },
+      { name: "provided", type: "bytes32" },
+    ],
+  },
+  {
+    type: "error",
+    name: "WrongVault",
+    inputs: [
+      { name: "expected", type: "address" },
+      { name: "provided", type: "address" },
+    ],
+  },
+  { type: "error", name: "ZeroAmount", inputs: [] },
 ] as const satisfies Abi;
 
 /**

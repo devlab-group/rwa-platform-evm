@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { encodeErrorResult } from "viem";
-import { rwaTokenErrorsAbi } from "./abis";
-import { describeWalletError, waitForTxReceipt } from "./wallet";
+import { decodeFunctionData, encodeErrorResult } from "viem";
+import {
+  rwaTokenErrorsAbi,
+  supplyControllerAbi,
+  supplyControllerErrorsAbi,
+} from "./abis";
+import { burnCall, describeWalletError, waitForTxReceipt } from "./wallet";
 
 const HASH = "0xaa" as const;
 
@@ -93,5 +97,52 @@ describe("describeWalletError", () => {
     expect(describeWalletError("not an error at all")).toBe(
       "Transaction failed.",
     );
+  });
+});
+
+describe("burnCall", () => {
+  const controller = "0x0000000000000000000000000000000000000044";
+  const attestation = {
+    auditor: "0x9999999999999999999999999999999999999999",
+    profileDigest: `0x${"cc".repeat(32)}`,
+    operationId: `0x${"11".repeat(32)}`,
+    metadataDigest: `0x${"aa".repeat(32)}`,
+    amount: 5n,
+    nonce: 7n,
+    validUntil: 4102444800n,
+    vault: "0x0000000000000000000000000000000000000055",
+  } as const;
+  const signature = `0x${"ab".repeat(65)}` as const;
+
+  it("encodes the attestation tuple and signature for SupplyController.burn", () => {
+    const call = burnCall(controller, attestation, signature);
+    expect(call.to).toBe(controller);
+    const { functionName, args } = decodeFunctionData({
+      abi: supplyControllerAbi,
+      data: call.data,
+    });
+    expect(functionName).toBe("burn");
+    expect(args).toEqual([attestation, signature]);
+  });
+
+  it("explains insufficient Vault inventory", () => {
+    const data = encodeErrorResult({
+      abi: supplyControllerErrorsAbi,
+      errorName: "InsufficientVaultInventory",
+      args: [500n, 20n],
+    });
+    const msg = describeWalletError(Object.assign(new Error("x"), { data }));
+    expect(msg).toMatch(/Vault holds 20 .* less than the 500/);
+  });
+
+  it("explains a reused operation ID", () => {
+    const data = encodeErrorResult({
+      abi: supplyControllerErrorsAbi,
+      errorName: "OperationIdAlreadyUsed",
+      args: [`0x${"11".repeat(32)}`],
+    });
+    expect(
+      describeWalletError(Object.assign(new Error("x"), { data })),
+    ).toMatch(/already executed/);
   });
 });

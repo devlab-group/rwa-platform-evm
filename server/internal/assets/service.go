@@ -146,20 +146,28 @@ func (s *RecordService) CreateRecord(ctx context.Context, profile *Profile, proj
 		return nil, err
 	}
 
-	if s.ipfs != nil {
-		// use Publish, which keys the publication record by RecordID, when the
-		// client has it (ipfs.ReplicationManager does; a plain Client does not)
-		if p, ok := s.ipfs.(interface {
-			Publish(ctx context.Context, id string, data []byte) (string, error)
-		}); ok {
-			if _, err := p.Publish(ctx, req.RecordID, meta.Canonical); err != nil {
-				return nil, fmt.Errorf("assets: pin metadata: %w", err)
-			}
-		} else if _, err := s.ipfs.AddRaw(ctx, meta.Canonical); err != nil {
-			return nil, fmt.Errorf("assets: pin metadata: %w", err)
-		}
+	if err := s.publish(ctx, req.RecordID, meta.Canonical); err != nil {
+		return nil, err
 	}
 	return record, nil
+}
+
+// publish sends canonical metadata to IPFS when configured, keyed by id if supported
+// (ReplicationManager, but not a plain Client)
+func (s *RecordService) publish(ctx context.Context, id string, canonical []byte) error {
+	if s.ipfs == nil {
+		return nil
+	}
+	if p, ok := s.ipfs.(interface {
+		Publish(ctx context.Context, id string, data []byte) (string, error)
+	}); ok {
+		if _, err := p.Publish(ctx, id, canonical); err != nil {
+			return fmt.Errorf("assets: pin metadata: %w", err)
+		}
+	} else if _, err := s.ipfs.AddRaw(ctx, canonical); err != nil {
+		return fmt.Errorf("assets: pin metadata: %w", err)
+	}
+	return nil
 }
 
 // ErrRecordNotFound is returned by ReissueRecord when no record has the given id

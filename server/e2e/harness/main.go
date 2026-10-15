@@ -1,16 +1,16 @@
-// Command harness tests the platform lifecycle through its HTTP API against the
-// server, Anvil and MongoDB started by server/e2e/run_e2e.sh. Initially only the
-// RWAFactory exists. The harness broadcasts an admin-bound deployment and waits
-// for the server to verify it and mark the project Active.
+// Command harness tests the HTTP lifecycle against the server, Anvil and MongoDB
+// started by server/e2e/run_e2e.sh. With only RWAFactory deployed, it broadcasts
+// an admin-bound deployment and waits for the server to verify it and mark it Active.
 //
-// It then verifies wallet ownership, allows compliance, creates an asset record,
-// downloads its .rwa package, signs with the offline CLI and broadcasts mint.
-// After the server observes Minted, it tests purchase, redemption funding and
-// claim, a timeout and cancellation, and ERC-7943 freeze and seizure.
+// It verifies wallet ownership, allows compliance, creates a record and signs its
+// .rwa package with the offline CLI before broadcasting mint. It then waits for
+// Minted, burns part of the record and checks Burned, supply and remaining amount.
+// It also tests purchase, redemption funding and claim, timeout/cancellation,
+// and ERC-7943 freeze and seizure.
 //
-// Wallet transactions use go-ethereum, already a module dependency. Configuration
-// comes from the environment; see run_e2e.sh. Every step and read-model assertion
-// must pass before the program prints "API E2E OK" and exits 0.
+// Wallet transactions use the existing go-ethereum dependency. Configuration comes
+// from the environment; see run_e2e.sh. Every step and read-model assertion must
+// pass before it prints "API E2E OK" and exits 0.
 package main
 
 import (
@@ -143,6 +143,7 @@ var (
 	amount1000 = mustBig("1000000000000000000000") // 1000 RWA (18 dec) minted to the Vault
 	amount100  = mustBig("100000000000000000000")  // 100 RWA bought by the investor
 	amount40   = mustBig("40000000000000000000")   // 40 RWA redeemed in the primary request
+	amount5    = mustBig("5000000000000000000")    // 5 RWA burned from the minted record
 	amount10   = mustBig("10000000000000000000")   // 10 RWA redeemed in the timeout->cancel demo
 	amount25   = mustBig("25000000000000000000")   // 25 RWA frozen against the investor
 	amount20   = mustBig("20000000000000000000")   // the 20 RWA still frozen after the seizure
@@ -251,6 +252,11 @@ func run() error {
 	step("wait for record status Minted (server observes the Minted event)")
 	if err := waitRecordMinted(api, cfg, recordID); err != nil {
 		return fmt.Errorf("wait minted: %w", err)
+	}
+
+	step("burn: create a burn for part of the minted record, sign its package, broadcast SupplyController.burn")
+	if err := burnLifecycle(ctx, api, chain, cfg, deployerKey, profileDigest, recordID); err != nil {
+		return fmt.Errorf("burn: %w", err)
 	}
 
 	step("buy")
@@ -1016,6 +1022,163 @@ func mintOnChain(ctx context.Context, chain *chainClient, cfg config, deployerKe
 		return fmt.Errorf("broadcast SupplyController.mint: %w", err)
 	}
 	return nil
+}
+
+// burnLifecycle creates, signs and submits a burn of amount5, waits for Burned,
+// then checks the supply decrease and record's remaining amount
+func burnLifecycle(ctx context.Context, api *apiClient, chain *chainClient, cfg config, deployerKey *ecdsa.PrivateKey, profileDigest, recordID string) error {
+	supplyBefore, err := chain.totalSupply(ctx, cfg.tokenAddr)
+	if err != nil {
+		return err
+	}
+
+	type burnView struct {
+		BurnID      string `json:"burnId"`
+		RecordID    string `json:"recordId"`
+		Status      string `json:"status"`
+		Amount      string `json:"amount"`
+		BurnTxHash  string `json:"burnTxHash"`
+		Remaining   string `json:"remaining"`
+		OperationID string `json:"operationId"`
+	}
+	var burn burnView
+	body := map[string]any{"recordId": recordID, "amount": amount5.String()}
+	if err := api.postJSON("/api/v1/assets/burns", cfg.adminBearer, body, &burn, "e2e-create-burn"); err != nil {
+		return fmt.Errorf("create burn: %w", err)
+	}
+	wantRemaining := new(big.Int).Sub(amount1000, amount5).String()
+	if burn.Status != "Pending" || burn.Amount != amount5.String() || burn.Remaining != wantRemaining {
+		return fmt.Errorf("new burn = %+v, want Pending, amount %s, remaining %s", burn, amount5, wantRemaining)
+	}
+
+	// Reject a burn above the remaining amount
+	over := map[string]any{"recordId": recordID, "amount": amount1000.String()}
+	if err := api.postJSON("/api/v1/assets/burns", cfg.adminBearer, over, nil, "e2e-create-burn-over"); err == nil {
+		return fmt.Errorf("burn of %s exceeding the remaining amount was accepted", amount1000)
+	} else if ae, ok := err.(*apiError); !ok || ae.status != http.StatusConflict {
+		return fmt.Errorf("over-remaining burn: got %v, want http 409", err)
+	}
+
+	raw, err := api.do(http.MethodGet, "/api/v1/assets/burns/"+burn.BurnID+"/package", cfg.adminBearer, nil, "")
+	if err != nil {
+		return fmt.Errorf("download burn package: %w", err)
+	}
+	pkgPath := cfg.workDir + "/" + burn.BurnID + ".rwa"
+	if err := os.WriteFile(pkgPath, raw, 0o600); err != nil {
+		return err
+	}
+	signedResultPath, err := signPackage(cfg, pkgPath, profileDigest)
+	if err != nil {
+		return fmt.Errorf("signer CLI: %w", err)
+	}
+	if err := burnOnChain(ctx, chain, cfg, deployerKey, pkgPath, signedResultPath); err != nil {
+		return fmt.Errorf("burn on-chain: %w", err)
+	}
+
+	if err := poll("burn "+burn.BurnID+" status Burned", 90*time.Second, 3*time.Second, func() (bool, error) {
+		var burns []burnView
+		if err := api.getJSON("/api/v1/assets/burns", cfg.adminBearer, &burns); err != nil {
+			return false, err
+		}
+		for _, b := range burns {
+			if b.BurnID == burn.BurnID {
+				burn = b
+				return b.Status == "Burned", nil
+			}
+		}
+		return false, nil
+	}); err != nil {
+		return err
+	}
+	if burn.BurnTxHash == "" || burn.Remaining != wantRemaining {
+		return fmt.Errorf("Burned burn = %+v, want a tx hash and remaining %s", burn, wantRemaining)
+	}
+
+	supplyAfter, err := chain.totalSupply(ctx, cfg.tokenAddr)
+	if err != nil {
+		return err
+	}
+	if drop := new(big.Int).Sub(supplyBefore, supplyAfter); drop.Cmp(amount5) != 0 {
+		return fmt.Errorf("totalSupply dropped by %s, want %s", drop, amount5)
+	}
+	return nil
+}
+
+// burnOnChain submits SupplyController.burn from the admin wallet using the
+// package's typed-data.json and signer's signed-result.json
+func burnOnChain(ctx context.Context, chain *chainClient, cfg config, deployerKey *ecdsa.PrivateKey, pkgPath, signedResultPath string) error {
+	zipBytes, err := os.ReadFile(pkgPath)
+	if err != nil {
+		return fmt.Errorf("read package: %w", err)
+	}
+	opened, err := auditpkg.OpenPackage(zipBytes)
+	if err != nil {
+		return fmt.Errorf("open package: %w", err)
+	}
+	var td auditpkg.TypedDataDoc
+	if err := json.Unmarshal(opened.Files["typed-data.json"], &td); err != nil {
+		return fmt.Errorf("parse typed-data.json: %w", err)
+	}
+	if td.PrimaryType != "BurnAttestation" {
+		return fmt.Errorf("package primaryType = %q, want BurnAttestation", td.PrimaryType)
+	}
+	srRaw, err := os.ReadFile(signedResultPath)
+	if err != nil {
+		return fmt.Errorf("read signed-result.json: %w", err)
+	}
+	var sr struct {
+		Signature string `json:"signature"`
+	}
+	if err := json.Unmarshal(srRaw, &sr); err != nil {
+		return fmt.Errorf("parse signed-result.json: %w", err)
+	}
+
+	profileDigest, err := hexToBytes32Local(td.Message.ProfileDigest)
+	if err != nil {
+		return fmt.Errorf("profileDigest: %w", err)
+	}
+	operationID, err := hexToBytes32Local(td.Message.OperationID)
+	if err != nil {
+		return fmt.Errorf("operationId: %w", err)
+	}
+	metadataDigest, err := hexToBytes32Local(td.Message.MetadataDigest)
+	if err != nil {
+		return fmt.Errorf("metadataDigest: %w", err)
+	}
+	amount, ok := new(big.Int).SetString(td.Message.Amount, 10)
+	if !ok {
+		return fmt.Errorf("invalid amount %q", td.Message.Amount)
+	}
+	nonce, ok := new(big.Int).SetString(td.Message.Nonce, 10)
+	if !ok {
+		return fmt.Errorf("invalid nonce %q", td.Message.Nonce)
+	}
+	sig, err := hexBytesLocal(sr.Signature)
+	if err != nil {
+		return fmt.Errorf("signature: %w", err)
+	}
+
+	data, err := bindings.NewSupplyController().PackBurn(bindings.BurnAttestation{
+		Auditor: common.HexToAddress(td.Message.Auditor), ProfileDigest: profileDigest, OperationID: operationID,
+		MetadataDigest: metadataDigest, Amount: amount, Nonce: nonce,
+		ValidUntil: uint64(td.Message.ValidUntil), Vault: common.HexToAddress(td.Message.Vault),
+	}, sig)
+	if err != nil {
+		return fmt.Errorf("encode burn calldata: %w", err)
+	}
+	if _, err := chain.sendTx(ctx, deployerKey, cfg.supplyCtrlAddr, data); err != nil {
+		return fmt.Errorf("broadcast SupplyController.burn: %w", err)
+	}
+	return nil
+}
+
+// totalSupply reads token.totalSupply()
+func (cc *chainClient) totalSupply(ctx context.Context, token common.Address) (*big.Int, error) {
+	out, err := cc.call(ctx, token, common.FromHex("0x18160ddd"))
+	if err != nil {
+		return nil, fmt.Errorf("totalSupply: %w", err)
+	}
+	return new(big.Int).SetBytes(out), nil
 }
 
 func hexToBytes32Local(s string) ([32]byte, error) {

@@ -19,6 +19,7 @@ const (
 	collProjects             = "projects"
 	collAssetProfiles        = "asset_profiles"
 	collAssetRecords         = "asset_records"
+	collBurns                = "burns"
 	collAuditPackages        = "audit_packages"
 	collAttestations         = "attestations"
 	collInvestors            = "investors"
@@ -48,6 +49,7 @@ func New(db *mongo.Database) *repository.Repositories {
 		Projects:             &projectRepo{coll: db.Collection(collProjects)},
 		AssetProfiles:        &assetProfileRepo{coll: db.Collection(collAssetProfiles)},
 		AssetRecords:         &assetRecordRepo{coll: db.Collection(collAssetRecords)},
+		Burns:                &burnRepo{coll: db.Collection(collBurns)},
 		AuditPackages:        &auditPackageRepo{coll: db.Collection(collAuditPackages)},
 		Attestations:         &attestationRepo{coll: db.Collection(collAttestations)},
 		Investors:            &investorRepo{coll: db.Collection(collInvestors)},
@@ -189,6 +191,25 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	// order
 	_, err = db.Collection(collAssetRecords).Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "createdAt", Value: 1}, {Key: "_id", Value: 1}},
+	})
+	if err != nil {
+		return err
+	}
+	// Burn indexes support pagination, per-record totals and unique operationId lookup
+	_, err = db.Collection(collBurns).Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = db.Collection(collBurns).Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "recordId", Value: 1}},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = db.Collection(collBurns).Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "operationId", Value: 1}}, Options: options.Index().SetUnique(true),
 	})
 	if err != nil {
 		return err

@@ -16,6 +16,7 @@ func New() *repository.Repositories {
 		Projects:             NewProjectRepository(),
 		AssetProfiles:        NewAssetProfileRepository(),
 		AssetRecords:         NewAssetRecordRepository(),
+		Burns:                NewBurnRepository(),
 		AuditPackages:        NewAuditPackageRepository(),
 		Attestations:         NewAttestationRepository(),
 		Investors:            NewInvestorRepository(),

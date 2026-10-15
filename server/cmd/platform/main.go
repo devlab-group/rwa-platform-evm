@@ -419,6 +419,7 @@ func buildApp(cfg config.Config, addrs models.Addresses, auditor string, repos *
 			common.HexToAddress(addrs.SupplyController), common.HexToAddress(addrs.Vault),
 			domainCfg, auditorAddr,
 		)
+		app.Burns = assets.NewBurnService(app.Records, repos.Burns)
 		// Prefer a live auditor read; retain the stored value on failure and retry in reconciliation
 		liveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := app.Records.ReconcileAuditorLive(liveCtx, chainClient); err != nil {
@@ -583,6 +584,9 @@ func startBackgroundLoops(ctx context.Context, cfg config.Config, addrs models.A
 	if app.Records != nil && addrs.SupplyController != "" {
 		go runIndexDependentTicker(ctx, repos, cfg, 15*time.Second, "assets minted-reconcile", func() error {
 			return app.Records.ReconcileMinted(ctx, repos.ChainEvents, cfg.ChainID, addrs.SupplyController, repos.AssetRecords)
+		})
+		go runIndexDependentTicker(ctx, repos, cfg, 15*time.Second, "assets burned-reconcile", func() error {
+			return app.Burns.ReconcileBurned(ctx, repos.ChainEvents, cfg.ChainID, addrs.SupplyController)
 		})
 		// Refresh auditor rotations without restarting
 		go runIndexDependentTicker(ctx, repos, cfg, 15*time.Second, "assets auditor-reconcile", func() error {

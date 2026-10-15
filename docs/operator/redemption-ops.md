@@ -108,6 +108,6 @@ Anyone can submit the claim, and the beneficiary receives the payment regardless
 
 ## Re-shelving and burns
 
-A completed redemption is an issuer repurchase: the RWA returns to the Vault and total supply
-stays unchanged. Retiring those tokens requires an auditor-signed `BurnAttestation` against
-Vault inventory.
+A completed redemption is an issuer repurchase: RWA returns to the Vault without changing total
+supply. Retiring it requires an auditor-signed `BurnAttestation` against Vault inventory; start
+from the record on the console's Assets screen. See [Burns in the operator guide](operator-guide.md#4-day-2-operations).

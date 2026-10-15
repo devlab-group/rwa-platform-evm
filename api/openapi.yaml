@@ -331,6 +331,69 @@ paths:
         "200": { description: Reissued, content: { application/json: { schema: { $ref: "#/components/schemas/AssetRecord" } } } }
         "409": { $ref: "#/components/responses/Error" }
 
+  /api/v1/assets/burns:
+    get:
+      tags: [assets]
+      operationId: listBurns
+      summary: "List burns, newest first"
+      x-required-role: admin
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: "Burns (bounded/paginated, see Limit/Cursor)"
+          headers:
+            X-Total-Count: { $ref: "#/components/headers/XTotalCount" }
+            X-Page-Size: { $ref: "#/components/headers/XPageSize" }
+            X-Next-Cursor: { $ref: "#/components/headers/XNextCursor" }
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Burn" } } } }
+    post:
+      tags: [assets]
+      operationId: createBurn
+      summary: "Prepare a burn against a Minted record"
+      description: >
+        Returns a Pending burn, reserving its amount from the record amount minus Burned and unexpired
+        Pending burns. Download its package for the auditor. Returns 400 for malformed amounts or metadata
+        rejected by the stored profile, 404 for an unknown record, and 409 for a non-Minted record or an amount
+        above remaining.
+      x-required-role: admin
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateBurnRequest" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Burn" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/assets/burns/{burnId}/package:
+    get:
+      tags: [assets]
+      operationId: downloadBurnPackage
+      summary: "Download the BurnAttestation .rwa package"
+      x-required-role: admin
+      parameters: [ { name: burnId, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: .rwa package, content: { application/zip: { schema: { type: string, format: binary } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/assets/burns/{burnId}/reissue:
+    post:
+      tags: [assets]
+      operationId: reissueBurn
+      summary: "Refresh a Pending burn's nonce and expiry"
+      description: >
+        Audited. Keeps burnId, metadata and amount. Returns 409 for a Burned burn, an amount above remaining
+        or a concurrent update. Metadata age still limits signing under the auditor's policy.
+      x-required-role: admin
+      parameters:
+        - { name: burnId, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "200": { description: Reissued, content: { application/json: { schema: { $ref: "#/components/schemas/Burn" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
   /api/v1/sales/inventory:
     get:
       tags: [sales]
@@ -784,6 +847,33 @@ components:
         asset: { type: object }
         amount: { type: string }
         proofs: { type: array, items: { type: object } }
+    CreateBurnRequest:
+      type: object
+      required: [recordId, amount]
+      properties:
+        recordId: { type: string }
+        amount: { type: string, description: "Positive decimal string in minimal units, at most the record's remaining amount" }
+        proofs: { type: array, items: { type: object } }
+    Burn:
+      type: object
+      description: >
+        Supply retirement against a Minted record. operationId is keccak256(utf8(burnId)). The wallet submits
+        a BurnAttestation using these fields; the server marks the burn Burned after observing its event.
+      properties:
+        burnId: { type: string }
+        recordId: { type: string }
+        operationId: { type: string, description: "BurnAttestation bytes32 operationId; usable once on-chain" }
+        amount: { type: string }
+        unit: { type: string }
+        status: { type: string, enum: [Pending, Burned] }
+        metadataDigest: { type: string }
+        cid: { type: string }
+        nonce: { type: string, description: "uint256 attestation nonce" }
+        validUntil: { type: integer, format: int64, description: "Attestation expiry in Unix seconds" }
+        burnTxHash: { type: string, description: "Present once Burned" }
+        remaining: { type: string, description: "Amount available for new burns against the record at response time; omitted if computation fails" }
+        createdAt: { type: string }
+        updatedAt: { type: string }
     SignedResult:
       type: object
       required: [formatVersion, auditor, primaryType, typedDataDigest, signature, signedAt]

@@ -56,6 +56,22 @@ type AssetRecordRepository interface {
 	ListPage(ctx context.Context, cursor string, limit int) (items []*models.AssetRecord, nextCursor string, err error)
 }
 
+// BurnRepository stores burn records and metadata
+type BurnRepository interface {
+	Get(ctx context.Context, burnID string) (*models.Burn, error)
+	// GetByOperationID matches a 0x-hex operationId case-insensitively or returns ErrNotFound
+	GetByOperationID(ctx context.Context, operationID string) (*models.Burn, error)
+	// ListByRecord returns recordID's burns in no particular order
+	ListByRecord(ctx context.Context, recordID string) ([]*models.Burn, error)
+	Create(ctx context.Context, b *models.Burn) error
+	// UpdateConditional requires Version == expectedVersion and increments it on success.
+	// A version conflict returns (false, nil); a missing burn returns ErrNotFound.
+	UpdateConditional(ctx context.Context, b *models.Burn, expectedVersion int) (bool, error)
+	// ListPage sorts by (CreatedAt, BurnID) descending; cursor="" starts and
+	// nextCursor="" ends pagination (see PurchaseRepository.ListPage)
+	ListPage(ctx context.Context, cursor string, limit int) (items []*models.Burn, nextCursor string, err error)
+}
+
 // AuditPackageRepository persists .rwa package build metadata
 type AuditPackageRepository interface {
 	Get(ctx context.Context, recordID string) (*models.AuditPackage, error)
@@ -381,6 +397,7 @@ type Repositories struct {
 	Projects             ProjectRepository
 	AssetProfiles        AssetProfileRepository
 	AssetRecords         AssetRecordRepository
+	Burns                BurnRepository
 	AuditPackages        AuditPackageRepository
 	Attestations         AttestationRepository
 	Investors            InvestorRepository

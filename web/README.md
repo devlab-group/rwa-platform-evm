@@ -34,7 +34,7 @@ Root/unmatched URLs redirect to `/admin/setup`; without a live session, the shel
 | Route             | Screen                                                                              |
 | ----------------- | ----------------------------------------------------------------------------------- |
 | `setup`           | Asset Profile validation/creation, legal descriptor, project summary and deployment |
-| `assets`          | Records, signer policy/package downloads, signed-result upload and mint             |
+| `assets`          | Records, signer policy/package downloads, signed-result upload, mint and burn       |
 | `compliance`      | Wallet status, allow/block, ownership challenges, webhooks and audit log            |
 | `inventory-sales` | Inventory, quote preview, treasury withdrawal and purchase history                  |
 | `redemptions`     | Requests/details, funding and rejection                                             |
@@ -42,6 +42,13 @@ Root/unmatched URLs redirect to `/admin/setup`; without a live session, the shel
 | `security`        | Pause, prices, roles, admin transfer, freeze/seizure and bytecode-presence status   |
 
 Purchases use on-chain `Vault.buy`.
+
+Burns retire Vault inventory against a Minted record. Start from that record on Assets, enter
+up to its remaining amount and give the package to the auditor. Upload `signed-result.json`
+and confirm the wallet transaction. The browser matches its declared auditor and typed-data
+digest to the burn; `SupplyController.burn` verifies the signature and Vault balance.
+Expired Pending burns need reissue; the signer's metadata-age limit still applies. See the
+[operator guide](../docs/operator/operator-guide.md#4-day-2-operations).
 
 ## Transaction safety
 

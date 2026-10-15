@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { toFunctionSelector } from "viem";
-import { erc7943Abi } from "./abis";
+import { keccak256, toFunctionSelector, toHex } from "viem";
+import { erc7943Abi, supplyControllerAbi } from "./abis";
 
 /*
  * Checks ERC-7943 ABI fragments against shared vectors used by Solidity and Go;
@@ -45,4 +45,22 @@ describe("erc7943Abi", () => {
       );
     },
   );
+});
+
+const typehashes = JSON.parse(
+  readFileSync("../shared/vectors/typehashes.json", "utf8"),
+) as Record<string, string>;
+
+// Field names and order determine the typehash
+describe("supplyControllerAbi attestation tuples", () => {
+  it.each([
+    ["mint", "MintAttestation", "mintTypehash"],
+    ["burn", "BurnAttestation", "burnTypehash"],
+  ] as const)("%s tuple hashes to the pinned typehash", (name, type, key) => {
+    const fragment = supplyControllerAbi.find((e) => e.name === name)!;
+    const fields = fragment.inputs[0].components
+      .map((c) => `${c.type} ${c.name}`)
+      .join(",");
+    expect(keccak256(toHex(`${type}(${fields})`))).toBe(typehashes[key]);
+  });
 });

@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Assets } from "./Assets";
 import { buildSignerPolicy } from "../../lib/signerPolicy";
 import { api, ApiError } from "../../lib/client";
-import { sendMint, waitForTxReceipt } from "../../lib/wallet";
+import { sendBurn, sendMint, waitForTxReceipt } from "../../lib/wallet";
+import { BURN, signedFor } from "../../test/burnFixtures";
 import { installFakeWallet, renderWithWallet } from "../../test/walletHarness";
 
 // Mint uses the admin wallet, not server relay. Upload supplies the separate auditor
@@ -18,6 +19,8 @@ vi.mock("../../lib/client", async (importOriginal) => {
       getProject: vi.fn(),
       getProfile: vi.fn(),
       createRecord: vi.fn(),
+      listBurns: vi.fn().mockResolvedValue({ items: [] }),
+      createBurn: vi.fn(),
     },
   };
 });
@@ -28,6 +31,7 @@ vi.mock("../../lib/wallet", async (importOriginal) => {
   return {
     ...actual,
     sendMint: vi.fn().mockResolvedValue("0xminthash"),
+    sendBurn: vi.fn().mockResolvedValue("0xburnhash"),
     waitForTxReceipt: vi.fn().mockResolvedValue(undefined),
   };
 });
@@ -277,5 +281,141 @@ describe("Assets signer policy (offline signing trust root)", () => {
     expect(
       screen.queryByRole("button", { name: "Download policy.json" }),
     ).toBeNull();
+  });
+});
+
+describe("Assets burn flow", () => {
+  let wallet: ReturnType<typeof installFakeWallet>;
+  const MINTED = { ...RECORD, status: "Minted" as const };
+  const REMAINING = "1000000000000000000";
+  const pendingBurn = { ...BURN, remaining: REMAINING };
+
+  function burnFile(content: unknown): File {
+    return {
+      name: "signed-result.json",
+      text: () => Promise.resolve(JSON.stringify(content)),
+    } as unknown as File;
+  }
+
+  beforeEach(() => {
+    wallet = installFakeWallet({ account: ADMIN, chainId: 31337 });
+    vi.mocked(api.listRecords)
+      .mockReset()
+      .mockResolvedValue({ items: [MINTED] });
+    vi.mocked(api.getProject).mockReset().mockResolvedValue(PROJECT);
+    vi.mocked(api.getProfile)
+      .mockReset()
+      .mockRejectedValue(
+        new ApiError(404, { code: "not_found", message: "no profile" }),
+      );
+    vi.mocked(api.listBurns)
+      .mockReset()
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValue({ items: [pendingBurn] });
+    vi.mocked(api.createBurn).mockReset().mockResolvedValue(pendingBurn);
+    vi.mocked(sendBurn).mockClear().mockResolvedValue("0xburnhash");
+    vi.mocked(waitForTxReceipt).mockClear().mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    wallet.uninstall();
+  });
+
+  async function createBurn() {
+    renderWithWallet(<Assets />, { connected: true });
+    await screen.findByText("record-001");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Burn record-001" }),
+    );
+    fireEvent.change(await screen.findByLabelText(/Burn amount/), {
+      target: { value: "0.25" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create burn" }));
+  }
+
+  it("creates a Pending burn in minimal units and sends it after confirmation", async () => {
+    await createBurn();
+    await waitFor(() => expect(api.createBurn).toHaveBeenCalled());
+    const [body, key] = vi.mocked(api.createBurn).mock.calls[0];
+    expect(body).toEqual({
+      recordId: "record-001",
+      amount: "250000000000000000",
+      proofs: [],
+    });
+    expect(key).toBeTruthy();
+
+    // Reload with the Pending burn
+    expect(await screen.findByText("Pending")).toBeInTheDocument();
+    fireEvent.change(
+      await screen.findByLabelText(/Upload signed result for burn 11111111/),
+      { target: { files: [burnFile(signedFor(BURN))] } },
+    );
+
+    // Wait for confirmation before sending
+    await screen.findByText("Confirm burn");
+    expect(screen.getByText(BURN.operationId!)).toBeInTheDocument();
+    expect(sendBurn).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm and burn" }));
+
+    await waitFor(() => expect(sendBurn).toHaveBeenCalled());
+    const [chainId, from, controller, attestation, signature] =
+      vi.mocked(sendBurn).mock.calls[0];
+    expect(chainId).toBe(31337);
+    expect(from).toBe(ADMIN);
+    expect(controller).toBe(SUPPLY_CONTROLLER);
+    expect(signature).toBe(SIGNATURE);
+    expect(attestation).toEqual({
+      auditor: AUDITOR,
+      profileDigest: PROJECT.profileDigest,
+      operationId: BURN.operationId,
+      metadataDigest: BURN.metadataDigest,
+      amount: 250000000000000000n,
+      nonce: 9n,
+      validUntil: 4102444800n,
+      vault: VAULT,
+    });
+    await screen.findByText(/Burn broadcast/);
+  });
+
+  it("rejects a digest for another amount before calling the wallet", async () => {
+    await createBurn();
+    fireEvent.change(
+      await screen.findByLabelText(/Upload signed result for burn 11111111/),
+      {
+        target: {
+          files: [burnFile(signedFor({ ...BURN, amount: "1" }))],
+        },
+      },
+    );
+    await screen.findByText(/different burn/);
+    expect(screen.queryByText("Confirm burn")).not.toBeInTheDocument();
+    expect(sendBurn).not.toHaveBeenCalled();
+  });
+
+  it("shows a server rejection from createBurn", async () => {
+    vi.mocked(api.createBurn).mockRejectedValue(
+      new ApiError(409, {
+        code: "conflict",
+        message: "amount exceeds remaining",
+      }),
+    );
+    await createBurn();
+    await screen.findByText(/amount exceeds remaining/);
+  });
+
+  it("rejects amounts above remaining before calling the server", async () => {
+    vi.mocked(api.listBurns)
+      .mockReset()
+      .mockResolvedValue({ items: [pendingBurn] });
+    renderWithWallet(<Assets />, { connected: true });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Burn record-001" }),
+    );
+    fireEvent.change(await screen.findByLabelText(/Burn amount/), {
+      target: { value: "1.5" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create burn" }));
+    await screen.findByText(/left to burn/);
+    expect(api.createBurn).not.toHaveBeenCalled();
   });
 });

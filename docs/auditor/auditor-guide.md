@@ -117,8 +117,11 @@ underlying evidence:
   do not establish the amount.
 - Review `validUntil` despite the enforced policy window. Ask the operator about deadlines
   unexpectedly close to its maximum.
-- For burns, confirm legitimate removal of backing and that the tokens belong in unsold
-  Vault inventory, rather than in `RedemptionEscrow` or owed back to a holder.
+- For burns, confirm that retiring the backing is justified and that the tokens are in
+  Vault inventory, outside `RedemptionEscrow` and free of obligations to holders. The package's
+  `metadata.json` keeps the minted record's `recordId` and asset data with the burn amount.
+  Verify that the asset has left custody or retirement is otherwise documented, and that the
+  amount does not exceed the record's remaining backing.
 - Review and record the reason for signing the same record again. A used record key cannot
   mint twice, but an unused expired authorization may need replacing. Do not sign "just in
   case". Each Safe owner reviews the digest and signs their own share.
@@ -190,11 +193,10 @@ digest, signature and timestamp. Its format is defined in
 `shared/schemas/signed-result.schema.json`. The file contains no secrets, but it carries the
 authorization you just granted.
 
-Transfer it to the admin. For a mint, the admin uploads it on the console's Assets screen and
-submits `SupplyController.mint` from their wallet. The console has no burn screen; submit a burn
-by calling `SupplyController.burn` directly. The server relays neither transaction. Signing
-requires no network access, and submission requires no auditor key: both contract methods are
-permissionless once their signature and other checks pass. Safe owners produce shares first;
+Transfer it to the admin, who uploads it on the console's Assets screen and submits
+`SupplyController.mint` or `SupplyController.burn` from their wallet. The server relays neither
+transaction. Signing needs no network access; submission needs no auditor key. Both methods
+are permissionless once the signature and other checks pass. Safe owners produce shares first;
 `signer combine` creates the final result (§7).
 
 ## 7. When the auditor is a Safe multisig

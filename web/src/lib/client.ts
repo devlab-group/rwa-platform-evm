@@ -128,6 +128,16 @@ async function throwForErrorResponse(res: Response): Promise<never> {
   throw new ApiError(res.status, body);
 }
 
+// Authenticated GET as a Blob
+async function fetchBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  const res = await fetch(`${baseUrl()}${path}`, {
+    headers: authHeaders(),
+    signal,
+  });
+  if (!res.ok) await throwForErrorResponse(res);
+  return res.blob();
+}
+
 async function request<Op>(
   method: "GET" | "POST" | "DELETE",
   pathTemplate: string,
@@ -319,30 +329,50 @@ export const api = {
    * Fetches a protected .rwa package as Blob; callers download through an object URL
    * because an anchor cannot attach the bearer header (routes/admin/Assets.tsx)
    */
-  downloadPackage: async (
+  downloadPackage: (
     recordId: string,
     opts: Pick<RequestOptions<operations["downloadPackage"]>, "signal"> = {},
-  ): Promise<Blob> => {
-    const headers: Record<string, string> = {};
-    const session = getSession();
-    if (session) headers["Authorization"] = `Bearer ${session.token}`;
+  ): Promise<Blob> =>
+    fetchBlob(
+      `/api/v1/assets/records/${encodeURIComponent(recordId)}/package`,
+      opts.signal,
+    ),
 
-    const res = await fetch(
-      `${baseUrl()}/api/v1/assets/records/${encodeURIComponent(recordId)}/package`,
-      { headers, signal: opts.signal },
-    );
-    if (!res.ok) {
-      if (res.status === 401) clearSession();
-      let body: ApiErrorBody | undefined;
-      try {
-        body = (await res.json()) as ApiErrorBody;
-      } catch {
-        body = undefined;
-      }
-      throw new ApiError(res.status, body);
-    }
-    return res.blob();
+  listBurns: (opts: PageOptions<operations["listBurns"]> = {}) => {
+    const { signal, limit, cursor } = opts;
+    return requestPage<operations["listBurns"]>("/api/v1/assets/burns", {
+      signal,
+      query: { limit, cursor },
+    });
   },
+
+  createBurn: (
+    body: OpBody<operations["createBurn"]>,
+    idempotencyKey: string,
+  ) =>
+    request<operations["createBurn"]>("POST", "/api/v1/assets/burns", {
+      body,
+      idempotencyKey,
+    }),
+
+  downloadBurnPackage: (
+    burnId: string,
+    opts: Pick<
+      RequestOptions<operations["downloadBurnPackage"]>,
+      "signal"
+    > = {},
+  ): Promise<Blob> =>
+    fetchBlob(
+      `/api/v1/assets/burns/${encodeURIComponent(burnId)}/package`,
+      opts.signal,
+    ),
+
+  reissueBurn: (burnId: string, idempotencyKey: string) =>
+    request<operations["reissueBurn"]>(
+      "POST",
+      "/api/v1/assets/burns/{burnId}/reissue",
+      { path: { burnId }, idempotencyKey },
+    ),
 
   getInventory: (
     opts: Pick<RequestOptions<operations["getInventory"]>, "signal"> = {},

@@ -42,6 +42,11 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 		{http.MethodPost, "/api/v1/assets/records", true},
 		{http.MethodGet, "/api/v1/assets/records/rec-1/package", true},
 
+		{http.MethodGet, "/api/v1/assets/burns", true},
+		{http.MethodPost, "/api/v1/assets/burns", true},
+		{http.MethodGet, "/api/v1/assets/burns/b-1/package", true},
+		{http.MethodPost, "/api/v1/assets/burns/b-1/reissue", true},
+
 		{http.MethodGet, "/api/v1/sales/inventory", false},
 		{http.MethodGet, "/api/v1/sales/purchases", true},
 

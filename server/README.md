@@ -68,8 +68,9 @@ Router-wide middleware runs in this order:
 6. `auth.RateLimit` (when `security.rate_limit_rps > 0`)
 7. `auth.Authenticate`
 
-Admin routes then require `auth.RequireRole(auth.RoleAdmin)`. The four writes `POST /profile`,
-`POST /compliance/status`, `POST /assets/records` and `POST /assets/records/{recordId}/reissue`
+Admin routes then require `auth.RequireRole(auth.RoleAdmin)`. The writes `POST /profile`,
+`POST /compliance/status`, `POST /assets/records`, `POST /assets/records/{recordId}/reissue`,
+`POST /assets/burns` and `POST /assets/burns/{burnId}/reissue`
 also require `auth.Idempotency` before their handlers.
 
 Public `POST /auth/challenge` returns an expiring, single-use `personal_sign` message and
@@ -96,6 +97,36 @@ Errors use `{code, message}` from `internal/api/errors.go`.
 
 The router explicitly registers health, readiness, login and `/api/v1/` endpoints. Unmatched
 GET/HEAD paths use the SPA fallback; unmatched `/api/` paths and other methods return JSON 404.
+
+## Burns
+
+A burn retires supply against a `Minted` record. These endpoints require an admin:
+
+- `POST /assets/burns` accepts `{recordId, amount, proofs?}` and returns a `Pending` burn.
+  `amount` is a positive decimal string in minimal units, bounded by the record's remaining amount.
+- `GET /assets/burns` uses `limit`/`cursor` pagination, newest first.
+- `GET /assets/burns/{burnId}/package` rebuilds the `BurnAttestation` `.rwa` package.
+- `POST /assets/burns/{burnId}/reissue` refreshes a `Pending` burn's nonce and `validUntil`,
+  preserving its ID, metadata and amount. `Burned` burns, amounts above remaining and concurrent
+  updates return 409.
+
+`remaining = record.amount - burned - reserved`: `burned` sums `Burned` amounts, and `reserved`
+sums unexpired `Pending` amounts. Expired `Pending` burns release their reservations automatically.
+Responses include `remaining` when it can be computed. Creation and reissue share a lock within
+each `BurnService` instance; multiple instances need a database guard to avoid overlapping
+reservations.
+
+Reissue preserves `metadata.createdAt`. Moving expiry to a later 30-day window exceeds the
+default signer's 30-day limit from that timestamp.
+
+Burn IDs are UUIDs; `operationId = keccak256(utf8(burnId))`. Metadata retains the record's asset
+envelope, with the burn amount, a new `createdAt` and replacement `proofs` (omitted when empty).
+It is canonicalized and digested, then optionally published through the same path as record
+metadata. Anyone with a valid auditor signature may submit
+`SupplyController.burn(attestation, signature)`. The contract checks Vault inventory.
+`BurnService.ReconcileBurned` matches indexed events by `operationId` and records `Burned` and
+the transaction hash, including for expired or reissued burns. See the [API reference](../api/openapi.yaml)
+for request validation and errors.
 
 ## KeyProvider (hot-key backends)
 

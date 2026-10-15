@@ -37,8 +37,9 @@ state or automatic redemption; operators and holders must use the normal flows.
 
 - Holders who do not redeem keep their tokens. There is no issuer-forced redemption;
   `forcedTransfer` is a seizure, pays no quote and needs its own legal basis.
-- Returned RWA stays in Vault inventory and total supply until burned. Retirement requires an
-  auditor-signed `BurnAttestation`. Server libraries can encode burn typed data and the signer
-  supports it, but the console/API has no workflow to produce a burn `.rwa` package. Until that
-  workflow exists, leave the inventory in the Vault and keep sales closed.
+- Returned RWA remains in Vault inventory and total supply until burned. Keep sales closed.
+  After claims return enough tokens to the Vault, retire the amount backed by each record whose
+  asset has left custody. Follow the [burn workflow](operator-guide.md#4-day-2-operations) on
+  the Assets screen: get each package signed and submit the burn from the admin wallet.
+  The Vault must hold each burn's full amount.
 - Keep the project, or at least its read-only API, available until all Funded requests are claimed.

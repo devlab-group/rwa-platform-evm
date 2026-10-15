@@ -2,6 +2,7 @@
 // fresh store it can inspect or change, for example funding a redemption so it shows
 // Claimable after reload
 import type { Page, Route } from "@playwright/test";
+import { keccak256, toBytes } from "viem";
 import type { components } from "../../src/lib/api-types";
 import { MOCK_WALLET_ADDRESS } from "./mock-wallet";
 
@@ -9,6 +10,7 @@ type Project = components["schemas"]["Project"];
 type WalletStatus = components["schemas"]["WalletStatus"];
 type Challenge = components["schemas"]["Challenge"];
 type AssetRecord = components["schemas"]["AssetRecord"];
+type Burn = components["schemas"]["Burn"];
 type Inventory = components["schemas"]["Inventory"];
 type Redemption = components["schemas"]["Redemption"];
 type Transaction = components["schemas"]["Transaction"];
@@ -41,6 +43,7 @@ export interface MockState {
   project: Project;
   wallets: WalletStatus[];
   records: AssetRecord[];
+  burns: Burn[];
   inventory: Inventory;
   redemptions: Redemption[];
   transactions: Transaction[];
@@ -104,6 +107,7 @@ export function defaultState(): MockState {
       },
     ],
     records: [],
+    burns: [],
     inventory: {
       inventory: "1000000000000000000000",
       quoteBalance: "500000000",
@@ -282,6 +286,43 @@ export async function installMockApi(
       };
       state.records.push(record);
       return json(record, 201);
+    }
+    if (path === "/api/v1/assets/burns" && method === "GET")
+      return json(state.burns);
+    if (path === "/api/v1/assets/burns" && method === "POST") {
+      const body = req.postDataJSON() as { recordId: string; amount: string };
+      const record = state.records.find((r) => r.recordId === body.recordId);
+      if (!record)
+        return json({ code: "not_found", message: "record not found" }, 404);
+      if (record.status !== "Minted")
+        return json({ code: "conflict", message: "record is not Minted" }, 409);
+      const burnId = `00000000-0000-4000-8000-${String(state.burns.length + 1).padStart(12, "0")}`;
+      const burn: Burn = {
+        burnId,
+        recordId: body.recordId,
+        operationId: keccak256(toBytes(burnId)),
+        amount: body.amount,
+        unit: "gram",
+        status: "Pending",
+        metadataDigest: `0x${"ee".repeat(32)}`,
+        nonce: "5",
+        validUntil: 4102444800,
+        remaining: record.amount,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      state.burns.push(burn);
+      return json(burn, 201);
+    }
+    const burnPackage = path.match(
+      /^\/api\/v1\/assets\/burns\/([^/]+)\/package$/,
+    );
+    if (burnPackage && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/zip",
+        body: "mock-burn-package",
+      });
     }
     const packageMatch = path.match(
       /^\/api\/v1\/assets\/records\/([^/]+)\/package$/,

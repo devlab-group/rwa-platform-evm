@@ -368,6 +368,64 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/assets/burns": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List burns, newest first */
+    get: operations["listBurns"];
+    put?: never;
+    /**
+     * Prepare a burn against a Minted record
+     * @description Returns a Pending burn, reserving its amount from the record amount minus Burned and unexpired Pending burns. Download its package for the auditor. Returns 400 for malformed amounts or metadata rejected by the stored profile, 404 for an unknown record, and 409 for a non-Minted record or an amount above remaining.
+     */
+    post: operations["createBurn"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/assets/burns/{burnId}/package": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Download the BurnAttestation .rwa package */
+    get: operations["downloadBurnPackage"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/assets/burns/{burnId}/reissue": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Refresh a Pending burn's nonce and expiry
+     * @description Audited. Keeps burnId, metadata and amount. Returns 409 for a Burned burn, an amount above remaining or a concurrent update. Metadata age still limits signing under the auditor's policy.
+     */
+    post: operations["reissueBurn"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/sales/inventory": {
     parameters: {
       query?: never;
@@ -699,6 +757,38 @@ export interface components {
       asset: Record<string, never>;
       amount: string;
       proofs?: Record<string, never>[];
+    };
+    CreateBurnRequest: {
+      recordId: string;
+      /** @description Positive decimal string in minimal units, at most the record's remaining amount */
+      amount: string;
+      proofs?: Record<string, never>[];
+    };
+    /** @description Supply retirement against a Minted record. operationId is keccak256(utf8(burnId)). The wallet submits a BurnAttestation using these fields; the server marks the burn Burned after observing its event. */
+    Burn: {
+      burnId?: string;
+      recordId?: string;
+      /** @description BurnAttestation bytes32 operationId; usable once on-chain */
+      operationId?: string;
+      amount?: string;
+      unit?: string;
+      /** @enum {string} */
+      status?: "Pending" | "Burned";
+      metadataDigest?: string;
+      cid?: string;
+      /** @description uint256 attestation nonce */
+      nonce?: string;
+      /**
+       * Format: int64
+       * @description Attestation expiry in Unix seconds
+       */
+      validUntil?: number;
+      /** @description Present once Burned */
+      burnTxHash?: string;
+      /** @description Amount available for new burns against the record at response time; omitted if computation fails */
+      remaining?: string;
+      createdAt?: string;
+      updatedAt?: string;
     };
     SignedResult: {
       formatVersion: string;
@@ -1461,6 +1551,114 @@ export interface operations {
           "application/json": components["schemas"]["AssetRecord"];
         };
       };
+      409: components["responses"]["Error"];
+    };
+  };
+  listBurns: {
+    parameters: {
+      query?: {
+        /** @description Item limit, capped at the server maximum even when omitted or exceeded */
+        limit?: components["parameters"]["Limit"];
+        /** @description Opaque X-Next-Cursor from a previous response; omit for the first page */
+        cursor?: components["parameters"]["Cursor"];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Burns (bounded/paginated, see Limit/Cursor) */
+      200: {
+        headers: {
+          "X-Total-Count": components["headers"]["XTotalCount"];
+          "X-Page-Size": components["headers"]["XPageSize"];
+          "X-Next-Cursor": components["headers"]["XNextCursor"];
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Burn"][];
+        };
+      };
+    };
+  };
+  createBurn: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description Required on state-changing admin POSTs; maximum 256 bytes. Scoped to principal, operation, concrete path and normalized query to isolate cached responses across path parameters. */
+        "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateBurnRequest"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Burn"];
+        };
+      };
+      400: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+      409: components["responses"]["Error"];
+    };
+  };
+  downloadBurnPackage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        burnId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description .rwa package */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/zip": string;
+        };
+      };
+      404: components["responses"]["Error"];
+    };
+  };
+  reissueBurn: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description Required on state-changing admin POSTs; maximum 256 bytes. Scoped to principal, operation, concrete path and normalized query to isolate cached responses across path parameters. */
+        "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+      };
+      path: {
+        burnId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Reissued */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Burn"];
+        };
+      };
+      404: components["responses"]["Error"];
       409: components["responses"]["Error"];
     };
   };

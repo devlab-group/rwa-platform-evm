@@ -132,6 +132,14 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
   `SupplyController.mint(attestation, signature)`. The call is permissionless because the
   auditor's EIP-712 signature authorizes the mint. Minted tokens go to the Vault. The server
   observes `Minted` and advances the record; it does not relay the mint.
+- Burns: retire Vault inventory when backing leaves custody, after claimed redemptions, or at
+  maturity. On the Assets screen, create a burn from a Minted record for up to its remaining amount
+  (record amount minus Burned and unexpired Pending burns). Give its `.rwa` package to the
+  auditor; it contains the record's asset data and burn amount. Upload `signed-result.json`
+  and confirm `SupplyController.burn(attestation, signature)` in the admin wallet. The Vault
+  must hold the full amount. Expired Pending burns release their reservations; reissue changes
+  nonce and expiry but retains metadata, so the signer's metadata-age limit still applies.
+  The server marks the burn Burned after observing the event.
 - Sales: investors call `Vault.buy` from their wallets. A holder of `TREASURER_ROLE` withdraws
   proceeds to the treasury.
 - Redemptions: follow the [redemption operations guide](redemption-ops.md).

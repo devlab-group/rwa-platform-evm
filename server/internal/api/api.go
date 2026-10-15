@@ -51,6 +51,7 @@ type App struct {
 
 	Project    *project.Service
 	Records    *assets.RecordService
+	Burns      *assets.BurnService
 	Challenges *compliance.ChallengeService
 	Webhooks   *compliance.WebhookService
 	Status     *compliance.StatusService
@@ -194,6 +195,12 @@ func NewRouter(app *App) *gin.Engine {
 		v1.GET("/assets/records/:recordId/package", adminOnly, app.downloadPackage)
 		// Reissuing a stuck record is an admin recovery action
 		v1.POST("/assets/records/:recordId/reissue", auth.RequireRole(auth.RoleAdmin), idem, app.reissueRecord)
+
+		// Burn package creation, download and reissue
+		v1.GET("/assets/burns", adminOnly, app.listBurns)
+		v1.POST("/assets/burns", auth.RequireRole(auth.RoleAdmin), idem, app.createBurn)
+		v1.GET("/assets/burns/:burnId/package", adminOnly, app.downloadBurnPackage)
+		v1.POST("/assets/burns/:burnId/reissue", auth.RequireRole(auth.RoleAdmin), idem, app.reissueBurn)
 
 		// Inventory is public; wallets read purchase quotes and submit buys directly
 		v1.GET("/sales/inventory", app.getInventory)

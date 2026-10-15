@@ -127,7 +127,7 @@ func setupTestApp(t *testing.T) *testEnv {
 
 	app := &App{
 		Repos: repos, ChainID: 31337,
-		Project: nil, Records: records, Challenges: challenges, Webhooks: webhooks, KYC: kycProvider, Status: status,
+		Project: nil, Records: records, Burns: assets.NewBurnService(records, repos.Burns), Challenges: challenges, Webhooks: webhooks, KYC: kycProvider, Status: status,
 		Sales: salesSvc, Redemptions: redemptionSvc, Audit: auditlog.New(repos.AuditLogs),
 		Sessions:              auth.NewSessionManager(repos.WalletSessions, 15*time.Minute),
 		AdminChallenges:       auth.NewAdminChallengeService(repos.AdminChallenges, time.Hour, "RWA Test Platform"),

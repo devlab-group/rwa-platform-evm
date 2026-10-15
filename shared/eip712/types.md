@@ -74,7 +74,9 @@ hashStruct(m) = keccak256(abi.encode(TYPEHASH, m.field1, ..., m.fieldN))
 ## Definitions
 
 - `recordKey = keccak256(bytes(recordId))`: one mint per record key.
-- `operationId`: one burn per operation ID; the contract rejects reuse.
+- `operationId`: one burn per ID; the contract rejects reuse. Server packages use
+  `keccak256(bytes(burnId))`, where `burnId` is a UUID. The signer accepts the supplied ID;
+  `metadata.json` identifies the minted record whose supply is retired.
 - `metadataDigest` / `profileDigest`: SHA-256 of the RFC 8785 canonical bytes, not keccak. This
   matches the IPFS raw/sha2-256 CID convention. Only the EIP-712 struct and domain hashing uses
   keccak256.
