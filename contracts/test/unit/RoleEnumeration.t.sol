@@ -76,6 +76,13 @@ contract RoleEnumerationTest is TestBase {
         assertEq(strategy.getRoleMember(strategy.DEFAULT_ADMIN_ROLE(), 0), admin);
     }
 
+    function test_incomeDistributor_roleEnumeration() public view {
+        assertEq(income.getRoleMemberCount(income.INCOME_MANAGER_ROLE()), 1);
+        assertEq(income.getRoleMember(income.INCOME_MANAGER_ROLE(), 0), incomeManager);
+        assertEq(income.getRoleMemberCount(income.DEFAULT_ADMIN_ROLE()), 1);
+        assertEq(income.getRoleMember(income.DEFAULT_ADMIN_ROLE(), 0), admin);
+    }
+
     /// @dev Enumeration must track grants/revokes made after deploy too, not just the
     ///      factory's initial wiring — e.g. a later `setStatus`-style role grant.
     function test_enumeration_tracksGrantsAndRevokesAfterDeploy() public {
@@ -145,6 +152,12 @@ contract RoleEnumerationTest is TestBase {
         assertFalse(strategy.hasRole(strategy.DEFAULT_ADMIN_ROLE(), f));
         _assertNotAMember(strategy.getRoleMembers(strategy.PRICER_ROLE()), f);
         _assertNotAMember(strategy.getRoleMembers(strategy.DEFAULT_ADMIN_ROLE()), f);
+
+        // IncomeDistributor
+        assertFalse(income.hasRole(income.INCOME_MANAGER_ROLE(), f));
+        assertFalse(income.hasRole(income.DEFAULT_ADMIN_ROLE(), f));
+        _assertNotAMember(income.getRoleMembers(income.INCOME_MANAGER_ROLE()), f);
+        _assertNotAMember(income.getRoleMembers(income.DEFAULT_ADMIN_ROLE()), f);
     }
 
     function _assertNotAMember(address[] memory members, address account) private pure {
@@ -164,5 +177,6 @@ contract RoleEnumerationTest is TestBase {
         assertTrue(escrow.supportsInterface(type(IAccessControlEnumerable).interfaceId));
         assertTrue(supplyController.supportsInterface(type(IAccessControlEnumerable).interfaceId));
         assertTrue(strategy.supportsInterface(type(IAccessControlEnumerable).interfaceId));
+        assertTrue(income.supportsInterface(type(IAccessControlEnumerable).interfaceId));
     }
 }

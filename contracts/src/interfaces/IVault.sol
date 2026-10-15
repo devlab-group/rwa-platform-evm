@@ -15,6 +15,8 @@ interface IVault {
     event StrategyChanged(address indexed previousStrategy, address indexed newStrategy, address indexed caller);
     event TreasuryChanged(address indexed previousTreasury, address indexed newTreasury, address indexed caller);
 
+    event MinPurchaseQuoteChanged(uint256 previousMinimum, uint256 newMinimum, address indexed caller);
+
     error ProjectPaused();
     error CallerNotAllowed(address account);
     error RecipientNotAllowed(address account);
@@ -23,6 +25,7 @@ interface IVault {
     error InsufficientInventory(uint256 requested, uint256 available);
     error QuoteAboveMax(uint256 quoted, uint256 maxQuote);
     error QuoteDeltaMismatch(uint256 expected, uint256 actual);
+    error QuoteBelowMinimum(uint256 quoted, uint256 minimum);
     error ZeroAddress();
 
     function buy(uint256 tokenAmount, uint256 maxQuoteAmount, address recipient, uint64 deadline) external;
@@ -32,6 +35,8 @@ interface IVault {
     function setStrategy(address newStrategy) external;
 
     function setTreasury(address newTreasury) external;
+
+    function setMinPurchaseQuote(uint256 newMinimum) external;
 
     function inventory() external view returns (uint256);
 
@@ -44,4 +49,6 @@ interface IVault {
     function strategy() external view returns (address);
 
     function treasury() external view returns (address);
+
+    function minPurchaseQuote() external view returns (uint256);
 }

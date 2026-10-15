@@ -11,7 +11,7 @@ import {RedemptionEscrow} from "../RedemptionEscrow.sol";
 ///      helpers, though RedemptionEscrow's constructor doesn't read `msg.sender` for anything
 ///      privileged. Holds no state of its own.
 contract RedemptionEscrowDeployer {
-    function deploy(IRWAFactory.ProjectConfig calldata config, address token, address vault, address strategy)
+    function deploy(IRWAFactory.ProjectConfig calldata config, address token, address vault)
         external
         returns (address escrow)
     {
@@ -20,7 +20,6 @@ contract RedemptionEscrowDeployer {
                 token,
                 config.quoteToken,
                 vault,
-                strategy,
                 config.redemptionTimeout,
                 config.treasurer,
                 config.redemptionManager,

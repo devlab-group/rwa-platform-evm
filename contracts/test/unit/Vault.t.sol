@@ -193,6 +193,88 @@ contract VaultTest is TestBase {
         assertEq(vault.treasury(), outsider);
     }
 
+    function test_minPurchase_defaultsToZeroAndAnyBuySucceeds() public {
+        assertEq(vault.minPurchaseQuote(), 0);
+        vm.prank(investor);
+        vault.buy(1, type(uint256).max, investor, uint64(block.timestamp + 1));
+        assertEq(token.balanceOf(investor), 1);
+    }
+
+    function test_minPurchase_belowMinimumReverts() public {
+        uint256 quote = strategy.quotePurchase(10 ether);
+        vm.prank(admin);
+        vault.setMinPurchaseQuote(quote + 1);
+        vm.prank(investor);
+        vm.expectRevert(abi.encodeWithSelector(IVault.QuoteBelowMinimum.selector, quote, quote + 1));
+        vault.buy(10 ether, type(uint256).max, investor, uint64(block.timestamp + 1));
+    }
+
+    function test_minPurchase_exactlyMinimumSucceeds() public {
+        uint256 quote = strategy.quotePurchase(10 ether);
+        vm.prank(admin);
+        vault.setMinPurchaseQuote(quote);
+        vm.prank(investor);
+        vault.buy(10 ether, quote, investor, uint64(block.timestamp + 1));
+        assertEq(token.balanceOf(investor), 10 ether);
+    }
+
+    function test_minPurchase_checkedBeforeMaxQuote() public {
+        uint256 quote = strategy.quotePurchase(10 ether);
+        vm.prank(admin);
+        vault.setMinPurchaseQuote(quote + 5);
+        vm.prank(investor);
+        vm.expectRevert(abi.encodeWithSelector(IVault.QuoteBelowMinimum.selector, quote, quote + 5));
+        vault.buy(10 ether, quote - 1, investor, uint64(block.timestamp + 1));
+    }
+
+    function test_setMinPurchaseQuote_nonAdminReverts() public {
+        bytes32 role = vault.DEFAULT_ADMIN_ROLE();
+        vm.prank(outsider);
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, outsider, role)
+        );
+        vault.setMinPurchaseQuote(1);
+    }
+
+    function test_setMinPurchaseQuote_revertsWhenPaused() public {
+        vm.startPrank(admin);
+        token.pause();
+        vm.expectRevert(IVault.ProjectPaused.selector);
+        vault.setMinPurchaseQuote(1);
+        vm.stopPrank();
+    }
+
+    function test_setMinPurchaseQuote_emitsAndNextBuyEnforces() public {
+        vm.prank(admin);
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit IVault.MinPurchaseQuoteChanged(0, 50_000_000, admin);
+        vault.setMinPurchaseQuote(50_000_000);
+        assertEq(vault.minPurchaseQuote(), 50_000_000);
+
+        uint256 quote = strategy.quotePurchase(10 ether);
+        vm.prank(investor);
+        vm.expectRevert(abi.encodeWithSelector(IVault.QuoteBelowMinimum.selector, quote, 50_000_000));
+        vault.buy(10 ether, type(uint256).max, investor, uint64(block.timestamp + 1));
+
+        vm.prank(admin);
+        vault.setMinPurchaseQuote(0);
+        vm.prank(investor);
+        vault.buy(10 ether, type(uint256).max, investor, uint64(block.timestamp + 1));
+    }
+
+    function testFuzz_minPurchase_boundaries(uint256 minimum, uint256 maxQuote) public {
+        uint256 quote = strategy.quotePurchase(10 ether);
+        vm.prank(admin);
+        vault.setMinPurchaseQuote(minimum);
+        vm.prank(investor);
+        if (quote < minimum) {
+            vm.expectRevert(abi.encodeWithSelector(IVault.QuoteBelowMinimum.selector, quote, minimum));
+        } else if (quote > maxQuote) {
+            vm.expectRevert(abi.encodeWithSelector(IVault.QuoteAboveMax.selector, quote, maxQuote));
+        }
+        vault.buy(10 ether, maxQuote, investor, uint64(block.timestamp + 1));
+    }
+
     function test_inventory() public view {
         assertEq(vault.inventory(), 100 ether);
     }

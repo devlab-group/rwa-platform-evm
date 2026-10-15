@@ -2,16 +2,10 @@
 pragma solidity ^0.8.24;
 
 import {TestBase} from "../helpers/TestBase.sol";
+import {OraclePriceStrategy} from "../../src/pricing/OraclePriceStrategy.sol";
+import {MockAggregatorV3} from "../mocks/oracle/MockAggregatorV3.sol";
 
-/// @notice EIP-170 restricts deployed (runtime) contract bytecode to 24,576 bytes; any
-///         attempt to deploy something larger reverts on every EIP-170-enforcing chain
-///         (mainnet and virtually every L2 — anvil is a notable exception and does NOT enforce
-///         this by default, so a purely-anvil-based E2E run can silently hide a violation).
-///         RWAFactory originally embedded all 6 child contracts' full creation bytecode
-///         directly (every contract a `new`-calling function can reach at runtime must carry
-///         that code), landing at 53,571 bytes — over double the limit. Fixed by splitting the
-///         `new` calls across four stateless deployer helpers invoked via `delegatecall`; this
-///         test pins that fix so it can't silently regress.
+/// @notice Checks factory, deployer and project runtime bytecode against EIP_170_LIMIT
 contract ContractSizeLimitTest is TestBase {
     uint256 internal constant EIP_170_LIMIT = 24_576;
 
@@ -24,6 +18,7 @@ contract ContractSizeLimitTest is TestBase {
         _assertUnderLimit(factory.marketDeployer(), "MarketDeployer");
         _assertUnderLimit(factory.supplyControllerDeployer(), "SupplyControllerDeployer");
         _assertUnderLimit(factory.redemptionEscrowDeployer(), "RedemptionEscrowDeployer");
+        _assertUnderLimit(factory.incomeDistributorDeployer(), "IncomeDistributorDeployer");
     }
 
     /// @dev Regression coverage for every other production contract too, so a future change
@@ -36,6 +31,14 @@ contract ContractSizeLimitTest is TestBase {
         _assertUnderLimit(address(vault), "Vault");
         _assertUnderLimit(address(escrow), "RedemptionEscrow");
         _assertUnderLimit(address(strategy), "FixedPriceStrategy");
+        _assertUnderLimit(address(income), "IncomeDistributor");
+    }
+
+    function test_oraclePriceStrategyUnderSizeLimit() public {
+        OraclePriceStrategy oracle = new OraclePriceStrategy(
+            address(new MockAggregatorV3(8, 1e8)), address(0), 1 hours, 0, 0, 0, TOKEN_DECIMALS, QUOTE_DECIMALS
+        );
+        _assertUnderLimit(address(oracle), "OraclePriceStrategy");
     }
 
     function _assertUnderLimit(address deployed, string memory label) internal view {

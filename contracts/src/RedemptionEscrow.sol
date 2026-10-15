@@ -11,6 +11,7 @@ import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {IRedemptionEscrow} from "./interfaces/IRedemptionEscrow.sol";
+import {IVault} from "./interfaces/IVault.sol";
 import {IPriceStrategy} from "./interfaces/IPriceStrategy.sol";
 import {IRWAToken} from "./interfaces/IRWAToken.sol";
 import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
@@ -47,7 +48,6 @@ contract RedemptionEscrow is
     address public immutable token;
     address public immutable quoteToken;
     address public immutable vault;
-    address public immutable strategy;
     uint64 public immutable redemptionTimeout;
     address private immutable _compliance;
 
@@ -60,20 +60,18 @@ contract RedemptionEscrow is
         address token_,
         address quoteToken_,
         address vault_,
-        address strategy_,
         uint64 redemptionTimeout_,
         address treasurer,
         address redemptionManager,
         address admin,
         uint48 adminTransferDelay
     ) AccessControlDefaultAdminRules(adminTransferDelay, admin) {
-        if (token_ == address(0) || quoteToken_ == address(0) || vault_ == address(0) || strategy_ == address(0)) {
+        if (token_ == address(0) || quoteToken_ == address(0) || vault_ == address(0)) {
             revert ZeroAddress();
         }
         token = token_;
         quoteToken = quoteToken_;
         vault = vault_;
-        strategy = strategy_;
         redemptionTimeout = redemptionTimeout_;
         _compliance = IRWAToken(token_).compliance();
 
@@ -91,7 +89,7 @@ contract RedemptionEscrow is
         if (rwaAmount == 0) revert ZeroAmount();
         if (deadline < block.timestamp) revert DeadlineExpired(deadline, block.timestamp);
 
-        uint256 quoteAmount = IPriceStrategy(strategy).quoteRedemption(rwaAmount);
+        uint256 quoteAmount = IPriceStrategy(strategy()).quoteRedemption(rwaAmount);
         if (quoteAmount == 0) revert ZeroQuote();
         if (quoteAmount < minQuoteOut) revert QuoteBelowMin(quoteAmount, minQuoteOut);
 
@@ -186,8 +184,13 @@ contract RedemptionEscrow is
         return _requests[id];
     }
 
+    /// @inheritdoc IRedemptionEscrow
+    function strategy() public view returns (address) {
+        return IVault(vault).strategy();
+    }
+
     function previewRedeem(uint256 rwaAmount) external view returns (uint256 quoteAmount) {
-        return IPriceStrategy(strategy).quoteRedemption(rwaAmount);
+        return IPriceStrategy(strategy()).quoteRedemption(rwaAmount);
     }
 
     // ---- AccessControl diamond resolution — see ComplianceRegistry.sol for rationale ----

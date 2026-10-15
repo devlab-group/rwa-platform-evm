@@ -11,22 +11,18 @@ import {ComplianceRegistry} from "../src/ComplianceRegistry.sol";
 import {SupplyController} from "../src/SupplyController.sol";
 import {Vault} from "../src/Vault.sol";
 import {RedemptionEscrow} from "../src/RedemptionEscrow.sol";
+import {IncomeDistributor} from "../src/IncomeDistributor.sol";
 import {FixedPriceStrategy} from "../src/pricing/FixedPriceStrategy.sol";
 import {MockERC20} from "../test/mocks/token/MockERC20.sol";
 
-/// @notice The full integration exit scenario, run against a LIVE chain with real
-///         broadcast transactions: deploy -> allow investor -> mint (locally-signed
-///         attestation) -> buy -> requestRedemption -> fund -> claim -> auditor burn of the
-///         returned Vault inventory. Then a timeout -> cancel branch on a second request.
+/// @notice Broadcasts deploy -> allow -> mint (locally signed) -> buy -> request -> fund ->
+///         claim -> burn of returned Vault inventory. Separate calls reuse the deployment
+///         for income distribution/claim and redemption timeout/cancellation.
 ///
 /// Usage: forge script script/E2EFlow.s.sol --broadcast --rpc-url http://localhost:8545 -vv
 ///
-/// Extends DeployBase so the whole lifecycle — deploy + full flow — happens in one broadcast
-/// session against the addresses `deployAll()` prints.
-///
-/// @dev All step data lives in state (not `run()` locals) — a single function juggling every
-///      contract handle, role address/key, and attestation local at once blows solc's stack
-///      (needs --via-ir otherwise); state variables cost SLOADs, not stack slots.
+/// @dev Inherits deployment helpers from DeployBase; later calls reuse the logged addresses.
+///      Shared step data uses state to avoid stack-too-deep without --via-ir.
 contract E2EFlow is DeployBase {
     // Anvil's default account 1, used as the investor.
     uint256 internal constant ANVIL_ACCT1_PK = 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d;
@@ -44,6 +40,7 @@ contract E2EFlow is DeployBase {
     Vault internal _vault;
     RedemptionEscrow internal _escrow;
     FixedPriceStrategy internal _strategy;
+    IncomeDistributor internal _income;
     MockERC20 internal _quoteToken;
 
     /// @notice The full flow: deploy -> allow -> mint -> buy -> request -> fund -> claim
@@ -59,13 +56,8 @@ contract E2EFlow is DeployBase {
         console2.log("E2E OK");
     }
 
-    /// @notice Nice-to-have branch, step 1/2: create a second Pending request against the
-    ///         ALREADY-deployed contracts from `run()` (wired via env, not redeployed). Called
-    ///         as a separate `forge script --sig` invocation so e2e.sh can advance the live
-    ///         chain's clock with `cast rpc` (a plain Solidity `vm.rpc("evm_increaseTime", ...)`
-    ///         call was tried first but reliably reverts on this forge/anvil build's handling
-    ///         of evm_increaseTime's non-hex numeric RPC response — reproduced in isolation,
-    ///         unrelated to contract logic) between this call and `cancelIt`.
+    /// @notice Creates a Pending request on the existing deployment for the optional timeout/cancel branch
+    /// @dev Run separately so e2e.sh can advance time with cast rpc before cancelIt
     function requestForCancelDemo() external returns (uint256 id) {
         _wireExisting();
 
@@ -97,9 +89,8 @@ contract E2EFlow is DeployBase {
         _wireDeployment(dep, quoteTokenAddr);
     }
 
-    /// @dev For `requestForCancelDemo`/`cancelIt`: wire up handles to the contracts `run()`
-    ///      already deployed, read from env (TOKEN/COMPLIANCE/SUPPLY_CONTROLLER/VAULT/ESCROW/
-    ///      STRATEGY/QUOTE_TOKEN), instead of deploying a fresh, unrelated project.
+    /// @dev Loads run()'s deployment from TOKEN, COMPLIANCE, SUPPLY_CONTROLLER, VAULT,
+    ///      ESCROW, STRATEGY, INCOME_DISTRIBUTOR and QUOTE_TOKEN for the later entrypoints
     function _wireExisting() internal {
         _wireKeys();
         IRWAFactory.Deployment memory dep = IRWAFactory.Deployment({
@@ -108,7 +99,8 @@ contract E2EFlow is DeployBase {
             supplyController: vm.envAddress("SUPPLY_CONTROLLER"),
             vault: vm.envAddress("VAULT"),
             redemptionEscrow: vm.envAddress("ESCROW"),
-            strategy: vm.envAddress("STRATEGY")
+            strategy: vm.envAddress("STRATEGY"),
+            incomeDistributor: vm.envAddress("INCOME_DISTRIBUTOR")
         });
         _wireDeployment(dep, vm.envAddress("QUOTE_TOKEN"));
     }
@@ -120,8 +112,7 @@ contract E2EFlow is DeployBase {
         _investor = vm.addr(_investorPk);
     }
 
-    /// @dev Same anvil-only-fallback guard as `_deployerPrivateKey` (DeployBase) — never
-    ///      silently use the well-known anvil account 1 key outside anvil's default chain id.
+    /// @dev The public Anvil account 1 key is a fallback only on ANVIL_CHAIN_ID
     function _investorPrivateKey() internal view returns (uint256) {
         if (block.chainid == ANVIL_CHAIN_ID) {
             return vm.envOr("INVESTOR_PK", ANVIL_ACCT1_PK);
@@ -140,6 +131,7 @@ contract E2EFlow is DeployBase {
         _vault = Vault(dep.vault);
         _escrow = RedemptionEscrow(dep.redemptionEscrow);
         _strategy = FixedPriceStrategy(dep.strategy);
+        _income = IncomeDistributor(dep.incomeDistributor);
         _quoteToken = MockERC20(quoteTokenAddr);
     }
 
@@ -210,6 +202,35 @@ contract E2EFlow is DeployBase {
         _escrow.claimRedemption(id);
         vm.stopBroadcast();
         console2.log("Claimed redemption id", id, "- status Completed");
+    }
+
+    /// @notice Funds and claims a single-leaf distribution for the investor (root = leaf, empty proof)
+    /// @dev Reuses run()'s deployment in a separate invocation so the chosen record block
+    ///      predates simulation and mining of createDistribution
+    function distributeIncome() external {
+        _wireExisting();
+        uint256 amount = 1_000_000;
+        bytes32 root = keccak256(bytes.concat(keccak256(abi.encode(_investor, amount))));
+
+        uint64 recordBlock = uint64(block.number - 1);
+        // Leave time for mining after simulation so the minimum claim window still holds
+        uint64 deadline = uint64(block.timestamp) + _income.MIN_CLAIM_WINDOW() + 1 days;
+
+        vm.startBroadcast(_deployerPk);
+        _quoteToken.mint(_deployer, amount);
+        _quoteToken.approve(address(_income), amount);
+        uint256 id = _income.createDistribution(
+            root, amount, recordBlock, deadline, "ipfs://e2e-income", keccak256("e2e-income")
+        );
+        vm.stopBroadcast();
+
+        uint256 before = _quoteToken.balanceOf(_investor);
+        vm.startBroadcast(_investorPk);
+        _income.claim(id, amount, new bytes32[](0));
+        vm.stopBroadcast();
+        require(_quoteToken.balanceOf(_investor) - before == amount, "income claim balance");
+        require(_income.isClaimed(id, _investor), "income not claimed");
+        console2.log("Distributed and claimed income id", id, "amount", amount);
     }
 
     function _burnReturnedInventory() internal {

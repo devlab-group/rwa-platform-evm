@@ -32,12 +32,14 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
 
     address public strategy;
     address public treasury;
+    uint256 public minPurchaseQuote;
 
     constructor(
         address token_,
         address quoteToken_,
         address strategy_,
         address treasury_,
+        uint256 minPurchaseQuote_,
         address admin,
         address treasurer,
         uint48 adminTransferDelay
@@ -49,6 +51,7 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
         quoteToken = quoteToken_;
         strategy = strategy_;
         treasury = treasury_;
+        minPurchaseQuote = minPurchaseQuote_;
         _compliance = IRWAToken(token_).compliance();
 
         _grantRole(TREASURER_ROLE, treasurer);
@@ -73,6 +76,7 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
         if (tokenAmount > inv) revert InsufficientInventory(tokenAmount, inv);
 
         uint256 quote = IPriceStrategy(strategy).quotePurchase(tokenAmount);
+        if (quote < minPurchaseQuote) revert QuoteBelowMinimum(quote, minPurchaseQuote);
         if (quote > maxQuoteAmount) revert QuoteAboveMax(quote, maxQuoteAmount);
 
         uint256 before = IERC20(quoteToken).balanceOf(address(this));
@@ -113,6 +117,13 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
         address previous = treasury;
         treasury = newTreasury;
         emit TreasuryChanged(previous, newTreasury, msg.sender);
+    }
+
+    function setMinPurchaseQuote(uint256 newMinimum) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (IRWAToken(token).paused()) revert ProjectPaused();
+        uint256 previous = minPurchaseQuote;
+        minPurchaseQuote = newMinimum;
+        emit MinPurchaseQuoteChanged(previous, newMinimum, msg.sender);
     }
 
     function inventory() external view returns (uint256) {

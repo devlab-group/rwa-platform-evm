@@ -6,6 +6,7 @@ import {RWAFactory} from "../src/RWAFactory.sol";
 import {ComplianceTokenDeployer} from "../src/factory/ComplianceTokenDeployer.sol";
 import {MarketDeployer} from "../src/factory/MarketDeployer.sol";
 import {SupplyControllerDeployer} from "../src/factory/SupplyControllerDeployer.sol";
+import {IncomeDistributorDeployer} from "../src/factory/IncomeDistributorDeployer.sol";
 import {RedemptionEscrowDeployer} from "../src/factory/RedemptionEscrowDeployer.sol";
 import {IRWAFactory} from "../src/interfaces/IRWAFactory.sol";
 import {MockERC20} from "../test/mocks/token/MockERC20.sol";
@@ -61,6 +62,9 @@ abstract contract DeployBase is Script {
     ///      overflow instead of truncating.
     error AdminTransferDelayExceedsUint48(uint256 delay);
 
+    /// @dev Rejects env values above the destination field's range before narrowing
+    error EnvValueOutOfRange(string name, uint256 value, uint256 max);
+
     function _deployerPrivateKey() internal view returns (uint256) {
         if (block.chainid == ANVIL_CHAIN_ID) {
             return vm.envOr("DEPLOYER_PK", ANVIL_ACCT0_PK);
@@ -89,13 +93,13 @@ abstract contract DeployBase is Script {
             config.quoteToken = quoteToken;
         }
 
-        // RWAFactory takes its four stateless deploy-helper addresses in its constructor (see
-        // src/factory/*Deployer.sol NatSpec for why); they must be deployed first.
+        // RWAFactory needs the helper addresses at construction
         factory = new RWAFactory(
             address(new ComplianceTokenDeployer()),
             address(new MarketDeployer()),
             address(new SupplyControllerDeployer()),
-            address(new RedemptionEscrowDeployer())
+            address(new RedemptionEscrowDeployer()),
+            address(new IncomeDistributorDeployer())
         );
         dep = factory.deploy(config);
 
@@ -107,21 +111,37 @@ abstract contract DeployBase is Script {
     function _readConfig(address deployer) private view returns (IRWAFactory.ProjectConfig memory config) {
         config.name = vm.envOr("TOKEN_NAME", string("Gold Bar Token"));
         config.symbol = vm.envOr("TOKEN_SYMBOL", string("GBT"));
-        config.decimals = uint8(vm.envOr("TOKEN_DECIMALS", uint256(18)));
+        config.decimals = uint8(_envBounded("TOKEN_DECIMALS", 18, type(uint8).max));
         config.profileDigest = vm.envOr("PROFILE_DIGEST", keccak256("e2e-profile"));
         config.projectId = vm.envOr("PROJECT_ID", keccak256("e2e-project"));
         config.quoteToken = vm.envOr("QUOTE_TOKEN", address(0));
-        config.purchasePricePerWholeToken = vm.envOr("PURCHASE_PRICE", uint256(2_000_000));
-        config.redemptionPricePerWholeToken = vm.envOr("REDEMPTION_PRICE", uint256(1_950_000));
-        config.redemptionTimeout = uint64(vm.envOr("REDEMPTION_TIMEOUT", uint256(14 days)));
+        // STRATEGY_KIND: 0 = Fixed (default), 1 = Oracle; Oracle defaults prices/pricer to zero
+        bool oracle = _envBounded("STRATEGY_KIND", 0, 1) == 1;
+        config.strategyKind = oracle ? IRWAFactory.StrategyKind.Oracle : IRWAFactory.StrategyKind.Fixed;
+        config.purchasePricePerWholeToken = vm.envOr("PURCHASE_PRICE", oracle ? uint256(0) : uint256(2_000_000));
+        config.redemptionPricePerWholeToken = vm.envOr("REDEMPTION_PRICE", oracle ? uint256(0) : uint256(1_950_000));
+        config.priceFeed = vm.envOr("PRICE_FEED", address(0));
+        config.priceMaxAge = uint64(_envBounded("PRICE_MAX_AGE", 0, type(uint64).max));
+        config.purchaseSpreadBps = uint16(_envBounded("PURCHASE_SPREAD_BPS", 0, type(uint16).max));
+        config.redemptionSpreadBps = uint16(_envBounded("REDEMPTION_SPREAD_BPS", 0, type(uint16).max));
+        config.sequencerUptimeFeed = vm.envOr("SEQUENCER_UPTIME_FEED", address(0));
+        config.sequencerGracePeriod = uint64(_envBounded("SEQUENCER_GRACE_PERIOD", 0, type(uint64).max));
+        config.minPurchaseQuote = vm.envOr("MIN_PURCHASE_QUOTE", uint256(0));
+        config.redemptionTimeout = uint64(_envBounded("REDEMPTION_TIMEOUT", 14 days, type(uint64).max));
         config.admin = vm.envOr("ADMIN", deployer);
         config.auditor = vm.envOr("AUDITOR", deployer);
         config.complianceOperator = vm.envOr("COMPLIANCE_OPERATOR", deployer);
-        config.pricer = vm.envOr("PRICER", deployer);
+        config.pricer = vm.envOr("PRICER", oracle ? address(0) : deployer);
         config.treasurer = vm.envOr("TREASURER", deployer);
         config.redemptionManager = vm.envOr("REDEMPTION_MANAGER", deployer);
+        config.incomeManager = vm.envOr("INCOME_MANAGER", deployer);
         config.treasury = vm.envOr("TREASURY", deployer);
         config.adminTransferDelay = _adminTransferDelay();
+    }
+
+    function _envBounded(string memory name, uint256 defaultValue, uint256 max) private view returns (uint256 value) {
+        value = vm.envOr(name, defaultValue);
+        if (value > max) revert EnvValueOutOfRange(name, value, max);
     }
 
     /// @dev Defaults to 0 on anvil (dev/test) and to `PRODUCTION_MIN_ADMIN_TRANSFER_DELAY` on
@@ -154,6 +174,7 @@ abstract contract DeployBase is Script {
         console2.log("vault             ", dep.vault);
         console2.log("redemptionEscrow  ", dep.redemptionEscrow);
         console2.log("strategy          ", dep.strategy);
+        console2.log("incomeDistributor ", dep.incomeDistributor);
         console2.log("quoteToken        ", quoteToken);
         console2.log("admin/auditor/etc ", deployer);
     }

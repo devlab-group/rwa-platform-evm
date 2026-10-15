@@ -1,13 +1,14 @@
 # Role & mutability matrix
 
-| Role                    | keccak256 id                      | Powers                                                            |
-| ----------------------- | --------------------------------- | ---------------------------------------------------------------- |
-| DEFAULT_ADMIN_ROLE      | OZ default (0x00)                 | grant/revoke roles, set auditor/treasury/strategy/redemptionMgr, ERC-7943 `setFrozenTokens`/`forcedTransfer` on RWAToken |
-| PAUSER_ROLE             | keccak256("PAUSER_ROLE")          | pause/unpause the token (project-wide emergency flag)            |
-| COMPLIANCE_ROLE         | keccak256("COMPLIANCE_ROLE")      | set wallet status/expiry in ComplianceRegistry                   |
-| PRICER_ROLE             | keccak256("PRICER_ROLE")          | update FixedPriceStrategy prices                                 |
-| TREASURER_ROLE          | keccak256("TREASURER_ROLE")       | Vault.withdrawProceeds, RedemptionEscrow.fundRedemption          |
-| REDEMPTION_MANAGER_ROLE | keccak256("REDEMPTION_MANAGER_ROLE") | RedemptionEscrow.rejectRedemption                             |
+| Role                    | keccak256 id                         | Powers                                                                                                                   |
+| ----------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| DEFAULT_ADMIN_ROLE      | OZ default (0x00)                    | Manage roles; set auditor, treasury, strategy and `minPurchaseQuote`; call RWAToken's `setFrozenTokens`/`forcedTransfer` |
+| PAUSER_ROLE             | keccak256("PAUSER_ROLE")             | Pause/unpause RWAToken (project emergency flag)                                                                          |
+| COMPLIANCE_ROLE         | keccak256("COMPLIANCE_ROLE")         | Set ComplianceRegistry wallet status and expiry                                                                          |
+| PRICER_ROLE             | keccak256("PRICER_ROLE")             | Set FixedPriceStrategy purchase and redemption prices                                                                    |
+| TREASURER_ROLE          | keccak256("TREASURER_ROLE")          | `Vault.withdrawProceeds`, `RedemptionEscrow.fundRedemption`                                                              |
+| REDEMPTION_MANAGER_ROLE | keccak256("REDEMPTION_MANAGER_ROLE") | `RedemptionEscrow.rejectRedemption`                                                                                      |
+| INCOME_MANAGER_ROLE     | keccak256("INCOME_MANAGER_ROLE")     | Create IncomeDistributor distributions and extend claim deadlines                                                        |
 
 - ERC-7943 enforcement (freeze a holder's balance, force a transfer out of a blocked wallet) is
   DEFAULT_ADMIN_ROLE's, not PAUSER_ROLE's and not COMPLIANCE_ROLE's. PAUSER stays a narrow

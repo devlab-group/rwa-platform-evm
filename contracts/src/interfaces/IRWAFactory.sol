@@ -2,10 +2,15 @@
 pragma solidity ^0.8.24;
 
 /// @title IRWAFactory
-/// @notice Deploys and wires one versioned project stack.
-/// @dev Stable interface; see docs/spec/contracts.md section "Factory".
-///      There is no off-chain distribution: no `distributor`, no `distributionCap`.
+/// @notice Deploys and wires a versioned project stack
+/// @dev incomeDistributor pays quote-token income without moving RWA; there are no
+///      inventory distributor/distributionCap fields. See docs/spec/contracts.md, Factory.
 interface IRWAFactory {
+    enum StrategyKind {
+        Fixed,
+        Oracle
+    }
+
     struct ProjectConfig {
         // Token
         string name;
@@ -18,6 +23,14 @@ interface IRWAFactory {
         address quoteToken;
         uint256 purchasePricePerWholeToken;
         uint256 redemptionPricePerWholeToken;
+        uint256 minPurchaseQuote;
+        StrategyKind strategyKind;
+        address priceFeed;
+        uint64 priceMaxAge;
+        uint16 purchaseSpreadBps;
+        uint16 redemptionSpreadBps;
+        address sequencerUptimeFeed;
+        uint64 sequencerGracePeriod;
         // Redemption
         uint64 redemptionTimeout;
         // Roles
@@ -27,6 +40,7 @@ interface IRWAFactory {
         address pricer;
         address treasurer;
         address redemptionManager;
+        address incomeManager;
         address treasury;
         // Governance
         uint48 adminTransferDelay;
@@ -39,6 +53,7 @@ interface IRWAFactory {
         address vault;
         address redemptionEscrow;
         address strategy;
+        address incomeDistributor;
     }
 
     event ProjectDeployed(
@@ -50,6 +65,7 @@ interface IRWAFactory {
         address vault,
         address redemptionEscrow,
         address strategy,
+        address incomeDistributor,
         string version
     );
 

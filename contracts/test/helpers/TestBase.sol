@@ -9,11 +9,13 @@ import {RWAFactory} from "../../src/RWAFactory.sol";
 import {ComplianceTokenDeployer} from "../../src/factory/ComplianceTokenDeployer.sol";
 import {MarketDeployer} from "../../src/factory/MarketDeployer.sol";
 import {SupplyControllerDeployer} from "../../src/factory/SupplyControllerDeployer.sol";
+import {IncomeDistributorDeployer} from "../../src/factory/IncomeDistributorDeployer.sol";
 import {RedemptionEscrowDeployer} from "../../src/factory/RedemptionEscrowDeployer.sol";
 import {RWAToken} from "../../src/RWAToken.sol";
 import {ComplianceRegistry} from "../../src/ComplianceRegistry.sol";
 import {SupplyController} from "../../src/SupplyController.sol";
 import {Vault} from "../../src/Vault.sol";
+import {IncomeDistributor} from "../../src/IncomeDistributor.sol";
 import {RedemptionEscrow} from "../../src/RedemptionEscrow.sol";
 import {FixedPriceStrategy} from "../../src/pricing/FixedPriceStrategy.sol";
 import {MockERC20} from "../mocks/token/MockERC20.sol";
@@ -28,6 +30,7 @@ abstract contract TestBase is Test {
     Vault internal vault;
     RedemptionEscrow internal escrow;
     FixedPriceStrategy internal strategy;
+    IncomeDistributor internal income;
     MockERC20 internal quoteToken;
 
     uint256 internal constant ADMIN_PK = 0xA11CE;
@@ -36,6 +39,7 @@ abstract contract TestBase is Test {
     uint256 internal constant PRICER_PK = 0xE1CE;
     uint256 internal constant TREASURER_PK = 0xF11A;
     uint256 internal constant REDEMPTION_MANAGER_PK = 0xF00D;
+    uint256 internal constant INCOME_MANAGER_PK = 0xD1D1;
     uint256 internal constant INVESTOR_PK = 0x1234;
     uint256 internal constant INVESTOR2_PK = 0x5678;
     uint256 internal constant OUTSIDER_PK = 0x9999;
@@ -46,6 +50,7 @@ abstract contract TestBase is Test {
     address internal pricer;
     address internal treasurer;
     address internal redemptionManager;
+    address internal incomeManager;
     address internal treasury;
     address internal investor;
     address internal investor2;
@@ -67,6 +72,7 @@ abstract contract TestBase is Test {
         pricer = vm.addr(PRICER_PK);
         treasurer = vm.addr(TREASURER_PK);
         redemptionManager = vm.addr(REDEMPTION_MANAGER_PK);
+        incomeManager = vm.addr(INCOME_MANAGER_PK);
         treasury = makeAddr("treasury");
         investor = vm.addr(INVESTOR_PK);
         investor2 = vm.addr(INVESTOR2_PK);
@@ -83,6 +89,7 @@ abstract contract TestBase is Test {
         vault = Vault(dep.vault);
         escrow = RedemptionEscrow(dep.redemptionEscrow);
         strategy = FixedPriceStrategy(dep.strategy);
+        income = IncomeDistributor(dep.incomeDistributor);
 
         vm.startPrank(complianceOperator);
         compliance.setStatus(investor, IComplianceRegistry.ComplianceStatus.Allowed, 0);
@@ -90,14 +97,14 @@ abstract contract TestBase is Test {
         vm.stopPrank();
     }
 
-    /// @dev RWAFactory takes its four stateless deploy-helper addresses in its constructor
-    ///      (see src/factory/*Deployer.sol NatSpec for why); they must be deployed first.
+    /// @dev Deploy helpers before the factory; see RWAFactory
     function _deployFactory() internal returns (RWAFactory) {
         return new RWAFactory(
             address(new ComplianceTokenDeployer()),
             address(new MarketDeployer()),
             address(new SupplyControllerDeployer()),
-            address(new RedemptionEscrowDeployer())
+            address(new RedemptionEscrowDeployer()),
+            address(new IncomeDistributorDeployer())
         );
     }
 
@@ -115,6 +122,14 @@ abstract contract TestBase is Test {
             quoteToken: quoteToken_,
             purchasePricePerWholeToken: PURCHASE_PRICE,
             redemptionPricePerWholeToken: REDEMPTION_PRICE,
+            minPurchaseQuote: 0,
+            strategyKind: IRWAFactory.StrategyKind.Fixed,
+            priceFeed: address(0),
+            priceMaxAge: 0,
+            purchaseSpreadBps: 0,
+            redemptionSpreadBps: 0,
+            sequencerUptimeFeed: address(0),
+            sequencerGracePeriod: 0,
             redemptionTimeout: REDEMPTION_TIMEOUT,
             admin: admin,
             auditor: auditor,
@@ -122,6 +137,7 @@ abstract contract TestBase is Test {
             pricer: pricer,
             treasurer: treasurer,
             redemptionManager: redemptionManager,
+            incomeManager: incomeManager,
             treasury: treasury,
             adminTransferDelay: 0
         });
