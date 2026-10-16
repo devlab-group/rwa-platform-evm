@@ -15,14 +15,19 @@ import {
 import {
   accessControlAdminAbi,
   erc7943Abi,
+  incomeDistributorAbi,
+  incomeDistributorErrorsAbi,
+  oracleStrategyErrorsAbi,
   rwaTokenErrorsAbi,
   fixedPriceStrategyAbi,
   pausableAbi,
   redemptionEscrowAbi,
   rwaFactoryAbi,
+  rwaFactoryV3Abi,
   supplyControllerAbi,
   supplyControllerErrorsAbi,
   vaultAbi,
+  vaultErrorsAbi,
 } from "./abis";
 import { findNetwork, toAddChainParams } from "./networks";
 import type { ContractCall } from "./safeBatch";
@@ -218,6 +223,43 @@ export async function readPreviewBuy(
   });
 }
 
+/**
+ * Id of an on-chain distribution that already uses this snapshot, or null. The contract accepts
+ * the same root again and each creation pays it in full, so the console checks before sending.
+ */
+export async function findOnChainDistribution(
+  expectedChainId: number,
+  distributor: Address,
+  merkleRoot: Hex,
+  snapshotSha256: Hex,
+): Promise<bigint | null> {
+  const provider = getInjectedProvider();
+  if (!provider) throw new Error("No injected wallet found.");
+  await assertChain(provider, expectedChainId);
+  const client = createPublicClient({ transport: custom(provider) });
+  const next = await client.readContract({
+    address: distributor,
+    abi: incomeDistributorAbi,
+    functionName: "nextId",
+  });
+  // One read per distribution, newest first; consider multicall at hundreds of distributions
+  for (let id = next - 1n; id >= 0n; id--) {
+    const d = await client.readContract({
+      address: distributor,
+      abi: incomeDistributorAbi,
+      functionName: "getDistribution",
+      args: [id],
+    });
+    if (
+      d.merkleRoot.toLowerCase() === merkleRoot.toLowerCase() &&
+      d.snapshotSha256.toLowerCase() === snapshotSha256.toLowerCase()
+    ) {
+      return id;
+    }
+  }
+  return null;
+}
+
 /** Waits for a successful receipt; mined reverts throw before approval-dependent spending */
 export async function waitForTxReceipt(hash: Hex): Promise<void> {
   const provider = getInjectedProvider();
@@ -243,7 +285,13 @@ export function describeWalletError(err: unknown): string {
   if (data) {
     try {
       const decoded = decodeErrorResult({
-        abi: [...rwaTokenErrorsAbi, ...supplyControllerErrorsAbi],
+        abi: [
+          ...rwaTokenErrorsAbi,
+          ...supplyControllerErrorsAbi,
+          ...vaultErrorsAbi,
+          ...oracleStrategyErrorsAbi,
+          ...incomeDistributorErrorsAbi,
+        ],
         data,
       });
       const named = explainTokenError(decoded.errorName, decoded.args);
@@ -309,11 +357,47 @@ function explainTokenError(
     case "WrongVault":
       return `The attestation does not match this deployment (${name}).`;
     case "ProjectPaused":
-      return "The project is paused. Unpause it before changing supply.";
+      return "The project is paused. Unpause it and retry.";
     case "ZeroAmount":
       return "The attestation amount is zero.";
     case "AccessControlUnauthorizedAccount":
       return `${first} does not hold the role this call requires.`;
+    case "QuoteBelowMinimum":
+      return `The purchase quote ${String(first)} is below the minimum of ${String(args?.[1])} (quote-token minimal units). Buy more tokens.`;
+    case "StalePrice":
+      return "The price feed is stale: its last update is older than the allowed maximum age. Trading is paused until the feed updates.";
+    case "InvalidPrice":
+      return "The price feed returned an invalid (zero, negative or incomplete) price.";
+    case "SequencerDown":
+      return "The L2 sequencer uptime feed reports the sequencer is down, so oracle prices are unavailable.";
+    case "GracePeriodNotOver":
+      return "The L2 sequencer restarted recently; oracle prices stay unavailable until its grace period passes.";
+    case "FeedDecimalsChanged":
+      return "The price feed changed its decimals after deployment, so the strategy refuses to price. Deploy a new strategy.";
+    case "ZeroMerkleRoot":
+    case "ZeroSnapshotHash":
+    case "EmptySnapshotURI":
+      return `The distribution is missing snapshot data (${name}). Prepare it again from the Income page.`;
+    case "ZeroTotal":
+      return "The distribution total is zero.";
+    case "RecordBlockNotPast":
+      return `The record block ${String(first)} is not before the block that would mine this transaction (${String(args?.[1])}). Prepare a distribution at an earlier block.`;
+    case "DeadlineNotFuture":
+      return "The claim deadline is not in the future.";
+    case "ClaimWindowTooShort":
+      return `The claim deadline is under the 7-day minimum window when mined (earliest ${String(args?.[1])}). Prepare again with a later deadline.`;
+    case "DeadlineNotExtended":
+      return `The new deadline must be later than the current one (${String(first)}). Deadlines can only be extended.`;
+    case "UnknownDistribution":
+      return `Distribution ${String(first)} does not exist on-chain.`;
+    case "ClaimWindowOpen":
+      return "The claim window is still open; unclaimed income can be reclaimed only after the deadline.";
+    case "ClaimWindowClosed":
+      return "The claim window has closed.";
+    case "AlreadyReclaimed":
+      return "The unclaimed remainder of this distribution was already reclaimed.";
+    case "QuoteDeltaMismatch":
+      return "The quote token moved a different amount than requested (fee-on-transfer token?). Nothing was changed.";
     default:
       return undefined;
   }
@@ -421,6 +505,35 @@ export function strategyPriceCall(
       args: [priceMinimalUnits],
     }),
   };
+}
+
+/** Encodes Vault.setMinPurchaseQuote(newMin) in quote-token minimal units (rwa-v3) */
+export function setMinPurchaseQuoteCall(
+  vault: Address,
+  minimumQuote: bigint,
+): ContractCall {
+  return {
+    to: vault,
+    data: encodeFunctionData({
+      abi: vaultAbi,
+      functionName: "setMinPurchaseQuote",
+      args: [minimumQuote],
+    }),
+  };
+}
+
+/** Submits the DEFAULT_ADMIN_ROLE minimum-purchase update; the Vault reverts while paused */
+export async function sendSetMinPurchaseQuote(
+  expectedChainId: number,
+  from: Address,
+  vault: Address,
+  minimumQuote: bigint,
+): Promise<Hex> {
+  return sendCall(
+    expectedChainId,
+    from,
+    setMinPurchaseQuoteCall(vault, minimumQuote),
+  );
 }
 
 /** Submits a PRICER_ROLE price update in quote-token minimal units per whole RWA token */
@@ -680,8 +793,8 @@ export function rejectRedemptionCall(
 }
 
 /**
- * Browser-built IRWAFactory.ProjectConfig: ABI field order, hex addresses/bytes32 and declared
- * integer widths
+ * Browser-built IRWAFactory.ProjectConfig of an rwa-v2 factory: ABI field order, hex
+ * addresses/bytes32 and declared integer widths
  */
 export interface ProjectConfigInput {
   name: string;
@@ -704,6 +817,54 @@ export interface ProjectConfigInput {
   adminTransferDelay: number;
 }
 
+/** rwa-v3 ProjectConfig; strategyKind is 0 for Fixed and 1 for Oracle, with the other kind's fields zero */
+export interface ProjectConfigV3Input {
+  name: string;
+  symbol: string;
+  decimals: number;
+  profileDigest: Hex;
+  projectId: Hex;
+  quoteToken: Address;
+  purchasePricePerWholeToken: bigint;
+  redemptionPricePerWholeToken: bigint;
+  minPurchaseQuote: bigint;
+  strategyKind: number;
+  priceFeed: Address;
+  priceMaxAge: bigint;
+  purchaseSpreadBps: number;
+  redemptionSpreadBps: number;
+  sequencerUptimeFeed: Address;
+  sequencerGracePeriod: bigint;
+  redemptionTimeout: bigint;
+  admin: Address;
+  auditor: Address;
+  complianceOperator: Address;
+  pricer: Address;
+  treasurer: Address;
+  redemptionManager: Address;
+  incomeManager: Address;
+  treasury: Address;
+  adminTransferDelay: number;
+}
+
+/** Encodes RWAFactory.deploy; the rwa-v3 ABI is chosen by the config's strategyKind field */
+export function deployCalldata(
+  config: ProjectConfigInput | ProjectConfigV3Input,
+): Hex {
+  if ("strategyKind" in config) {
+    return encodeFunctionData({
+      abi: rwaFactoryV3Abi,
+      functionName: "deploy",
+      args: [config],
+    });
+  }
+  return encodeFunctionData({
+    abi: rwaFactoryAbi,
+    functionName: "deploy",
+    args: [config],
+  });
+}
+
 /**
  * Permissionless wallet deployment with config.admin authority; server observes ProjectDeployed
  * without relaying
@@ -712,17 +873,13 @@ export async function sendDeployProject(
   expectedChainId: number,
   from: Address,
   factoryAddress: Address,
-  config: ProjectConfigInput,
+  config: ProjectConfigInput | ProjectConfigV3Input,
 ): Promise<Hex> {
   return sendWrite(
     expectedChainId,
     from,
     factoryAddress,
-    encodeFunctionData({
-      abi: rwaFactoryAbi,
-      functionName: "deploy",
-      args: [config],
-    }),
+    deployCalldata(config),
   );
 }
 
@@ -799,4 +956,106 @@ export function sendBurn(
     from,
     burnCall(supplyControllerAddress, attestation, signature),
   );
+}
+
+/** createDistribution arguments, as returned by the prepare endpoint */
+export interface CreateDistributionInput {
+  merkleRoot: Hex;
+  total: bigint;
+  recordBlock: bigint;
+  claimDeadline: bigint;
+  snapshotURI: string;
+  snapshotSha256: Hex;
+}
+
+/** Encodes IncomeDistributor.createDistribution; the caller must have approved `total` first */
+export function createDistributionCall(
+  distributor: Address,
+  d: CreateDistributionInput,
+): ContractCall {
+  return {
+    to: distributor,
+    data: encodeFunctionData({
+      abi: incomeDistributorAbi,
+      functionName: "createDistribution",
+      args: [
+        d.merkleRoot,
+        d.total,
+        d.recordBlock,
+        d.claimDeadline,
+        d.snapshotURI,
+        d.snapshotSha256,
+      ],
+    }),
+  };
+}
+
+/** Submits createDistribution (INCOME_MANAGER_ROLE) from the connected wallet */
+export function sendCreateDistribution(
+  expectedChainId: number,
+  from: Address,
+  distributor: Address,
+  d: CreateDistributionInput,
+): Promise<Hex> {
+  return sendCall(
+    expectedChainId,
+    from,
+    createDistributionCall(distributor, d),
+  );
+}
+
+/** Encodes extendClaimDeadline(id, newDeadline); deadlines can only move later */
+export function extendClaimDeadlineCall(
+  distributor: Address,
+  id: bigint,
+  newDeadline: bigint,
+): ContractCall {
+  return {
+    to: distributor,
+    data: encodeFunctionData({
+      abi: incomeDistributorAbi,
+      functionName: "extendClaimDeadline",
+      args: [id, newDeadline],
+    }),
+  };
+}
+
+/** Submits extendClaimDeadline (INCOME_MANAGER_ROLE), which also works while paused */
+export function sendExtendClaimDeadline(
+  expectedChainId: number,
+  from: Address,
+  distributor: Address,
+  id: bigint,
+  newDeadline: bigint,
+): Promise<Hex> {
+  return sendCall(
+    expectedChainId,
+    from,
+    extendClaimDeadlineCall(distributor, id, newDeadline),
+  );
+}
+
+/** Encodes reclaimUnclaimed(id), which sends the remainder to the treasury */
+export function reclaimUnclaimedCall(
+  distributor: Address,
+  id: bigint,
+): ContractCall {
+  return {
+    to: distributor,
+    data: encodeFunctionData({
+      abi: incomeDistributorAbi,
+      functionName: "reclaimUnclaimed",
+      args: [id],
+    }),
+  };
+}
+
+/** Submits the permissionless reclaim after the claim deadline; reverts while paused */
+export function sendReclaimUnclaimed(
+  expectedChainId: number,
+  from: Address,
+  distributor: Address,
+  id: bigint,
+): Promise<Hex> {
+  return sendCall(expectedChainId, from, reclaimUnclaimedCall(distributor, id));
 }

@@ -9,7 +9,7 @@ import {RedemptionEscrow} from "../RedemptionEscrow.sol";
 /// @dev Uses RWAFactory's delegatecall helper pattern; see ComplianceTokenDeployer. The child
 ///      constructor assigns no privilege from msg.sender.
 contract RedemptionEscrowDeployer {
-    function deploy(IRWAFactory.ProjectConfig calldata config, address token, address vault, address strategy)
+    function deploy(IRWAFactory.ProjectConfig calldata config, address token, address vault)
         external
         returns (address escrow)
     {
@@ -18,7 +18,6 @@ contract RedemptionEscrowDeployer {
                 token,
                 config.quoteToken,
                 vault,
-                strategy,
                 config.redemptionTimeout,
                 config.treasurer,
                 config.redemptionManager,

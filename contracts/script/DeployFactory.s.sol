@@ -7,9 +7,10 @@ import {RWAFactory} from "../src/RWAFactory.sol";
 import {ComplianceTokenDeployer} from "../src/factory/ComplianceTokenDeployer.sol";
 import {MarketDeployer} from "../src/factory/MarketDeployer.sol";
 import {SupplyControllerDeployer} from "../src/factory/SupplyControllerDeployer.sol";
+import {IncomeDistributorDeployer} from "../src/factory/IncomeDistributorDeployer.sol";
 import {RedemptionEscrowDeployer} from "../src/factory/RedemptionEscrowDeployer.sol";
 
-/// @notice Deploys RWAFactory and four stateless helpers; logs contract.factory_address and
+/// @notice Deploys RWAFactory and five stateless helpers; logs contract.factory_address and
 ///         contract.start_block for server config. Reuse the factory for factory.deploy(config);
 ///         Deploy.s.sol instead creates a factory and project together.
 ///
@@ -20,7 +21,7 @@ import {RedemptionEscrowDeployer} from "../src/factory/RedemptionEscrowDeployer.
 ///   DEPLOYER_PK  Broadcast key; defaults to public Anvil account 0 on chain 31337.
 ///                Required elsewhere or RefusingAnvilKeyFallbackOnNonAnvilChain reverts.
 ///
-/// DEPLOYER_PK is the only input; fund it for five creations. No project or quote token is
+/// DEPLOYER_PK is the only input; fund it for six creations. No project or quote token is
 /// created, and the factory has no admin, owner or roles.
 /// @dev Shares DeployBase._deployerPrivateKey() and its key guard with Deploy
 contract DeployFactory is DeployBase {
@@ -35,7 +36,8 @@ contract DeployFactory is DeployBase {
             address(new ComplianceTokenDeployer()),
             address(new MarketDeployer()),
             address(new SupplyControllerDeployer()),
-            address(new RedemptionEscrowDeployer())
+            address(new RedemptionEscrowDeployer()),
+            address(new IncomeDistributorDeployer())
         );
 
         vm.stopBroadcast();

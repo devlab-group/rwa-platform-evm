@@ -14,6 +14,7 @@ import (
 	"github.com/rwa-platform/server/internal/auth"
 	"github.com/rwa-platform/server/internal/compliance"
 	"github.com/rwa-platform/server/internal/dal/repository"
+	"github.com/rwa-platform/server/internal/income"
 	"github.com/rwa-platform/server/internal/kyc"
 	"github.com/rwa-platform/server/internal/metrics"
 	"github.com/rwa-platform/server/internal/project"
@@ -63,7 +64,11 @@ type App struct {
 	KYC         kyc.Provider
 	Sales       *sales.Service
 	Redemptions *redemption.Service
-	Audit       *auditlog.Logger
+	// Income serves the rwa-v3 income endpoints; nil answers them with 501
+	Income *income.Service
+	// pricing caches GET /project's live strategy reads
+	pricing pricingCache
+	Audit   *auditlog.Logger
 	// Sessions issues wallet-scoped tokens after ownership verification;
 	// nil disables protected wallet-status access
 	Sessions *auth.SessionManager
@@ -211,6 +216,11 @@ func NewRouter(app *App) *gin.Engine {
 		// Wallets read quotes and submit request, claim and cancel calls directly.
 		v1.GET("/redemptions", app.listRedemptions)
 		v1.GET("/redemptions/:id", app.getRedemption)
+
+		// Preparation and distribution lists require admin; wallet entitlements are public
+		v1.GET("/income/distributions", adminOnly, app.listIncomeDistributions)
+		v1.POST("/income/distributions", auth.RequireRole(auth.RoleAdmin), idem, app.prepareIncomeDistribution)
+		v1.GET("/income/claims/:address", app.listIncomeClaims)
 
 		// Public transaction history includes server and indexed wallet transactions,
 		// with an optional address filter

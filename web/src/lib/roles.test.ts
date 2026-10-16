@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { components } from "./api-types";
 import {
+  adminContractFields,
   adminTransferTargets,
+  grantableRoles,
   DEFAULT_ADMIN_ROLE_HASH,
   hasRole,
   holdersOnAll,
@@ -164,5 +166,62 @@ describe("holdersOnAll", () => {
       A,
       B,
     ]);
+  });
+});
+
+describe("strategy kind and income distributor", () => {
+  const V3 = {
+    ...ADDRESSES,
+    incomeDistributor: "0x0000000000000000000000000000000000000080",
+  } as Addresses;
+
+  it("adds the IncomeDistributor to an admin transfer on rwa-v3", () => {
+    expect(adminTransferTargets(V3, "Fixed")).toEqual([
+      V3.token,
+      V3.compliance,
+      V3.supplyController,
+      V3.vault,
+      V3.redemptionEscrow,
+      V3.strategy,
+      V3.incomeDistributor,
+    ]);
+    expect(adminContractFields(V3, "Fixed")).toContain("incomeDistributor");
+  });
+
+  it("leaves the rwa-v2 admin transfer unchanged", () => {
+    expect(adminContractFields(ADDRESSES, undefined)).not.toContain(
+      "incomeDistributor",
+    );
+    expect(adminTransferTargets(ADDRESSES, undefined)).toHaveLength(6);
+  });
+
+  it("skips an Oracle or unknown strategy, which has no admin role to transfer", () => {
+    for (const kind of ["Oracle", "Unknown"] as const) {
+      expect(adminTransferTargets(V3, kind)).not.toContain(V3.strategy);
+      expect(adminContractFields(V3, kind)).not.toContain("strategy");
+    }
+  });
+
+  it("has no pricer targets without a Fixed strategy", () => {
+    expect(roleTargets(ROLES.pricer, V3, "Fixed")).toEqual([V3.strategy]);
+    expect(roleTargets(ROLES.pricer, V3, "Oracle")).toEqual([]);
+    expect(roleTargets(ROLES.pricer, V3, "Unknown")).toEqual([]);
+  });
+
+  it("targets the IncomeDistributor for INCOME_MANAGER_ROLE", () => {
+    expect(roleTargets(ROLES.incomeManager, V3)).toEqual([
+      V3.incomeDistributor,
+    ]);
+    expect(roleTargets(ROLES.incomeManager, ADDRESSES)).toEqual([]);
+  });
+
+  it("offers only the roles the deployment has", () => {
+    expect(grantableRoles(ADDRESSES, undefined)).toContain(ROLES.pricer);
+    expect(grantableRoles(ADDRESSES, undefined)).not.toContain(
+      ROLES.incomeManager,
+    );
+    const v3Oracle = grantableRoles(V3, "Oracle");
+    expect(v3Oracle).toContain(ROLES.incomeManager);
+    expect(v3Oracle).not.toContain(ROLES.pricer);
   });
 });

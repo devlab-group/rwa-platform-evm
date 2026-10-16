@@ -21,6 +21,17 @@ For one deployed project, investors can:
   ceiling and deadline.
 - Redeem: preview, approve RWA spend to escrow, request, then claim after funding or cancel a
   Pending request after timeout.
+- rwa-v3 features:
+  - Minimum purchase: shows a positive `minPurchaseQuote`, blocks lower preview quotes before
+    opening the wallet, and decodes `QuoteBelowMinimum` reverts.
+  - Oracle pricing: when `strategyKind` is `Oracle`, the page says prices follow a feed and when
+    it last updated. If `oracle.available` is false, `GET /api/v1/sales/inventory` reports a
+    `priceError`, or a preview reverts with an oracle error, new buys and redemption requests
+    are disabled with the reason; claim and cancel of existing requests stay available.
+  - Income: a connected wallet sees its entitlements from `GET /api/v1/income/claims/{address}`
+    when `addresses.incomeDistributor` is set: amount, deadline, status and snapshot URI
+    (linked only for `https:`). Claimable entries use
+    `IncomeDistributor.claim(id, amount, proof)`; Claimed and Expired entries remain as history.
 - Transfer after recipient-eligibility preflight; both parties must be Allowed on-chain.
 - Read indexed wallet transactions with distinct unconfirmed, confirmed and reorged states.
 
@@ -34,6 +45,7 @@ The server separately submits compliance changes; the app neither holds nor requ
 `src/lib/client.ts` wraps these endpoints from `api/openapi.yaml`:
 
 - Public: `GET /api/v1/project`, `GET /api/v1/redemptions`, `GET /api/v1/transactions`,
+  `GET /api/v1/sales/inventory`, `GET /api/v1/income/claims/{address}`,
   `GET /api/v1/compliance/allowed/{address}`, `POST /api/v1/compliance/challenge`,
   `POST /api/v1/compliance/challenge/verify`.
 - `X-Wallet-Session`: `GET /api/v1/me/wallet-status`, `POST /api/v1/compliance/kyc/start`.
@@ -110,7 +122,7 @@ src/
   context/                  WalletProvider: connected account and chain
   hooks/                    useAsync, usePaginatedList, useWallet
   lib/
-    abis.ts                 pinned ABI fragments (buy, request/claim/cancel)
+    abis.ts                 pinned ABI fragments (buy, request/claim/cancel, oracle and income errors, income claim)
     wallet.ts               viem senders and reads over window.ethereum
     client.ts               typed fetch wrapper for the endpoints above
     api-types.ts            generated from api/openapi.yaml, do not edit

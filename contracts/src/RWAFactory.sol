@@ -9,13 +9,19 @@ import {ComplianceTokenDeployer} from "./factory/ComplianceTokenDeployer.sol";
 import {MarketDeployer} from "./factory/MarketDeployer.sol";
 import {SupplyControllerDeployer} from "./factory/SupplyControllerDeployer.sol";
 import {RedemptionEscrowDeployer} from "./factory/RedemptionEscrowDeployer.sol";
+import {IncomeDistributorDeployer} from "./factory/IncomeDistributorDeployer.sol";
+import {
+    MAX_PURCHASE_SPREAD_BPS,
+    MAX_REDEMPTION_SPREAD_BPS,
+    isValidSequencerConfig
+} from "./pricing/OraclePriceStrategy.sol";
 
 /// @title RWAFactory
 /// @notice Deploys and wires a versioned project stack in one transaction
-/// @dev Delegatecalls four stateless helpers to preserve factory-owned bootstrap wiring while
+/// @dev Delegatecalls five stateless helpers to preserve factory-owned bootstrap wiring while
 ///      splitting creation code below the EIP-170 runtime limit; see ComplianceTokenDeployer
 contract RWAFactory is IRWAFactory {
-    string private constant VERSION = "rwa-v2";
+    string private constant VERSION = "rwa-v3";
 
     uint64 private constant MIN_REDEMPTION_TIMEOUT = 1 days;
     uint64 private constant MAX_REDEMPTION_TIMEOUT = 365 days;
@@ -25,6 +31,7 @@ contract RWAFactory is IRWAFactory {
     address public immutable marketDeployer;
     address public immutable supplyControllerDeployer;
     address public immutable redemptionEscrowDeployer;
+    address public immutable incomeDistributorDeployer;
 
     error ZeroAddressDeployer();
     error DeployerCallFailed();
@@ -33,11 +40,13 @@ contract RWAFactory is IRWAFactory {
         address complianceTokenDeployer_,
         address marketDeployer_,
         address supplyControllerDeployer_,
-        address redemptionEscrowDeployer_
+        address redemptionEscrowDeployer_,
+        address incomeDistributorDeployer_
     ) {
         if (
             complianceTokenDeployer_ == address(0) || marketDeployer_ == address(0)
                 || supplyControllerDeployer_ == address(0) || redemptionEscrowDeployer_ == address(0)
+                || incomeDistributorDeployer_ == address(0)
         ) {
             revert ZeroAddressDeployer();
         }
@@ -45,6 +54,7 @@ contract RWAFactory is IRWAFactory {
         marketDeployer = marketDeployer_;
         supplyControllerDeployer = supplyControllerDeployer_;
         redemptionEscrowDeployer = redemptionEscrowDeployer_;
+        incomeDistributorDeployer = incomeDistributorDeployer_;
     }
 
     function deploy(ProjectConfig calldata config) external returns (Deployment memory) {
@@ -53,7 +63,8 @@ contract RWAFactory is IRWAFactory {
         (address compliance, address token) = _deployComplianceAndToken(config);
         (address strategy, address vault) = _deployMarket(config, token);
         address supplyController = _deploySupplyController(config, token, vault);
-        address escrow = _deployEscrow(config, token, vault, strategy);
+        address escrow = _deployEscrow(config, token, vault);
+        address incomeDistributor = _deployIncomeDistributor(config, token, vault);
 
         RWAToken(token).setSupplyController(supplyController);
         // Wire the escrow-only pause-bypass path (RWAToken.returnEscrowedRWA)
@@ -75,6 +86,7 @@ contract RWAFactory is IRWAFactory {
             vault,
             escrow,
             strategy,
+            incomeDistributor,
             VERSION
         );
 
@@ -84,7 +96,8 @@ contract RWAFactory is IRWAFactory {
             supplyController: supplyController,
             vault: vault,
             redemptionEscrow: escrow,
-            strategy: strategy
+            strategy: strategy,
+            incomeDistributor: incomeDistributor
         });
     }
 
@@ -119,14 +132,24 @@ contract RWAFactory is IRWAFactory {
         supplyController = abi.decode(ret, (address));
     }
 
-    function _deployEscrow(ProjectConfig calldata config, address token, address vault, address strategy)
+    function _deployEscrow(ProjectConfig calldata config, address token, address vault)
         private
         returns (address escrow)
     {
         bytes memory ret = _delegateDeploy(
-            redemptionEscrowDeployer, abi.encodeCall(RedemptionEscrowDeployer.deploy, (config, token, vault, strategy))
+            redemptionEscrowDeployer, abi.encodeCall(RedemptionEscrowDeployer.deploy, (config, token, vault))
         );
         escrow = abi.decode(ret, (address));
+    }
+
+    function _deployIncomeDistributor(ProjectConfig calldata config, address token, address vault)
+        private
+        returns (address distributor)
+    {
+        bytes memory ret = _delegateDeploy(
+            incomeDistributorDeployer, abi.encodeCall(IncomeDistributorDeployer.deploy, (config, token, vault))
+        );
+        distributor = abi.decode(ret, (address));
     }
 
     function _delegateDeploy(address target, bytes memory data) private returns (bytes memory) {
@@ -151,18 +174,38 @@ contract RWAFactory is IRWAFactory {
         if (config.complianceOperator == address(0)) {
             revert InvalidConfig("complianceOperator");
         }
-        if (config.pricer == address(0)) revert InvalidConfig("pricer");
         if (config.treasurer == address(0)) revert InvalidConfig("treasurer");
         if (config.redemptionManager == address(0)) {
             revert InvalidConfig("redemptionManager");
         }
+        if (config.incomeManager == address(0)) revert InvalidConfig("incomeManager");
         if (config.treasury == address(0)) revert InvalidConfig("treasury");
         if (config.decimals > MAX_DECIMALS) revert InvalidConfig("decimals");
-        if (config.purchasePricePerWholeToken == 0) {
-            revert InvalidConfig("purchasePricePerWholeToken");
-        }
-        if (config.redemptionPricePerWholeToken == 0) {
-            revert InvalidConfig("redemptionPricePerWholeToken");
+        if (config.strategyKind == StrategyKind.Fixed) {
+            if (config.pricer == address(0)) revert InvalidConfig("pricer");
+            if (config.purchasePricePerWholeToken == 0) {
+                revert InvalidConfig("purchasePricePerWholeToken");
+            }
+            if (config.redemptionPricePerWholeToken == 0) {
+                revert InvalidConfig("redemptionPricePerWholeToken");
+            }
+            if (config.priceFeed != address(0)) revert InvalidConfig("priceFeed");
+            if (config.priceMaxAge != 0) revert InvalidConfig("priceMaxAge");
+            if (config.purchaseSpreadBps != 0) revert InvalidConfig("purchaseSpreadBps");
+            if (config.redemptionSpreadBps != 0) revert InvalidConfig("redemptionSpreadBps");
+            if (config.sequencerUptimeFeed != address(0)) revert InvalidConfig("sequencerUptimeFeed");
+            if (config.sequencerGracePeriod != 0) revert InvalidConfig("sequencerGracePeriod");
+        } else {
+            if (config.pricer != address(0)) revert InvalidConfig("pricer");
+            if (config.purchasePricePerWholeToken != 0) revert InvalidConfig("purchasePricePerWholeToken");
+            if (config.redemptionPricePerWholeToken != 0) revert InvalidConfig("redemptionPricePerWholeToken");
+            if (config.priceFeed == address(0)) revert InvalidConfig("priceFeed");
+            if (config.priceMaxAge == 0) revert InvalidConfig("priceMaxAge");
+            if (config.purchaseSpreadBps > MAX_PURCHASE_SPREAD_BPS) revert InvalidConfig("purchaseSpreadBps");
+            if (config.redemptionSpreadBps > MAX_REDEMPTION_SPREAD_BPS) revert InvalidConfig("redemptionSpreadBps");
+            if (!isValidSequencerConfig(config.sequencerUptimeFeed, config.sequencerGracePeriod)) {
+                revert InvalidConfig("sequencerGracePeriod");
+            }
         }
         if (config.redemptionTimeout < MIN_REDEMPTION_TIMEOUT || config.redemptionTimeout > MAX_REDEMPTION_TIMEOUT) {
             revert InvalidConfig("redemptionTimeout");

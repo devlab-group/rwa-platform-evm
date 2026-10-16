@@ -32,6 +32,9 @@ const (
 	collChainEvents          = "chain_events"
 	collPurchases            = "purchases"
 	collRedemptionRequests   = "redemption_requests"
+	collIncomePreparations   = "income_preparations"
+	collIncomeDistributions  = "income_distributions"
+	collIncomeClaims         = "income_claims"
 	collAuditLogs            = "audit_logs"
 	collIndexerCheckpoints   = "indexer_checkpoints"
 	collIndexerBlockHashes   = "indexer_block_hashes"
@@ -61,6 +64,9 @@ func New(db *mongo.Database) *repository.Repositories {
 		ChainEvents:          &chainEventRepo{coll: db.Collection(collChainEvents)},
 		Purchases:            &purchaseRepo{coll: db.Collection(collPurchases)},
 		RedemptionRequests:   &redemptionRequestRepo{coll: db.Collection(collRedemptionRequests)},
+		IncomePreparations:   &incomePreparationRepo{coll: db.Collection(collIncomePreparations)},
+		IncomeDistributions:  &incomeDistributionRepo{coll: db.Collection(collIncomeDistributions)},
+		IncomeClaims:         &incomeClaimRepo{coll: db.Collection(collIncomeClaims)},
 		AuditLogs:            &auditLogRepo{coll: db.Collection(collAuditLogs)},
 		IndexerCheckpoints:   &indexerCheckpointRepo{coll: db.Collection(collIndexerCheckpoints)},
 		IndexerBlockHashes:   &blockHashRepo{coll: db.Collection(collIndexerBlockHashes)},
@@ -183,6 +189,21 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	}
 	_, err = db.Collection(collRedemptionRequests).Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}},
+	})
+	if err != nil {
+		return err
+	}
+	// one preparation per snapshot, so concurrent prepares cannot leave a second Prepared
+	// row that invites paying the same snapshot twice
+	_, err = db.Collection(collIncomePreparations).Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "merkleRoot", Value: 1}, {Key: "snapshotSha256", Value: 1}}, Options: options.Index().SetUnique(true),
+	})
+	if err != nil {
+		return err
+	}
+	// income claims are listed per wallet
+	_, err = db.Collection(collIncomeClaims).Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "account", Value: 1}},
 	})
 	if err != nil {
 		return err

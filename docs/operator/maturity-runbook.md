@@ -15,16 +15,22 @@ state or automatic redemption; operators and holders must use the normal flows.
 
 ## At maturity
 
-1. **Close sales without pausing redemption.** The supplied strategy has no switch to close sales.
-   `setPurchasePrice(2**256 - 1)` does not guarantee that every `buy` reverts: quotes scale by
-   token decimals, so fractional purchases may remain payable. Use a separately implemented and
-   verified closure mechanism. Project pause also blocks redemption requests, funding and claims.
-   Keep sales closed, since completed redemptions return RWA to Vault inventory.
-2. **Set redemption price to par.** The pricer calls `setRedemptionPrice(par)` on
-   `RedemptionEscrow.strategy()`. Express `par` in quote-token minimal units per whole RWA token.
-   The escrow keeps its deploy-time strategy even after `Vault.setStrategy`. Existing requests
-   keep their quoted amounts. The redemption manager can reject only Pending requests, with a
-   reason code, and ask holders to request again; Funded payouts stay fixed.
+1. **Close sales without pausing redemption.** On rwa-v3, the admin calls
+   `Vault.setMinPurchaseQuote(2**256 - 1)` from its wallet or Safe while unpaused. Quotes below
+   that maximum revert with `QuoteBelowMinimum`; an equal quote still passes the minimum check.
+   Restore the old minimum to reopen sales. On rwa-v2, use a separately implemented and verified
+   closure mechanism: `setPurchasePrice(2**256 - 1)` can leave fractional purchases payable
+   because quotes scale by token decimals. Project pause also blocks redemption requests,
+   funding and claims. Keep sales closed, since completed redemptions return RWA to inventory.
+2. **Set redemption price to par.** Express `par` in quote-token minimal units per whole RWA
+   token. On rwa-v3, the escrow quotes through `Vault.strategy()`: with a fixed strategy the
+   pricer calls `setRedemptionPrice(par)` on it; an oracle strategy has no price setter, so
+   deploy a `FixedPriceStrategy` with redemption price `par` and call `Vault.setStrategy`
+   while unpaused. On rwa-v2, the pricer calls `setRedemptionPrice(par)` on
+   `RedemptionEscrow.strategy()`, which keeps its deploy-time strategy even after
+   `Vault.setStrategy`. Existing requests keep their quoted amounts. The redemption manager can
+   reject only Pending requests, with a reason code, and ask holders to request again; Funded
+   payouts stay fixed.
 3. **Use normal redemption:** request, fund, permissionless claim; see the
    [redemption guide](redemption-ops.md). Fund promptly: an Allowed beneficiary can cancel a
    Pending request after `redemptionTimeout`.

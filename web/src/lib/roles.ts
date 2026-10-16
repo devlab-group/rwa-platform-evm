@@ -17,6 +17,7 @@ export const ROLES = {
   treasurer: "TREASURER_ROLE",
   redemptionManager: "REDEMPTION_MANAGER_ROLE",
   compliance: "COMPLIANCE_ROLE",
+  incomeManager: "INCOME_MANAGER_ROLE",
 } as const;
 
 /** DEFAULT_ADMIN_ROLE is the zero hash, not keccak256("DEFAULT_ADMIN_ROLE") */
@@ -38,6 +39,7 @@ export const ROLE_TARGET_FIELDS: Record<string, (keyof Addresses)[]> = {
   [ROLES.treasurer]: ["vault", "redemptionEscrow"],
   [ROLES.redemptionManager]: ["redemptionEscrow"],
   [ROLES.compliance]: ["compliance"],
+  [ROLES.incomeManager]: ["incomeDistributor"],
 };
 
 /** The roles the admin can grant or revoke in the UI; DEFAULT_ADMIN_ROLE is excluded */
@@ -47,7 +49,43 @@ export const GRANTABLE_ROLES = [
   ROLES.treasurer,
   ROLES.redemptionManager,
   ROLES.compliance,
+  ROLES.incomeManager,
 ] as const;
+
+/** Strategy kind as projected by the server; only a Fixed strategy has roles */
+export type StrategyKind = components["schemas"]["Project"]["strategyKind"];
+
+// An unknown kind is treated like Oracle: no role or admin call is sent to an unverified contract
+function strategyHasRoles(kind: StrategyKind): boolean {
+  return kind === undefined || kind === "Fixed";
+}
+
+/** Filters roles by strategy kind and income address; missing kinds retain legacy Fixed behavior */
+export function grantableRoles(
+  addresses: Addresses | undefined,
+  kind: StrategyKind,
+): readonly string[] {
+  return GRANTABLE_ROLES.filter((r) =>
+    r === ROLES.pricer
+      ? strategyHasRoles(kind)
+      : r === ROLES.incomeManager
+        ? Boolean(addresses?.incomeDistributor)
+        : true,
+  );
+}
+
+/** Admin-transfer targets, filtered like grantableRoles and including income when its address exists */
+export function adminContractFields(
+  addresses: Addresses | undefined,
+  kind: StrategyKind,
+): (keyof Addresses)[] {
+  const fields = ADMIN_CONTRACT_FIELDS.filter(
+    (f) => f !== "strategy" || strategyHasRoles(kind),
+  );
+  return addresses?.incomeDistributor
+    ? [...fields, "incomeDistributor"]
+    : fields;
+}
 
 /** Begin two-step admin transfer on each governance contract */
 export const ADMIN_CONTRACT_FIELDS: (keyof Addresses)[] = [
@@ -63,7 +101,9 @@ export const ADMIN_CONTRACT_FIELDS: (keyof Addresses)[] = [
 export function roleTargets(
   role: string,
   addresses: Addresses | undefined,
+  kind?: StrategyKind,
 ): Address[] {
+  if (role === ROLES.pricer && !strategyHasRoles(kind)) return [];
   const fields = ROLE_TARGET_FIELDS[role] ?? [];
   return resolveAddresses(fields, addresses);
 }
@@ -71,8 +111,9 @@ export function roleTargets(
 /** Resolves the governance contract addresses an admin transfer begins on */
 export function adminTransferTargets(
   addresses: Addresses | undefined,
+  kind?: StrategyKind,
 ): Address[] {
-  return resolveAddresses(ADMIN_CONTRACT_FIELDS, addresses);
+  return resolveAddresses(adminContractFields(addresses, kind), addresses);
 }
 
 function resolveAddresses(

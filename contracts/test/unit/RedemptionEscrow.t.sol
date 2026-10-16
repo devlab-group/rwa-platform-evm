@@ -491,54 +491,17 @@ contract RedemptionEscrowTest is TestBase {
     function test_constructor_zeroAddressReverts() public {
         vm.expectRevert(RedemptionEscrow.ZeroAddress.selector);
         new RedemptionEscrow(
-            address(0),
-            address(quoteToken),
-            address(vault),
-            address(strategy),
-            REDEMPTION_TIMEOUT,
-            treasurer,
-            redemptionManager,
-            admin,
-            0
+            address(0), address(quoteToken), address(vault), REDEMPTION_TIMEOUT, treasurer, redemptionManager, admin, 0
         );
 
         vm.expectRevert(RedemptionEscrow.ZeroAddress.selector);
         new RedemptionEscrow(
-            address(token),
-            address(0),
-            address(vault),
-            address(strategy),
-            REDEMPTION_TIMEOUT,
-            treasurer,
-            redemptionManager,
-            admin,
-            0
+            address(token), address(0), address(vault), REDEMPTION_TIMEOUT, treasurer, redemptionManager, admin, 0
         );
 
         vm.expectRevert(RedemptionEscrow.ZeroAddress.selector);
         new RedemptionEscrow(
-            address(token),
-            address(quoteToken),
-            address(0),
-            address(strategy),
-            REDEMPTION_TIMEOUT,
-            treasurer,
-            redemptionManager,
-            admin,
-            0
-        );
-
-        vm.expectRevert(RedemptionEscrow.ZeroAddress.selector);
-        new RedemptionEscrow(
-            address(token),
-            address(quoteToken),
-            address(vault),
-            address(0),
-            REDEMPTION_TIMEOUT,
-            treasurer,
-            redemptionManager,
-            admin,
-            0
+            address(token), address(quoteToken), address(0), REDEMPTION_TIMEOUT, treasurer, redemptionManager, admin, 0
         );
     }
 }

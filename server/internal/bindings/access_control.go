@@ -81,4 +81,5 @@ var (
 	PricerRole            = crypto.Keccak256Hash([]byte("PRICER_ROLE"))
 	TreasurerRole         = crypto.Keccak256Hash([]byte("TREASURER_ROLE"))
 	RedemptionManagerRole = crypto.Keccak256Hash([]byte("REDEMPTION_MANAGER_ROLE"))
+	IncomeManagerRole     = crypto.Keccak256Hash([]byte("INCOME_MANAGER_ROLE"))
 )

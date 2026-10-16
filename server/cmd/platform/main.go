@@ -35,6 +35,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/mongodb"
 	"github.com/rwa-platform/server/internal/dal/repository"
 	"github.com/rwa-platform/server/internal/eip712"
+	"github.com/rwa-platform/server/internal/income"
 	"github.com/rwa-platform/server/internal/indexer"
 	"github.com/rwa-platform/server/internal/ipfs"
 	"github.com/rwa-platform/server/internal/keys"
@@ -346,6 +347,19 @@ func newIPFSReplicationManager(cfg config.Config, local ipfs.Client, repos *repo
 	return ipfs.NewReplicationManager(local, backups, cfg.IPFSReplicationThreshold, repos.Publications)
 }
 
+// newIPFSPublisher returns the local Kubo client, wrapped in the replication manager when
+// backups are configured, or nil without an IPFS node
+func newIPFSPublisher(cfg config.Config, repos *repository.Repositories) income.Pinner {
+	if cfg.IPFSAPIURL == "" {
+		return nil
+	}
+	local := ipfs.NewKuboClient(cfg.IPFSAPIURL)
+	if rm := newIPFSReplicationManager(cfg, local, repos); rm != nil {
+		return rm
+	}
+	return local
+}
+
 // newTxManager uses serverwiring's nonce coordination for request, background and
 // opsctl submissions
 func newTxManager(cfg config.Config, chainClient blockchain.Client, repos *repository.Repositories) blockchain.TxManager {
@@ -397,25 +411,18 @@ func buildApp(cfg config.Config, addrs models.Addresses, auditor string, repos *
 			common.HexToAddress(cfg.AdminAddress))
 	}
 
+	publisher := newIPFSPublisher(cfg, repos)
+	// Income resolves addresses from the stored project; preparation requires Active rwa-v3
+	app.Income = income.New(cfg.ChainID, repos, publisher, cfg.Confirmations)
+
 	auditorAddr := common.HexToAddress(auditor)
 	if addrs.SupplyController != "" {
 		domainCfg := eip712.Domain{
 			Name: "RWA-Supply-Attestation", Version: "1",
 			ChainID: big.NewInt(cfg.ChainID), VerifyingContract: common.HexToAddress(addrs.SupplyController),
 		}
-		var ipfsClient interface {
-			AddRaw(ctx context.Context, data []byte) (string, error)
-		}
-		if cfg.IPFSAPIURL != "" {
-			local := ipfs.NewKuboClient(cfg.IPFSAPIURL)
-			if rm := newIPFSReplicationManager(cfg, local, repos); rm != nil {
-				ipfsClient = rm
-			} else {
-				ipfsClient = local
-			}
-		}
 		app.Records = assets.NewRecordService(
-			repos.AssetRecords, repos.AuditPackages, repos.Attestations, ipfsClient,
+			repos.AssetRecords, repos.AuditPackages, repos.Attestations, publisher,
 			common.HexToAddress(addrs.SupplyController), common.HexToAddress(addrs.Vault),
 			domainCfg, auditorAddr,
 		)
@@ -575,6 +582,12 @@ func startBackgroundLoops(ctx context.Context, cfg config.Config, addrs models.A
 		})
 	}
 
+	if app.Income != nil && addrs.IncomeDistributor != "" {
+		go runIndexDependentTicker(ctx, repos, cfg, 15*time.Second, "income reconcile", func() error {
+			return app.Income.Reconcile(ctx)
+		})
+	}
+
 	if app.Sales != nil && addrs.Vault != "" {
 		go runIndexDependentTicker(ctx, repos, cfg, 15*time.Second, "sales reconcile", func() error {
 			return app.Sales.Reconcile(ctx, repos.ChainEvents, cfg.ChainID)
@@ -609,7 +622,7 @@ func startBackgroundLoops(ctx context.Context, cfg config.Config, addrs models.A
 
 	// Add indexed wallet transactions to the history alongside server submissions
 	if addrs.Token != "" || addrs.Vault != "" || addrs.RedemptionEscrow != "" ||
-		addrs.SupplyController != "" || addrs.Compliance != "" || addrs.Strategy != "" {
+		addrs.SupplyController != "" || addrs.Compliance != "" || addrs.Strategy != "" || addrs.IncomeDistributor != "" {
 		go runIndexDependentTicker(ctx, repos, cfg, 15*time.Second, "stack transactions-reconcile", func() error {
 			return txindex.ReconcileStackTransactions(ctx, repos.Transactions, repos.ChainEvents, repos.IndexerCheckpoints, cfg.ChainID)
 		})
@@ -715,6 +728,9 @@ func evaluateAlerts(ctx context.Context, cfg config.Config, repos *repository.Re
 		}
 	}
 
+	// deferred so it runs after the DB-only checks below: a hung RPC must not hold them back
+	defer evaluateOracleAlert(ctx, app)
+
 	requests, err := repos.RedemptionRequests.List(ctx, "")
 	if err != nil {
 		log.Printf("platform: alert evaluation: listing redemption requests: %v", err)
@@ -733,6 +749,33 @@ func evaluateAlerts(ctx context.Context, cfg config.Config, repos *repository.Re
 			})
 		}
 	}
+}
+
+// oracleAlertTimeout bounds the chain reads of evaluateOracleAlert
+const oracleAlertTimeout = 10 * time.Second
+
+// evaluateOracleAlert raises price_feed_stale on Oracle price reverts, skipping transport
+// failures. Only chain reads use oracleAlertTimeout, preserving time for the audit write.
+func evaluateOracleAlert(ctx context.Context, app *api.App) {
+	if app.Sales == nil {
+		return
+	}
+	readCtx, cancel := context.WithTimeout(ctx, oracleAlertTimeout)
+	info, err := app.Sales.CurrentOracle(readCtx)
+	cancel()
+	if err != nil {
+		log.Printf("platform: alert evaluation: reading the oracle strategy: %v", err)
+		return
+	}
+	if info == nil || info.Available {
+		return
+	}
+	if info.TransportFailure {
+		log.Printf("platform: alert evaluation: reading the oracle price: RPC failure, skipped")
+		return
+	}
+	app.RaiseAlert(ctx, sales.AlertPriceFeedStale, "system", info.Strategy.Hex(),
+		fmt.Sprintf("OraclePriceStrategy.latestPrice() fails with %s; purchases and redemptions cannot be quoted", info.Error))
 }
 
 // rescreenOnSanctionsReload reports listed Allowed holders after a successful file reload

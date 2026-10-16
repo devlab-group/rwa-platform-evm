@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AsyncSection } from "../../components/AsyncSection";
 import { PaginationFooter } from "../../components/PaginationFooter";
 import {
@@ -12,6 +12,7 @@ import {
 import { useAsync } from "../../hooks/useAsync";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { useWallet } from "../../hooks/useWallet";
+import { IncomeSection } from "./IncomeSection";
 import { KycVerificationSection } from "./KycVerification";
 import { LegalDisclosure } from "./LegalDisclosure";
 import { api, ApiError } from "../../lib/client";
@@ -35,6 +36,7 @@ import {
 } from "../../lib/status";
 import {
   formatWithDecimals,
+  oracleErrorName,
   readErc20Allowance,
   describeTxError,
   readErc20Balance,
@@ -51,6 +53,12 @@ import {
   waitForTxReceipt,
 } from "../../lib/wallet";
 import {
+  minPurchaseQuote,
+  minPurchaseRefusal,
+  priceAvailability,
+  type PriceAvailability,
+} from "../../lib/v3";
+import {
   clearWalletSession,
   getWalletSession,
   setWalletSession,
@@ -62,6 +70,9 @@ type VerifyChallengeResult = components["schemas"]["VerifyChallengeResult"];
 type Redemption = components["schemas"]["Redemption"];
 type Transaction = components["schemas"]["Transaction"];
 type Challenge = components["schemas"]["Challenge"];
+type Inventory = components["schemas"]["Inventory"];
+
+const PRICE_RECHECK_MS = 15_000;
 
 /**
  * On-chain preview and its input: tokenAmount uses RWA minimal units; quoteAmount uses
@@ -100,6 +111,37 @@ export function Investor() {
   // Read own KYC status through the challenge-issued X-Wallet-Session
   const ownWalletStatus = useOwnWalletStatus(wallet.address);
   const submitted = useSubmittedTransactions();
+
+  // Fetch inventory for Oracle projects to check live price availability
+  const projectData = project.status === "success" ? project.data : undefined;
+  const isOracle = projectData?.strategyKind === "Oracle";
+  const inventory = useAsync<Inventory | undefined>(
+    (signal) =>
+      isOracle ? api.getInventory({ signal }) : Promise.resolve(undefined),
+    [isOracle],
+  );
+  // Re-read the feed state while prices are unavailable so a recovered feed re-enables trading
+  const [fresh, setFresh] = useState<{
+    project: Project;
+    inventory?: Inventory;
+  }>();
+  const availability = priceAvailability(
+    fresh?.project ?? projectData,
+    fresh
+      ? fresh.inventory
+      : inventory.status === "success"
+        ? inventory.data
+        : undefined,
+  );
+  useEffect(() => {
+    if (!availability.unavailable) return;
+    const timer = setInterval(() => {
+      Promise.all([api.getProject(), isOracle ? api.getInventory() : undefined])
+        .then(([p, i]) => setFresh({ project: p, inventory: i }))
+        .catch(() => undefined);
+    }, PRICE_RECHECK_MS);
+    return () => clearInterval(timer);
+  }, [availability.unavailable, isOracle]);
 
   return (
     <div>
@@ -152,7 +194,10 @@ export function Investor() {
         }
       />
 
+      <PriceNotice project={projectData} availability={availability} />
+
       <BuySection
+        availability={availability}
         chainId={chainId}
         project={project.status === "success" ? project.data : undefined}
         walletAddress={wallet.address}
@@ -161,10 +206,20 @@ export function Investor() {
       />
 
       <RedemptionSection
+        availability={availability}
         chainId={chainId}
         project={project.status === "success" ? project.data : undefined}
         walletAddress={wallet.address}
         finalityConfirmations={finalityConfirmations}
+        chainMismatch={wallet.chainMismatch}
+        onSubmitted={submitted.record}
+      />
+
+      {/* keyed by wallet so a switch drops the previous wallet's selection and session claims */}
+      <IncomeSection
+        key={wallet.address ?? ""}
+        project={projectData}
+        walletAddress={wallet.address}
         chainMismatch={wallet.chainMismatch}
         onSubmitted={submitted.record}
       />
@@ -569,19 +624,59 @@ function BalanceSection({
   );
 }
 
+// Oracle projects: say prices follow a feed, when it last updated and why prices are unavailable
+function PriceNotice({
+  project,
+  availability,
+}: {
+  project: Project | undefined;
+  availability: PriceAvailability;
+}) {
+  if (project?.strategyKind !== "Oracle" && !availability.unavailable)
+    return null;
+  const updatedAt = project?.oracle?.updatedAt;
+  return (
+    <section className="card" aria-label="Pricing">
+      <h2>Pricing</h2>
+      {project?.strategyKind === "Oracle" && (
+        <p>
+          Prices follow an oracle price feed.
+          {updatedAt !== undefined &&
+            ` Last feed update: ${formatUnixSeconds(updatedAt)}.`}
+        </p>
+      )}
+      {availability.unavailable && (
+        <p className="async-state--error" role="alert">
+          Prices unavailable: {availability.reason}. New purchases and
+          redemption requests are disabled; claiming or cancelling an existing
+          redemption still works.
+        </p>
+      )}
+    </section>
+  );
+}
+
 function BuySection({
+  availability,
   chainId,
   project,
   walletAddress,
   chainMismatch,
   onSubmitted,
 }: {
+  availability: PriceAvailability;
   chainId: number;
   project: Project | undefined;
   walletAddress: string | null | undefined;
   chainMismatch: boolean;
   onSubmitted: (txHash: string, kind: string) => void;
 }) {
+  const [previewOracleError, setPreviewOracleError] = useState<string>();
+  // availability follows the parent's polled project and inventory; the project prop is the
+  // first load, so only this section's own preview error is added here
+  const unavailable =
+    previewOracleError !== undefined || availability.unavailable;
+  const minimum = minPurchaseQuote(project);
   const [tokenAmount, setTokenAmount] = useState("");
   const [slippageBps, setSlippageBps] = useState(50);
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -609,6 +704,7 @@ function BuySection({
   async function handlePreview() {
     setError(null);
     setBuyTx(null);
+    setPreviewOracleError(undefined);
     try {
       if (!vault || !chainId) throw new Error("Project addresses not loaded.");
       // Convert whole units; AmountFormatError rejects invalid or over-precise input
@@ -622,10 +718,23 @@ function BuySection({
       );
       setDecimals(rwaDecimals);
       // Missing display decimals preserves the quote and shows grouped raw units
+      let resolvedQuoteDecimals: number | null = null;
       try {
-        setQuoteDecimals(await resolveQuoteDecimals(project, chainId));
+        resolvedQuoteDecimals = await resolveQuoteDecimals(project, chainId);
       } catch {
-        setQuoteDecimals(null);
+        resolvedQuoteDecimals = null;
+      }
+      setQuoteDecimals(resolvedQuoteDecimals);
+      // Refuse before the wallet opens; the Vault would revert QuoteBelowMinimum
+      const refusal = minPurchaseRefusal(
+        quoteAmount,
+        minimum,
+        resolvedQuoteDecimals ?? undefined,
+      );
+      if (refusal) {
+        setQuote(null);
+        setError(refusal);
+        return;
       }
       setQuote({
         tokenAmount: minimalTokenAmount,
@@ -633,6 +742,8 @@ function BuySection({
         side: "purchase",
       });
     } catch (err) {
+      setQuote(null);
+      setPreviewOracleError(oracleErrorName(err));
       setError(describeTxError(err, "Quote request failed."));
     }
   }
@@ -704,6 +815,13 @@ function BuySection({
   return (
     <section className="card">
       <h2>Buy</h2>
+      {minimum > 0n && (
+        <p className="field__hint">
+          Minimum purchase:{" "}
+          {formatTokenAmount(minimum.toString(), project?.quoteDecimals)} quote
+          tokens.
+        </p>
+      )}
       <div className="field">
         <label htmlFor="buy-token-amount">RWA token amount (whole units)</label>
         <input
@@ -732,7 +850,7 @@ function BuySection({
         type="button"
         className="button button--secondary"
         onClick={handlePreview}
-        disabled={!tokenAmount || chainMismatch}
+        disabled={!tokenAmount || chainMismatch || availability.unavailable}
       >
         Preview quote
       </button>
@@ -790,6 +908,7 @@ function BuySection({
               !walletAddress ||
               !addressesReady ||
               chainMismatch ||
+              unavailable ||
               txState === "awaiting-signature"
             }
           >
@@ -804,6 +923,7 @@ function BuySection({
               !approveTx ||
               !allowanceSufficient ||
               chainMismatch ||
+              unavailable ||
               txState === "awaiting-signature"
             }
           >
@@ -826,6 +946,7 @@ function BuySection({
 }
 
 function RedemptionSection({
+  availability,
   chainId,
   project,
   walletAddress,
@@ -833,6 +954,7 @@ function RedemptionSection({
   chainMismatch,
   onSubmitted,
 }: {
+  availability: PriceAvailability;
   chainId: number;
   project: Project | undefined;
   walletAddress: string | null | undefined;
@@ -840,6 +962,11 @@ function RedemptionSection({
   chainMismatch: boolean;
   onSubmitted: (txHash: string, kind: string) => void;
 }) {
+  const [previewOracleError, setPreviewOracleError] = useState<string>();
+  // availability follows the parent's polled project and inventory; the project prop is the
+  // first load, so only this section's own preview error is added here
+  const unavailable =
+    previewOracleError !== undefined || availability.unavailable;
   const [rwaAmount, setRwaAmount] = useState("");
   const [slippageBps, setSlippageBps] = useState(50);
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -893,6 +1020,7 @@ function RedemptionSection({
   async function handlePreview() {
     setError(null);
     setRequestTx(null);
+    setPreviewOracleError(undefined);
     // Reset local approval tracking for the new preview; on-chain allowance is unchanged
     setApproveTx(null);
     setAllowance(null);
@@ -920,6 +1048,7 @@ function RedemptionSection({
         side: "redemption",
       });
     } catch (err) {
+      setPreviewOracleError(oracleErrorName(err));
       setError(describeTxError(err, "Quote request failed."));
     }
   }
@@ -1060,7 +1189,7 @@ function RedemptionSection({
         type="button"
         className="button button--secondary"
         onClick={handlePreview}
-        disabled={!rwaAmount || chainMismatch}
+        disabled={!rwaAmount || chainMismatch || availability.unavailable}
       >
         Preview quote
       </button>
@@ -1117,6 +1246,7 @@ function RedemptionSection({
             disabled={
               !walletAddress ||
               chainMismatch ||
+              unavailable ||
               txState === "awaiting-signature"
             }
           >
@@ -1131,6 +1261,7 @@ function RedemptionSection({
               !approveTx ||
               !allowanceSufficient ||
               chainMismatch ||
+              unavailable ||
               txState === "awaiting-signature"
             }
           >

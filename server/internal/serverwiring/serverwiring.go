@@ -20,6 +20,7 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 	"github.com/rwa-platform/server/internal/dal/repository"
 	"github.com/rwa-platform/server/internal/governance"
+	"github.com/rwa-platform/server/internal/income"
 	"github.com/rwa-platform/server/internal/indexer"
 	"github.com/rwa-platform/server/internal/redemption"
 	"github.com/rwa-platform/server/internal/sales"
@@ -48,13 +49,14 @@ func FeeCaps(cfg config.Config) blockchain.FeeCaps {
 }
 
 // IndexerAddresses lists configured compliance, supply controller, Vault, escrow,
-// token, strategy and factory addresses, skipping unset values. The token emits
-// enforcement/governance events; the strategy emits price updates. Watching the
+// token, strategy, income distributor (rwa-v3) and factory addresses, skipping unset
+// values. The token emits transfer and enforcement/governance events; a Fixed strategy
+// emits price updates; the income distributor emits distribution events. Watching the
 // startup-configured factory allows wallet-deployment adoption before child addresses
 // exist.
 func IndexerAddresses(addrs models.Addresses, factoryAddr string) []common.Address {
 	var out []common.Address
-	for _, a := range []string{addrs.Compliance, addrs.SupplyController, addrs.Vault, addrs.RedemptionEscrow, addrs.Token, addrs.Strategy, factoryAddr} {
+	for _, a := range []string{addrs.Compliance, addrs.SupplyController, addrs.Vault, addrs.RedemptionEscrow, addrs.Token, addrs.Strategy, addrs.IncomeDistributor, factoryAddr} {
 		if a != "" {
 			out = append(out, common.HexToAddress(a))
 		}
@@ -125,6 +127,7 @@ func BuildDecoder(addrs models.Addresses, factoryAddr string) indexer.EventDecod
 	escrowAddr := strings.ToLower(addrs.RedemptionEscrow)
 	strategyAddr := strings.ToLower(addrs.Strategy)
 	tokenAddr := strings.ToLower(addrs.Token)
+	incomeAddr := strings.ToLower(addrs.IncomeDistributor)
 	factory := strings.ToLower(factoryAddr)
 
 	// withGovernance tries governance only when primary returns "unknown" without error
@@ -164,6 +167,10 @@ func BuildDecoder(addrs models.Addresses, factoryAddr string) indexer.EventDecod
 			if tokenAddr != "" {
 				return withGovernance(token.DecodeLog)(log)
 			}
+		case incomeAddr:
+			if incomeAddr != "" {
+				return withGovernance(income.DecodeLog)(log)
+			}
 		case factory:
 			if factory != "" {
 				return decodeProjectDeployed(log)
@@ -177,12 +184,15 @@ func BuildDecoder(addrs models.Addresses, factoryAddr string) indexer.EventDecod
 	}
 }
 
-// decodeProjectDeployed types the factory event for project.ReconcileDeployment: 0x-hex
-// projectId/profileDigest, six deployed addresses and version. Other factory logs use
-// generic decoding.
+// factoryBindings holds both parsed factory ABIs for decodeProjectDeployed
+var factoryBindings = bindings.NewFactory()
+
+// decodeProjectDeployed types the factory event of either generation for
+// project.ReconcileDeployment: 0x-hex projectId/profileDigest, the deployed addresses
+// (incomeDistributor for rwa-v3 only) and version. Other factory logs use generic decoding.
 func decodeProjectDeployed(log types.Log) (string, map[string]any, error) {
-	f := bindings.NewFactory()
-	if len(log.Topics) == 0 || log.Topics[0] != f.EventID("ProjectDeployed") {
+	f := factoryBindings
+	if len(log.Topics) == 0 || !f.IsProjectDeployed(log.Topics[0]) {
 		name := "unknown"
 		if len(log.Topics) > 0 {
 			name = log.Topics[0].Hex()
@@ -193,13 +203,17 @@ func decodeProjectDeployed(log types.Log) (string, map[string]any, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	return "ProjectDeployed", map[string]any{
+	data := map[string]any{
 		"projectId": ev.ProjectID.Hex(), "profileDigest": ev.ProfileDigest.Hex(),
 		"token": ev.Token.Hex(), "compliance": ev.Compliance.Hex(),
 		"supplyController": ev.SupplyController.Hex(), "vault": ev.Vault.Hex(),
 		"redemptionEscrow": ev.RedemptionEscrow.Hex(), "strategy": ev.Strategy.Hex(),
 		"version": ev.Version,
-	}, nil
+	}
+	if ev.Layout == bindings.FactoryVersionV3 {
+		data["incomeDistributor"] = ev.IncomeDistributor.Hex()
+	}
+	return "ProjectDeployed", data, nil
 }
 
 // complianceEventNames lists compliance.DecodeLog outputs; internal/compliance has no
@@ -225,9 +239,10 @@ func KnownEventNames(addrs models.Addresses, factoryAddr string) map[string]bool
 	add(addrs.Vault, sales.EventNames)
 	add(addrs.RedemptionEscrow, redemption.EventNames)
 	add(addrs.Strategy, strategy.EventNames)
+	add(addrs.IncomeDistributor, income.EventNames)
 	add(addrs.Token, append([]string{"Paused", "Unpaused"}, token.EventNames...))
 	// Every child can emit role and two-step admin-transfer events
-	for _, a := range []string{addrs.Compliance, addrs.SupplyController, addrs.Vault, addrs.RedemptionEscrow, addrs.Strategy, addrs.Token} {
+	for _, a := range []string{addrs.Compliance, addrs.SupplyController, addrs.Vault, addrs.RedemptionEscrow, addrs.Strategy, addrs.Token, addrs.IncomeDistributor} {
 		add(a, []string{"RoleGranted", "RoleRevoked", "DefaultAdminTransferScheduled", "DefaultAdminTransferCanceled"})
 	}
 	return set

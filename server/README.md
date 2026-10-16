@@ -20,13 +20,14 @@ Shared implementation lives in `internal/`; `cmd/` contains executable entry poi
 | `internal/auth`                                                | Admin wallet login and JWTs, investor `X-Wallet-Session`, idempotency, IP/body limits and shared security headers. See [Security posture](#security-posture).                                                                                                                                                                        |
 | `internal/config`                                              | YAML parsing, defaults and validation; `LoadFromMap` exposes the I/O-free loader for tests. See [Configuration](#configuration-the---config-yaml-file).                                                                                                                                                                              |
 | `internal/dal`                                                 | Storage models with BSON/JSON tags, repository interfaces and the `Repositories` aggregate. `memory` supplies test stores; `mongodb` implements persistence, indexes and atomic operations; `db.go` opens Mongo connections.                                                                                                         |
-| `internal/bindings`                                            | Hand-written ABI encoders/decoders, checked against `contracts/out/` by `cmd/verifyabi`. See [Build, test, and verify](#build-test-and-verify).                                                                                                                                                                                      |
+| `internal/bindings` | Hand-written ABI encoders/decoders for rwa-v3 and the pinned rwa-v2 `deploy`/`ProjectDeployed` formats. `cmd/verifyabi` checks them against `contracts/out/` and `internal/bindings/testdata/rwa-v2`. See [Build, test, and verify](#build-test-and-verify). |
 | `internal/blockchain`                                          | RPC wrapper, `Signer` interface and `TxManager`: nonce coordination, EIP-1559/legacy fees, submission/replacement and pending, mined, confirmed, reverted and reorged states.                                                                                                                                                        |
 | `internal/indexer`                                             | Stores logs by `(chainId, address, txHash, logIndex)`, checkpoints progress and rolls back to a common ancestor within its recovery window. Deeper reorgs require operator reconciliation.                                                                                                                                           |
 | `internal/project`                                             | Adopts profile-matching, admin-authorized deployments; checks code presence, enumerated roles, wiring and system allowlisting against signed calldata; projects governance and prices.                                                                                                                                               |
 | `internal/assets`, `internal/auditpkg`                         | Validate profiles, including the optional [legal descriptor](../docs/spec/asset-profile.md#legal-descriptor), canonicalize JSON (RFC 8785/JCS), compute digests/CIDs, assemble `.rwa` packages and verify `signed-result.json`. `GET /api/v1/project` exposes legal terms; indexed `Minted` events advance wallet-submitted records. |
 | `internal/compliance`                                          | EIP-191 wallet-ownership challenges, authenticated KYC decisions, replay/ownership checks and `ComplianceRegistry.setStatus` submission.                                                                                                                                                                                             |
 | `internal/sales`, `internal/redemption`                        | Live inventory and indexed purchases/redemptions. Clients quote through `Vault.previewBuy`/`RedemptionEscrow.previewRedeem` and submit wallet transactions, including treasurer funding/withdrawals and manager rejection.                                                                                                           |
+| `internal/income` | Computes holder entitlements, builds OpenZeppelin-compatible Merkle trees and snapshots, and maintains distribution and claim read models for rwa-v3. See [Income distribution](#income-distribution). |
 | `internal/governance`, `internal/strategy`, `internal/txindex` | Decode role/admin-transfer/pause and strategy-price events. `txindex` adds transaction records for indexed wallet activity absent from the server manager, visible in `GET /transactions`.                                                                                                                                           |
 | `internal/serverwiring`                                        | Shared chain-ID checks, transaction-manager settings and typed event dispatch for platform and opsctl.                                                                                                                                                                                                                               |
 | `internal/shadow`                                              | Runs scripted indexer replay in isolated memory stores, sampling resources and comparing final event/DLQ counts. It constructs no transaction manager or key provider. See `docs/operator/soak-runbook.md`.                                                                                                                          |
@@ -70,7 +71,7 @@ Router-wide middleware runs in this order:
 
 Admin routes then require `auth.RequireRole(auth.RoleAdmin)`. The writes `POST /profile`,
 `POST /compliance/status`, `POST /assets/records`, `POST /assets/records/{recordId}/reissue`,
-`POST /assets/burns` and `POST /assets/burns/{burnId}/reissue`
+`POST /assets/burns`, `POST /assets/burns/{burnId}/reissue` and `POST /income/distributions`
 also require `auth.Idempotency` before their handlers.
 
 Public `POST /auth/challenge` returns an expiring, single-use `personal_sign` message and
@@ -127,6 +128,122 @@ metadata. Anyone with a valid auditor signature may submit
 `BurnService.ReconcileBurned` matches indexed events by `operationId` and records `Burned` and
 the transaction hash, including for expired or reissued burns. See the [API reference](../api/openapi.yaml)
 for request validation and errors.
+
+## rwa-v3 support
+
+The server verifies and indexes `rwa-v2` and `rwa-v3` deployments using the matching
+factory format. Minimum purchase limits, oracle pricing and income distribution require rwa-v3.
+
+`bindings.Factory` decodes `deploy` calldata by selector and `ProjectDeployed` logs by topic0.
+`VerifyDeployment` requires the calldata generation, log layout, log `version` and live
+`factory.version()` to agree. `cmd/verifyabi` checks rwa-v3 bindings against
+`contracts/out` and the rwa-v2 factory binding against the pinned ABI at
+`internal/bindings/testdata/rwa-v2/RWAFactory.json`. It skips both checks if `contracts/out` is
+absent.
+
+`GET /api/v1/config` returns `factoryVersion` from the service's cached first nonempty
+`version()` result for the configured factory. Failed or empty reads return an empty string
+and allow another read after 30 seconds.
+
+`models.Addresses.IncomeDistributor` is used by `addressesFromProject`, the indexer watch set,
+event decoder, known-event set (including role and admin-transfer events), `opsctl` and
+`reindex`. It is empty for rwa-v2.
+
+The API's `Project.minPurchaseQuote` starts from deploy calldata; `Security` replays indexed
+`MinPurchaseQuoteChanged` events to track later changes.
+
+The server probes strategy views to resolve `Project.strategyKind`. A successful `feed()`
+read identifies `Oracle`. If that call reverts and `purchasePricePerWholeToken()` succeeds,
+the kind is `Fixed`. Resolved kinds are cached by address; inconclusive probes return
+`Unknown` and can be retried. For the deployed strategy, the project response falls back to
+the verified deploy-time kind when a probe is inconclusive.
+
+For Oracle strategies, `Project.oracle` reports immutable parameters, `latestPrice()` results
+(`available`, `price`, `error`) and the feed's `updatedAt` when readable, even if stale. Project
+pricing results, including failures, are cached for 15 seconds; inventory reads prices per
+request. Failed reads omit the affected prices. `oracle.error` reports `latestPrice()` failures;
+`inventory.priceError` reports failed inventory price reads. Errors are `StalePrice`, `InvalidPrice`, `SequencerDown`,
+`GracePeriodNotOver`, `FeedDecimalsChanged`, or `ReadFailed` for RPC failures and unknown reverts.
+
+Deployment verification for rwa-v3 also checks:
+
+- Code at the income distributor, its `token`, `quoteToken` and `vault` references, and
+  `Vault.minPurchaseQuote`.
+- The distributor's roles: `DEFAULT_ADMIN_ROLE` belongs to the admin and `INCOME_MANAGER_ROLE`
+  to the calldata's `incomeManager`, with no unexpected holders of the checked roles.
+  `INCOME_MANAGER_ROLE` is also checked on the other project contracts that support roles.
+- For an Oracle strategy, the feed, max age, both spreads, sequencer feed, grace period and token
+  decimals against the deploy calldata. Its quote decimals must match the quote token's
+  `decimals()`. Oracle strategies have no roles, so verification skips their role checks.
+
+The rwa-v3 escrow reads `Vault.strategy()`, so `escrow.strategy()` must match the Vault's
+current strategy. A strategy swap therefore does not produce a purchase/redemption pricing
+split. `CheckConfigDrift` reuses the wiring and parameter checks, accepting minimum-purchase
+changes recorded in `Security`.
+
+## Income distribution
+
+`rwa-v3` projects can pay quote-token income to RWA holders through `IncomeDistributor`. The
+server prepares snapshots and serves proofs; it does not submit `createDistribution`. The
+income manager's wallet or Safe approves the quote token and calls
+`createDistribution(merkleRoot, total, recordBlock, claimDeadline, snapshotURI, snapshotSha256)`
+with the fields returned by the prepare call.
+
+Admin `POST /api/v1/income/distributions` accepts `{recordBlock, total, claimDeadline}`, requires
+an `Idempotency-Key` and records an audit entry. A successful call returns a `Prepared`
+distribution. It requires:
+
+- An `Active` rwa-v3 project with an income distributor (409 `income_unsupported`).
+- `recordBlock` at or below the indexed checkpoint minus `chain.confirmations`
+  (409 `record_block_not_final`).
+- A positive decimal string for `total` (400 `invalid_request`).
+- `claimDeadline` at least 7 days and 1 hour away (400 `claim_window_too_short`). The extra hour
+  allows mining time, but the transaction must still meet the contract's 7-day minimum at
+  inclusion.
+
+Preparation returns 409 `no_eligible_holders` if no holder receives a positive amount, or
+503 `ipfs_unavailable` if pinning fails.
+
+Entitlements use confirmed indexed events only. The server replays the token's `Transfer`
+events through `recordBlock` and excludes the Vault's unsold inventory. It replaces the escrow's
+balance with the RWA in redemption requests that are `Pending` or `Funded` at `recordBlock`,
+crediting each request's beneficiary. Frozen and Blocked holders count too. `eligibleSupply`
+is the sum of these attributed balances. Each holder receives
+`floor(total * balance / eligibleSupply)`; zero amounts are dropped, and rounding dust stays
+in the contract until `reclaimUnclaimed`.
+
+Preparation returns 409 `transfer_history_incomplete` if a transfer exceeds the sender's
+replayed balance or if replayed supply differs from indexed `SupplyController` mints minus
+burns. Deployments indexed before the server stored `Transfer` events need
+[reindexing](#backup-restore-and-reindex) before snapshot preparation.
+
+Snapshots follow `shared/schemas/income-snapshot.schema.json`: decimal strings, EIP-55 accounts
+sorted by lowercase hex, and RFC 8785 canonical bytes. The server hashes the bytes with SHA-256,
+pins them through `internal/ipfs` and stores them in `income_preparations`, so it can serve proofs
+if the pin is lost. Snapshots bypass the profile's 4096-item array limit but have a 1 MiB limit
+(409 `snapshot_too_large`). Holder capacity depends on entry size.
+
+`income.BuildTree` matches OpenZeppelin `StandardMerkleTree` for `["address","uint256"]`, with
+double-hashed leaves and sorted pairs. `TestIncomeMerkleVectors` checks each root, leaf and
+proof in `shared/vectors/income-merkle.json`.
+
+`GET /api/v1/income/distributions` requires an admin and returns results newest first with
+`limit`/`cursor` offset pagination. The service matches preparations to `DistributionCreated`
+events by `merkleRoot` and `snapshotSha256`, oldest first, using each event once. Repeated
+on-chain creations appear as separate rows. Status is `Prepared`, `Active`, `Expired` or
+`Reclaimed`. Claims remain valid through the deadline second; indexed `ClaimDeadlineExtended`
+events update that deadline.
+
+Public `GET /api/v1/income/claims/{address}` returns entitlements from readable server-prepared
+snapshots matched to on-chain distributions, newest first. Each entry includes `amount`,
+`proof` and a status of `Claimable`, `Claimed` or `Expired`. Malformed addresses return 400.
+Status reflects indexed events and time; the contract's `claim` call also checks pause and
+compliance. Snapshots prepared elsewhere have no entries in this response.
+
+The platform schedules `income.Service.Reconcile` every 15 seconds, skipping it while the indexer
+requires reconciliation. It rebuilds `income_distributions` and `income_claims` from indexed
+`IncomeDistributor` events. Like redemption reconciliation, it writes a fresh generation and
+prunes older rows to reflect indexer rollbacks.
 
 ## KeyProvider (hot-key backends)
 
@@ -262,7 +379,8 @@ API. It exposes standard Go metrics and:
 - `rwa_allowed_wallets`: wallets Allowed and unexpired in the investor read model, excluding
   the vault and redemption escrow.
 - `rwa_alerts_fired_total{kind}`: redemption findings and `storage_degraded`, `config_drift`,
-  `kyc_monitoring_hit`, `holder_cap_reached`, `holder_cap_exceeded`, `sanctions_list_match`;
+  `kyc_monitoring_hit`, `holder_cap_reached`, `holder_cap_exceeded`, `sanctions_list_match`,
+  `price_feed_stale`;
   persistent conditions count again on later checks.
 - `rwa_storage_up`: last Mongo ping result (0 before checking or in memory mode).
 - `rwa_config_drift`: last successful drift result, 1 for differences and 0 for a match;
@@ -277,11 +395,20 @@ uses funding-index time `FundedAt` against `alerts.funded_claim_failure_sla`. Fi
 counted and submitted to the audit log (`category: "alerts"`, `GET /api/v1/audit-logs`); audit
 persistence is best effort.
 
+The same 5-minute tick raises `price_feed_stale` when the Vault's Oracle strategy reverts on
+a price read because the feed is stale or invalid, the sequencer is down or in its grace
+period, feed decimals changed, or the contract returned an unknown revert. RPC transport
+failures are logged and skipped. The alert uses the strategy address as its audit target and
+includes the error name in its detail. These price failures block quotes for new purchases
+and redemption requests.
+
 Every 5 minutes, `project.CheckConfigDrift` checks post-adoption wiring without changing Active
 status. Differences raise `config_drift` through logs, metrics and audit attempts. Treasury,
-auditor and Vault strategy expectations follow Security's event projection; strategy swaps still
-report a purchase/redemption split because the escrow strategy is immutable. Prices/roles appear
-in `Security` rather than being checked against deployment values.
+auditor, minimum purchase and Vault strategy expectations follow the `Security` event projection.
+For rwa-v2, a strategy swap raises a purchase/redemption pricing split because the escrow's
+strategy is immutable. The rwa-v3 escrow follows `Vault.strategy()`, so a swap is accepted
+when the escrow matches. Price and role changes appear in `Security` and are excluded from
+checks against deployment values.
 
 ## Backup, restore, and reindex
 
@@ -291,10 +418,22 @@ into timestamped `.car` archives. Stop writers for a consistent dump: it does no
 collections intact, then imports and pins CAR roots with `ipfs dag import`.
 
 `cmd/reindex` deletes events for child addresses in `Project.Addresses` (retaining factory events),
-the chain's shared checkpoint/hash history, purchases and redemption requests. Profiles,
-investor ownership flags, audit logs and idempotency records remain. The command does not scan;
-a running platform rebuilds the indexed views. The scope uses stored addresses, including the
-deploy-time strategy.
+the chain's shared checkpoint/hash history, purchases, redemption requests and the income read
+models (`income_distributions`, `income_claims`). It preserves profiles, prepared income
+snapshots (`income_preparations`), investor ownership flags, audit logs and idempotency records.
+The command uses stored addresses, including the deploy-time strategy. It deletes data;
+the running platform rescans the chain and rebuilds the indexed views.
+
+Reindex an existing deployment before preparing income snapshots if its indexed history
+predates storage of `RWAToken` `Transfer` events. Gaps in that history can cause
+`POST /api/v1/income/distributions` to return 409 `transfer_history_incomplete`.
+
+1. Stop the platform.
+2. Set `contract.start_block` at or below the factory deployment block so the rescan includes
+   the child contracts' full history.
+3. Run `go run ./cmd/reindex --config <path>`; add `--yes` to skip the prompt.
+4. Start the platform and wait until the checkpoint's `lastBlock` in `indexer_checkpoints`
+   reaches the chain head.
 
 `server/ops/reindex_rehearsal.sh` waits for collection counts to return to their pre-delete values.
 `internal/indexer.TestReindexRehearsalReconstructsIdenticalReadModel` checks redemption-model
@@ -336,7 +475,7 @@ go build ./...
 go vet ./...
 go test ./...              # needs no live Mongo or chain
 go test ./... -race
-go run ./cmd/verifyabi      # ABI drift against contracts/out/ (skips if that dir is absent)
+go run ./cmd/verifyabi      # ABI drift: rwa-v3 bindings vs contracts/out/ (skips if absent), rwa-v2 factory vs the pinned testdata ABI
 bash e2e/run_e2e.sh          # end-to-end proof; needs anvil, forge, cast and docker
 ```
 

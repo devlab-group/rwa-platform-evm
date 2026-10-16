@@ -86,10 +86,11 @@ Detection: unexpected `RoleGranted`, `RoleRevoked`, `AuditorChanged`, `TreasuryC
 `StrategyChanged`, `Frozen`, `ForcedTransfer` or `DefaultAdminTransferScheduled` events;
 `config_drift` after wiring changes; or a compromised multisig owner's device.
 
-An admin controls each contract where it holds `DEFAULT_ADMIN_ROLE`, initially all six. It can
-grant operational roles, replace the auditor to authorize supply changes, redirect future
-proceeds, replace the Vault strategy, freeze non-system holders or force-transfer their tokens
-to Allowed recipients.
+An admin controls each contract where it holds `DEFAULT_ADMIN_ROLE`, initially every project
+contract with roles. It can grant operational roles, replace the auditor to authorize supply
+changes, redirect future proceeds and reclaimed income, replace the Vault strategy, change the
+minimum purchase, freeze non-system holders or force-transfer their tokens to Allowed
+recipients.
 
 1. If trusted Safe owners can meet the threshold, replace compromised owners through the Safe.
    If they cannot form a trusted quorum, administrative containment cannot proceed normally.
@@ -113,6 +114,11 @@ Revoke the compromised key's roles on every hosting contract and grant them to t
 | `PRICER_ROLE`                                 | sell inventory cheaply through a low purchase price, or commit inflated quotes through a high redemption price | pause and reset both prices; prepare rejection of inflated Pending requests, then unpause to reject (`REDEMPTION_MANAGER_ROLE`); completed purchases remain final |
 | `TREASURER_ROLE` (Vault and RedemptionEscrow) | withdraw proceeds to configured `treasury`; fund Pending requests from its own quote balance                   | revoke on both contracts                                                                                                                                          |
 | `REDEMPTION_MANAGER_ROLE`                     | reject Pending requests and return their RWA                                                                   | replace the role holder; affected investors can request again                                                                                                     |
+| `INCOME_MANAGER_ROLE`                         | fund a distribution with a wrong Merkle root from its own wallet; keep extending claim deadlines               | revoke; each distribution pays at most its funded total; pause claims if needed, then unpause before reclaiming the remainder to treasury after the deadline      |
+
+A wrong or manipulated oracle feed can misprice like a compromised pricer. Pause for
+containment. To replace it, deploy a trusted fixed strategy and call `Vault.setStrategy` while
+unpaused; rwa-v3 redemption pricing follows the switch. Reject inflated Pending requests as above.
 
 ## 5. Compromised server or server secrets
 

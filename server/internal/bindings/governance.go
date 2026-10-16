@@ -80,6 +80,7 @@ var roleNamesByID = map[common.Hash]string{
 	PricerRole:                    "PRICER_ROLE",
 	TreasurerRole:                 "TREASURER_ROLE",
 	RedemptionManagerRole:         "REDEMPTION_MANAGER_ROLE",
+	IncomeManagerRole:             "INCOME_MANAGER_ROLE",
 }
 
 // RoleName returns a known platform role's name, or false for an unknown ID

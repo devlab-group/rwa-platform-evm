@@ -69,5 +69,6 @@ interface IRedemptionEscrow {
 
     function vault() external view returns (address);
 
+    /// @notice The Vault's current price strategy
     function strategy() external view returns (address);
 }

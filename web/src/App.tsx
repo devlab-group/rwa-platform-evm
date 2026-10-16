@@ -29,6 +29,9 @@ const Transactions = lazy(() =>
     default: m.Transactions,
   })),
 );
+const Income = lazy(() =>
+  import("./routes/admin/Income").then((m) => ({ default: m.Income })),
+);
 const Security = lazy(() =>
   import("./routes/admin/Security").then((m) => ({ default: m.Security })),
 );
@@ -45,6 +48,7 @@ export default function App() {
           <Route path="compliance" element={<Compliance />} />
           <Route path="inventory-sales" element={<InventorySales />} />
           <Route path="redemptions" element={<Redemptions />} />
+          <Route path="income" element={<Income />} />
           <Route path="transactions" element={<Transactions />} />
           <Route path="security" element={<Security />} />
         </Route>

@@ -4,6 +4,12 @@ import { AsyncSection } from "../../components/AsyncSection";
 import { useAsync } from "../../hooks/useAsync";
 import { api, ApiError } from "../../lib/client";
 import type { components } from "../../lib/api-types";
+import {
+  buildProjectConfigV3,
+  parseFactoryVersion,
+  type FactoryVersion,
+  type StrategyChoice,
+} from "../../lib/deployConfig";
 import { AmountFormatError, toMinimalUnits } from "../../lib/format";
 import {
   buildLegal,
@@ -20,6 +26,7 @@ import {
   sendDeployProject,
   waitForTxReceipt,
   type ProjectConfigInput,
+  type ProjectConfigV3Input,
 } from "../../lib/wallet";
 
 type Project = components["schemas"]["Project"];
@@ -806,6 +813,7 @@ const REQUIRED_ADDRESS_FIELDS = [
 const MIN_REDEMPTION_TIMEOUT = 86_400; // 1 day
 const MAX_REDEMPTION_TIMEOUT = 31_536_000; // 365 days
 
+// The v3 fields stay at their neutral values on an rwa-v2 factory and are not sent
 const EMPTY_DEPLOY = {
   name: "",
   symbol: "",
@@ -821,8 +829,18 @@ const EMPTY_DEPLOY = {
   redemptionManager: "",
   treasury: "",
   adminTransferDelay: 172800,
+  strategyKind: "Fixed" as StrategyChoice,
+  minPurchase: "0",
+  incomeManager: "",
+  priceFeed: "",
+  priceMaxAge: "",
+  purchaseSpreadBps: "0",
+  redemptionSpreadBps: "0",
+  sequencerUptimeFeed: "",
+  sequencerGracePeriod: "",
 };
 
+// Loads the factory's version before offering a form, since the ProjectConfig encoding depends on it
 function DeployForm({
   profile,
   onDeployed,
@@ -830,7 +848,75 @@ function DeployForm({
   profile: CreatedProfile;
   onDeployed: () => void;
 }) {
+  const bootstrap = useAsync<components["schemas"]["BootstrapConfig"]>(
+    (signal) => api.getConfig({ signal }),
+    [],
+  );
+  if (bootstrap.status === "error") {
+    return (
+      <div className="async-state async-state--error" role="alert">
+        <p>Could not load factory/chain configuration.</p>
+        <button
+          type="button"
+          className="button button--secondary"
+          onClick={bootstrap.reload}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (bootstrap.status !== "success") {
+    return (
+      <div className="async-state async-state--loading" role="status">
+        Loading…
+      </div>
+    );
+  }
+  const version = parseFactoryVersion(bootstrap.data.factoryVersion);
+  if (!version) {
+    const reported = bootstrap.data.factoryVersion;
+    return (
+      <div className="async-state async-state--error" role="alert">
+        <p>
+          {reported
+            ? `Deployment is blocked: the configured factory reports an unsupported version (${reported}). This console deploys rwa-v2 and rwa-v3 factories only. Check contract.factory_address in the server config.`
+            : "The server could not read the configured factory's version, so deployment is blocked. Check the chain RPC and contract.factory_address. The server retries after 30 seconds."}
+        </p>
+        <button
+          type="button"
+          className="button button--secondary"
+          onClick={bootstrap.reload}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  return (
+    <DeployFormBody
+      profile={profile}
+      version={version}
+      bootstrap={bootstrap.data}
+      onDeployed={onDeployed}
+    />
+  );
+}
+
+function DeployFormBody({
+  profile,
+  version,
+  bootstrap,
+  onDeployed,
+}: {
+  profile: CreatedProfile;
+  version: FactoryVersion;
+  bootstrap: components["schemas"]["BootstrapConfig"];
+  onDeployed: () => void;
+}) {
+  const v3 = version === "rwa-v3";
   const [form, setForm] = useState(EMPTY_DEPLOY);
+  const oracle = v3 && form.strategyKind === "Oracle";
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -845,29 +931,29 @@ function DeployForm({
     setForm((f) => ({ ...f, [key]: value }));
   }
 
+  // Fixed needs prices and a pricer; Oracle needs a feed and max age instead. rwa-v2 is always fixed
+  const strategyReady = oracle
+    ? Boolean(form.priceFeed) && Boolean(form.priceMaxAge)
+    : Boolean(form.purchasePricePerWholeToken) &&
+      Boolean(form.redemptionPricePerWholeToken);
   const readyToReview =
     Boolean(form.name) &&
     Boolean(form.symbol) &&
-    Boolean(form.purchasePricePerWholeToken) &&
-    Boolean(form.redemptionPricePerWholeToken) &&
+    strategyReady &&
     form.redemptionTimeout >= MIN_REDEMPTION_TIMEOUT &&
     form.redemptionTimeout <= MAX_REDEMPTION_TIMEOUT &&
-    REQUIRED_ADDRESS_FIELDS.every((key) => Boolean(form[key]));
+    REQUIRED_ADDRESS_FIELDS.every(
+      (key) => (oracle && key === "pricer") || Boolean(form[key]),
+    ) &&
+    (!v3 || Boolean(form.incomeManager));
 
   async function handleDeploy() {
     setSubmitting(true);
     setError(null);
     setTxHash(null);
     try {
-      // Use public getConfig chain/factory before a project exists; wallet broadcasts and server
-      // observes ProjectDeployed
-      let bootstrap: components["schemas"]["BootstrapConfig"];
-      try {
-        bootstrap = await api.getConfig();
-      } catch {
-        setError("Could not load factory/chain configuration. Retry.");
-        return;
-      }
+      // Chain and factory come from the public bootstrap config; the wallet broadcasts and the
+      // server observes ProjectDeployed
       const factoryAddress = bootstrap.factoryAddress as Address;
       const chainId = bootstrap.chainId;
 
@@ -898,47 +984,89 @@ function DeployForm({
         return;
       }
 
-      let purchasePricePerWholeToken: string;
-      let redemptionPricePerWholeToken: string;
-      try {
-        purchasePricePerWholeToken = toMinimalUnits(
-          form.purchasePricePerWholeToken,
-          quoteDecimals,
-        );
-        redemptionPricePerWholeToken = toMinimalUnits(
-          form.redemptionPricePerWholeToken,
-          quoteDecimals,
-        );
-      } catch (err) {
-        setError(
-          err instanceof AmountFormatError
-            ? err.message
-            : "Invalid price - enter a whole-quote-token amount.",
-        );
-        return;
-      }
-
       // Build config locally: keccak256(profile UUID) for projectId, stored profile decimals/digest
       // for identity
-      const projectConfig: ProjectConfigInput = {
-        name: form.name,
-        symbol: form.symbol,
-        decimals: profile.tokenDecimals,
-        profileDigest: profile.profileDigest as Hex,
-        projectId: keccak256(toBytes(profile.projectId)),
-        quoteToken: form.quoteToken as Address,
-        purchasePricePerWholeToken: BigInt(purchasePricePerWholeToken),
-        redemptionPricePerWholeToken: BigInt(redemptionPricePerWholeToken),
-        redemptionTimeout: BigInt(form.redemptionTimeout),
-        admin: form.admin as Address,
-        auditor: form.auditor as Address,
-        complianceOperator: form.complianceOperator as Address,
-        pricer: form.pricer as Address,
-        treasurer: form.treasurer as Address,
-        redemptionManager: form.redemptionManager as Address,
-        treasury: form.treasury as Address,
-        adminTransferDelay: form.adminTransferDelay,
-      };
+      const projectId = keccak256(toBytes(profile.projectId));
+      let projectConfig: ProjectConfigInput | ProjectConfigV3Input;
+      if (v3) {
+        const built = buildProjectConfigV3(
+          {
+            name: form.name,
+            symbol: form.symbol,
+            quoteToken: form.quoteToken,
+            strategyKind: form.strategyKind,
+            purchasePrice: form.purchasePricePerWholeToken,
+            redemptionPrice: form.redemptionPricePerWholeToken,
+            minPurchase: form.minPurchase,
+            priceFeed: form.priceFeed,
+            priceMaxAge: form.priceMaxAge,
+            purchaseSpreadBps: form.purchaseSpreadBps,
+            redemptionSpreadBps: form.redemptionSpreadBps,
+            sequencerUptimeFeed: form.sequencerUptimeFeed,
+            sequencerGracePeriod: form.sequencerGracePeriod,
+            redemptionTimeout: form.redemptionTimeout,
+            admin: form.admin,
+            auditor: form.auditor,
+            complianceOperator: form.complianceOperator,
+            pricer: form.pricer,
+            treasurer: form.treasurer,
+            redemptionManager: form.redemptionManager,
+            incomeManager: form.incomeManager,
+            treasury: form.treasury,
+            adminTransferDelay: form.adminTransferDelay,
+          },
+          {
+            decimals: profile.tokenDecimals,
+            profileDigest: profile.profileDigest as Hex,
+            projectId,
+            quoteDecimals,
+          },
+        );
+        if ("error" in built) {
+          setError(built.error);
+          return;
+        }
+        projectConfig = built.config;
+      } else {
+        let purchasePricePerWholeToken: string;
+        let redemptionPricePerWholeToken: string;
+        try {
+          purchasePricePerWholeToken = toMinimalUnits(
+            form.purchasePricePerWholeToken,
+            quoteDecimals,
+          );
+          redemptionPricePerWholeToken = toMinimalUnits(
+            form.redemptionPricePerWholeToken,
+            quoteDecimals,
+          );
+        } catch (err) {
+          setError(
+            err instanceof AmountFormatError
+              ? err.message
+              : "Invalid price - enter a whole-quote-token amount.",
+          );
+          return;
+        }
+        projectConfig = {
+          name: form.name,
+          symbol: form.symbol,
+          decimals: profile.tokenDecimals,
+          profileDigest: profile.profileDigest as Hex,
+          projectId,
+          quoteToken: form.quoteToken as Address,
+          purchasePricePerWholeToken: BigInt(purchasePricePerWholeToken),
+          redemptionPricePerWholeToken: BigInt(redemptionPricePerWholeToken),
+          redemptionTimeout: BigInt(form.redemptionTimeout),
+          admin: form.admin as Address,
+          auditor: form.auditor as Address,
+          complianceOperator: form.complianceOperator as Address,
+          pricer: form.pricer as Address,
+          treasurer: form.treasurer as Address,
+          redemptionManager: form.redemptionManager as Address,
+          treasury: form.treasury as Address,
+          adminTransferDelay: form.adminTransferDelay,
+        };
+      }
 
       const hash = await sendDeployProject(
         chainId,
@@ -1005,36 +1133,166 @@ function DeployForm({
           onChange={(e) => set("quoteToken", e.target.value)}
         />
       </div>
-      <div className="field">
-        <label htmlFor="purchasePrice">
-          Purchase price per whole token (whole quote-token units)
-        </label>
-        <input
-          id="purchasePrice"
-          value={form.purchasePricePerWholeToken}
-          onChange={(e) => set("purchasePricePerWholeToken", e.target.value)}
-          aria-describedby="purchasePrice-hint"
-        />
-        <span className="field__hint" id="purchasePrice-hint">
-          Whole quote-token units (e.g. 1.5), converted to minimal units in the
-          browser before deployment.
-        </span>
-      </div>
-      <div className="field">
-        <label htmlFor="redemptionPrice">
-          Redemption price per whole token (whole quote-token units)
-        </label>
-        <input
-          id="redemptionPrice"
-          value={form.redemptionPricePerWholeToken}
-          onChange={(e) => set("redemptionPricePerWholeToken", e.target.value)}
-          aria-describedby="redemptionPrice-hint"
-        />
-        <span className="field__hint" id="redemptionPrice-hint">
-          Whole quote-token units, converted to minimal units in the browser
-          before deployment.
-        </span>
-      </div>
+      {v3 && (
+        <div className="field">
+          <label htmlFor="strategyKind">Price strategy</label>
+          <select
+            id="strategyKind"
+            value={form.strategyKind}
+            onChange={(e) =>
+              set("strategyKind", e.target.value as StrategyChoice)
+            }
+            aria-describedby="strategyKind-hint"
+          >
+            <option value="Fixed">Fixed prices (set by a pricer)</option>
+            <option value="Oracle">Oracle feed (Chainlink-style)</option>
+          </select>
+          <span className="field__hint" id="strategyKind-hint">
+            An oracle strategy has no roles and no setters: its feed and spreads
+            are fixed at deployment.
+          </span>
+        </div>
+      )}
+      {v3 && (
+        <div className="field">
+          <label htmlFor="minPurchase">
+            Minimum purchase (whole quote-token units)
+          </label>
+          <input
+            id="minPurchase"
+            value={form.minPurchase}
+            onChange={(e) => set("minPurchase", e.target.value)}
+            aria-describedby="minPurchase-hint"
+          />
+          <span className="field__hint" id="minPurchase-hint">
+            Minimum quote paid per purchase; 0 disables it. The admin can change
+            it later.
+          </span>
+        </div>
+      )}
+      {!oracle && (
+        <>
+          <div className="field">
+            <label htmlFor="purchasePrice">
+              Purchase price per whole token (whole quote-token units)
+            </label>
+            <input
+              id="purchasePrice"
+              value={form.purchasePricePerWholeToken}
+              onChange={(e) =>
+                set("purchasePricePerWholeToken", e.target.value)
+              }
+              aria-describedby="purchasePrice-hint"
+            />
+            <span className="field__hint" id="purchasePrice-hint">
+              Whole quote-token units (e.g. 1.5), converted to minimal units in
+              the browser before deployment.
+            </span>
+          </div>
+          <div className="field">
+            <label htmlFor="redemptionPrice">
+              Redemption price per whole token (whole quote-token units)
+            </label>
+            <input
+              id="redemptionPrice"
+              value={form.redemptionPricePerWholeToken}
+              onChange={(e) =>
+                set("redemptionPricePerWholeToken", e.target.value)
+              }
+              aria-describedby="redemptionPrice-hint"
+            />
+            <span className="field__hint" id="redemptionPrice-hint">
+              Whole quote-token units, converted to minimal units in the browser
+              before deployment.
+            </span>
+          </div>
+        </>
+      )}
+      {oracle && (
+        <>
+          <div className="field">
+            <label htmlFor="priceFeed">Price feed address</label>
+            <input
+              id="priceFeed"
+              className="mono"
+              value={form.priceFeed}
+              onChange={(e) => set("priceFeed", e.target.value)}
+              aria-describedby="priceFeed-hint"
+            />
+            <span className="field__hint" id="priceFeed-hint">
+              Chainlink-style AggregatorV3 feed quoting one whole RWA token in
+              the quote token.
+            </span>
+          </div>
+          <div className="field">
+            <label htmlFor="priceMaxAge">Max feed age (seconds)</label>
+            <input
+              id="priceMaxAge"
+              inputMode="numeric"
+              value={form.priceMaxAge}
+              onChange={(e) => set("priceMaxAge", e.target.value)}
+              aria-describedby="priceMaxAge-hint"
+            />
+            <span className="field__hint" id="priceMaxAge-hint">
+              New purchases and redemption requests revert when the feed is older
+              than this.
+            </span>
+          </div>
+          <div className="field">
+            <label htmlFor="purchaseSpreadBps">Purchase spread (bps)</label>
+            <input
+              id="purchaseSpreadBps"
+              inputMode="numeric"
+              value={form.purchaseSpreadBps}
+              onChange={(e) => set("purchaseSpreadBps", e.target.value)}
+              aria-describedby="purchaseSpreadBps-hint"
+            />
+            <span className="field__hint" id="purchaseSpreadBps-hint">
+              Markup over the feed price, 0 to 10,000 (100 bps = 1%).
+            </span>
+          </div>
+          <div className="field">
+            <label htmlFor="redemptionSpreadBps">Redemption spread (bps)</label>
+            <input
+              id="redemptionSpreadBps"
+              inputMode="numeric"
+              value={form.redemptionSpreadBps}
+              onChange={(e) => set("redemptionSpreadBps", e.target.value)}
+              aria-describedby="redemptionSpreadBps-hint"
+            />
+            <span className="field__hint" id="redemptionSpreadBps-hint">
+              Discount from the feed price, 0 to 9,999.
+            </span>
+          </div>
+          <div className="field">
+            <label htmlFor="sequencerUptimeFeed">
+              Sequencer uptime feed (optional)
+            </label>
+            <input
+              id="sequencerUptimeFeed"
+              className="mono"
+              value={form.sequencerUptimeFeed}
+              onChange={(e) => set("sequencerUptimeFeed", e.target.value)}
+              aria-describedby="sequencerUptimeFeed-hint"
+            />
+            <span className="field__hint" id="sequencerUptimeFeed-hint">
+              For L2 chains. Set together with the grace period, or leave both
+              empty.
+            </span>
+          </div>
+          <div className="field">
+            <label htmlFor="sequencerGracePeriod">
+              Sequencer grace period (seconds, optional)
+            </label>
+            <input
+              id="sequencerGracePeriod"
+              inputMode="numeric"
+              value={form.sequencerGracePeriod}
+              onChange={(e) => set("sequencerGracePeriod", e.target.value)}
+            />
+          </div>
+        </>
+      )}
       <div className="field">
         <label htmlFor="redemptionTimeout">Redemption timeout (seconds)</label>
         <input
@@ -1077,15 +1335,17 @@ function DeployForm({
           onChange={(e) => set("complianceOperator", e.target.value)}
         />
       </div>
-      <div className="field">
-        <label htmlFor="pricer">Pricer address</label>
-        <input
-          id="pricer"
-          className="mono"
-          value={form.pricer}
-          onChange={(e) => set("pricer", e.target.value)}
-        />
-      </div>
+      {!oracle && (
+        <div className="field">
+          <label htmlFor="pricer">Pricer address</label>
+          <input
+            id="pricer"
+            className="mono"
+            value={form.pricer}
+            onChange={(e) => set("pricer", e.target.value)}
+          />
+        </div>
+      )}
       <div className="field">
         <label htmlFor="treasurer">Treasurer address</label>
         <input
@@ -1104,6 +1364,22 @@ function DeployForm({
           onChange={(e) => set("redemptionManager", e.target.value)}
         />
       </div>
+      {v3 && (
+        <div className="field">
+          <label htmlFor="incomeManager">Income manager address</label>
+          <input
+            id="incomeManager"
+            className="mono"
+            value={form.incomeManager}
+            onChange={(e) => set("incomeManager", e.target.value)}
+            aria-describedby="incomeManager-hint"
+          />
+          <span className="field__hint" id="incomeManager-hint">
+            Holds INCOME_MANAGER_ROLE on the IncomeDistributor: creates and
+            extends income distributions.
+          </span>
+        </div>
+      )}
       <div className="field">
         <label htmlFor="treasury">Treasury address</label>
         <input
@@ -1145,6 +1421,57 @@ function DeployForm({
             the server verifies ProjectDeployed. Review every field: token
             identity and one-time contract wiring are permanent.
           </p>
+          {v3 && (
+            <dl className="tx-preview__grid">
+              <div className="tx-preview__row">
+                <dt>Chain ID</dt>
+                <dd>{bootstrap.chainId}</dd>
+              </div>
+              <div className="tx-preview__row">
+                <dt>Factory ({version})</dt>
+                <dd className="mono">{bootstrap.factoryAddress}</dd>
+              </div>
+              <div className="tx-preview__row">
+                <dt>Price strategy</dt>
+                <dd>{form.strategyKind}</dd>
+              </div>
+              <div className="tx-preview__row">
+                <dt>Minimum purchase</dt>
+                <dd>{form.minPurchase || "0"} (whole quote-token units)</dd>
+              </div>
+              {oracle && (
+                <>
+                  <div className="tx-preview__row">
+                    <dt>Price feed</dt>
+                    <dd className="mono">{form.priceFeed}</dd>
+                  </div>
+                  <div className="tx-preview__row">
+                    <dt>Max feed age</dt>
+                    <dd>{form.priceMaxAge} s</dd>
+                  </div>
+                  <div className="tx-preview__row">
+                    <dt>Spreads (purchase / redemption)</dt>
+                    <dd>
+                      {form.purchaseSpreadBps || "0"} /{" "}
+                      {form.redemptionSpreadBps || "0"} bps
+                    </dd>
+                  </div>
+                  <div className="tx-preview__row">
+                    <dt>Sequencer feed / grace</dt>
+                    <dd>
+                      {form.sequencerUptimeFeed
+                        ? `${form.sequencerUptimeFeed} / ${form.sequencerGracePeriod} s`
+                        : "none"}
+                    </dd>
+                  </div>
+                </>
+              )}
+              <div className="tx-preview__row">
+                <dt>Income manager</dt>
+                <dd className="mono">{form.incomeManager}</dd>
+              </div>
+            </dl>
+          )}
           <div className="tx-preview__actions">
             <button
               type="button"

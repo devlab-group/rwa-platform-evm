@@ -2,11 +2,15 @@
 pragma solidity ^0.8.24;
 
 import {TestBase} from "../helpers/TestBase.sol";
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {IAccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
+import {
+    IAccessControlDefaultAdminRules
+} from "@openzeppelin/contracts/access/extensions/IAccessControlDefaultAdminRules.sol";
 
-/// @notice Checks getRoleMemberCount, getRoleMember and getRoleMembers against fixture role holders
-///         on all six role-bearing contracts. Enumeration supports post-deploy verification
-///         without complete event history; see ComplianceRegistry for inheritance overrides.
+/// @notice Checks getRoleMemberCount, getRoleMember and getRoleMembers on every role-bearing contract
+/// @dev Enumeration supports deployment verification without full event history; the shared base
+///      preserves two-step admin transfer
 contract RoleEnumerationTest is TestBase {
     function test_complianceRegistry_complianceRoleEnumeration_bootstrapRenounced() public view {
         bytes32 role = compliance.COMPLIANCE_ROLE();
@@ -65,6 +69,13 @@ contract RoleEnumerationTest is TestBase {
         assertEq(strategy.getRoleMember(strategy.PRICER_ROLE(), 0), pricer);
         assertEq(strategy.getRoleMemberCount(strategy.DEFAULT_ADMIN_ROLE()), 1);
         assertEq(strategy.getRoleMember(strategy.DEFAULT_ADMIN_ROLE(), 0), admin);
+    }
+
+    function test_incomeDistributor_roleEnumeration() public view {
+        assertEq(income.getRoleMemberCount(income.INCOME_MANAGER_ROLE()), 1);
+        assertEq(income.getRoleMember(income.INCOME_MANAGER_ROLE(), 0), incomeManager);
+        assertEq(income.getRoleMemberCount(income.DEFAULT_ADMIN_ROLE()), 1);
+        assertEq(income.getRoleMember(income.DEFAULT_ADMIN_ROLE(), 0), admin);
     }
 
     /// @dev Enumeration must track post-deploy grants and revokes
@@ -126,6 +137,12 @@ contract RoleEnumerationTest is TestBase {
         assertFalse(strategy.hasRole(strategy.DEFAULT_ADMIN_ROLE(), f));
         _assertNotAMember(strategy.getRoleMembers(strategy.PRICER_ROLE()), f);
         _assertNotAMember(strategy.getRoleMembers(strategy.DEFAULT_ADMIN_ROLE()), f);
+
+        // IncomeDistributor
+        assertFalse(income.hasRole(income.INCOME_MANAGER_ROLE(), f));
+        assertFalse(income.hasRole(income.DEFAULT_ADMIN_ROLE(), f));
+        _assertNotAMember(income.getRoleMembers(income.INCOME_MANAGER_ROLE()), f);
+        _assertNotAMember(income.getRoleMembers(income.DEFAULT_ADMIN_ROLE()), f);
     }
 
     function _assertNotAMember(address[] memory members, address account) private pure {
@@ -143,5 +160,29 @@ contract RoleEnumerationTest is TestBase {
         assertTrue(escrow.supportsInterface(type(IAccessControlEnumerable).interfaceId));
         assertTrue(supplyController.supportsInterface(type(IAccessControlEnumerable).interfaceId));
         assertTrue(strategy.supportsInterface(type(IAccessControlEnumerable).interfaceId));
+        assertTrue(income.supportsInterface(type(IAccessControlEnumerable).interfaceId));
+    }
+
+    /// @dev Every override chain must enforce the delayed admin transfer and reject direct grants
+    ///      of DEFAULT_ADMIN_ROLE
+    function test_defaultAdminRules_directAdminGrantRevertsOnEveryContract() public {
+        address[7] memory contracts = [
+            address(compliance),
+            address(token),
+            address(supplyController),
+            address(vault),
+            address(escrow),
+            address(strategy),
+            address(income)
+        ];
+        address newAdmin = makeAddr("directAdminGrant");
+        for (uint256 i = 0; i < contracts.length; i++) {
+            IAccessControlDefaultAdminRules c = IAccessControlDefaultAdminRules(contracts[i]);
+            assertTrue(IERC165(contracts[i]).supportsInterface(type(IAccessControlDefaultAdminRules).interfaceId));
+            vm.prank(admin);
+            vm.expectRevert(IAccessControlDefaultAdminRules.AccessControlEnforcedDefaultAdminRules.selector);
+            c.grantRole(bytes32(0), newAdmin);
+            assertEq(c.defaultAdmin(), admin);
+        }
     }
 }

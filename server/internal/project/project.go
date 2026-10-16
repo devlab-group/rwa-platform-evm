@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -31,6 +32,12 @@ type Service struct {
 	factoryAddr common.Address
 	repo        repository.ProjectRepository
 	chainID     int64
+	// factoryVersion caches the configured factory's version() once it has been read
+	factoryVersion atomic.Value
+	// versionFailedAt is the unix-nano time of the last failed version() read, 0 if none
+	versionFailedAt atomic.Int64
+	// now is the clock of the failed-read backoff; nil means time.Now
+	now func() time.Time
 	// adminAddress binds adoption to the configured wallet when nonzero; public
 	// projectId/profileDigest values alone cannot authenticate a permissionless deployment
 	adminAddress common.Address
@@ -50,6 +57,42 @@ func New(client blockchain.Client, factoryAddr common.Address, repo repository.P
 	}
 }
 
+// versionRetryAfter is how long a failed version() read is not retried
+const versionRetryAfter = 30 * time.Second
+
+// versionReadTimeout bounds one version() read
+const versionReadTimeout = 3 * time.Second
+
+// FactoryVersion caches the configured factory's first nonempty version() result.
+// Missing configuration or failed/empty reads return "", with failures backed off for
+// versionRetryAfter to bound public-endpoint RPC traffic.
+func (s *Service) FactoryVersion(ctx context.Context) string {
+	if v, ok := s.factoryVersion.Load().(string); ok {
+		return v
+	}
+	if s.factoryAddr == (common.Address{}) {
+		return ""
+	}
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+	if failed := s.versionFailedAt.Load(); failed != 0 && now().Sub(time.Unix(0, failed)) < versionRetryAfter {
+		return ""
+	}
+	// The read runs detached from the caller, so a client that disconnects from the public
+	// GET /config does not record a failure that every caller then sees
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), versionReadTimeout)
+	defer cancel()
+	v, err := viewString(readCtx, s.client, s.factory.ABI, s.factoryAddr, "version")
+	if err != nil || v == "" {
+		s.versionFailedAt.Store(now().UnixNano())
+		return ""
+	}
+	s.factoryVersion.Store(v)
+	return v
+}
+
 // GetProject returns the current project record
 func (s *Service) GetProject(ctx context.Context) (*models.Project, error) {
 	return s.repo.Get(ctx)
@@ -57,7 +100,7 @@ func (s *Service) GetProject(ctx context.Context) (*models.Project, error) {
 
 // SupportedFactoryVersions is the set of RWAFactory.version() strings that this
 // server's verification logic supports
-var SupportedFactoryVersions = map[string]bool{"rwa-v2": true}
+var SupportedFactoryVersions = map[string]bool{bindings.FactoryVersionV2: true, bindings.FactoryVersionV3: true}
 
 // ReconcileDeployment repeatedly adopts and verifies the newest authorized
 // ProjectDeployed event from the configured factory. Its projectId must equal keccak256
@@ -168,7 +211,7 @@ func (s *Service) deployAuthorizationError(ctx context.Context, txHash common.Ha
 	if err != nil {
 		return "calldata is not an RWAFactory.deploy(ProjectConfig): " + err.Error(), nil
 	}
-	return s.adminBindingError(tx, cfg), nil
+	return s.adminBindingError(tx, cfg.ProjectConfig), nil
 }
 
 // adminBindingError returns "" only if the recovered sender and ProjectConfig.admin
@@ -208,6 +251,7 @@ func (s *Service) demoteOrphaned(ctx context.Context, p *models.Project) (err er
 	p.DeployTxHash = ""
 	p.Admin, p.Auditor, p.Treasury, p.RedemptionManager = "", "", "", ""
 	p.ComplianceOperator, p.Pricer, p.Treasurer, p.QuoteToken = "", "", "", ""
+	p.IncomeManager, p.MinPurchaseQuote, p.StrategyKind, p.Oracle = "", "", "", nil
 	p.PurchasePricePerWholeToken, p.RedemptionPricePerWholeToken = "", ""
 	p.QuoteDecimals = 0
 	p.VerificationNote = "deployment demoted: the ProjectDeployed event it was adopted from is no longer canonical (reorg)"
@@ -251,7 +295,7 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 		if lg.Address != s.factoryAddr {
 			continue // the log must be emitted by the configured factory
 		}
-		if len(lg.Topics) == 0 || lg.Topics[0] != s.factory.EventID("ProjectDeployed") {
+		if len(lg.Topics) == 0 || !s.factory.IsProjectDeployed(lg.Topics[0]) {
 			continue
 		}
 		ev, err := s.factory.UnpackProjectDeployed(lg.Data, lg.Topics)
@@ -290,6 +334,9 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 	if err != nil {
 		return s.markVerificationFailed(ctx, p, "deploy transaction calldata could not be decoded to an RWAFactory.deploy(ProjectConfig): "+err.Error())
 	}
+	if cfg.Version != deployed.Version || cfg.Version != deployed.Layout {
+		return s.markVerificationFailed(ctx, p, fmt.Sprintf("deploy calldata is %s, the ProjectDeployed event uses the %s layout and reports version %q", cfg.Version, deployed.Layout, deployed.Version))
+	}
 	// Check the signed profile identity and decimals against the stored profile
 	if cfg.ProjectID != common.Hash(wantProjectID) {
 		return s.markVerificationFailed(ctx, p, "deploy calldata projectId disagrees with the stored asset profile")
@@ -302,7 +349,7 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 	}
 	// Recheck authorization for direct callers: an attacker's own calldata cannot serve as
 	// a trusted allowlist
-	if reason := s.adminBindingError(tx, cfg); reason != "" {
+	if reason := s.adminBindingError(tx, cfg.ProjectConfig); reason != "" {
 		return s.markVerificationFailed(ctx, p, reason)
 	}
 	applyConfig(p, cfg)
@@ -312,6 +359,9 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 		SupplyController: deployed.SupplyController.Hex(), Vault: deployed.Vault.Hex(),
 		RedemptionEscrow: deployed.RedemptionEscrow.Hex(), Strategy: deployed.Strategy.Hex(),
 		QuoteToken: cfg.QuoteToken.Hex(),
+	}
+	if deployed.Version == bindings.FactoryVersionV3 {
+		p.Addresses.IncomeDistributor = deployed.IncomeDistributor.Hex()
 	}
 	p.Version = deployed.Version
 
@@ -347,7 +397,7 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 		reasons = append(reasons, fmt.Sprintf("unexpected role holders: %v", unexpectedRoles))
 	}
 
-	factoryRoles, err := verifyNoFactoryRoles(ctx, s.client, s.factoryAddr, p.Addresses)
+	factoryRoles, err := verifyNoFactoryRoles(ctx, s.client, s.factoryAddr, p)
 	if err != nil {
 		return nil, fmt.Errorf("project: verify factory role absence: %w", err)
 	}
@@ -393,9 +443,10 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 	return p, nil
 }
 
-// applyConfig copies signed roles, treasury, auditor, quote token, prices and timeout
-// onto p for verifyRoles and verifyImmutableConfig
-func applyConfig(p *models.Project, cfg bindings.ProjectConfig) {
+// applyConfig copies signed roles, treasury, auditor, quote token, prices, timeout and
+// the rwa-v3 minimum purchase, income manager and strategy configuration onto p for
+// verifyRoles and verifyImmutableConfig. An Oracle strategy has no stored prices.
+func applyConfig(p *models.Project, cfg bindings.DeployCall) {
 	p.Admin = cfg.Admin.Hex()
 	p.Auditor = cfg.Auditor.Hex()
 	p.ComplianceOperator = cfg.ComplianceOperator.Hex()
@@ -404,13 +455,30 @@ func applyConfig(p *models.Project, cfg bindings.ProjectConfig) {
 	p.RedemptionManager = cfg.RedemptionManager.Hex()
 	p.Treasury = cfg.Treasury.Hex()
 	p.QuoteToken = cfg.QuoteToken.Hex()
+	p.RedemptionTimeout = int64(cfg.RedemptionTimeout)
+	p.StrategyKind = models.StrategyKindFixed
+	if cfg.Version == bindings.FactoryVersionV3 {
+		p.IncomeManager = cfg.IncomeManager.Hex()
+		p.MinPurchaseQuote = "0"
+		if cfg.MinPurchaseQuote != nil {
+			p.MinPurchaseQuote = cfg.MinPurchaseQuote.String()
+		}
+		if cfg.StrategyKind == bindings.StrategyKindOracle {
+			p.StrategyKind = models.StrategyKindOracle
+			p.Oracle = &models.OracleConfig{
+				Feed: cfg.PriceFeed.Hex(), MaxAge: cfg.PriceMaxAge,
+				PurchaseSpreadBps: cfg.PurchaseSpreadBps, RedemptionSpreadBps: cfg.RedemptionSpreadBps,
+				SequencerUptimeFeed: cfg.SequencerUptimeFeed.Hex(), GracePeriod: cfg.SequencerGracePeriod,
+			}
+			return
+		}
+	}
 	if cfg.PurchasePricePerWholeToken != nil {
 		p.PurchasePricePerWholeToken = cfg.PurchasePricePerWholeToken.String()
 	}
 	if cfg.RedemptionPricePerWholeToken != nil {
 		p.RedemptionPricePerWholeToken = cfg.RedemptionPricePerWholeToken.String()
 	}
-	p.RedemptionTimeout = int64(cfg.RedemptionTimeout)
 }
 
 // markVerificationFailed persists p as Failed with reason, returning (p, nil) if the

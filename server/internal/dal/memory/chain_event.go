@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"sync"
 
@@ -67,12 +68,12 @@ func (r *ChainEventRepository) ListByName(ctx context.Context, chainID int64, ad
 	return out, nil
 }
 
-func (r *ChainEventRepository) ListAll(ctx context.Context, chainID int64) ([]*models.ChainEvent, error) {
+func (r *ChainEventRepository) ListAll(ctx context.Context, chainID int64, excludeNames ...string) ([]*models.ChainEvent, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := make([]*models.ChainEvent, 0)
 	for _, v := range r.m {
-		if v.ChainID == chainID {
+		if v.ChainID == chainID && !slices.Contains(excludeNames, v.Name) {
 			cp := *v
 			out = append(out, &cp)
 		}

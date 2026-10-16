@@ -57,6 +57,8 @@ vectors-check: dialect-check ## Verify shared golden vectors reproduce across la
 	# shared/vectors/erc7943-abi.json, so one drifting selector fails here.
 	# The web line needs web/node_modules, so run `make bootstrap` first on a fresh checkout.
 	cd server && go test ./internal/bindings/... -run Vectors -count=1
+	# Check the server tree against the same OpenZeppelin vectors as the contracts
+	cd server && go test ./internal/income -run TestIncomeMerkleVectors -count=1
 	cd web && npm test -- --run src/lib/abis.test.ts
 
 dialect-check: ## Cross-binary parity for the assetSchema dialect

@@ -4,13 +4,9 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {
-    AccessControlDefaultAdminRules
-} from "@openzeppelin/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
-import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {AccessControlEnumerableAdminRules} from "./access/AccessControlEnumerableAdminRules.sol";
 import {IRedemptionEscrow} from "./interfaces/IRedemptionEscrow.sol";
+import {IVault} from "./interfaces/IVault.sol";
 import {IPriceStrategy} from "./interfaces/IPriceStrategy.sol";
 import {IRWAToken} from "./interfaces/IRWAToken.sol";
 import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
@@ -20,13 +16,8 @@ import {RWAToken} from "./RWAToken.sol";
 /// @notice Cash redemption: request, fund, then permissionless claim
 /// @dev Timed-out cancellation uses RWAToken.returnEscrowedRWA to repay an Allowed beneficiary
 ///      while paused; other transitions check pause. See docs/spec/redemption-state-machine.md.
-///      Enumerable treasurer, redemption-manager and admin roles; see ComplianceRegistry for overrides.
-contract RedemptionEscrow is
-    IRedemptionEscrow,
-    AccessControlEnumerable,
-    AccessControlDefaultAdminRules,
-    ReentrancyGuard
-{
+///      Enumerable treasurer, redemption-manager and admin roles.
+contract RedemptionEscrow is IRedemptionEscrow, AccessControlEnumerableAdminRules, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     bytes32 public constant TREASURER_ROLE = keccak256("TREASURER_ROLE");
@@ -35,7 +26,6 @@ contract RedemptionEscrow is
     address public immutable token;
     address public immutable quoteToken;
     address public immutable vault;
-    address public immutable strategy;
     uint64 public immutable redemptionTimeout;
     address private immutable _compliance;
 
@@ -48,20 +38,18 @@ contract RedemptionEscrow is
         address token_,
         address quoteToken_,
         address vault_,
-        address strategy_,
         uint64 redemptionTimeout_,
         address treasurer,
         address redemptionManager,
         address admin,
         uint48 adminTransferDelay
-    ) AccessControlDefaultAdminRules(adminTransferDelay, admin) {
-        if (token_ == address(0) || quoteToken_ == address(0) || vault_ == address(0) || strategy_ == address(0)) {
+    ) AccessControlEnumerableAdminRules(adminTransferDelay, admin) {
+        if (token_ == address(0) || quoteToken_ == address(0) || vault_ == address(0)) {
             revert ZeroAddress();
         }
         token = token_;
         quoteToken = quoteToken_;
         vault = vault_;
-        strategy = strategy_;
         redemptionTimeout = redemptionTimeout_;
         _compliance = IRWAToken(token_).compliance();
 
@@ -79,7 +67,7 @@ contract RedemptionEscrow is
         if (rwaAmount == 0) revert ZeroAmount();
         if (deadline < block.timestamp) revert DeadlineExpired(deadline, block.timestamp);
 
-        uint256 quoteAmount = IPriceStrategy(strategy).quoteRedemption(rwaAmount);
+        uint256 quoteAmount = IPriceStrategy(strategy()).quoteRedemption(rwaAmount);
         if (quoteAmount == 0) revert ZeroQuote();
         if (quoteAmount < minQuoteOut) revert QuoteBelowMin(quoteAmount, minQuoteOut);
 
@@ -170,62 +158,12 @@ contract RedemptionEscrow is
         return _requests[id];
     }
 
+    /// @inheritdoc IRedemptionEscrow
+    function strategy() public view returns (address) {
+        return IVault(vault).strategy();
+    }
+
     function previewRedeem(uint256 rwaAmount) external view returns (uint256 quoteAmount) {
-        return IPriceStrategy(strategy).quoteRedemption(rwaAmount);
-    }
-
-    // ---- AccessControl overrides, see ComplianceRegistry.sol ----
-
-    function _grantRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._grantRole(role, account);
-    }
-
-    function _revokeRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._revokeRole(role, account);
-    }
-
-    function _setRoleAdmin(bytes32 role, bytes32 adminRole)
-        internal
-        override(AccessControl, AccessControlDefaultAdminRules)
-    {
-        super._setRoleAdmin(role, adminRole);
-    }
-
-    function grantRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.grantRole(role, account);
-    }
-
-    function revokeRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.revokeRole(role, account);
-    }
-
-    function renounceRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.renounceRole(role, account);
-    }
-
-    function supportsInterface(bytes4 interfaceId)
-        public
-        view
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super.supportsInterface(interfaceId);
+        return IPriceStrategy(strategy()).quoteRedemption(rwaAmount);
     }
 }

@@ -56,6 +56,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: "22.23.3" }
+      # The pinned-ABI test compares lib/abis.ts with the compiled contracts
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with: { version: v1.5.1 }
+      - uses: ./.github/actions/forge-deps
+      - run: cd contracts && forge build
       # Match `make ci` (web-test): typecheck, test and build
       - run: cd web && npm ci && npm run typecheck && npm test && npm run build
 
@@ -66,6 +71,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: "22.23.3" }
+      # The pinned-ABI test compares lib/abis.ts with the compiled contracts
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with: { version: v1.5.1 }
+      - uses: ./.github/actions/forge-deps
+      - run: cd contracts && forge build
       - run: cd investor-web && npm ci && npm run typecheck && npm test && npm run build
 
   # Build the SPA and release binary to verify go:embed resolves real assets.

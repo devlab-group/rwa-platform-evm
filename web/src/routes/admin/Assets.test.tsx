@@ -19,7 +19,7 @@ vi.mock("../../lib/client", async (importOriginal) => {
       getProject: vi.fn(),
       getProfile: vi.fn(),
       createRecord: vi.fn(),
-      listBurns: vi.fn().mockResolvedValue({ items: [] }),
+      listBurns: vi.fn(async () => ({ items: [] })),
       createBurn: vi.fn(),
     },
   };
@@ -30,9 +30,9 @@ vi.mock("../../lib/wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/wallet")>();
   return {
     ...actual,
-    sendMint: vi.fn().mockResolvedValue("0xminthash"),
-    sendBurn: vi.fn().mockResolvedValue("0xburnhash"),
-    waitForTxReceipt: vi.fn().mockResolvedValue(undefined),
+    sendMint: vi.fn(async () => "0xminthash"),
+    sendBurn: vi.fn(async () => "0xburnhash"),
+    waitForTxReceipt: vi.fn(async () => undefined),
   };
 });
 
@@ -62,6 +62,11 @@ const PROJECT = {
 };
 
 const SIGNATURE = `0x${"ab".repeat(65)}`;
+
+// mockReset restores vi.fn defaults so tests start independently
+beforeEach(() => {
+  vi.resetAllMocks();
+});
 
 // Use a File-like text() stub for jsdom upload handling
 function signedResultFile(auditor: string = AUDITOR): File {

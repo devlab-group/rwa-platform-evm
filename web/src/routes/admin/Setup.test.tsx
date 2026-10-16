@@ -1,4 +1,10 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { keccak256, toBytes } from "viem";
 import { Setup } from "./Setup";
@@ -34,9 +40,9 @@ vi.mock("../../lib/wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/wallet")>();
   return {
     ...actual,
-    readErc20Decimals: vi.fn().mockResolvedValue(18),
-    sendDeployProject: vi.fn().mockResolvedValue("0xdeployhash"),
-    waitForTxReceipt: vi.fn().mockResolvedValue(undefined),
+    readErc20Decimals: vi.fn(async () => 18),
+    sendDeployProject: vi.fn(async () => "0xdeployhash"),
+    waitForTxReceipt: vi.fn(async () => undefined),
   };
 });
 
@@ -46,6 +52,12 @@ const ADDR = (n: number) =>
 const FACTORY = ADDR(0xfac);
 // Fix getConfig projectId so its UUID keccak256 is deterministic
 const FIXED_UUID = "12345678-1234-1234-1234-123456789abc";
+
+// Restore the undeployed project and vi.fn wallet defaults before each test
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.mocked(api.getProject).mockRejectedValue(new Error("404"));
+});
 
 // Every required address field plus name and symbol; each price defaults to 1 whole unit
 async function reachDeployFormAndFill(
@@ -107,6 +119,7 @@ describe("Setup deploy price conversion", () => {
     vi.mocked(api.getConfig).mockReset().mockResolvedValue({
       chainId: 31337,
       factoryAddress: FACTORY,
+      factoryVersion: "rwa-v2",
       projectId: FIXED_UUID,
     });
     vi.mocked(api.validateProfile)
@@ -184,6 +197,7 @@ describe("Setup load-existing-profile on mount", () => {
     vi.mocked(api.getConfig).mockReset().mockResolvedValue({
       chainId: 31337,
       factoryAddress: FACTORY,
+      factoryVersion: "rwa-v2",
       projectId: "proj-1",
     });
     wallet = installFakeWallet({ chainId: 31337 });
@@ -275,6 +289,7 @@ describe("Setup deployment status gating", () => {
     vi.mocked(api.getConfig).mockReset().mockResolvedValue({
       chainId: 31337,
       factoryAddress: FACTORY,
+      factoryVersion: "rwa-v2",
       projectId: "proj-1",
     });
   });
@@ -468,5 +483,190 @@ describe("Setup legal descriptor", () => {
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
     expect(screen.getByText("javascript:alert(1)").closest("a")).toBeNull();
     expect(screen.getByText(`sha256: ${"cd".repeat(32)}`)).toBeInTheDocument();
+  });
+});
+
+describe("Setup by factory version", () => {
+  let wallet: ReturnType<typeof installFakeWallet>;
+
+  beforeEach(() => {
+    vi.mocked(api.getProject).mockReset().mockRejectedValue(new Error("404"));
+    vi.mocked(api.getProfile)
+      .mockReset()
+      .mockResolvedValue(storedProfileResponse());
+    vi.mocked(sendDeployProject).mockClear().mockResolvedValue("0xdeployhash");
+    vi.mocked(waitForTxReceipt).mockClear().mockResolvedValue(undefined);
+    vi.mocked(readErc20Decimals).mockClear().mockResolvedValue(6);
+    wallet = installFakeWallet({ chainId: 31337 });
+  });
+
+  afterEach(() => {
+    wallet.uninstall();
+  });
+
+  const config = (factoryVersion: string) =>
+    vi.mocked(api.getConfig).mockReset().mockResolvedValue({
+      chainId: 31337,
+      factoryAddress: FACTORY,
+      factoryVersion,
+      projectId: "proj-1",
+    });
+
+  const fill = (label: string, value: string) =>
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+
+  function fillCommon() {
+    fill("Name", "Acme");
+    fill("Symbol", "ACME");
+    fill("Quote token address", ADDR(2));
+    fill("Admin address", ADDR(3));
+    fill("Auditor address", ADDR(4));
+    fill("Compliance operator address", ADDR(5));
+    fill("Treasurer address", ADDR(7));
+    fill("Redemption manager address", ADDR(8));
+    fill("Treasury address", ADDR(9));
+  }
+
+  it.each([
+    ["", /could not read the configured factory's version/],
+    ["rwa-v9", /unsupported version \(rwa-v9\)/],
+  ])("blocks deployment for factory version %j", async (version, message) => {
+    config(version);
+    renderWithWallet(<Setup />, { connected: true });
+
+    const alert = (await screen.findByText(message)).closest(
+      '[role="alert"]',
+    ) as HTMLElement;
+    expect(
+      screen.queryByRole("button", { name: "Review deployment" }),
+    ).toBeNull();
+    expect(sendDeployProject).not.toHaveBeenCalled();
+    // the version read may fail on a transient RPC error, so the gate offers a retry
+    expect(
+      within(alert).getByRole("button", { name: "Retry" }),
+    ).toBeInTheDocument();
+  });
+
+  it("offers no v3 fields on an rwa-v2 factory", async () => {
+    config("rwa-v2");
+    renderWithWallet(<Setup />, { connected: true });
+
+    await screen.findByRole("button", { name: "Review deployment" });
+    for (const label of [
+      "Price strategy",
+      "Income manager address",
+      /Minimum purchase/,
+    ]) {
+      expect(screen.queryByLabelText(label)).toBeNull();
+    }
+  });
+
+  it("broadcasts a Fixed rwa-v3 config with the minimum scaled by quote decimals", async () => {
+    config("rwa-v3");
+    renderWithWallet(<Setup />, { connected: true });
+    await screen.findByRole("button", { name: "Review deployment" });
+
+    fillCommon();
+    fill("Purchase price per whole token (whole quote-token units)", "2");
+    fill("Redemption price per whole token (whole quote-token units)", "1.5");
+    fill("Minimum purchase (whole quote-token units)", "10");
+    fill("Pricer address", ADDR(6));
+    fill("Income manager address", ADDR(10));
+    fireEvent.click(screen.getByRole("button", { name: "Review deployment" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Confirm deploy" }),
+    );
+
+    await waitFor(() => expect(sendDeployProject).toHaveBeenCalled());
+    const sent = vi.mocked(sendDeployProject).mock
+      .calls[0][3] as unknown as Record<string, unknown>;
+    expect(sent).toMatchObject({
+      strategyKind: 0,
+      purchasePricePerWholeToken: 2_000_000n,
+      redemptionPricePerWholeToken: 1_500_000n,
+      minPurchaseQuote: 10_000_000n,
+      pricer: ADDR(6),
+      incomeManager: ADDR(10),
+    });
+  });
+
+  it("broadcasts an Oracle config with a zero pricer and the oracle parameters", async () => {
+    config("rwa-v3");
+    renderWithWallet(<Setup />, { connected: true });
+    await screen.findByRole("button", { name: "Review deployment" });
+
+    fillCommon();
+    fill("Price strategy", "Oracle");
+    // Fixed-only inputs disappear for an oracle
+    expect(screen.queryByLabelText("Pricer address")).toBeNull();
+    expect(
+      screen.queryByLabelText(/Purchase price per whole token/),
+    ).toBeNull();
+    fill("Price feed address", ADDR(0xfee));
+    fill("Max feed age (seconds)", "3600");
+    fill("Purchase spread (bps)", "50");
+    fill("Redemption spread (bps)", "75");
+    fill("Income manager address", ADDR(10));
+    fireEvent.click(screen.getByRole("button", { name: "Review deployment" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Confirm deploy" }),
+    );
+
+    await waitFor(() => expect(sendDeployProject).toHaveBeenCalled());
+    const sent = vi.mocked(sendDeployProject).mock
+      .calls[0][3] as unknown as Record<string, unknown>;
+    expect(sent).toMatchObject({
+      strategyKind: 1,
+      pricer: `0x${"0".repeat(40)}`,
+      purchasePricePerWholeToken: 0n,
+      redemptionPricePerWholeToken: 0n,
+      priceFeed: ADDR(0xfee),
+      priceMaxAge: 3600n,
+      purchaseSpreadBps: 50,
+      redemptionSpreadBps: 75,
+    });
+  });
+
+  it("refuses to review without an income manager or, for an oracle, a feed", async () => {
+    config("rwa-v3");
+    renderWithWallet(<Setup />, { connected: true });
+    await screen.findByRole("button", { name: "Review deployment" });
+
+    fillCommon();
+    fill("Purchase price per whole token (whole quote-token units)", "2");
+    fill("Redemption price per whole token (whole quote-token units)", "1");
+    fill("Pricer address", ADDR(6));
+    const review = screen.getByRole("button", { name: "Review deployment" });
+    expect(review).toBeDisabled();
+    fill("Income manager address", ADDR(10));
+    expect(review).toBeEnabled();
+
+    fill("Price strategy", "Oracle");
+    expect(review).toBeDisabled();
+    fill("Price feed address", ADDR(0xfee));
+    fill("Max feed age (seconds)", "60");
+    expect(review).toBeEnabled();
+  });
+
+  it("blocks a mismatched sequencer feed and grace period before broadcast", async () => {
+    config("rwa-v3");
+    renderWithWallet(<Setup />, { connected: true });
+    await screen.findByRole("button", { name: "Review deployment" });
+
+    fillCommon();
+    fill("Price strategy", "Oracle");
+    fill("Price feed address", ADDR(0xfee));
+    fill("Max feed age (seconds)", "60");
+    fill("Sequencer uptime feed (optional)", ADDR(0xfed));
+    fill("Income manager address", ADDR(10));
+    fireEvent.click(screen.getByRole("button", { name: "Review deployment" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Confirm deploy" }),
+    );
+
+    await screen.findByText(
+      /sequencer uptime feed and the grace period together/i,
+    );
+    expect(sendDeployProject).not.toHaveBeenCalled();
   });
 });

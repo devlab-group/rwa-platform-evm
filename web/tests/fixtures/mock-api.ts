@@ -18,6 +18,7 @@ type WebhookEvent = components["schemas"]["WebhookEvent"];
 type AuditLog = components["schemas"]["AuditLog"];
 type Purchase = components["schemas"]["Purchase"];
 type TxRef = components["schemas"]["TxRef"];
+type IncomeDistribution = components["schemas"]["IncomeDistribution"];
 
 const addr = (pair: string) => `0x${pair.repeat(20)}`;
 
@@ -41,6 +42,10 @@ export const PROJECT_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
 
 export interface MockState {
   project: Project;
+  /** RWAFactory.version() reported by GET /api/v1/config; "" simulates an unreadable factory */
+  factoryVersion: string;
+  /** Prepared and on-chain income distributions, newest first */
+  distributions: IncomeDistribution[];
   wallets: WalletStatus[];
   records: AssetRecord[];
   burns: Burn[];
@@ -68,6 +73,8 @@ export interface MockState {
 
 export function defaultState(): MockState {
   return {
+    factoryVersion: "rwa-v2",
+    distributions: [],
     project: {
       projectId: "demo-project",
       version: "1.0.0",
@@ -165,6 +172,7 @@ export async function installMockApi(
       return json({
         chainId: CHAIN_ID,
         factoryAddress: FACTORY_ADDRESS,
+        factoryVersion: state.factoryVersion,
         projectId: PROJECT_ID,
       });
     if (path === "/api/v1/profile/validate" && method === "POST") {
@@ -372,6 +380,42 @@ export async function installMockApi(
           404,
         );
       return json(redemption);
+    }
+
+    // --- income (rwa-v3) -----------------------------------------------------
+    if (path === "/api/v1/income/distributions" && method === "GET")
+      return json(state.distributions);
+    if (path === "/api/v1/income/distributions" && method === "POST") {
+      const body = req.postDataJSON() as {
+        recordBlock: number;
+        total: string;
+        claimDeadline: number;
+      };
+      // The server's rule: at least 7 days and 1 hour from now
+      if (body.claimDeadline < Date.now() / 1000 + 7 * 86_400 + 3_600) {
+        return json(
+          { code: "claim_window_too_short", message: "claim deadline too soon" },
+          400,
+        );
+      }
+      const id = nextId("prep");
+      const prepared: IncomeDistribution = {
+        preparationId: id,
+        status: "Prepared",
+        // Real 32-byte hex, because createDistribution encodes both as bytes32
+        merkleRoot: `0x${"ab".repeat(32)}`,
+        total: body.total,
+        recordBlock: body.recordBlock,
+        claimDeadline: body.claimDeadline,
+        snapshotURI: "ipfs://bafymocksnapshot",
+        snapshotSha256: `0x${"cd".repeat(32)}`,
+        eligibleSupply: "1000000000000000000",
+        distributed: body.total,
+        holderCount: 2,
+        createdAt: new Date().toISOString(),
+      };
+      state.distributions.unshift(prepared);
+      return json(prepared, 201);
     }
 
     // --- transactions --------------------------------------------------

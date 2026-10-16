@@ -92,3 +92,105 @@ export const tokenErrorsAbi = [
     inputs: [{ name: "to", type: "address" }],
   },
 ] as const satisfies Abi;
+
+/** Vault buy error for a purchase quote under the project minimum (rwa-v3) */
+export const vaultErrorsAbi = [
+  {
+    type: "error",
+    name: "QuoteBelowMinimum",
+    inputs: [
+      { name: "quoted", type: "uint256" },
+      { name: "minimum", type: "uint256" },
+    ],
+  },
+] as const satisfies Abi;
+
+/** Oracle strategy errors raised by previewBuy, buy, previewRedeem and requestRedemption */
+export const oracleErrorsAbi = [
+  {
+    type: "error",
+    name: "StalePrice",
+    inputs: [
+      { name: "updatedAt", type: "uint256" },
+      { name: "maxAge", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "InvalidPrice",
+    inputs: [
+      { name: "answer", type: "int256" },
+      { name: "updatedAt", type: "uint256" },
+    ],
+  },
+  { type: "error", name: "SequencerDown", inputs: [] },
+  {
+    type: "error",
+    name: "GracePeriodNotOver",
+    inputs: [
+      { name: "startedAt", type: "uint256" },
+      { name: "gracePeriod", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "FeedDecimalsChanged",
+    inputs: [
+      { name: "expected", type: "uint8" },
+      { name: "actual", type: "uint8" },
+    ],
+  },
+] as const satisfies Abi;
+
+/** IncomeDistributor.claim: a holder claims its own entitlement with a Merkle proof */
+export const incomeDistributorAbi = [
+  {
+    type: "function",
+    name: "claim",
+    inputs: [
+      { name: "id", type: "uint256" },
+      { name: "amount", type: "uint256" },
+      { name: "proof", type: "bytes32[]" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  { type: "error", name: "ProjectPaused", inputs: [] },
+  {
+    type: "error",
+    name: "UnknownDistribution",
+    inputs: [{ name: "id", type: "uint256" }],
+  },
+  {
+    type: "error",
+    name: "ClaimWindowClosed",
+    inputs: [
+      { name: "claimDeadline", type: "uint64" },
+      { name: "nowTs", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "AlreadyClaimed",
+    inputs: [
+      { name: "id", type: "uint256" },
+      { name: "account", type: "address" },
+    ],
+  },
+  {
+    type: "error",
+    name: "CallerNotAllowed",
+    inputs: [{ name: "account", type: "address" }],
+  },
+  { type: "error", name: "ZeroAmount", inputs: [] },
+  { type: "error", name: "InvalidProof", inputs: [] },
+  {
+    type: "error",
+    name: "ExceedsTotal",
+    inputs: [
+      { name: "id", type: "uint256" },
+      { name: "claimedAfter", type: "uint256" },
+      { name: "total", type: "uint256" },
+    ],
+  },
+] as const satisfies Abi;

@@ -17,6 +17,7 @@ tags:
   - name: assets
   - name: sales
   - name: redemptions
+  - name: income
   - name: transactions
   - name: auth
 
@@ -69,7 +70,7 @@ paths:
       operationId: getConfig
       summary: "Public bootstrap chain configuration"
       description: >
-        Chain ID, RWAFactory address and configured projectId for wallet-side
+        Chain ID, RWAFactory address and version, and configured projectId for wallet-side
         RWAFactory.deploy(ProjectConfig). Available before deployment, when GET /api/v1/project returns 404;
         the server does not relay deployment.
       security: []
@@ -448,6 +449,69 @@ paths:
       responses:
         "200": { description: Redemption, content: { application/json: { schema: { $ref: "#/components/schemas/Redemption" } } } }
 
+  /api/v1/income/distributions:
+    get:
+      tags: [income]
+      operationId: listIncomeDistributions
+      summary: "List income distributions, newest first (admin-only)"
+      description: >
+        Prepared snapshots with indexed IncomeDistributor state for Active rwa-v3 projects. Preparations
+        remain listed when no active deployment is available. Repeat on-chain creations appear as separate
+        rows with the same preparationId; each funds another payout of the snapshot.
+      x-required-role: admin
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: "Distributions (bounded/paginated, see Limit/Cursor)"
+          headers:
+            X-Total-Count: { $ref: "#/components/headers/XTotalCount" }
+            X-Page-Size: { $ref: "#/components/headers/XPageSize" }
+            X-Next-Cursor: { $ref: "#/components/headers/XNextCursor" }
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/IncomeDistribution" } } } }
+    post:
+      tags: [income]
+      operationId: prepareIncomeDistribution
+      summary: "Build and publish an income snapshot (admin-only)"
+      description: >
+        Replays finalized RWAToken Transfer and RedemptionEscrow events through recordBlock, builds a
+        StandardMerkleTree and pins the RFC 8785 snapshot to IPFS (shared/schemas/income-snapshot.schema.json).
+        Returns Prepared; the income manager's wallet or Safe approves funding and calls
+        IncomeDistributor.createDistribution with the returned fields. The server never sends it. A matching
+        indexed DistributionCreated (merkleRoot and snapshotSha256) supplies the on-chain state.
+        Returns 400 (invalid_request, claim_window_too_short); 409 (income_unsupported without an Active rwa-v3
+        deployment, record_block_not_final, no_eligible_holders, transfer_history_incomplete for a replayed
+        balance or minted-minus-burned supply mismatch, already_distributed for an indexed creation using the
+        same snapshot, snapshot_too_large above the 1 MiB snapshot limit); or 503 (ipfs_unavailable).
+        Deployments indexed before Transfer logs were stored need reindexing.
+      x-required-role: admin
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PrepareIncomeDistributionRequest" } } }
+      responses:
+        "201": { description: Prepared, content: { application/json: { schema: { $ref: "#/components/schemas/IncomeDistribution" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/income/claims/{address}:
+    get:
+      tags: [income]
+      operationId: listIncomeClaims
+      summary: "Public income entitlements of one wallet"
+      description: >
+        Entitlements from readable server-prepared snapshots matched to on-chain distributions, newest
+        first, with IncomeDistributor.claim(distributionId, amount, proof) arguments. Status follows indexed
+        events and time; claim separately requires an unpaused project and an Allowed caller. Snapshot
+        addresses, balances and entitlements are public on IPFS.
+      security: []
+      parameters:
+        - { name: address, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Entitlements, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/IncomeClaim" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+
   /api/v1/transactions:
     get:
       tags: [transactions]
@@ -620,14 +684,28 @@ components:
         purchasePricePerWholeToken:
           type: string
           description: >
-            Purchase price per whole RWA token in quote-token minimal units (display using quoteDecimals).
-            Starts at the deployment price and follows FixedPriceStrategy PurchasePriceUpdated events; omitted
-            when unavailable.
+            Purchase price per whole RWA token in quote-token minimal units (display using quoteDecimals). For
+            a Fixed strategy, starts at the deployment price and follows PurchasePriceUpdated events; for an
+            Oracle strategy, read from the strategy and cached for 15 seconds. Omitted when unavailable, including a
+            failing oracle read (see oracle.error).
         redemptionPricePerWholeToken:
           type: string
           description: >
-            Projected redemption price per whole RWA token in quote-token minimal units; see
+            Redemption price per whole RWA token in quote-token minimal units; see
             purchasePricePerWholeToken.
+        minPurchaseQuote:
+          type: string
+          description: >
+            rwa-v3 only: Vault minimum quote per purchase in quote-token minimal units, "0" for none. Starts at
+            the deploy config and follows MinPurchaseQuoteChanged events; omitted for rwa-v2.
+        strategyKind:
+          type: string
+          enum: [Fixed, Oracle, Unknown]
+          description: >
+            Kind of the Vault's current strategy, probed from its views; Unknown when inconclusive, including
+            RPC failures. Omitted before deployment.
+        oracle:
+          $ref: "#/components/schemas/OraclePrice"
         tokenUnit: { type: string }
         profileDigest: { type: string }
         legal:
@@ -647,7 +725,7 @@ components:
         bytecodeVerified:
           type: boolean
           description: >
-            Non-empty code exists at all six project contract addresses; checks presence, not identity against
+            Non-empty code exists at every project contract address; checks presence, not identity against
             released artifacts.
         roles:
           allOf:
@@ -662,7 +740,8 @@ components:
             $ref: "#/components/schemas/RoleHolders"
           description: >
             Role holders by contract label: token, compliance, supplyController, vault, redemptionEscrow,
-            strategy. Holders may differ across contracts; omitted before projection.
+            strategy (Fixed only; OraclePriceStrategy has no roles) and incomeDistributor (rwa-v3). Holders may
+            differ across contracts; omitted before projection.
         securityAsOfBlock:
           type: integer
           description: >
@@ -715,8 +794,30 @@ components:
         supplyController: { type: string }
         vault: { type: string }
         redemptionEscrow: { type: string }
-        strategy: { type: string }
+        strategy: { type: string, description: "Vault's current strategy" }
         quoteToken: { type: string }
+        incomeDistributor: { type: string, description: "rwa-v3 only; omitted for rwa-v2" }
+    OraclePrice:
+      type: object
+      description: >
+        Present for an identified Oracle strategy. Parameters are immutable; price-read results, including
+        failures, are cached for 15 seconds.
+      required: [feed, maxAge, purchaseSpreadBps, redemptionSpreadBps, feedDecimals, available]
+      properties:
+        feed: { type: string, description: "AggregatorV3Interface price feed" }
+        maxAge: { type: integer, format: int64, description: "Maximum feed age in seconds" }
+        purchaseSpreadBps: { type: integer }
+        redemptionSpreadBps: { type: integer }
+        feedDecimals: { type: integer }
+        sequencerUptimeFeed: { type: string, description: "L2 sequencer uptime feed; omitted when not configured" }
+        gracePeriod: { type: integer, format: int64, description: "Seconds after a sequencer restart before prices are valid; omitted without a sequencer feed" }
+        available: { type: boolean, description: "latestPrice() succeeded on the cached read" }
+        price: { type: string, description: "Validated feed answer in feed units; omitted when unavailable" }
+        updatedAt: { type: integer, format: int64, description: "Feed's last update in Unix seconds, also when stale; omitted when the feed cannot be read" }
+        error:
+          type: string
+          enum: [StalePrice, InvalidPrice, SequencerDown, GracePeriodNotOver, FeedDecimalsChanged, ReadFailed]
+          description: "Why the price is unavailable; omitted when available. ReadFailed covers RPC failures and unknown reverts."
     Enforcement:
       type: object
       description: >
@@ -766,10 +867,16 @@ components:
         Public bootstrap values. The console combines projectId with stored profile digest/decimals, then
         broadcasts RWAFactory.deploy through the admin wallet. The server observes ProjectDeployed without
         signing or relaying deployment.
-      required: [chainId, factoryAddress, projectId]
+      required: [chainId, factoryAddress, factoryVersion, projectId]
       properties:
         chainId: { type: integer, format: int64, description: "Factory's EVM chain ID" }
         factoryAddress: { type: string, description: "RWAFactory address for wallet-side deploy(ProjectConfig)" }
+        factoryVersion:
+          type: string
+          description: >
+            Configured RWAFactory.version(); supported encodings are rwa-v2 and rwa-v3. The first nonempty
+            result is cached; failed reads return empty and retry after 30 seconds. The console blocks
+            deployment for empty or unsupported versions.
         projectId:
           type: string
           description: >
@@ -889,8 +996,12 @@ components:
       properties:
         inventory: { type: string }
         quoteBalance: { type: string }
-        purchasePrice: { type: string }
-        redemptionPrice: { type: string }
+        purchasePrice: { type: string, description: "Per whole RWA token; omitted when the strategy read fails" }
+        redemptionPrice: { type: string, description: "Per whole RWA token; omitted when the strategy read fails" }
+        priceError:
+          type: string
+          enum: [StalePrice, InvalidPrice, SequencerDown, GracePeriodNotOver, FeedDecimalsChanged, ReadFailed]
+          description: "Why the prices are omitted; same values as OraclePrice.error"
     Redemption:
       type: object
       description: >
@@ -907,6 +1018,64 @@ components:
         timeoutAt: { type: integer }
         beneficiaryAllowed: { type: boolean }
         confirmations: { type: integer }
+    PrepareIncomeDistributionRequest:
+      type: object
+      required: [recordBlock, total, claimDeadline]
+      properties:
+        recordBlock:
+          type: integer
+          format: int64
+          description: >
+            Block whose end-of-block balances define entitlements; at or below the indexed checkpoint minus
+            finalityConfirmations, and below the block that mines createDistribution
+        total: { type: string, description: "Positive base-10 quote-token minimal units to distribute" }
+        claimDeadline:
+          type: integer
+          format: int64
+          description: >
+            Unix seconds; at least 7 days plus 1 hour after the request. The extra hour allows mining time;
+            createDistribution still requires MIN_CLAIM_WINDOW at inclusion
+    IncomeDistribution:
+      type: object
+      description: >
+        A prepared snapshot and, once created on-chain, its IncomeDistributor state. Prepared: pinned, no
+        matching DistributionCreated yet. Active: created and the claim deadline not passed. Expired: deadline
+        passed, not reclaimed. Reclaimed: remainder sent to the treasury.
+      required: [preparationId, status, merkleRoot, total, recordBlock, claimDeadline, snapshotURI, snapshotSha256, eligibleSupply, distributed, holderCount, createdAt]
+      properties:
+        preparationId: { type: string, description: "Server ID of the prepared snapshot" }
+        status: { type: string, enum: [Prepared, Active, Expired, Reclaimed] }
+        distributionId: { type: string, description: "On-chain distribution id; present once created" }
+        merkleRoot: { type: string, description: "createDistribution merkleRoot" }
+        total: { type: string, description: "createDistribution total, quote-token minimal units" }
+        recordBlock: { type: integer, format: int64, description: "createDistribution recordBlock" }
+        claimDeadline: { type: integer, format: int64, description: "Unix seconds; follows ClaimDeadlineExtended once created" }
+        snapshotURI: { type: string, description: "createDistribution snapshotURI, ipfs://<cid>" }
+        snapshotSha256: { type: string, description: "createDistribution snapshotSha256: 0x-hex SHA-256 of the canonical snapshot bytes" }
+        eligibleSupply: { type: string, description: "RWA minimal units the entitlements divide" }
+        distributed: { type: string, description: "Sum of entry amounts; total minus distributed is rounding dust" }
+        holderCount: { type: integer, description: "Snapshot entries" }
+        claimed: { type: string, description: "Claimed quote-token units; present once created" }
+        reclaimedAmount: { type: string, description: "Present once Reclaimed" }
+        createTxHash: { type: string, description: "createDistribution transaction; present once created" }
+        createdAt: { type: string, format: date-time, description: "Preparation time" }
+    IncomeClaim:
+      type: object
+      description: "One wallet's entitlement in an on-chain distribution, with the claim() arguments"
+      required: [distributionId, account, amount, proof, merkleRoot, claimDeadline, snapshotURI, status]
+      properties:
+        distributionId: { type: string, description: "claim() id" }
+        account: { type: string }
+        amount: { type: string, description: "claim() amount in quote-token minimal units" }
+        proof: { type: array, items: { type: string }, description: "claim() proof, 0x-hex bytes32 values" }
+        merkleRoot: { type: string }
+        claimDeadline: { type: integer, format: int64, description: "Unix seconds; claims are accepted through this second" }
+        snapshotURI: { type: string }
+        status:
+          type: string
+          enum: [Claimable, Claimed, Expired]
+          description: "Claimable: open and not yet claimed. Expired: deadline passed or remainder reclaimed without a claim."
+        claimTxHash: { type: string, description: "Present when Claimed" }
     ChallengeVerify:
       type: object
       required: [address, nonce, signature]

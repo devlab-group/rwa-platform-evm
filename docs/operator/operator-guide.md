@@ -16,9 +16,13 @@ Companion guides cover [redemption operations](redemption-ops.md),
 Each deployment serves one RWA token, Asset Profile, quote token and auditor, backed by
 the server, MongoDB and an IPFS node.
 
-- Contracts (Foundry): `ComplianceRegistry`, `RWAToken`, `SupplyController`, `Vault`,
-  `FixedPriceStrategy` and `RedemptionEscrow`. `RWAFactory` deploys and connects them through
-  four delegatecall helpers to keep its runtime code within the EIP-170 size limit.
+- Contracts (Foundry): `ComplianceRegistry`, `RWAToken`, `SupplyController`, `Vault`, a price
+  strategy (`FixedPriceStrategy` or `OraclePriceStrategy`), `RedemptionEscrow` and
+  `IncomeDistributor`. `RWAFactory` deploys and connects them through five delegatecall helpers
+  to keep its runtime code within the EIP-170 size limit.
+- Contract versions: this guide covers rwa-v3. The server also serves rwa-v2 deployments,
+  without minimum purchase, oracle pricing or income distribution. Their escrow retains its
+  deploy-time strategy (§4a).
 - Server (Go/Gin): API, indexer, transaction manager and embedded admin console.
 - Signer (Go CLI): the auditor's EIP-712 signing tool. Run it on an offline machine.
 - Admin console (React, `web/`): embedded in the server binary and served at `/`.
@@ -51,17 +55,19 @@ checks. The platform transfers quote tokens through the ERC-20 interface; it doe
 the issuer's allowlist or blacklist separately. These addresses must be eligible for their
 respective transfers:
 
-| Address                      | Quote-token movement                                                | Effect of refusal                                                                                                       |
-| ---------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `Vault`                      | receives payment in `buy`; sends proceeds in `withdrawProceeds`     | the affected purchase or withdrawal reverts                                                                             |
-| `RedemptionEscrow`           | receives funding in `fundRedemption`; pays out in `claimRedemption` | funding or the claim reverts                                                                                            |
-| Treasury (`Vault.treasury`)  | receives `withdrawProceeds`                                         | withdrawal reverts; proceeds remain in the Vault until the issuer accepts the treasury or the admin calls `setTreasury` |
-| Each `TREASURER_ROLE` wallet | pays in `fundRedemption`                                            | funding reverts                                                                                                         |
-| Each investor wallet         | pays in `buy`; receives in `claimRedemption`                        | the purchase or claim reverts                                                                                           |
+| Address                           | Quote-token movement                                                                  | Effect of refusal                                                                                                       |
+| --------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `Vault`                           | receives payment in `buy`; sends proceeds in `withdrawProceeds`                       | the affected purchase or withdrawal reverts                                                                             |
+| `RedemptionEscrow`                | receives funding in `fundRedemption`; pays out in `claimRedemption`                   | funding or the claim reverts                                                                                            |
+| Treasury (`Vault.treasury`)       | receives `withdrawProceeds`                                                           | withdrawal reverts; proceeds remain in the Vault until the issuer accepts the treasury or the admin calls `setTreasury` |
+| Each `TREASURER_ROLE` wallet      | pays in `fundRedemption`                                                              | funding reverts                                                                                                         |
+| Each investor wallet              | pays in `buy`; receives in `claimRedemption` and income `claim`                       | the purchase or claim reverts                                                                                           |
+| `IncomeDistributor`               | receives `createDistribution` funding; pays income claims and the reclaimed remainder | creating the distribution, a claim or the reclaim reverts                                                               |
+| Each `INCOME_MANAGER_ROLE` wallet | pays in `createDistribution`                                                          | creating the distribution reverts                                                                                       |
 
 After deployment and before opening sales, ask the quote-token issuer to accept the Vault,
-escrow, treasury and treasurer addresses. Confirm that it supports contract accounts before
-relying on the Vault or escrow to hold its token.
+escrow, income distributor, treasury, treasurer and income-manager addresses. Confirm that it
+supports contract accounts before relying on the Vault or escrow to hold its token.
 
 A reverted transfer rolls back that call, but cannot undo earlier funding. A Funded request
 pays only its recorded beneficiary, and no role can withdraw or refund its quote tokens. If
@@ -81,13 +87,27 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
    An optional `legal` descriptor records the issuer's declarations without verifying them.
    It is fixed with the profile, returned by the public `GET /api/v1/project` and shown in the
    example investor app. See [Legal descriptor](../spec/asset-profile.md#legal-descriptor).
-2. Choose the token name, symbol and decimals; quote token; purchase and redemption prices;
-   redemption timeout; role holders; treasury; and admin-transfer delay. The factory accepts a
-   redemption timeout from 1 to 365 days. Setup prefills 7 days; `Deploy.s.sol` defaults to 14
-   days. Set the admin-transfer delay deliberately: the contracts enforce no minimum (§4a).
+2. Choose the token name, symbol and decimals; quote token; price strategy; minimum purchase;
+   redemption timeout; role holders, including the income manager; treasury; and admin-transfer
+   delay. The factory accepts a redemption timeout from 1 to 365 days. Setup prefills 7 days;
+   `Deploy.s.sol` defaults to 14 days. Set the admin-transfer delay deliberately: the contracts
+   enforce no minimum (§4a).
+
+   - Fixed prices: choose a pricer and purchase/redemption prices; `PRICER_ROLE` can update them.
+   - Oracle prices: an `AggregatorV3Interface` feed that reports the value of one whole RWA
+     token in the quote token's currency, such as a fund's published USD NAV for a USD
+     stablecoin; a market price of another asset is not valid. Set `maxAge` above the feed's
+     heartbeat, or every quote reverts between updates. Purchase and redemption spreads are in
+     basis points. On an L2, add the sequencer uptime feed and a grace period. The settings are
+     immutable; the strategy does not detect a quote-token depeg.
+   - Minimum purchase: the smallest quote per `buy`, in quote-token units; 0 disables it.
+
+   The Setup screen reads the factory's version from `GET /api/v1/config` and offers these
+   fields only for an rwa-v3 factory.
+
 3. Deploy through either path:
 
-   - Setup screen: first run `contracts/script/DeployFactory.s.sol` to deploy the four helpers
+   - Setup screen: first run `contracts/script/DeployFactory.s.sol` to deploy the five helpers
      and factory. It deploys no project and logs the values for `contract.factory_address` and
      `contract.start_block`. The console reads the factory address from `GET /api/v1/config`
      and builds `ProjectConfig` using the stored profile's `projectId`, `profileDigest` and
@@ -111,6 +131,8 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
    - a successful transaction receipt and a supported event version matching `factory.version()`;
    - deploy calldata whose `projectId`, `profileDigest` and decimals match the stored profile;
    - bytecode at each project-contract address and the expected contract wiring;
+   - for rwa-v3, the minimum purchase, the oracle strategy's settings and the income
+     distributor's token, quote token and Vault matching the deploy calldata;
    - role holders matching the deploy calldata, with no unexpected holders;
    - the Vault and escrow registered as system addresses, Allowed with no expiry;
    - no platform roles retained by the factory, including `DEFAULT_ADMIN_ROLE`.
@@ -140,11 +162,14 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
   must hold the full amount. Expired Pending burns release their reservations; reissue changes
   nonce and expiry but retains metadata, so the signer's metadata-age limit still applies.
   The server marks the burn Burned after observing the event.
-- Sales: investors call `Vault.buy` from their wallets. A holder of `TREASURER_ROLE` withdraws
-  proceeds to the treasury.
+- Sales: investors call `Vault.buy` from their wallets; each purchase must meet the minimum
+  purchase. A holder of `TREASURER_ROLE` withdraws proceeds to the treasury.
 - Redemptions: follow the [redemption operations guide](redemption-ops.md).
-- Pricing: `PRICER_ROLE` sets purchase and redemption prices independently on
-  `FixedPriceStrategy`.
+- Pricing: with a fixed strategy, `PRICER_ROLE` sets purchase and redemption prices
+  independently on `FixedPriceStrategy`. With an oracle strategy, quotes follow the feed; while
+  it is stale or invalid, new purchases and redemption requests revert and `price_feed_stale`
+  fires (§5). Requests already made keep their quotes.
+- Income: pay holders through income distributions (§4e).
 - Pause: `PAUSER_ROLE` pauses the project. See §4a for the affected operations and exceptions.
 
 ## 4a. Privileged roles and administration
@@ -154,11 +179,12 @@ broadcast it. The console does not receive that wallet's private key. Contract `
 authorize privileged calls; the console's role controls help users choose available actions.
 Compliance-screen status writes use the server's compliance key instead.
 
-| Screen            | Wallet transactions                                                                                 |
-| ----------------- | --------------------------------------------------------------------------------------------------- |
-| Security          | pause/unpause, prices, role grants/revocations, admin transfer, ERC-7943 freeze and forced transfer |
-| Inventory & Sales | treasury withdrawal                                                                                 |
-| Redemptions       | quote-token approval, funding and rejection                                                         |
+| Screen            | Wallet transactions                                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Security          | pause/unpause, prices, minimum purchase, role grants/revocations, admin transfer, ERC-7943 freeze and forced transfer |
+| Inventory & Sales | treasury withdrawal                                                                                                   |
+| Redemptions       | quote-token approval, funding and rejection                                                                           |
+| Income            | quote-token approval, distribution creation, deadline extension and reclaim                                           |
 
 For a Safe role holder, select its address under the action to export the calls as a Safe{Wallet}
 Transaction Builder batch. Import it into that Safe, review the calls, and have the owners approve
@@ -172,25 +198,27 @@ redemption requests, claims and cancellations from their wallets through the inv
 
 ### Role matrix (see `../spec/roles.md`)
 
-| Role                      | Hosted on                        | Recommended production holder        | Powers                                                                                      |
-| ------------------------- | -------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------- |
-| `DEFAULT_ADMIN_ROLE`      | each project governance contract | issuer multisig                      | grant/revoke roles; set auditor, treasury and Vault strategy; freeze and force-transfer RWA |
-| `PAUSER_ROLE`             | `RWAToken`                       | issuer or security multisig          | pause and unpause the project                                                               |
-| `COMPLIANCE_ROLE`         | `ComplianceRegistry`             | server hot key and/or legal multisig | set wallet status and expiry                                                                |
-| `PRICER_ROLE`             | `FixedPriceStrategy`             | issuer or pricer multisig            | set fixed prices                                                                            |
-| `TREASURER_ROLE`          | `Vault`, `RedemptionEscrow`      | treasury multisig                    | withdraw proceeds; fund individual redemption requests                                      |
-| `REDEMPTION_MANAGER_ROLE` | `RedemptionEscrow`               | issuer or legal multisig             | reject Pending, unfunded requests with a reason code                                        |
+| Role                      | Hosted on                        | Recommended production holder        | Powers                                                                                                        |
+| ------------------------- | -------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `DEFAULT_ADMIN_ROLE`      | each project governance contract | issuer multisig                      | grant/revoke roles; set auditor, treasury, Vault strategy and minimum purchase; freeze and force-transfer RWA |
+| `PAUSER_ROLE`             | `RWAToken`                       | issuer or security multisig          | pause and unpause the project                                                                                 |
+| `COMPLIANCE_ROLE`         | `ComplianceRegistry`             | server hot key and/or legal multisig | set wallet status and expiry                                                                                  |
+| `PRICER_ROLE`             | `FixedPriceStrategy` only        | issuer or pricer multisig            | set fixed prices                                                                                              |
+| `TREASURER_ROLE`          | `Vault`, `RedemptionEscrow`      | treasury multisig                    | withdraw proceeds; fund individual redemption requests                                                        |
+| `REDEMPTION_MANAGER_ROLE` | `RedemptionEscrow`               | issuer or legal multisig             | reject Pending, unfunded requests with a reason code                                                          |
+| `INCOME_MANAGER_ROLE`     | `IncomeDistributor`              | treasury or issuer multisig          | fund income distributions; extend claim deadlines                                                             |
 
 Deployment grants `PAUSER_ROLE` to `config.admin`; `ProjectConfig` has no separate pauser field.
 Grant the role after deployment if a different multisig should hold it. The auditor is an
 address stored in `SupplyController`; it authorizes attestations rather than sending privileged
 transactions under an on-chain role.
 
-Each governance contract uses OpenZeppelin `AccessControlDefaultAdminRules`. The current admin
-begins a transfer, then the incoming admin accepts after the on-chain delay. Use at least 24
-hours in production, although the contracts impose no minimum. Outside Anvil, `Deploy.s.sol`
-defaults to 24 hours and refuses zero unless `ALLOW_ZERO_ADMIN_TRANSFER_DELAY` is set. Setup
-prefills 48 hours.
+Each governance contract uses OpenZeppelin `AccessControlDefaultAdminRules`; an
+`OraclePriceStrategy` has no roles, and the Security screen leaves it out of role and admin
+changes. The current admin begins a transfer, then the incoming admin accepts after the
+on-chain delay. Use at least 24 hours in production, although the contracts impose no minimum.
+Outside Anvil, `Deploy.s.sol` defaults to 24 hours and refuses zero unless
+`ALLOW_ZERO_ADMIN_TRANSFER_DELAY` is set. Setup prefills 48 hours.
 
 ### Common admin actions
 
@@ -205,10 +233,15 @@ prefills 48 hours.
   keys remain used. For a Safe auditor (v1.3.0 or later with `CompatibilityFallbackHandler`),
   provision every owner with a policy naming the Safe and its current owners and threshold
   ([auditor guide, §7](../auditor/auditor-guide.md)).
-- Change the treasury or purchase strategy with `Vault.setTreasury` or `Vault.setStrategy`.
+- Change the treasury or price strategy with `Vault.setTreasury` or `Vault.setStrategy`.
   Both require the admin role and revert while paused. Check the Security screen afterwards.
-  The escrow retains its original strategy, so continue setting redemption prices there after
-  a Vault strategy change. The split keeps `config_drift` raised (§7a).
+  In rwa-v3 the escrow quotes through the Vault's current strategy, so one call changes
+  purchase and redemption pricing; requests already made keep their quotes. To change an oracle
+  feed or spread, deploy a new `OraclePriceStrategy` and point the Vault at it. In rwa-v2 the
+  escrow retains its original strategy, so continue setting redemption prices there after a
+  Vault strategy change; the split keeps `config_drift` raised (§7a).
+- Change the minimum purchase with `Vault.setMinPurchaseQuote` on the Security screen. It
+  requires the admin role and reverts while paused.
 - Replace the redemption manager by granting `REDEMPTION_MANAGER_ROLE` on `RedemptionEscrow`
   to the new holder and revoking it from the old holder on the Security screen.
 - Update prices with `FixedPriceStrategy.setPurchasePrice` and `setRedemptionPrice`
@@ -218,10 +251,10 @@ prefills 48 hours.
 
 Call `RWAToken.pause()` or `unpause()` with `PAUSER_ROLE`.
 
-| While paused     | Operations                                                                                                                                                                            |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Revert           | ordinary transfers, `buy`, `withdrawProceeds`, `mint`, `burn`, `requestRedemption`, `fundRedemption`, `rejectRedemption`, `claimRedemption`, `Vault.setTreasury`, `Vault.setStrategy` |
-| Remain available | timed-out `cancelRedemption`, price updates, `setAuditor`, compliance and role changes, `setFrozenTokens`, `forcedTransfer`                                                           |
+| While paused     | Operations                                                                                                                                                                                                                                                                   |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Revert           | ordinary transfers, `buy`, `withdrawProceeds`, `mint`, `burn`, `requestRedemption`, `fundRedemption`, `rejectRedemption`, `claimRedemption`, `Vault.setTreasury`, `Vault.setStrategy`, `Vault.setMinPurchaseQuote`, `createDistribution`, income `claim`, `reclaimUnclaimed` |
+| Remain available | timed-out `cancelRedemption`, price updates, `setAuditor`, compliance and role changes, `setFrozenTokens`, `forcedTransfer`, `extendClaimDeadline`                                                                                                                           |
 
 Cancellation uses an escrow-only RWA return path that bypasses pause but still requires an
 Allowed beneficiary. See the [redemption state machine](../spec/redemption-state-machine.md).
@@ -406,6 +439,48 @@ Another `COMPLIANCE_ROLE` holder can approve wallets on-chain directly. Every fi
 read-model count, excluding transaction reservations. Checks and submissions share a lock within
 one process; multiple replicas need shared coordination to avoid racing for the last slot.
 
+## 4e. Income distributions
+
+For rwa-v3 income, such as dividends or interest, the issuer funds `IncomeDistributor` in the
+quote token. Each holder claims a share based on a published snapshot.
+
+1. On the Income screen, choose a record block, the total to pay and a claim deadline. The
+   record block must be finalized: at or below the last indexed block minus the finality depth.
+   The deadline must be at least 7 days and 1 hour away. The extra hour allows mining time;
+   the contract still requires 7 days at inclusion.
+2. The server computes entitlements from indexed events at the end of the record block:
+   - the Vault's unsold inventory is excluded;
+   - RWA held by the escrow counts for the beneficiary of each Pending or Funded request;
+   - frozen and Blocked holders retain their entitlement; Blocked holders must become Allowed
+     to claim;
+   - each amount is `floor(total * balance / eligibleSupply)`, and rounding dust stays in the
+     contract until the reclaim.
+
+   It publishes the snapshot ([format](../../shared/schemas/income-snapshot.schema.json)) as RFC
+   8785 canonical JSON on IPFS and returns a Prepared distribution with its Merkle root,
+   `ipfs://` URI and SHA-256.
+
+3. From a connected wallet or exported Safe batch, the income manager approves funding and
+   calls `createDistribution` with the returned fields. The server indexes it as Active while
+   its claim window is open. Each creation funds a separate payout, even for the same snapshot.
+   The console refuses snapshots already on-chain but cannot see pending Safe batches: execute
+   only one batch per distribution. Repeat creations appear as separate rows.
+4. Holders claim in the investor app before the deadline. A claim needs an unpaused project and
+   an Allowed wallet; the server serves each holder's amount and proof publicly.
+5. The income manager can extend a deadline, including while paused, until the distribution
+   is reclaimed. The new deadline must be later and in the future.
+6. After the deadline, anyone can use "Reclaim unclaimed" to send the remainder to the Vault's
+   current treasury. Unpause first; reclaim reverts while paused.
+
+The contract does not verify historical entitlements. Holders and auditors check the published
+snapshot, hash and root; keep IPFS replication healthy (§6). The server serves proofs only for
+snapshots it prepared. Each snapshot is one IPFS block, limited to 1 MiB; larger snapshots fail
+with `snapshot_too_large`.
+
+`POST /api/v1/income/distributions` returns `transfer_history_incomplete` if replayed transfers
+exceed a sender's balance or supply differs from indexed mints minus burns. Deployments indexed
+before the server stored `Transfer` events need one reindex (§6) before their first distribution.
+
 ## 5. Monitoring and alerts
 
 Scrape `/metrics` on `http.metrics_addr` (§7a). The platform exports:
@@ -423,16 +498,17 @@ an 18-decimal RWA token; account for that scale if your token uses different dec
 Each alert finding writes a log line, increments `rwa_alerts_fired_total` and attempts an
 audit-log write. Repeated findings are counted on each check rather than deduplicated.
 
-| Kind                     | Condition                                                                                                                              | Check interval                                         |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `pending_redemption_sla` | Pending age reaches `alerts.pending_redemption_sla` (default 48h)                                                                      | 5 minutes                                              |
-| `funded_claim_failure`   | Funded, unclaimed age reaches `alerts.funded_claim_failure_sla` (default 24h), measured from when the server indexed the funding event | 5 minutes                                              |
-| `config_drift`           | contract wiring differs from the expected project state (§7a)                                                                          | 5 minutes                                              |
-| `storage_degraded`       | MongoDB ping fails                                                                                                                     | 30 seconds, when using MongoDB                         |
-| `kyc_monitoring_hit`     | an accepted Sumsub monitoring decision concerns a projected Allowed wallet, or an Onfido monitor reports changed matches (§4c)         | accepted Sumsub decisions; each Onfido signal delivery |
-| `holder_cap_reached`     | webhook approval refused by the cap (§4d) | each refused approval |
-| `holder_cap_exceeded`    | unexpired, non-system Allowed count exceeds the cap (§4d) | 5 minutes |
-| `sanctions_list_match`   | listed Allowed holder or refused webhook approval (§4c) | load/successful reload; each refused approval |
+| Kind                     | Condition                                                                                                                                          | Check interval                                         |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `pending_redemption_sla` | Pending age reaches `alerts.pending_redemption_sla` (default 48h)                                                                                  | 5 minutes                                              |
+| `funded_claim_failure`   | Funded, unclaimed age reaches `alerts.funded_claim_failure_sla` (default 24h), measured from when the server indexed the funding event             | 5 minutes                                              |
+| `config_drift`           | contract wiring differs from the expected project state (§7a)                                                                                      | 5 minutes                                              |
+| `storage_degraded`       | MongoDB ping fails                                                                                                                                 | 30 seconds, when using MongoDB                         |
+| `kyc_monitoring_hit`     | an accepted Sumsub monitoring decision concerns a projected Allowed wallet, or an Onfido monitor reports changed matches (§4c)                     | accepted Sumsub decisions; each Onfido signal delivery |
+| `holder_cap_reached`     | webhook approval refused by the cap (§4d)                                                                                                          | each refused approval                                  |
+| `holder_cap_exceeded`    | unexpired, non-system Allowed count exceeds the cap (§4d)                                                                                          | 5 minutes                                              |
+| `sanctions_list_match`   | listed Allowed holder or refused webhook approval (§4c)                                                                                            | load/successful reload; each refused approval          |
+| `price_feed_stale`       | the Vault's `OraclePriceStrategy.latestPrice()` reverts (stale, invalid, sequencer down, grace period, changed decimals); RPC failures are skipped | 5 minutes                                              |
 
 The platform has no dedicated metrics for indexer lag, RPC errors or stuck nonces. Check the
 Security screen's stale-data warning (`securityStale` on `GET /api/v1/project`) and the
@@ -473,10 +549,14 @@ available backup. When a failed backup returns, retry replication with
 
 ### Chain reindex
 
-`cmd/reindex --config <path>` requests confirmation; `--yes` skips the prompt. It deletes
-indexed events for the project's contracts, resets the chain's checkpoint and retained block
-hashes, and clears purchases and redemption requests. The affected stores are `chain_events`,
-`indexer_checkpoints`, `indexer_block_hashes`, `purchases` and `redemption_requests`.
+Stop the platform, then run `cmd/reindex --config <path>`. It requests confirmation; `--yes`
+skips the prompt. It deletes indexed events for the project's contracts, resets the chain's
+checkpoint and retained block hashes, and clears purchases, redemption requests and the income
+read models. The affected stores are `chain_events`, `indexer_checkpoints`,
+`indexer_block_hashes`, `purchases`, `redemption_requests`, `income_distributions` and
+`income_claims`. Prepared income snapshots (`income_preparations`) are kept. Events are read
+again from `contract.start_block`, which must be at or below the factory deployment block.
+Start the platform and wait until the checkpoint reaches the chain head.
 
 The running platform's indexer and reconciliation loops rebuild the read models. Asset
 profiles, investor ownership flags and audit logs are preserved. Use
@@ -588,9 +668,10 @@ Every 5 minutes, the server checks an Active project's contract wiring against t
 project state. A mismatch raises `config_drift` and sets `rwa_config_drift` to 1; a successful
 matching check clears it. An RPC error leaves the previous gauge value unchanged. Treasury
 and auditor changes are compared with their indexed state, and price changes are excluded.
-Changing a cross-contract pointer can cause drift. `Vault.setStrategy` also raises it because
-the escrow retains its immutable strategy, leaving purchases and redemptions priced by
-different contracts.
+Changing a cross-contract pointer can cause drift. On rwa-v2, `Vault.setStrategy` also raises
+it because the escrow retains its immutable strategy, leaving purchases and redemptions priced
+by different contracts. An rwa-v3 escrow follows the Vault's strategy, so the swap raises no
+drift there.
 
 ## 8. Honest limitations
 
@@ -599,4 +680,10 @@ different contracts.
   `forcedTransfer` to an Allowed wallet.
 - Quote-token restrictions can prevent payment. A failed funded claim remains Funded and can
   be retried after the restriction is resolved; §2a covers permanent refusals.
-- Keep PII out of metadata and public IPFS objects.
+- Keep PII out of metadata and public IPFS objects, including income snapshots, which list holder
+  addresses and balances.
+- An oracle feed is a trusted pricing source. A wrong price can sell inventory too cheaply or fix
+  inflated redemption quotes; `maxAge`, the sequencer check and investors' slippage bounds limit
+  but do not remove that risk.
+- The income manager and the server's snapshot are trusted to compute entitlements; the
+  contract pays whatever a valid proof for the root states, up to the funded total.

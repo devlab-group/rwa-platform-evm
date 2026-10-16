@@ -53,6 +53,10 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 		{http.MethodGet, "/api/v1/redemptions", false}, // public: on-chain-public data for investor UIs
 		{http.MethodGet, "/api/v1/redemptions/1", false},
 
+		{http.MethodGet, "/api/v1/income/distributions", true},
+		{http.MethodPost, "/api/v1/income/distributions", true},
+		{http.MethodGet, "/api/v1/income/claims/0x00000000000000000000000000000000000000a1", false}, // public: snapshots are public on IPFS
+
 		{http.MethodGet, "/api/v1/transactions", false}, // public: on-chain-public data for investor UIs
 	}
 

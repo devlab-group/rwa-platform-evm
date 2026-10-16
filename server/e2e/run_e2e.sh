@@ -5,7 +5,8 @@
 #
 # The Go e2e/harness/main.go acts as the admin wallet: deploy and verify the stack,
 # prove ownership, allow compliance, create/sign/mint an asset, buy, redeem/fund/claim,
-# time out/cancel, and check ERC-7943 enforcement. Assertions poll server read models,
+# time out/cancel, check ERC-7943 enforcement, and run the rwa-v3 income flow (snapshot,
+# createDistribution, investor claim). Assertions poll server read models,
 # not just receipts; HTTP calls and readiness need no curl or wget.
 #
 # Usage: bash e2e/run_e2e.sh

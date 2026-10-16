@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Start Anvil (chain ID 31337), broadcast E2EFlow's deploy-through-burn flow, then
-# request again and advance time with cast rpc before cancelling. Attempt Anvil
-# cleanup on exit.
+# Start Anvil (chain ID 31337), broadcast E2EFlow's deploy-through-burn flow, distribute
+# and claim income, then request again and advance time with cast rpc before cancelling.
+# Attempt Anvil cleanup on exit.
 #
 # Usage: bash script/e2e.sh
 set -euo pipefail
@@ -32,6 +32,7 @@ export REDEMPTION_TIMEOUT="${REDEMPTION_TIMEOUT:-86400}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTRACTS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MAIN_LOG="$(mktemp)"
+INCOME_LOG="$(mktemp)"
 REQUEST_LOG="$(mktemp)"
 CANCEL_LOG="$(mktemp)"
 ANVIL_LOG="$(mktemp)"
@@ -44,7 +45,7 @@ cleanup() {
         kill "${ANVIL_PID}" 2>/dev/null || true
         wait "${ANVIL_PID}" 2>/dev/null || true
     fi
-    rm -f "${MAIN_LOG}" "${REQUEST_LOG}" "${CANCEL_LOG}" "${ANVIL_LOG}"
+    rm -f "${MAIN_LOG}" "${INCOME_LOG}" "${REQUEST_LOG}" "${CANCEL_LOG}" "${ANVIL_LOG}"
     exit "${status}"
 }
 trap cleanup EXIT
@@ -90,7 +91,7 @@ if [[ "${fail}" == "true" ]]; then
 fi
 echo "Required E2E flow PASSED."
 
-# Step 2: timeout -> cancel on the same deployment
+# Reuse deployment addresses from the step 1 log for steps 2 and 3
 extract_addr() {
     # Parse address lines from DeployBase._logDeployment
     grep -E "^\s*${1}\s+0x" "${MAIN_LOG}" | tail -1 | grep -oE "0x[0-9a-fA-F]{40}"
@@ -102,6 +103,7 @@ export SUPPLY_CONTROLLER
 export VAULT
 export ESCROW
 export STRATEGY
+export INCOME_DISTRIBUTOR
 export QUOTE_TOKEN
 TOKEN="$(extract_addr token)"
 COMPLIANCE="$(extract_addr compliance)"
@@ -109,12 +111,30 @@ SUPPLY_CONTROLLER="$(extract_addr supplyController)"
 VAULT="$(extract_addr vault)"
 ESCROW="$(extract_addr redemptionEscrow)"
 STRATEGY="$(extract_addr strategy)"
+INCOME_DISTRIBUTOR="$(extract_addr incomeDistributor)"
 QUOTE_TOKEN="$(extract_addr quoteToken)"
 
-if [[ -z "${ESCROW}" || -z "${TOKEN}" || -z "${STRATEGY}" ]]; then
-    echo "Could not parse deployed addresses from step 1 log; cannot run the cancel-demo branch." >&2
+# Missing addresses must fail the required income step before vm.envAddress runs
+for name in TOKEN COMPLIANCE SUPPLY_CONTROLLER VAULT ESCROW STRATEGY INCOME_DISTRIBUTOR QUOTE_TOKEN; do
+    if [[ -z "${!name}" ]]; then
+        echo "Could not parse ${name} from step 1 log; the income step needs it." >&2
+        exit 1
+    fi
+done
+
+# Step 2: income distribution and claim (required)
+echo "Distributing and claiming income ..."
+if ! forge script script/E2EFlow.s.sol:E2EFlow --sig "distributeIncome()" --broadcast --non-interactive --rpc-url "${RPC_URL}" -vv 2>&1 | tee "${INCOME_LOG}"; then
+    echo "forge script (distributeIncome) exited non-zero." >&2
     exit 1
 fi
+if ! grep -q "Distributed and claimed income" "${INCOME_LOG}"; then
+    echo "Income step FAILED." >&2
+    exit 1
+fi
+echo "Income step PASSED."
+
+# Step 3: timeout -> cancel on the same deployment
 
 echo "Requesting a second redemption for the timeout -> cancel demo ..."
 if ! forge script script/E2EFlow.s.sol:E2EFlow --sig "requestForCancelDemo()" --broadcast --non-interactive --rpc-url "${RPC_URL}" -vv 2>&1 | tee "${REQUEST_LOG}"; then
@@ -144,5 +164,5 @@ if ! grep -q "Cancelled timed-out redemption" "${CANCEL_LOG}"; then
 fi
 
 echo "timeout -> cancel branch PASSED."
-echo "E2E flow PASSED (required flow + timeout->cancel)."
+echo "E2E flow PASSED (required flow + income + timeout->cancel)."
 exit 0

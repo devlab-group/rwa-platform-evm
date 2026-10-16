@@ -105,3 +105,36 @@ func TestDecodeFailsClosedOnMissingTopics(t *testing.T) {
 		t.Errorf("topicless log: name=%q err=%v, want unknown/nil", name, err)
 	}
 }
+
+func TestDecodeTransfer(t *testing.T) {
+	erc20 := bindings.NewERC20()
+	from := common.HexToAddress("0x00000000000000000000000000000000000000b2")
+	to := common.HexToAddress("0x00000000000000000000000000000000000000c3")
+	// past 2^64, to catch any fixed-width conversion
+	value, _ := new(big.Int).SetString("123456789012345678901234567890", 10)
+	data, err := erc20.ABI.Events["Transfer"].Inputs.NonIndexed().Pack(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := types.Log{Topics: []common.Hash{erc20.ABI.Events["Transfer"].ID, common.BytesToHash(from.Bytes()), common.BytesToHash(to.Bytes())}, Data: data}
+
+	name, got, err := DecodeLog(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "Transfer" || got["from"] != from.Hex() || got["to"] != to.Hex() || got["value"] != value.String() {
+		t.Errorf("decoded %q %+v", name, got)
+	}
+	found := false
+	for _, n := range EventNames {
+		found = found || n == "Transfer"
+	}
+	if !found {
+		t.Error("Transfer is missing from EventNames, so KnownEventNames would not list it")
+	}
+
+	log.Topics = log.Topics[:2]
+	if _, _, err := DecodeLog(log); err == nil {
+		t.Error("a Transfer log missing its receiver topic decoded without error")
+	}
+}

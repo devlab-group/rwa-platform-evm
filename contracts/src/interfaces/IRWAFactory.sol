@@ -5,6 +5,11 @@ pragma solidity ^0.8.24;
 /// @notice Deploys and wires a versioned project stack
 /// @dev Stable interface; see docs/spec/contracts.md, "RWAFactory"
 interface IRWAFactory {
+    enum StrategyKind {
+        Fixed,
+        Oracle
+    }
+
     struct ProjectConfig {
         // Token
         string name;
@@ -17,6 +22,14 @@ interface IRWAFactory {
         address quoteToken;
         uint256 purchasePricePerWholeToken;
         uint256 redemptionPricePerWholeToken;
+        uint256 minPurchaseQuote;
+        StrategyKind strategyKind;
+        address priceFeed;
+        uint64 priceMaxAge;
+        uint16 purchaseSpreadBps;
+        uint16 redemptionSpreadBps;
+        address sequencerUptimeFeed;
+        uint64 sequencerGracePeriod;
         // Redemption
         uint64 redemptionTimeout;
         // Roles
@@ -26,6 +39,7 @@ interface IRWAFactory {
         address pricer;
         address treasurer;
         address redemptionManager;
+        address incomeManager;
         address treasury;
         // Governance
         uint48 adminTransferDelay;
@@ -38,6 +52,7 @@ interface IRWAFactory {
         address vault;
         address redemptionEscrow;
         address strategy;
+        address incomeDistributor;
     }
 
     event ProjectDeployed(
@@ -49,6 +64,7 @@ interface IRWAFactory {
         address vault,
         address redemptionEscrow,
         address strategy,
+        address incomeDistributor,
         string version
     );
 

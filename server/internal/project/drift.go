@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/rwa-platform/server/internal/bindings"
 	"github.com/rwa-platform/server/internal/blockchain"
 	"github.com/rwa-platform/server/internal/dal/models"
 	"github.com/rwa-platform/server/internal/dal/repository"
@@ -49,9 +50,9 @@ func CheckConfigDrift(ctx context.Context, client blockchain.Client, projects re
 		return false, reason, nil
 	}
 
-	// Report the pricing split: Vault strategy swaps are valid, but the escrow's immutable
-	// strategy leaves purchases and redemptions quoting through different contracts
-	if vaultStrategy != common.HexToAddress(p.Addresses.Strategy) {
+	// rwa-v2 swaps split purchase/redemption pricing; rwa-v3 follows Vault.strategy(),
+	// already checked by verifyImmutableConfig
+	if p.Version != bindings.FactoryVersionV3 && vaultStrategy != common.HexToAddress(p.Addresses.Strategy) {
 		return false, fmt.Sprintf("vault.strategy = %s but redemptionEscrow.strategy = %s (immutable): purchases and redemptions are priced by different contracts",
 			vaultStrategy.Hex(), common.HexToAddress(p.Addresses.Strategy).Hex()), nil
 	}
@@ -72,6 +73,9 @@ func driftExpectations(p *models.Project) *models.Project {
 		}
 		if s.Strategy != "" {
 			q.Addresses.Strategy = s.Strategy
+		}
+		if s.MinPurchaseQuote != "" {
+			q.MinPurchaseQuote = s.MinPurchaseQuote
 		}
 	}
 	// Empty expectations exclude legitimate pricer updates from drift checks;

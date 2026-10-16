@@ -11,12 +11,14 @@ import {ComplianceRegistry} from "../src/ComplianceRegistry.sol";
 import {SupplyController} from "../src/SupplyController.sol";
 import {Vault} from "../src/Vault.sol";
 import {RedemptionEscrow} from "../src/RedemptionEscrow.sol";
+import {IncomeDistributor} from "../src/IncomeDistributor.sol";
 import {FixedPriceStrategy} from "../src/pricing/FixedPriceStrategy.sol";
 import {MockERC20} from "../test/mocks/token/MockERC20.sol";
 
 /// @notice Broadcasts deploy -> allow investor -> locally signed mint -> buy ->
 ///         requestRedemption -> fund -> claim -> auditor burn of returned Vault inventory,
-///         with separate entrypoints for a second request's timeout -> cancel branch
+///         with separate entrypoints for an income distribution and claim and for a second
+///         request's timeout -> cancel branch
 ///
 /// Usage: forge script script/E2EFlow.s.sol --broadcast --rpc-url http://localhost:8545 -vv
 ///
@@ -40,6 +42,7 @@ contract E2EFlow is DeployBase {
     Vault internal _vault;
     RedemptionEscrow internal _escrow;
     FixedPriceStrategy internal _strategy;
+    IncomeDistributor internal _income;
     MockERC20 internal _quoteToken;
 
     /// @notice Runs deploy through burn; e2e.sh requires the final "E2E OK" log marker
@@ -87,8 +90,8 @@ contract E2EFlow is DeployBase {
         _wireDeployment(dep, quoteTokenAddr);
     }
 
-    /// @dev Reuses run()'s deployment for the cancel demo via env: TOKEN, COMPLIANCE,
-    ///      SUPPLY_CONTROLLER, VAULT, ESCROW, STRATEGY and QUOTE_TOKEN
+    /// @dev Reuses run()'s deployment for the later entrypoints via env: TOKEN, COMPLIANCE,
+    ///      SUPPLY_CONTROLLER, VAULT, ESCROW, STRATEGY, INCOME_DISTRIBUTOR and QUOTE_TOKEN
     function _wireExisting() internal {
         _wireKeys();
         IRWAFactory.Deployment memory dep = IRWAFactory.Deployment({
@@ -97,7 +100,8 @@ contract E2EFlow is DeployBase {
             supplyController: vm.envAddress("SUPPLY_CONTROLLER"),
             vault: vm.envAddress("VAULT"),
             redemptionEscrow: vm.envAddress("ESCROW"),
-            strategy: vm.envAddress("STRATEGY")
+            strategy: vm.envAddress("STRATEGY"),
+            incomeDistributor: vm.envAddress("INCOME_DISTRIBUTOR")
         });
         _wireDeployment(dep, vm.envAddress("QUOTE_TOKEN"));
     }
@@ -128,6 +132,7 @@ contract E2EFlow is DeployBase {
         _vault = Vault(dep.vault);
         _escrow = RedemptionEscrow(dep.redemptionEscrow);
         _strategy = FixedPriceStrategy(dep.strategy);
+        _income = IncomeDistributor(dep.incomeDistributor);
         _quoteToken = MockERC20(quoteTokenAddr);
     }
 
@@ -198,6 +203,35 @@ contract E2EFlow is DeployBase {
         _escrow.claimRedemption(id);
         vm.stopBroadcast();
         console2.log("Claimed redemption id", id, "- status Completed");
+    }
+
+    /// @notice Funds and claims a single-leaf distribution for the investor (root = leaf, empty proof)
+    /// @dev Reuses run()'s deployment in a separate invocation so the chosen record block
+    ///      predates simulation and mining of createDistribution
+    function distributeIncome() external {
+        _wireExisting();
+        uint256 amount = 1_000_000;
+        bytes32 root = keccak256(bytes.concat(keccak256(abi.encode(_investor, amount))));
+
+        uint64 recordBlock = uint64(block.number - 1);
+        // Leave time for mining after simulation so the minimum claim window still holds
+        uint64 deadline = uint64(block.timestamp) + _income.MIN_CLAIM_WINDOW() + 1 days;
+
+        vm.startBroadcast(_deployerPk);
+        _quoteToken.mint(_deployer, amount);
+        _quoteToken.approve(address(_income), amount);
+        uint256 id = _income.createDistribution(
+            root, amount, recordBlock, deadline, "ipfs://e2e-income", keccak256("e2e-income")
+        );
+        vm.stopBroadcast();
+
+        uint256 before = _quoteToken.balanceOf(_investor);
+        vm.startBroadcast(_investorPk);
+        _income.claim(id, amount, new bytes32[](0));
+        vm.stopBroadcast();
+        require(_quoteToken.balanceOf(_investor) - before == amount, "income claim balance");
+        require(_income.isClaimed(id, _investor), "income not claimed");
+        console2.log("Distributed and claimed income id", id, "amount", amount);
     }
 
     function _burnReturnedInventory() internal {

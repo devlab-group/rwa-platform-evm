@@ -4,12 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {
-    AccessControlDefaultAdminRules
-} from "@openzeppelin/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
-import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {AccessControlEnumerableAdminRules} from "./access/AccessControlEnumerableAdminRules.sol";
 import {IVault} from "./interfaces/IVault.sol";
 import {IPriceStrategy} from "./interfaces/IPriceStrategy.sol";
 import {IRWAToken} from "./interfaces/IRWAToken.sol";
@@ -17,8 +12,8 @@ import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 
 /// @title Vault
 /// @notice Sells RWA inventory for a quote token through buy; withdraws proceeds to treasury
-/// @dev Enumerable TREASURER_ROLE and DEFAULT_ADMIN_ROLE; see ComplianceRegistry for inheritance overrides
-contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRules, ReentrancyGuard {
+/// @dev Enumerable TREASURER_ROLE and DEFAULT_ADMIN_ROLE
+contract Vault is IVault, AccessControlEnumerableAdminRules, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     bytes32 public constant TREASURER_ROLE = keccak256("TREASURER_ROLE");
@@ -29,16 +24,18 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
 
     address public strategy;
     address public treasury;
+    uint256 public minPurchaseQuote;
 
     constructor(
         address token_,
         address quoteToken_,
         address strategy_,
         address treasury_,
+        uint256 minPurchaseQuote_,
         address admin,
         address treasurer,
         uint48 adminTransferDelay
-    ) AccessControlDefaultAdminRules(adminTransferDelay, admin) {
+    ) AccessControlEnumerableAdminRules(adminTransferDelay, admin) {
         if (token_ == address(0) || quoteToken_ == address(0) || strategy_ == address(0) || treasury_ == address(0)) {
             revert ZeroAddress();
         }
@@ -46,6 +43,7 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
         quoteToken = quoteToken_;
         strategy = strategy_;
         treasury = treasury_;
+        minPurchaseQuote = minPurchaseQuote_;
         _compliance = IRWAToken(token_).compliance();
 
         _grantRole(TREASURER_ROLE, treasurer);
@@ -70,6 +68,7 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
         if (tokenAmount > inv) revert InsufficientInventory(tokenAmount, inv);
 
         uint256 quote = IPriceStrategy(strategy).quotePurchase(tokenAmount);
+        if (quote < minPurchaseQuote) revert QuoteBelowMinimum(quote, minPurchaseQuote);
         if (quote > maxQuoteAmount) revert QuoteAboveMax(quote, maxQuoteAmount);
 
         uint256 before = IERC20(quoteToken).balanceOf(address(this));
@@ -110,66 +109,18 @@ contract Vault is IVault, AccessControlEnumerable, AccessControlDefaultAdminRule
         emit TreasuryChanged(previous, newTreasury, msg.sender);
     }
 
+    function setMinPurchaseQuote(uint256 newMinimum) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (IRWAToken(token).paused()) revert ProjectPaused();
+        uint256 previous = minPurchaseQuote;
+        minPurchaseQuote = newMinimum;
+        emit MinPurchaseQuoteChanged(previous, newMinimum, msg.sender);
+    }
+
     function inventory() external view returns (uint256) {
         return IERC20(token).balanceOf(address(this));
     }
 
     function previewBuy(uint256 tokenAmount) external view returns (uint256 quoteAmount) {
         return IPriceStrategy(strategy).quotePurchase(tokenAmount);
-    }
-
-    // ---- AccessControl overrides, see ComplianceRegistry.sol ----
-
-    function _grantRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._grantRole(role, account);
-    }
-
-    function _revokeRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._revokeRole(role, account);
-    }
-
-    function _setRoleAdmin(bytes32 role, bytes32 adminRole)
-        internal
-        override(AccessControl, AccessControlDefaultAdminRules)
-    {
-        super._setRoleAdmin(role, adminRole);
-    }
-
-    function grantRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.grantRole(role, account);
-    }
-
-    function revokeRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.revokeRole(role, account);
-    }
-
-    function renounceRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.renounceRole(role, account);
-    }
-
-    function supportsInterface(bytes4 interfaceId)
-        public
-        view
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super.supportsInterface(interfaceId);
     }
 }

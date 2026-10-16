@@ -374,6 +374,27 @@ export const api = {
       { path: { burnId }, idempotencyKey },
     ),
 
+  // Preparations plus indexed rwa-v3 distribution state
+  listIncomeDistributions: (
+    opts: PageOptions<operations["listIncomeDistributions"]> = {},
+  ) => {
+    const { signal, limit, cursor } = opts;
+    return requestPage<operations["listIncomeDistributions"]>(
+      "/api/v1/income/distributions",
+      { signal, query: { limit, cursor } },
+    );
+  },
+
+  prepareIncomeDistribution: (
+    body: OpBody<operations["prepareIncomeDistribution"]>,
+    idempotencyKey: string,
+  ) =>
+    request<operations["prepareIncomeDistribution"]>(
+      "POST",
+      "/api/v1/income/distributions",
+      { body, idempotencyKey },
+    ),
+
   getInventory: (
     opts: Pick<RequestOptions<operations["getInventory"]>, "signal"> = {},
   ) =>

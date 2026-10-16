@@ -20,6 +20,11 @@ const vaultABIJSON = `[
   {"type":"function","name":"quoteToken","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"address"}]},
   {"type":"function","name":"strategy","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"address"}]},
   {"type":"function","name":"treasury","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"address"}]},
+  {"type":"function","name":"minPurchaseQuote","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint256"}]},
+  {"type":"function","name":"setMinPurchaseQuote","stateMutability":"nonpayable","inputs":[{"name":"newMinimum","type":"uint256"}],"outputs":[]},
+  {"type":"event","name":"MinPurchaseQuoteChanged","anonymous":false,"inputs":[
+    {"name":"previousMinimum","type":"uint256","indexed":false},{"name":"newMinimum","type":"uint256","indexed":false},
+    {"name":"caller","type":"address","indexed":true}]},
   {"type":"event","name":"Purchased","anonymous":false,"inputs":[
     {"name":"buyer","type":"address","indexed":true},{"name":"recipient","type":"address","indexed":true},
     {"name":"tokenAmount","type":"uint256","indexed":false},{"name":"quoteAmount","type":"uint256","indexed":false},
@@ -68,6 +73,30 @@ func (v Vault) UnpackStrategy(data []byte) (common.Address, error) {
 		return common.Address{}, err
 	}
 	return *abi.ConvertType(out[0], new(common.Address)).(*common.Address), nil
+}
+
+// MinPurchaseQuoteChangedEvent mirrors the MinPurchaseQuoteChanged event: previous and
+// new minimums in log.Data, the indexed caller in topics
+type MinPurchaseQuoteChangedEvent struct {
+	PreviousMinimum *big.Int
+	NewMinimum      *big.Int
+	Caller          common.Address
+}
+
+// UnpackMinPurchaseQuoteChanged decodes a MinPurchaseQuoteChanged log
+func (v Vault) UnpackMinPurchaseQuoteChanged(data []byte, topics []common.Hash) (MinPurchaseQuoteChangedEvent, error) {
+	var partial struct {
+		PreviousMinimum *big.Int
+		NewMinimum      *big.Int
+	}
+	if err := v.ABI.UnpackIntoInterface(&partial, "MinPurchaseQuoteChanged", data); err != nil {
+		return MinPurchaseQuoteChangedEvent{}, err
+	}
+	ev := MinPurchaseQuoteChangedEvent{PreviousMinimum: partial.PreviousMinimum, NewMinimum: partial.NewMinimum}
+	if len(topics) >= 2 {
+		ev.Caller = common.HexToAddress(topics[1].Hex())
+	}
+	return ev, nil
 }
 
 // PackPreviewBuy builds calldata for previewBuy(uint256).

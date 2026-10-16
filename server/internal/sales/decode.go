@@ -7,9 +7,9 @@ import (
 )
 
 // EventNames lists Vault events: Purchased feeds sales, TreasuryChanged/StrategyChanged
-// feed project security, and ProceedsWithdrawn feeds txindex's treasury-withdrawal
-// history
-var EventNames = []string{"Purchased", "TreasuryChanged", "StrategyChanged", "ProceedsWithdrawn"}
+// feed project security, MinPurchaseQuoteChanged (rwa-v3) feeds the projected minimum,
+// and ProceedsWithdrawn feeds txindex's treasury-withdrawal history
+var EventNames = []string{"Purchased", "TreasuryChanged", "StrategyChanged", "ProceedsWithdrawn", "MinPurchaseQuoteChanged"}
 
 // DecodeLog is an indexer.EventDecoder for Vault EventNames, using JSON-friendly fields
 // as in internal/redemption.DecodeLog; other logs return "unknown" for serverwiring's
@@ -49,6 +49,14 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 		}
 		return "ProceedsWithdrawn", map[string]any{
 			"treasury": ev.Treasury.Hex(), "quoteAmount": ev.QuoteAmount.String(), "caller": ev.Caller.Hex(),
+		}, nil
+	case vault.EventID("MinPurchaseQuoteChanged"):
+		ev, err := vault.UnpackMinPurchaseQuoteChanged(log.Data, log.Topics)
+		if err != nil {
+			return "", nil, err
+		}
+		return "MinPurchaseQuoteChanged", map[string]any{
+			"previousMinimum": ev.PreviousMinimum.String(), "newMinimum": ev.NewMinimum.String(), "caller": ev.Caller.Hex(),
 		}, nil
 	default:
 		return "unknown", map[string]any{"topic0": topic0.Hex()}, nil

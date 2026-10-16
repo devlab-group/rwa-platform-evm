@@ -9,6 +9,7 @@ type WalletStatus = components["schemas"]["WalletStatus"];
 type Challenge = components["schemas"]["Challenge"];
 type Redemption = components["schemas"]["Redemption"];
 type Transaction = components["schemas"]["Transaction"];
+type IncomeClaim = components["schemas"]["IncomeClaim"];
 
 const addr = (pair: string) => `0x${pair.repeat(20)}`;
 
@@ -32,6 +33,8 @@ export interface MockState {
   wallets: WalletStatus[];
   redemptions: Redemption[];
   transactions: Transaction[];
+  incomeClaims: IncomeClaim[];
+  inventory: components["schemas"]["Inventory"];
   challenges: Record<string, Challenge>;
 }
 
@@ -62,6 +65,8 @@ export function defaultState(): MockState {
     ],
     redemptions: [],
     transactions: [],
+    incomeClaims: [],
+    inventory: { inventory: "0", quoteBalance: "0" },
     challenges: {},
   };
 }
@@ -200,6 +205,12 @@ export async function installMockApi(
         : state.transactions;
       return json(list);
     }
+
+    // --- sales inventory and income ----------------------------------------
+    if (path === "/api/v1/sales/inventory" && method === "GET")
+      return json(state.inventory);
+    if (path.startsWith("/api/v1/income/claims/") && method === "GET")
+      return json(state.incomeClaims);
 
     // Fail loudly so an unmocked route can't pass a spec silently
     return route.fulfill({

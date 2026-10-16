@@ -1,5 +1,6 @@
 // Command verifyabi compares internal/bindings selectors and event topic0 hashes with
-// contracts/out artifacts. A missing contracts/out prints a notice and exits 0 so Go
+// contracts/out artifacts, and the rwa-v2 factory binding with the pinned ABI in
+// internal/bindings/testdata/rwa-v2. A missing contracts/out prints a notice and exits 0 so Go
 // needs no Foundry build. Once present, missing or unreadable checked artifacts fail
 // verification.
 package main
@@ -51,12 +52,18 @@ func main() {
 		{"Vault", filepath.Join(root, "Vault.sol", "Vault.json"), func() abi.ABI { return bindings.NewVault().ABI }},
 		{"RedemptionEscrow", filepath.Join(root, "RedemptionEscrow.sol", "RedemptionEscrow.json"), func() abi.ABI { return bindings.NewRedemptionEscrow().ABI }},
 		{"FixedPriceStrategy", filepath.Join(root, "FixedPriceStrategy.sol", "FixedPriceStrategy.json"), func() abi.ABI { return bindings.NewFixedPriceStrategy().ABI }},
+		{"IncomeDistributor", filepath.Join(root, "IncomeDistributor.sol", "IncomeDistributor.json"), func() abi.ABI { return bindings.NewIncomeDistributor().ABI }},
+		{"OraclePriceStrategy", filepath.Join(root, "OraclePriceStrategy.sol", "OraclePriceStrategy.json"), func() abi.ABI { return bindings.NewOraclePriceStrategy().ABI }},
+		{"AggregatorV3Interface", filepath.Join(root, "AggregatorV3Interface.sol", "AggregatorV3Interface.json"), func() abi.ABI { return bindings.NewAggregatorV3().ABI }},
 		{"RWAFactory", filepath.Join(root, "RWAFactory.sol", "RWAFactory.json"), func() abi.ABI { return bindings.NewFactory().ABI }},
 		{"RWAToken", filepath.Join(root, "RWAToken.sol", "RWAToken.json"), func() abi.ABI { return bindings.NewRWAToken().ABI }},
 		// The ERC-20 binding is also used for the quote token, but each entry in it (the ERC-20 views
 		// plus the compliance(), supplyController(), redemptionEscrow() and paused() getters) is declared
 		// by RWAToken, so the RWAToken artifact is the one to check it against
 		{"RWAToken (ERC-20 views)", filepath.Join(root, "RWAToken.sol", "RWAToken.json"), func() abi.ABI { return bindings.NewERC20().ABI }},
+		// rwa-v2 deployments keep their own deploy selector and ProjectDeployed topic, which
+		// the compiled rwa-v3 factory no longer carries, so a fixture pins them
+		{"RWAFactory (rwa-v2)", findPinnedV2(), func() abi.ABI { return bindings.NewFactory().ABIV2 }},
 	}
 
 	// An artifact that cannot be loaded counts as a mismatch, so a renamed or
@@ -83,7 +90,19 @@ func main() {
 		fmt.Printf("verifyabi: %d mismatch(es) found\n", mismatches)
 		os.Exit(1)
 	}
-	fmt.Printf("verifyabi: OK, no drift between internal/bindings and the %d compiled contract ABIs\n", compared)
+	fmt.Printf("verifyabi: OK, no drift between internal/bindings and the %d contract ABIs checked\n", compared)
+}
+
+// findPinnedV2 returns the path of the pinned rwa-v2 RWAFactory ABI, found relative to
+// the working directory (server/ or the repository root)
+func findPinnedV2() string {
+	rel := filepath.Join("internal", "bindings", "testdata", "rwa-v2", "RWAFactory.json")
+	for _, candidate := range []string{rel, filepath.Join("server", rel)} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return rel
 }
 
 // findContractsOut returns the absolute path of contracts/out, found relative
@@ -126,6 +145,18 @@ func compare(name string, real, mine abi.ABI) int {
 		}
 		if e.ID != re.ID {
 			fmt.Printf("  %s: event %s topic0 mismatch: mine=%s real=%s\n", name, evName, e.ID.Hex(), re.ID.Hex())
+			mismatches++
+		}
+	}
+	for errName, e := range mine.Errors {
+		re, ok := real.Errors[errName]
+		if !ok {
+			fmt.Printf("  %s: error %s missing from real ABI\n", name, errName)
+			mismatches++
+			continue
+		}
+		if e.ID != re.ID {
+			fmt.Printf("  %s: error %s selector mismatch: mine=%s real=%s\n", name, errName, e.ID.Hex(), re.ID.Hex())
 			mismatches++
 		}
 	}

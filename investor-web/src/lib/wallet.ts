@@ -14,7 +14,15 @@ import {
   type Chain,
   type Hex,
 } from "viem";
-import { redemptionEscrowAbi, tokenErrorsAbi, vaultAbi } from "./abis";
+import {
+  incomeDistributorAbi,
+  oracleErrorsAbi,
+  redemptionEscrowAbi,
+  tokenErrorsAbi,
+  vaultAbi,
+  vaultErrorsAbi,
+} from "./abis";
+import { oracleReason } from "./v3";
 import { findNetwork, toAddChainParams } from "./networks";
 
 export interface InjectedProvider {
@@ -441,13 +449,80 @@ export async function sendCancelRedemption(
   );
 }
 
+/** Sends IncomeDistributor.claim; the contract checks the caller's proof, deadline and compliance */
+export async function sendIncomeClaim(
+  expectedChainId: number,
+  from: Address,
+  distributor: Address,
+  id: bigint,
+  amount: bigint,
+  proof: Hex[],
+): Promise<Hex> {
+  return sendWrite(
+    expectedChainId,
+    from,
+    distributor,
+    encodeFunctionData({
+      abi: incomeDistributorAbi,
+      functionName: "claim",
+      args: [id, amount, proof],
+    }),
+  );
+}
+
+const INCOME_ERROR_TEXT: Record<string, string> = {
+  ProjectPaused: "The project is paused; claims resume when it is unpaused.",
+  UnknownDistribution: "This distribution does not exist on-chain.",
+  ClaimWindowClosed: "The claim window for this distribution has closed.",
+  AlreadyClaimed: "This entitlement has already been claimed.",
+  CallerNotAllowed:
+    "Your wallet is not Allowed in the compliance registry and cannot claim.",
+  ZeroAmount: "The claim amount is zero.",
+  InvalidProof: "The proof does not match this distribution.",
+  ExceedsTotal: "This claim would exceed the distribution total.",
+};
+
+/** Oracle error name when err carries oracle revert data, so callers can stop new purchases */
+export function oracleErrorName(err: unknown): string | undefined {
+  const data = revertData(err);
+  if (!data) return undefined;
+  try {
+    return decodeErrorResult({ abi: oracleErrorsAbi, data }).errorName;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Decodes token revert bytes for raw sends, whose viem errors lack an ABI.
  * Frozen-balance detail explains why the full wallet balance may not be spendable.
+ * Pass "income" for IncomeDistributor.claim to get claim-specific wording.
  */
-export function describeTxError(err: unknown, fallback: string): string {
+export function describeTxError(
+  err: unknown,
+  fallback: string,
+  context?: "income",
+): string {
   const data = revertData(err);
   if (data) {
+    const oracle = oracleErrorName(err);
+    if (oracle) return `Prices unavailable: ${oracleReason(oracle)}.`;
+    try {
+      const below = decodeErrorResult({ abi: vaultErrorsAbi, data });
+      return `This purchase is below the project minimum: it quotes ${String(below.args[0])} and the minimum is ${String(below.args[1])} (quote-token minimal units).`;
+    } catch {
+      // Not a Vault error
+    }
+    // Shared selectors such as ProjectPaused() need claim wording only for income transactions
+    if (context === "income") {
+      try {
+        const income = decodeErrorResult({ abi: incomeDistributorAbi, data });
+        const text = INCOME_ERROR_TEXT[income.errorName];
+        if (text) return text;
+      } catch {
+        // Not an income error
+      }
+    }
     try {
       const decoded = decodeErrorResult({ abi: tokenErrorsAbi, data });
       switch (decoded.errorName) {
@@ -469,7 +544,9 @@ export function describeTxError(err: unknown, fallback: string): string {
 function revertData(err: unknown): Hex | undefined {
   let current: unknown = err;
   for (let depth = 0; current && depth < 6; depth++) {
-    const candidate = (current as { data?: unknown }).data;
+    const candidate =
+      (current as { data?: unknown }).data ??
+      (current as { raw?: unknown }).raw;
     if (
       typeof candidate === "string" &&
       candidate.startsWith("0x") &&

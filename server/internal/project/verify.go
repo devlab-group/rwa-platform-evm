@@ -14,11 +14,14 @@ import (
 	"github.com/rwa-platform/server/internal/dal/models"
 )
 
-// verifyBytecode checks for non-empty code at all six deployed child addresses,
-// catching missing deployments. It checks presence, not identity or a known hash; the
-// server does not bundle contracts/out artifacts.
+// verifyBytecode checks code presence at deployed child addresses, including rwa-v3 income.
+// It does not verify identity or hashes; the server does not bundle contracts/out artifacts.
 func verifyBytecode(ctx context.Context, client blockchain.Client, addrs models.Addresses) (bool, error) {
-	for _, a := range []string{addrs.Token, addrs.Compliance, addrs.SupplyController, addrs.Vault, addrs.RedemptionEscrow, addrs.Strategy} {
+	list := []string{addrs.Token, addrs.Compliance, addrs.SupplyController, addrs.Vault, addrs.RedemptionEscrow, addrs.Strategy}
+	if addrs.IncomeDistributor != "" {
+		list = append(list, addrs.IncomeDistributor)
+	}
+	for _, a := range list {
 		if a == "" {
 			return false, nil
 		}
@@ -47,6 +50,26 @@ var knownRoles = []struct {
 	{"REDEMPTION_MANAGER_ROLE", bindings.RedemptionManagerRole},
 }
 
+// incomeManagerRole is INCOME_MANAGER_ROLE, which rwa-v3 projects add to knownRoles
+var incomeManagerRole = struct {
+	name string
+	id   [32]byte
+}{"INCOME_MANAGER_ROLE", bindings.IncomeManagerRole}
+
+// rolesFor adds INCOME_MANAGER_ROLE to knownRoles for checks on rwa-v3 role-bearing contracts
+func rolesFor(p *models.Project) []struct {
+	name string
+	id   [32]byte
+} {
+	if p.Addresses.IncomeDistributor == "" {
+		return knownRoles
+	}
+	return append(append([]struct {
+		name string
+		id   [32]byte
+	}{}, knownRoles...), incomeManagerRole)
+}
+
 // verifyRoles compares each child's getRoleMemberCount/getRoleMember enumeration with
 // the signed ProjectConfig allowlist. All children expose AccessControlEnumerable;
 // enumeration catches unexpected grants and bootstrap holders that expected-address
@@ -66,6 +89,22 @@ func verifyRoles(ctx context.Context, client blockchain.Client, p *models.Projec
 		{"vault", common.HexToAddress(p.Addresses.Vault)},
 		{"redemptionEscrow", common.HexToAddress(p.Addresses.RedemptionEscrow)},
 		{"strategy", common.HexToAddress(p.Addresses.Strategy)},
+	}
+	if p.Addresses.IncomeDistributor != "" {
+		contracts = append(contracts, struct {
+			label string
+			addr  common.Address
+		}{"incomeDistributor", common.HexToAddress(p.Addresses.IncomeDistributor)})
+	}
+	// An OraclePriceStrategy has no AccessControl, so it has no roles to enumerate
+	if p.StrategyKind == models.StrategyKindOracle {
+		kept := contracts[:0:0]
+		for _, c := range contracts {
+			if c.label != "strategy" {
+				kept = append(kept, c)
+			}
+		}
+		contracts = kept
 	}
 
 	// expected[contractLabel][roleName] = set of allowed holder hex addresses.
@@ -92,6 +131,7 @@ func verifyRoles(ctx context.Context, client blockchain.Client, p *models.Projec
 	addExpected("vault", "TREASURER_ROLE", common.HexToAddress(p.Treasurer))
 	addExpected("redemptionEscrow", "TREASURER_ROLE", common.HexToAddress(p.Treasurer))
 	addExpected("redemptionEscrow", "REDEMPTION_MANAGER_ROLE", common.HexToAddress(p.RedemptionManager))
+	addExpected("incomeDistributor", "INCOME_MANAGER_ROLE", common.HexToAddress(p.IncomeManager))
 
 	roles = map[string][]string{}
 	rolesSeen := map[string]map[string]bool{}
@@ -99,7 +139,7 @@ func verifyRoles(ctx context.Context, client blockchain.Client, p *models.Projec
 		if c.addr == (common.Address{}) {
 			continue
 		}
-		for _, role := range knownRoles {
+		for _, role := range rolesFor(p) {
 			holders, err := enumerateRoleHolders(ctx, client, ac, c.addr, role.id)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("project: enumerate %s on %s: %w", role.name, c.label, err)
@@ -190,8 +230,9 @@ var factoryBootstrapRoles = []struct {
 // verifyNoFactoryRoles returns retained factory roles as deterministic "ROLE on
 // Contract" entries. Empty means none of the checked roles remain; checking only
 // DEFAULT_ADMIN_ROLE would miss a retained COMPLIANCE_ROLE and its privileges.
-func verifyNoFactoryRoles(ctx context.Context, client blockchain.Client, factoryAddr common.Address, addrs models.Addresses) ([]string, error) {
+func verifyNoFactoryRoles(ctx context.Context, client blockchain.Client, factoryAddr common.Address, p *models.Project) ([]string, error) {
 	ac := bindings.NewAccessControl()
+	addrs := p.Addresses
 	contracts := []struct{ name, addr string }{
 		{"RWAToken", addrs.Token},
 		{"ComplianceRegistry", addrs.Compliance},
@@ -199,13 +240,24 @@ func verifyNoFactoryRoles(ctx context.Context, client blockchain.Client, factory
 		{"Vault", addrs.Vault},
 		{"RedemptionEscrow", addrs.RedemptionEscrow},
 		{"FixedPriceStrategy", addrs.Strategy},
+		{"IncomeDistributor", addrs.IncomeDistributor},
 	}
 	var retained []string
 	for _, c := range contracts {
 		if c.addr == "" {
 			continue
 		}
-		for _, role := range factoryBootstrapRoles {
+		if c.name == "FixedPriceStrategy" && p.StrategyKind == models.StrategyKindOracle {
+			continue // no AccessControl to hold a role
+		}
+		roles := factoryBootstrapRoles
+		if c.name == "IncomeDistributor" {
+			roles = append(append(roles[:0:0], roles...), struct {
+				name string
+				id   [32]byte
+			}{incomeManagerRole.name, incomeManagerRole.id})
+		}
+		for _, role := range roles {
 			has, err := hasRole(ctx, client, ac, common.HexToAddress(c.addr), role.id, factoryAddr)
 			if err != nil {
 				return nil, fmt.Errorf("project: hasRole(%s) for factory on %s: %w", role.name, c.name, err)
@@ -284,9 +336,12 @@ func verifySystemAllowlist(ctx context.Context, client blockchain.Client, addrs 
 // non-empty prices. Adoption uses deploy expectations; CheckConfigDrift substitutes
 // mutable values.
 //
-// vaultStrategy is the separate Vault.strategy expectation; the escrow uses deployed
-// p.Addresses.Strategy. The first mismatch returns (false, reason, nil); RPC, decoding
-// or invalid expected-value errors propagate.
+// vaultStrategy is the separate Vault.strategy expectation. The rwa-v2 escrow holds the
+// deployed p.Addresses.Strategy immutably; the rwa-v3 escrow reads Vault.strategy(), so
+// it must equal vaultStrategy. An rwa-v3 project additionally checks the income
+// distributor's wiring, Vault.minPurchaseQuote and, for an Oracle strategy, its
+// immutables against the signed calldata. The first mismatch returns (false, reason,
+// nil); RPC, decoding or invalid expected-value errors propagate.
 func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *models.Project, vaultStrategy common.Address) (bool, string, error) {
 	tokenABI := bindings.NewERC20().ABI
 	vaultABI := bindings.NewVault().ABI
@@ -303,6 +358,11 @@ func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *mod
 	wantQuoteToken := common.HexToAddress(p.QuoteToken)
 	wantTreasury := common.HexToAddress(p.Treasury)
 	wantAuditor := common.HexToAddress(p.Auditor)
+	v3 := p.Version == bindings.FactoryVersionV3
+	escrowStrategy := strategy
+	if v3 {
+		escrowStrategy = vaultStrategy
+	}
 
 	addressChecks := []struct {
 		label    string
@@ -323,7 +383,7 @@ func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *mod
 		{"escrow.token", escrowABI, escrow, "token", token},
 		{"escrow.quoteToken", escrowABI, escrow, "quoteToken", wantQuoteToken},
 		{"escrow.vault", escrowABI, escrow, "vault", vault},
-		{"escrow.strategy", escrowABI, escrow, "strategy", strategy},
+		{"escrow.strategy", escrowABI, escrow, "strategy", escrowStrategy},
 		{"controller.vault", controllerABI, controller, "vault", vault},
 		{"controller.token", controllerABI, controller, "token", token},
 		{"controller.auditor", controllerABI, controller, "auditor", wantAuditor},
@@ -367,6 +427,12 @@ func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *mod
 		return false, fmt.Sprintf("strategy.tokenDecimals = %d, want %d", got, p.TokenDecimals), nil
 	}
 
+	if v3 {
+		if ok, reason, err := verifyV3Config(ctx, client, p, vault, token, wantQuoteToken, strategy); err != nil || !ok {
+			return ok, reason, err
+		}
+	}
+
 	if p.PurchasePricePerWholeToken != "" {
 		want, err := parseBigInt(p.PurchasePricePerWholeToken)
 		if err != nil {
@@ -392,6 +458,101 @@ func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *mod
 		if got.Cmp(want) != 0 {
 			return false, fmt.Sprintf("strategy.redemptionPricePerWholeToken = %s, want %s", got, want), nil
 		}
+	}
+	return true, "", nil
+}
+
+// verifyV3Config checks the rwa-v3 additions: the income distributor's token,
+// quoteToken and vault, Vault.minPurchaseQuote and the Oracle strategy's immutables.
+// strategy is the deployed strategy, whose immutables the signed calldata describes.
+func verifyV3Config(ctx context.Context, client blockchain.Client, p *models.Project, vault, token, quoteToken, strategy common.Address) (bool, string, error) {
+	incomeABI := bindings.NewIncomeDistributor().ABI
+	income := common.HexToAddress(p.Addresses.IncomeDistributor)
+	for _, c := range []struct {
+		label string
+		want  common.Address
+	}{{"token", token}, {"quoteToken", quoteToken}, {"vault", vault}} {
+		got, err := viewAddress(ctx, client, incomeABI, income, c.label)
+		if err != nil {
+			return false, "", fmt.Errorf("project: read incomeDistributor.%s: %w", c.label, err)
+		}
+		if got != c.want {
+			return false, fmt.Sprintf("incomeDistributor.%s = %s, want %s", c.label, got.Hex(), c.want.Hex()), nil
+		}
+	}
+
+	if p.MinPurchaseQuote != "" {
+		want, err := parseBigInt(p.MinPurchaseQuote)
+		if err != nil {
+			return false, "", err
+		}
+		got, err := viewUint256(ctx, client, bindings.NewVault().ABI, vault, "minPurchaseQuote")
+		if err != nil {
+			return false, "", fmt.Errorf("project: read vault.minPurchaseQuote: %w", err)
+		}
+		if got.Cmp(want) != 0 {
+			return false, fmt.Sprintf("vault.minPurchaseQuote = %s, want %s", got, want), nil
+		}
+	}
+
+	if p.StrategyKind != models.StrategyKindOracle {
+		return true, "", nil
+	}
+	// roles skip an Oracle strategy, so a missing config must not leave it unchecked
+	if p.Oracle == nil {
+		return false, "oracle strategy has no stored configuration to verify against", nil
+	}
+	oracleABI := bindings.NewOraclePriceStrategy().ABI
+	cfg := p.Oracle
+	for _, c := range []struct {
+		label  string
+		method string
+		want   common.Address
+	}{
+		{"feed", "feed", common.HexToAddress(cfg.Feed)},
+		{"sequencerUptimeFeed", "sequencerUptimeFeed", common.HexToAddress(cfg.SequencerUptimeFeed)},
+	} {
+		got, err := viewAddress(ctx, client, oracleABI, strategy, c.method)
+		if err != nil {
+			return false, "", fmt.Errorf("project: read strategy.%s: %w", c.label, err)
+		}
+		if got != c.want {
+			return false, fmt.Sprintf("strategy.%s = %s, want %s", c.label, got.Hex(), c.want.Hex()), nil
+		}
+	}
+	for _, c := range []struct {
+		method string
+		want   uint64
+	}{{"maxAge", cfg.MaxAge}, {"gracePeriod", cfg.GracePeriod}} {
+		got, err := viewUint64(ctx, client, oracleABI, strategy, c.method)
+		if err != nil {
+			return false, "", fmt.Errorf("project: read strategy.%s: %w", c.method, err)
+		}
+		if got != c.want {
+			return false, fmt.Sprintf("strategy.%s = %d, want %d", c.method, got, c.want), nil
+		}
+	}
+	for _, c := range []struct {
+		method string
+		want   uint64
+	}{{"purchaseSpreadBps", uint64(cfg.PurchaseSpreadBps)}, {"redemptionSpreadBps", uint64(cfg.RedemptionSpreadBps)}} {
+		out, err := callView(ctx, client, oracleABI, strategy, c.method)
+		if err != nil {
+			return false, "", fmt.Errorf("project: read strategy.%s: %w", c.method, err)
+		}
+		if got := *abi.ConvertType(out[0], new(uint16)).(*uint16); uint64(got) != c.want {
+			return false, fmt.Sprintf("strategy.%s = %d, want %d", c.method, got, c.want), nil
+		}
+	}
+	// quoteDecimals is not in the calldata; it must equal the quote token's decimals()
+	quoteDecimals, err := viewUint8(ctx, client, bindings.NewERC20().ABI, quoteToken, "decimals")
+	if err != nil {
+		return false, "", fmt.Errorf("project: read quoteToken.decimals: %w", err)
+	}
+	if got, err := viewUint8(ctx, client, oracleABI, strategy, "quoteDecimals"); err != nil {
+		return false, "", fmt.Errorf("project: read strategy.quoteDecimals: %w", err)
+	} else if got != quoteDecimals {
+		return false, fmt.Sprintf("strategy.quoteDecimals = %d, want %d", got, quoteDecimals), nil
 	}
 	return true, "", nil
 }

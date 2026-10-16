@@ -1,0 +1,74 @@
+{
+  "description": "OpenZeppelin StandardMerkleTree.of(values, [\"address\",\"uint256\"]) roots and proofs, generated with @openzeppelin/merkle-tree 1.0.8. Leaf = keccak256(bytes.concat(keccak256(abi.encode(account, amount)))); pairs are hashed in sorted order. IncomeDistributor.claim verifies these proofs; the server must reproduce every root and proof.",
+  "leafEncoding": [
+    "address",
+    "uint256"
+  ],
+  "cases": [
+    {
+      "name": "five-holders",
+      "root": "0xfc0558017cab1befb9b87ef2243b4f37f4bde228f5f0fa18c6ce0ed73c80981e",
+      "entries": [
+        {
+          "account": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+          "amount": "1000000",
+          "leaf": "0xb144aecc2da8e6e365016efbc95f365edac3a544e940a82f93db7d0d14efbeec",
+          "proof": [
+            "0x4315cb32195d11b622e0cb5ac09124eb6e2a73a1757a77e7177dcd2d524328e8",
+            "0xe24ddac75401dbb4574ba4bab0119380c34fc4dd84ec75515efc3938995f46f2",
+            "0x942bb0ad4ecfdd5e4c6237bc2e7447603ae39c7f9cfc93b88cb6e2c272d79a5e"
+          ]
+        },
+        {
+          "account": "0x1111111111111111111111111111111111111111",
+          "amount": "2500000",
+          "leaf": "0x4315cb32195d11b622e0cb5ac09124eb6e2a73a1757a77e7177dcd2d524328e8",
+          "proof": [
+            "0xb144aecc2da8e6e365016efbc95f365edac3a544e940a82f93db7d0d14efbeec",
+            "0xe24ddac75401dbb4574ba4bab0119380c34fc4dd84ec75515efc3938995f46f2",
+            "0x942bb0ad4ecfdd5e4c6237bc2e7447603ae39c7f9cfc93b88cb6e2c272d79a5e"
+          ]
+        },
+        {
+          "account": "0x2222222222222222222222222222222222222222",
+          "amount": "750000",
+          "leaf": "0xb908dfa781aa1be8f3742f2df4743a563aaa38366396be93908db630a5397959",
+          "proof": [
+            "0xddddf2992c4f1cab4a044e44665cb2360bbcb75cca79e61b1354fd7bc84b4136",
+            "0x00c8b4ab401459e3027b5026d3e90fdf1858ae382caf0ba15c22e81414e86c0f"
+          ]
+        },
+        {
+          "account": "0x3333333333333333333333333333333333333333",
+          "amount": "5000000",
+          "leaf": "0xe24ddac75401dbb4574ba4bab0119380c34fc4dd84ec75515efc3938995f46f2",
+          "proof": [
+            "0x191018481654ac990fbfc1c12a16c8c810e680a751885ae6446dfb4c33340986",
+            "0x942bb0ad4ecfdd5e4c6237bc2e7447603ae39c7f9cfc93b88cb6e2c272d79a5e"
+          ]
+        },
+        {
+          "account": "0x4444444444444444444444444444444444444444",
+          "amount": "1",
+          "leaf": "0xddddf2992c4f1cab4a044e44665cb2360bbcb75cca79e61b1354fd7bc84b4136",
+          "proof": [
+            "0xb908dfa781aa1be8f3742f2df4743a563aaa38366396be93908db630a5397959",
+            "0x00c8b4ab401459e3027b5026d3e90fdf1858ae382caf0ba15c22e81414e86c0f"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "single-holder",
+      "root": "0xb144aecc2da8e6e365016efbc95f365edac3a544e940a82f93db7d0d14efbeec",
+      "entries": [
+        {
+          "account": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+          "amount": "1000000",
+          "leaf": "0xb144aecc2da8e6e365016efbc95f365edac3a544e940a82f93db7d0d14efbeec",
+          "proof": []
+        }
+      ]
+    }
+  ]
+}

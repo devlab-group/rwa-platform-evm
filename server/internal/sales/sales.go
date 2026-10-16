@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -17,10 +18,13 @@ import (
 
 // Inventory mirrors api Schemas.Inventory.
 type Inventory struct {
-	Inventory       string `json:"inventory"`
-	QuoteBalance    string `json:"quoteBalance"`
-	PurchasePrice   string `json:"purchasePrice"`
-	RedemptionPrice string `json:"redemptionPrice"`
+	Inventory    string `json:"inventory"`
+	QuoteBalance string `json:"quoteBalance"`
+	// PurchasePrice and RedemptionPrice are omitted when an Oracle strategy's read fails;
+	// PriceError then names why
+	PurchasePrice   string `json:"purchasePrice,omitempty"`
+	RedemptionPrice string `json:"redemptionPrice,omitempty"`
+	PriceError      string `json:"priceError,omitempty"`
 }
 
 // PurchaseView mirrors api Schemas.Purchase.
@@ -41,9 +45,16 @@ type Service struct {
 	vault          bindings.Vault
 	erc20          bindings.ERC20
 	strategy       bindings.FixedPriceStrategy
+	oracle         bindings.OraclePriceStrategy
+	aggregator     bindings.AggregatorV3
 	vaultAddr      common.Address
 	quoteTokenAddr common.Address
 	purchases      repository.PurchaseRepository
+
+	// kinds caches StrategyKind answers and oracleCfg the immutable OraclePriceStrategy
+	// views, both by strategy address
+	kinds     sync.Map
+	oracleCfg sync.Map
 }
 
 // New constructs a Service; purchases may be nil if ListPurchases and Reconcile are
@@ -52,6 +63,7 @@ func New(client blockchain.Client, vaultAddr, quoteTokenAddr common.Address, pur
 	return &Service{
 		client: client,
 		vault:  bindings.NewVault(), erc20: bindings.NewERC20(), strategy: bindings.NewFixedPriceStrategy(),
+		oracle: bindings.NewOraclePriceStrategy(), aggregator: bindings.NewAggregatorV3(),
 		vaultAddr: vaultAddr, quoteTokenAddr: quoteTokenAddr,
 		purchases: purchases,
 	}
@@ -59,7 +71,8 @@ func New(client blockchain.Client, vaultAddr, quoteTokenAddr common.Address, pur
 
 // strategyAddress reads live Vault.strategy so inventory prices follow the contract
 // used by buy/previewBuy after an admin's setStrategy. The deploy-time address can
-// become stale; RedemptionEscrow's strategy remains immutable.
+// become stale; an rwa-v2 RedemptionEscrow keeps its deploy-time strategy, while an
+// rwa-v3 escrow reads Vault.strategy() too.
 func (s *Service) strategyAddress(ctx context.Context) (common.Address, error) {
 	data, err := s.vault.PackStrategy()
 	if err != nil {
@@ -104,6 +117,17 @@ func (s *Service) GetInventory(ctx context.Context) (Inventory, error) {
 	strategyAddr, err := s.strategyAddress(ctx)
 	if err != nil {
 		return Inventory{}, err
+	}
+	if s.StrategyKind(ctx, strategyAddr) == KindOracle {
+		prices := s.OraclePrices(ctx, strategyAddr)
+		inv := Inventory{Inventory: inventory.String(), QuoteBalance: quoteBalance.String(), PriceError: prices.Error}
+		if prices.Purchase != nil {
+			inv.PurchasePrice = prices.Purchase.String()
+		}
+		if prices.Redemption != nil {
+			inv.RedemptionPrice = prices.Redemption.String()
+		}
+		return inv, nil
 	}
 	purchasePrice, err := s.readStrategyPrice(ctx, strategyAddr, "purchasePricePerWholeToken")
 	if err != nil {
