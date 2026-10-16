@@ -108,8 +108,7 @@ security-scan: ## Dependency vulnerability scan (fail-closed on reachable adviso
 	cd server && go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 	cd signer && go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 	# Production deps only: dev tooling (eslint, openapi-typescript, playwright) never
-	# ships in the SPA or binary, and some of its transitive advisories have no upstream
-	# fix (js-yaml via @redocly/openapi-core). Mirrors the ci.yml security-scan job.
+	# ships in the SPA or binary. Mirrors the ci.yml security-scan job.
 	cd web && npm audit --omit=dev --audit-level=high
 
 up: ## Start local dev stack (anvil, mongo, ipfs)

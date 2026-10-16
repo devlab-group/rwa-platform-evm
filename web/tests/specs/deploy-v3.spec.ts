@@ -45,7 +45,7 @@ test.describe("Setup - rwa-v3 factory", () => {
   }) => {
     api.factoryVersion = "";
     await reachDeployForm(page);
-    await expect(page.getByText(/Deployment is blocked/)).toBeVisible();
+    await expect(page.getByText(/deployment is blocked/i)).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Review deployment" }),
     ).toHaveCount(0);

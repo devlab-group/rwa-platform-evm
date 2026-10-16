@@ -284,7 +284,7 @@ From the repository root, `make signer-test` runs `go test -race ./...`, `make s
 `signer/bin/signer`, and `make vectors-check` runs `go test ./internal/attestation/... -run Vectors`
 alongside contract/server/web shared-vector checks.
 
-`github.com/rwa-platform/signer` uses Go 1.25. Direct dependencies are `github.com/ethereum/go-ethereum`
+`github.com/rwa-platform/signer` uses Go 1.26.9. Direct dependencies are `github.com/ethereum/go-ethereum`
 (crypto/keystores/types), `golang.org/x/term` (hidden input) and `golang.org/x/crypto` (Argon2id),
 plus transitive requirements; x/crypto also appears through go-ethereum. Local JCS/schema code
 implements the platform's canonicalization rules and restricted dialect.
