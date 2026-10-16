@@ -1,6 +1,7 @@
 package bindings
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -18,7 +19,10 @@ const erc20ABIJSON = `[
   {"type":"function","name":"paused","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"bool"}]},
   {"type":"function","name":"compliance","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"address"}]},
   {"type":"function","name":"supplyController","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"address"}]},
-  {"type":"function","name":"redemptionEscrow","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"address"}]}
+  {"type":"function","name":"redemptionEscrow","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"address"}]},
+  {"type":"event","name":"Transfer","anonymous":false,"inputs":[
+    {"name":"from","type":"address","indexed":true},{"name":"to","type":"address","indexed":true},
+    {"name":"value","type":"uint256","indexed":false}]}
 ]`
 
 // ERC20 encodes calldata for, and decodes results from, the ERC-20 views in erc20ABIJSON
@@ -51,4 +55,28 @@ func (e ERC20) UnpackDecimals(data []byte) (uint8, error) {
 		return 0, err
 	}
 	return *abi.ConvertType(out[0], new(uint8)).(*uint8), nil
+}
+
+// TransferEvent mirrors the ERC-20 Transfer event: sender and receiver (indexed) and
+// the amount moved (non-indexed). Mints come from the zero address and burns go to it.
+type TransferEvent struct {
+	From  common.Address
+	To    common.Address
+	Value *big.Int
+}
+
+// UnpackTransfer requires exactly three topics, rejecting ERC-721 Transfer logs
+func (e ERC20) UnpackTransfer(data []byte, topics []common.Hash) (TransferEvent, error) {
+	var partial struct{ Value *big.Int }
+	if err := e.ABI.UnpackIntoInterface(&partial, "Transfer", data); err != nil {
+		return TransferEvent{}, err
+	}
+	if len(topics) != 3 {
+		return TransferEvent{}, fmt.Errorf("bindings: Transfer log has %d topics, want 3", len(topics))
+	}
+	return TransferEvent{
+		From:  common.HexToAddress(topics[1].Hex()),
+		To:    common.HexToAddress(topics[2].Hex()),
+		Value: partial.Value,
+	}, nil
 }

@@ -193,6 +193,63 @@ export const vaultAbi = [
     outputs: [{ name: "quoteAmount", type: "uint256" }],
     stateMutability: "view",
   },
+  // rwa-v3 only; DEFAULT_ADMIN_ROLE, reverts while paused
+  {
+    type: "function",
+    name: "setMinPurchaseQuote",
+    inputs: [{ name: "newMin", type: "uint256" }],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+] as const satisfies Abi;
+
+/** Vault revert raised by buy when the quote is under the rwa-v3 minimum */
+export const vaultErrorsAbi = [
+  {
+    type: "error",
+    name: "QuoteBelowMinimum",
+    inputs: [
+      { name: "quoted", type: "uint256" },
+      { name: "minimum", type: "uint256" },
+    ],
+  },
+] as const satisfies Abi;
+
+/** OraclePriceStrategy read failures; the strategy has no roles and no setters */
+export const oracleStrategyErrorsAbi = [
+  {
+    type: "error",
+    name: "StalePrice",
+    inputs: [
+      { name: "updatedAt", type: "uint256" },
+      { name: "maxAge", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "InvalidPrice",
+    inputs: [
+      { name: "answer", type: "int256" },
+      { name: "updatedAt", type: "uint256" },
+    ],
+  },
+  { type: "error", name: "SequencerDown", inputs: [] },
+  {
+    type: "error",
+    name: "GracePeriodNotOver",
+    inputs: [
+      { name: "sinceRestart", type: "uint256" },
+      { name: "gracePeriod", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "FeedDecimalsChanged",
+    inputs: [
+      { name: "expected", type: "uint8" },
+      { name: "actual", type: "uint8" },
+    ],
+  },
 ] as const satisfies Abi;
 
 /**
@@ -244,6 +301,208 @@ export const rwaFactoryAbi = [
       },
     ],
     stateMutability: "nonpayable",
+  },
+] as const satisfies Abi;
+
+/**
+ * rwa-v3 deployment; same permissionless entry point with the extended ProjectConfig/Deployment
+ * tuples of IRWAFactory (strategyKind 0 = Fixed, 1 = Oracle)
+ */
+export const rwaFactoryV3Abi = [
+  {
+    type: "function",
+    name: "deploy",
+    inputs: [
+      {
+        name: "config",
+        type: "tuple",
+        components: [
+          { name: "name", type: "string" },
+          { name: "symbol", type: "string" },
+          { name: "decimals", type: "uint8" },
+          { name: "profileDigest", type: "bytes32" },
+          { name: "projectId", type: "bytes32" },
+          { name: "quoteToken", type: "address" },
+          { name: "purchasePricePerWholeToken", type: "uint256" },
+          { name: "redemptionPricePerWholeToken", type: "uint256" },
+          { name: "minPurchaseQuote", type: "uint256" },
+          { name: "strategyKind", type: "uint8" },
+          { name: "priceFeed", type: "address" },
+          { name: "priceMaxAge", type: "uint64" },
+          { name: "purchaseSpreadBps", type: "uint16" },
+          { name: "redemptionSpreadBps", type: "uint16" },
+          { name: "sequencerUptimeFeed", type: "address" },
+          { name: "sequencerGracePeriod", type: "uint64" },
+          { name: "redemptionTimeout", type: "uint64" },
+          { name: "admin", type: "address" },
+          { name: "auditor", type: "address" },
+          { name: "complianceOperator", type: "address" },
+          { name: "pricer", type: "address" },
+          { name: "treasurer", type: "address" },
+          { name: "redemptionManager", type: "address" },
+          { name: "incomeManager", type: "address" },
+          { name: "treasury", type: "address" },
+          { name: "adminTransferDelay", type: "uint48" },
+        ],
+      },
+    ],
+    outputs: [
+      {
+        name: "deployment",
+        type: "tuple",
+        components: [
+          { name: "token", type: "address" },
+          { name: "compliance", type: "address" },
+          { name: "supplyController", type: "address" },
+          { name: "vault", type: "address" },
+          { name: "redemptionEscrow", type: "address" },
+          { name: "strategy", type: "address" },
+          { name: "incomeDistributor", type: "address" },
+        ],
+      },
+    ],
+    stateMutability: "nonpayable",
+  },
+] as const satisfies Abi;
+
+/**
+ * IncomeDistributor: INCOME_MANAGER_ROLE creates distributions with approved funding and extends
+ * deadlines. Reclaim is permissionless after expiry while unpaused; views detect existing snapshots.
+ */
+export const incomeDistributorAbi = [
+  {
+    type: "function",
+    name: "createDistribution",
+    inputs: [
+      { name: "merkleRoot", type: "bytes32" },
+      { name: "total", type: "uint256" },
+      { name: "recordBlock", type: "uint64" },
+      { name: "claimDeadline", type: "uint64" },
+      { name: "snapshotURI", type: "string" },
+      { name: "snapshotSha256", type: "bytes32" },
+    ],
+    outputs: [{ name: "id", type: "uint256" }],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "extendClaimDeadline",
+    inputs: [
+      { name: "id", type: "uint256" },
+      { name: "newDeadline", type: "uint64" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "reclaimUnclaimed",
+    inputs: [{ name: "id", type: "uint256" }],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "nextId",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "getDistribution",
+    inputs: [{ name: "id", type: "uint256" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        components: [
+          { name: "merkleRoot", type: "bytes32" },
+          { name: "total", type: "uint256" },
+          { name: "claimed", type: "uint256" },
+          { name: "recordBlock", type: "uint64" },
+          { name: "claimDeadline", type: "uint64" },
+          { name: "snapshotSha256", type: "bytes32" },
+          { name: "reclaimed", type: "bool" },
+        ],
+      },
+    ],
+    stateMutability: "view",
+  },
+] as const satisfies Abi;
+
+/** Error-only fragments for IncomeDistributor reverts shown by describeWalletError */
+export const incomeDistributorErrorsAbi = [
+  { type: "error", name: "ProjectPaused", inputs: [] },
+  { type: "error", name: "ZeroMerkleRoot", inputs: [] },
+  { type: "error", name: "ZeroTotal", inputs: [] },
+  { type: "error", name: "ZeroSnapshotHash", inputs: [] },
+  { type: "error", name: "EmptySnapshotURI", inputs: [] },
+  {
+    type: "error",
+    name: "RecordBlockNotPast",
+    inputs: [
+      { name: "recordBlock", type: "uint64" },
+      { name: "currentBlock", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "DeadlineNotFuture",
+    inputs: [
+      { name: "claimDeadline", type: "uint64" },
+      { name: "nowTs", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "ClaimWindowTooShort",
+    inputs: [
+      { name: "claimDeadline", type: "uint64" },
+      { name: "minDeadline", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "DeadlineNotExtended",
+    inputs: [
+      { name: "currentDeadline", type: "uint64" },
+      { name: "newDeadline", type: "uint64" },
+    ],
+  },
+  {
+    type: "error",
+    name: "UnknownDistribution",
+    inputs: [{ name: "id", type: "uint256" }],
+  },
+  {
+    type: "error",
+    name: "ClaimWindowClosed",
+    inputs: [
+      { name: "claimDeadline", type: "uint64" },
+      { name: "nowTs", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "ClaimWindowOpen",
+    inputs: [
+      { name: "claimDeadline", type: "uint64" },
+      { name: "nowTs", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "AlreadyReclaimed",
+    inputs: [{ name: "id", type: "uint256" }],
+  },
+  {
+    type: "error",
+    name: "QuoteDeltaMismatch",
+    inputs: [
+      { name: "expected", type: "uint256" },
+      { name: "actual", type: "uint256" },
+    ],
   },
 ] as const satisfies Abi;
 

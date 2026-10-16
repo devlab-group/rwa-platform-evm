@@ -81,14 +81,26 @@ func stubExpectedRoleHolders(t *testing.T, c *perContractClient, p *models.Proje
 	vault := common.HexToAddress(p.Addresses.Vault)
 	escrow := common.HexToAddress(p.Addresses.RedemptionEscrow)
 	strategy := common.HexToAddress(p.Addresses.Strategy)
-	for _, ct := range []common.Address{token, compliance, controller, vault, escrow, strategy} {
+	oracle := p.StrategyKind == models.StrategyKindOracle
+	contracts := []common.Address{token, compliance, controller, vault, escrow}
+	if !oracle {
+		contracts = append(contracts, strategy) // an OraclePriceStrategy has no roles
+	}
+	if p.Addresses.IncomeDistributor != "" {
+		income := common.HexToAddress(p.Addresses.IncomeDistributor)
+		contracts = append(contracts, income)
+		if im := common.HexToAddress(p.IncomeManager); im != (common.Address{}) {
+			stubRoleHolders(t, c, income, bindings.IncomeManagerRole, im)
+		}
+	}
+	for _, ct := range contracts {
 		stubRoleHolders(t, c, ct, bindings.DefaultAdminRole, admin)
 	}
 	stubRoleHolders(t, c, token, bindings.PauserRole, admin)
 	if op := common.HexToAddress(p.ComplianceOperator); op != (common.Address{}) {
 		stubRoleHolders(t, c, compliance, bindings.ComplianceRole, op)
 	}
-	if pr := common.HexToAddress(p.Pricer); pr != (common.Address{}) {
+	if pr := common.HexToAddress(p.Pricer); pr != (common.Address{}) && !oracle {
 		// strategy only: RWAFactory does not grant PRICER_ROLE on the Vault
 		stubRoleHolders(t, c, strategy, bindings.PricerRole, pr)
 	}
@@ -249,7 +261,7 @@ func TestVerifyNoFactoryRolesNamesRetainedRole(t *testing.T) {
 	}
 	c.byContract[compliance] = map[string][]byte{common.Bytes2Hex(data): out}
 
-	got, err := verifyNoFactoryRoles(context.Background(), c, factory, addrs)
+	got, err := verifyNoFactoryRoles(context.Background(), c, factory, &models.Project{Addresses: addrs})
 	if err != nil {
 		t.Fatal(err)
 	}

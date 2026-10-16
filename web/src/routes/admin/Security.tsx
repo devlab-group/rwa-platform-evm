@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 // Accept well-formed addresses without requiring preserved EIP-55 casing
 import { isAddress, type Address } from "viem";
 import { AsyncSection } from "../../components/AsyncSection";
@@ -10,13 +10,14 @@ import type { components } from "../../lib/api-types";
 import { resolveQuoteDecimals } from "../../lib/decimals";
 import {
   formatTokenAmount,
+  formatUnixSeconds,
   shortenAddress,
   toMinimalUnits,
 } from "../../lib/format";
 import {
-  ADMIN_CONTRACT_FIELDS,
+  adminContractFields,
   adminTransferTargets,
-  GRANTABLE_ROLES,
+  grantableRoles,
   ROLE_TARGET_FIELDS,
   ROLES,
   roleHash,
@@ -38,8 +39,10 @@ import {
   sendForcedTransfer,
   sendRoleChange,
   sendSetFrozenTokens,
+  sendSetMinPurchaseQuote,
   sendSetPaused,
   sendSetStrategyPrice,
+  setMinPurchaseQuoteCall,
   waitForTxReceipt,
 } from "../../lib/wallet";
 import { TableWrap } from "../../components/TableWrap";
@@ -49,6 +52,8 @@ type Addresses = components["schemas"]["Addresses"];
 type Project = components["schemas"]["Project"];
 
 type Enforcement = components["schemas"]["Enforcement"];
+
+type OraclePrice = components["schemas"]["OraclePrice"];
 
 // Optional indexer snapshot metadata; servers without it remain compatible
 type ProjectWithSecurityStaleness = Project & {
@@ -118,15 +123,20 @@ export function Security() {
 
   // Resolve quote decimals; use raw display units on failure, not RWA decimals
   const proj = project.status === "success" ? project.data : undefined;
-  const chainId = proj?.chainId ?? 0;
+  // Retain the section and result during post-write reloads, with chain and quote decimals
+  // from the same project so another send uses the correct network and units
+  const lastProj = useRef<ProjectWithSecurityStaleness>();
+  if (proj) lastProj.current = proj;
+  const shownProj = proj ?? lastProj.current;
+  const chainId = shownProj?.chainId ?? 0;
   const quoteDecimalsState = useAsync<number | null>(async () => {
-    if (!proj || !chainId) return null;
+    if (!shownProj || !chainId) return null;
     try {
-      return await resolveQuoteDecimals(proj, chainId);
+      return await resolveQuoteDecimals(shownProj, chainId);
     } catch {
       return null;
     }
-  }, [proj?.quoteDecimals, proj?.addresses?.quoteToken, chainId]);
+  }, [shownProj?.quoteDecimals, shownProj?.addresses?.quoteToken, chainId]);
   const quoteDecimals =
     quoteDecimalsState.status === "success"
       ? (quoteDecimalsState.data ?? undefined)
@@ -174,6 +184,20 @@ export function Security() {
                   <dt>Version</dt>
                   <dd>{data.version ?? "-"}</dd>
                 </div>
+                {data.strategyKind && (
+                  <div className="tx-preview__row">
+                    <dt>Price strategy</dt>
+                    <dd>{data.strategyKind}</dd>
+                  </div>
+                )}
+                {data.minPurchaseQuote !== undefined && (
+                  <div className="tx-preview__row">
+                    <dt>Minimum purchase (quote token)</dt>
+                    <dd>
+                      {formatMinPurchase(data.minPurchaseQuote, quoteDecimals)}
+                    </dd>
+                  </div>
+                )}
                 <div className="tx-preview__row">
                   <dt>Bytecode verified</dt>
                   <dd>
@@ -247,8 +271,9 @@ export function Security() {
             data.purchasePricePerWholeToken === undefined &&
             data.redemptionPricePerWholeToken === undefined ? (
               <p className="field__hint">
-                No prices reported: deployment or price projection may be
-                pending.
+                {data.oracle && !data.oracle.available
+                  ? `The price feed is unavailable (${data.oracle.error ?? "unknown"}); purchases and redemptions revert until it recovers.`
+                  : "No prices reported: deployment or price projection may be pending."}
               </p>
             ) : (
               <dl className="tx-preview__grid">
@@ -280,23 +305,53 @@ export function Security() {
         </AsyncSection>
       </section>
 
-      <section className="card">
-        <h2>Update prices</h2>
-        <RoleGate
-          roles={proj?.roles}
-          rolesByContract={proj?.rolesByContract}
-          contracts={["strategy"]}
-          role={ROLES.pricer}
-          action="set prices"
-        >
-          <PriceControls
-            project={proj}
-            chainId={chainId}
-            quoteDecimals={quoteDecimals}
-            onChanged={project.reload}
-          />
-        </RoleGate>
-      </section>
+      {proj?.oracle && (
+        <section className="card">
+          <h2>Price oracle</h2>
+          <OracleDetails oracle={proj.oracle} />
+        </section>
+      )}
+
+      {shownProj?.minPurchaseQuote !== undefined && (
+        <section className="card">
+          <h2>Minimum purchase</h2>
+          <RoleGate
+            roles={shownProj.roles}
+            rolesByContract={shownProj.rolesByContract}
+            contracts={["vault"]}
+            role={ROLES.admin}
+            action="set the minimum purchase"
+          >
+            <MinPurchaseControls
+              project={shownProj}
+              chainId={chainId}
+              quoteDecimals={quoteDecimals}
+              onChanged={project.reload}
+            />
+          </RoleGate>
+        </section>
+      )}
+
+      {/* Only a Fixed strategy has a PRICER_ROLE and price setters; an older server omits the kind */}
+      {(proj?.strategyKind === undefined || proj.strategyKind === "Fixed") && (
+        <section className="card">
+          <h2>Update prices</h2>
+          <RoleGate
+            roles={proj?.roles}
+            rolesByContract={proj?.rolesByContract}
+            contracts={["strategy"]}
+            role={ROLES.pricer}
+            action="set prices"
+          >
+            <PriceControls
+              project={proj}
+              chainId={chainId}
+              quoteDecimals={quoteDecimals}
+              onChanged={project.reload}
+            />
+          </RoleGate>
+        </section>
+      )}
 
       <section className="card">
         <h2>Role holders</h2>
@@ -568,6 +623,195 @@ function PauseControls({
           {busy ? "Submitting…" : "Unpause trading"}
         </button>
       </div>
+      {error && (
+        <p className="async-state--error" role="alert">
+          {error}
+        </p>
+      )}
+      {done && <p role="status">{done}</p>}
+    </div>
+  );
+}
+
+// "0" means no minimum
+function formatMinPurchase(raw: string, quoteDecimals: number | undefined) {
+  return raw === "0" ? "None" : formatTokenAmount(raw, quoteDecimals);
+}
+
+function OracleDetails({ oracle }: { oracle: OraclePrice }) {
+  return (
+    <>
+      <dl className="tx-preview__grid">
+        <div className="tx-preview__row">
+          <dt>Availability</dt>
+          <dd>
+            <span
+              className={`badge ${oracle.available ? "badge--success" : "badge--danger"}`}
+            >
+              {oracle.available ? "Available" : (oracle.error ?? "Unavailable")}
+            </span>
+          </dd>
+        </div>
+        <div className="tx-preview__row">
+          <dt>Price feed</dt>
+          <dd className="mono" title={oracle.feed}>
+            {shortenAddress(oracle.feed)}
+          </dd>
+        </div>
+        {oracle.price !== undefined && (
+          <div className="tx-preview__row">
+            <dt>Feed price</dt>
+            <dd className="mono">
+              {formatTokenAmount(oracle.price, oracle.feedDecimals)}
+            </dd>
+          </div>
+        )}
+        <div className="tx-preview__row">
+          <dt>Last feed update</dt>
+          <dd>{formatUnixSeconds(oracle.updatedAt)}</dd>
+        </div>
+        <div className="tx-preview__row">
+          <dt>Max feed age</dt>
+          <dd>{oracle.maxAge} s</dd>
+        </div>
+        <div className="tx-preview__row">
+          <dt>Purchase spread</dt>
+          <dd>{oracle.purchaseSpreadBps} bps</dd>
+        </div>
+        <div className="tx-preview__row">
+          <dt>Redemption spread</dt>
+          <dd>{oracle.redemptionSpreadBps} bps</dd>
+        </div>
+        {oracle.sequencerUptimeFeed && (
+          <>
+            <div className="tx-preview__row">
+              <dt>Sequencer uptime feed</dt>
+              <dd className="mono" title={oracle.sequencerUptimeFeed}>
+                {shortenAddress(oracle.sequencerUptimeFeed)}
+              </dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Sequencer grace period</dt>
+              <dd>{oracle.gracePeriod ?? "-"} s</dd>
+            </div>
+          </>
+        )}
+      </dl>
+      <p className="field__hint">
+        The oracle strategy has no roles and no setters. To change the feed or
+        spreads, deploy a new strategy and point the Vault at it.
+      </p>
+    </>
+  );
+}
+
+// DEFAULT_ADMIN_ROLE raises or lowers the per-purchase quote floor; the Vault reverts while paused
+function MinPurchaseControls({
+  project,
+  chainId,
+  quoteDecimals,
+  onChanged,
+}: {
+  project: Project | undefined;
+  chainId: number;
+  quoteDecimals: number | undefined;
+  onChanged: () => void;
+}) {
+  const from = useSender();
+  const route = useTxRoute();
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const vault = project?.addresses?.vault;
+  const paused = Boolean(project?.paused);
+
+  async function handle() {
+    setError(null);
+    setDone(null);
+    if (!vault || (route.kind === "wallet" && !from)) {
+      setError("Wallet not connected or Vault address unavailable.");
+      return;
+    }
+    let decimals = quoteDecimals;
+    if (decimals === undefined) {
+      try {
+        decimals = await resolveQuoteDecimals(project, chainId);
+      } catch {
+        setError(
+          "Could not read quote-token decimals. Connect your wallet to the project chain and retry.",
+        );
+        return;
+      }
+    }
+    let minimal: bigint;
+    try {
+      minimal = BigInt(toMinimalUnits(value, decimals));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Invalid amount.");
+      return;
+    }
+    if (route.kind === "safe") {
+      setDone(
+        exportSafeBatch(chainId, route.safe, "Set minimum purchase", [
+          setMinPurchaseQuoteCall(vault as Address, minimal),
+        ]),
+      );
+      return;
+    }
+    if (!from) return;
+    setBusy(true);
+    try {
+      const hash = await sendSetMinPurchaseQuote(
+        chainId,
+        from,
+        vault as Address,
+        minimal,
+      );
+      await waitForTxReceipt(hash);
+      setDone("Minimum purchase updated.");
+      onChanged();
+    } catch (err) {
+      setError(describeWalletError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <p className="field__hint">
+        Current minimum:{" "}
+        <strong>
+          {formatMinPurchase(project?.minPurchaseQuote ?? "0", quoteDecimals)}
+        </strong>{" "}
+        of quote token per purchase; 0 disables the minimum. Transfers,
+        redemptions and claims are unaffected.
+      </p>
+      {paused && (
+        <p className="field__hint" role="status">
+          The project is paused; the Vault rejects this change until it is
+          unpaused.
+        </p>
+      )}
+      <div className="field">
+        <label htmlFor="new-min-purchase">
+          Minimum purchase (whole quote-token units)
+        </label>
+        <input
+          id="new-min-purchase"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+      </div>
+      <button
+        type="button"
+        className="button button--secondary"
+        onClick={handle}
+        disabled={busy || paused || !value}
+      >
+        {busy ? "Submitting…" : "Set minimum purchase"}
+      </button>
       {error && (
         <p className="async-state--error" role="alert">
           {error}
@@ -1110,6 +1354,18 @@ function ForcedTransferControls({
   );
 }
 
+// Shown when the strategy is excluded from role and admin calls because its type is unreadable
+function UnknownStrategyWarning({ project }: { project: Project | undefined }) {
+  if (project?.strategyKind !== "Unknown" || !project.addresses?.strategy)
+    return null;
+  return (
+    <p className="async-state--error" role="alert">
+      The pricing strategy contract is excluded because its type could not be
+      read. Handle PRICER_ROLE and its admin separately, or reload to retry.
+    </p>
+  );
+}
+
 // Gate role edits on that role's target contracts; gate admin transfer on all governance contracts
 function RoleAdminControls({
   project,
@@ -1120,8 +1376,9 @@ function RoleAdminControls({
   chainId: number;
   onChanged: () => void;
 }) {
-  const [role, setRole] = useState<string>(GRANTABLE_ROLES[0]);
+  const [role, setRole] = useState<string>(ROLES.pauser);
   const addresses = project?.addresses as Addresses | undefined;
+  const kind = project?.strategyKind;
   const gate = {
     roles: project?.roles,
     rolesByContract: project?.rolesByContract,
@@ -1129,6 +1386,7 @@ function RoleAdminControls({
   };
   return (
     <div>
+      <UnknownStrategyWarning project={project} />
       <h3>Grant or revoke a role</h3>
       <div className="field">
         <label htmlFor="role-select">Role</label>
@@ -1137,15 +1395,15 @@ function RoleAdminControls({
           value={role}
           onChange={(e) => setRole(e.target.value)}
         >
-          {GRANTABLE_ROLES.map((r) => (
+          {grantableRoles(addresses, kind).map((r) => (
             <option key={r} value={r}>
               {r}
             </option>
           ))}
         </select>
         <span className="field__hint">
-          Configured target contracts ({roleTargets(role, addresses).length}{" "}
-          total).
+          Configured target contracts (
+          {roleTargets(role, addresses, kind).length} total).
         </span>
       </div>
       <RoleGate
@@ -1169,7 +1427,7 @@ function RoleAdminControls({
       </p>
       <RoleGate
         {...gate}
-        contracts={ADMIN_CONTRACT_FIELDS}
+        contracts={adminContractFields(addresses, kind)}
         action="transfer admin"
       >
         <RoleAdminForm
@@ -1219,7 +1477,7 @@ function RoleAdminForm({
       setError("Wallet not connected.");
       return;
     }
-    const targets = roleTargets(role, addresses);
+    const targets = roleTargets(role, addresses, project?.strategyKind);
     if (targets.length === 0) {
       setError("No target contracts for this role - project not deployed?");
       return;
@@ -1273,7 +1531,7 @@ function RoleAdminForm({
       setError("Wallet not connected.");
       return;
     }
-    const targets = adminTransferTargets(addresses);
+    const targets = adminTransferTargets(addresses, project?.strategyKind);
     if (targets.length === 0) {
       setError("No governance contracts found - project not deployed?");
       return;
@@ -1415,7 +1673,7 @@ function AcceptAdminControls({
       setError("Wallet not connected.");
       return;
     }
-    const targets = adminTransferTargets(addresses);
+    const targets = adminTransferTargets(addresses, project?.strategyKind);
     if (targets.length === 0) {
       setError("No governance contracts found - project not deployed?");
       return;
@@ -1441,7 +1699,7 @@ function AcceptAdminControls({
   function handleExportAccept() {
     setError(null);
     setDone(null);
-    const targets = adminTransferTargets(addresses);
+    const targets = adminTransferTargets(addresses, project?.strategyKind);
     if (!pendingAdmin || targets.length === 0) {
       setError("No governance contracts found - project not deployed?");
       return;
@@ -1459,6 +1717,7 @@ function AcceptAdminControls({
   if (!isIncomingAdmin) {
     return (
       <div>
+        <UnknownStrategyWarning project={project} />
         <p className="field__hint">
           An admin transfer is pending to{" "}
           <span className="mono" title={pendingAdmin}>
@@ -1491,6 +1750,7 @@ function AcceptAdminControls({
 
   return (
     <div>
+      <UnknownStrategyWarning project={project} />
       <p className="field__hint">
         Become DEFAULT_ADMIN by accepting each pending transfer after its
         configured delay.

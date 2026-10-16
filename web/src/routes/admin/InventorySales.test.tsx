@@ -126,4 +126,31 @@ describe("InventorySales amount conversion", () => {
     ).toBeInTheDocument();
     expect(sendWithdrawProceeds).not.toHaveBeenCalled();
   });
+
+  // A stale oracle leaves the prices out of the inventory; the operator needs the reason, not "-"
+  it("shows why prices are missing when the oracle strategy reports a price error", async () => {
+    vi.mocked(api.getInventory).mockResolvedValue({
+      inventory: "500",
+      quoteBalance: "900",
+      priceError: "StalePrice",
+    });
+    renderWithWallet(<InventorySales />, { connected: true });
+
+    expect(
+      await screen.findByText(/the oracle strategy reports StalePrice/),
+    ).toBeVisible();
+  });
+
+  it("shows no price status while the strategy reports prices", async () => {
+    vi.mocked(api.getInventory).mockResolvedValue({
+      inventory: "500",
+      quoteBalance: "900",
+      purchasePrice: "1000000",
+      redemptionPrice: "990000",
+    });
+    renderWithWallet(<InventorySales />, { connected: true });
+
+    await screen.findByText("Purchase price");
+    expect(screen.queryByText("Price status")).toBeNull();
+  });
 });

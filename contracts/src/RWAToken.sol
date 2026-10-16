@@ -4,12 +4,7 @@ pragma solidity ^0.8.24;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {ERC20Pausable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Pausable.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
-import {
-    AccessControlDefaultAdminRules
-} from "@openzeppelin/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
-import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {AccessControlEnumerableAdminRules} from "./access/AccessControlEnumerableAdminRules.sol";
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {IERC7943} from "./interfaces/IERC7943.sol";
 import {IRWAToken} from "./interfaces/IRWAToken.sol";
@@ -17,15 +12,8 @@ import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 
 /// @title RWAToken
 /// @notice Permissioned ERC-20 with pause and ERC-7943 freeze/seizure controls; only SupplyController mints/burns
-/// @dev Enumerable PAUSER_ROLE and DEFAULT_ADMIN_ROLE; see ComplianceRegistry for inheritance overrides
-contract RWAToken is
-    IRWAToken,
-    IERC7943,
-    ERC20,
-    ERC20Pausable,
-    AccessControlEnumerable,
-    AccessControlDefaultAdminRules
-{
+/// @dev Enumerable PAUSER_ROLE and DEFAULT_ADMIN_ROLE
+contract RWAToken is IRWAToken, IERC7943, ERC20, ERC20Pausable, AccessControlEnumerableAdminRules {
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     /// @notice Deployer (normally RWAFactory), authorized to wire controller and escrow once
@@ -61,7 +49,7 @@ contract RWAToken is
         address compliance_,
         address admin,
         uint48 adminTransferDelay
-    ) ERC20(name_, symbol_) AccessControlDefaultAdminRules(adminTransferDelay, admin) {
+    ) ERC20(name_, symbol_) AccessControlEnumerableAdminRules(adminTransferDelay, admin) {
         if (compliance_ == address(0)) revert ZeroAddress();
         _decimals = decimals_;
         compliance = compliance_;
@@ -219,56 +207,10 @@ contract RWAToken is
         super._update(from, to, value);
     }
 
-    // ---- AccessControl overrides, see ComplianceRegistry.sol ----
-
-    function _grantRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._grantRole(role, account);
-    }
-
-    function _revokeRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._revokeRole(role, account);
-    }
-
-    function _setRoleAdmin(bytes32 role, bytes32 adminRole)
-        internal
-        override(AccessControl, AccessControlDefaultAdminRules)
-    {
-        super._setRoleAdmin(role, adminRole);
-    }
-
-    function grantRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.grantRole(role, account);
-    }
-
-    function revokeRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.revokeRole(role, account);
-    }
-
-    function renounceRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.renounceRole(role, account);
-    }
-
     function supportsInterface(bytes4 interfaceId)
         public
         view
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules, IERC165)
+        override(AccessControlEnumerableAdminRules, IERC165)
         returns (bool)
     {
         return interfaceId == type(IERC7943).interfaceId || super.supportsInterface(interfaceId);

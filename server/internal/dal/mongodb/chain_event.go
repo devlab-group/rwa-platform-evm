@@ -45,9 +45,13 @@ func (r *chainEventRepo) ListByName(ctx context.Context, chainID int64, address,
 	)
 }
 
-func (r *chainEventRepo) ListAll(ctx context.Context, chainID int64) ([]*models.ChainEvent, error) {
+func (r *chainEventRepo) ListAll(ctx context.Context, chainID int64, excludeNames ...string) ([]*models.ChainEvent, error) {
+	filter := bson.M{"chainId": chainID}
+	if len(excludeNames) > 0 {
+		filter["name"] = bson.M{"$nin": excludeNames}
+	}
 	return findMany[models.ChainEvent](ctx, r.coll,
-		bson.M{"chainId": chainID},
+		filter,
 		options.Find().SetSort(bson.D{{Key: "blockNumber", Value: 1}, {Key: "logIndex", Value: 1}, {Key: "txHash", Value: 1}}),
 	)
 }

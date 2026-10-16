@@ -89,6 +89,12 @@ func sampleProfile() *models.AssetProfile {
 
 // verifyFixture supplies a passing transaction/profile scenario so tests can isolate
 // each verification failure
+type fixtureOpts struct {
+	// v3 builds an rwa-v3 deployment with an income distributor; oracle (v3 only) deploys an
+	// OraclePriceStrategy instead of a FixedPriceStrategy
+	v3, oracle bool
+}
+
 type verifyFixture struct {
 	svc                                                    *Service
 	client                                                 *perContractClient
@@ -96,12 +102,17 @@ type verifyFixture struct {
 	profileRepo                                            *memory.AssetProfileRepository
 	txHash                                                 common.Hash
 	factoryAddr, tokenAddr, complianceAddr, controllerAddr common.Address
-	vaultAddr, escrowAddr, strategyAddr                    common.Address
+	vaultAddr, escrowAddr, strategyAddr, incomeAddr        common.Address
 	cfg                                                    bindings.ProjectConfig
 	profile                                                *models.AssetProfile
 }
 
 func newVerifyFixture(t *testing.T) *verifyFixture {
+	t.Helper()
+	return newVerifyFixtureOpts(t, fixtureOpts{})
+}
+
+func newVerifyFixtureOpts(t *testing.T, o fixtureOpts) *verifyFixture {
 	t.Helper()
 	factoryAddr := common.HexToAddress("0x0000000000000000000000000000000000FACE")
 	client := newPerContractClient()
@@ -110,6 +121,21 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 	svc := New(client, factoryAddr, projectRepo, testChainID, keyAddress(adminKey))
 
 	cfg := sampleConfig(t)
+	version := bindings.FactoryVersionV2
+	if o.v3 {
+		version = bindings.FactoryVersionV3
+		cfg.MinPurchaseQuote = big.NewInt(5_000_000)
+		cfg.IncomeManager = common.HexToAddress("0x000000000000000000000000000000000000AA09")
+	}
+	if o.oracle {
+		cfg.StrategyKind = bindings.StrategyKindOracle
+		cfg.PurchasePricePerWholeToken, cfg.RedemptionPricePerWholeToken = big.NewInt(0), big.NewInt(0)
+		cfg.PriceFeed = common.HexToAddress("0x000000000000000000000000000000000000FEED")
+		cfg.PriceMaxAge = 3600
+		cfg.PurchaseSpreadBps, cfg.RedemptionSpreadBps = 25, 40
+		cfg.SequencerUptimeFeed = common.HexToAddress("0x00000000000000000000000000000000000005E0")
+		cfg.SequencerGracePeriod = 900
+	}
 	profile := sampleProfile()
 	if err := profileRepo.Create(context.Background(), profile); err != nil {
 		t.Fatal(err)
@@ -122,17 +148,29 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 	escrowAddr := common.HexToAddress("0xB005")
 	strategyAddr := common.HexToAddress("0xB006")
 
+	incomeAddr := common.HexToAddress("0xB007")
+
 	factoryABI := bindings.NewFactory()
-	event := factoryABI.ABI.Events["ProjectDeployed"]
+	event := factoryABI.ABIV2.Events["ProjectDeployed"]
 	packed, err := event.Inputs.NonIndexed().Pack(tokenAddr, complianceAddr, controllerAddr, vaultAddr, escrowAddr, strategyAddr, "rwa-v2")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	// Admin-signed factory transaction carrying ProjectConfig calldata
-	calldata, err := factoryABI.PackDeploy(cfg)
+	calldata, err := factoryABI.PackDeployV2(cfg)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if o.v3 {
+		event = factoryABI.ABI.Events["ProjectDeployed"]
+		packed, err = event.Inputs.NonIndexed().Pack(tokenAddr, complianceAddr, controllerAddr, vaultAddr, escrowAddr, strategyAddr, incomeAddr, "rwa-v3")
+		if err != nil {
+			t.Fatal(err)
+		}
+		calldata, err = factoryABI.PackDeploy(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	tx := signDeployTx(t, adminKey, factoryAddr, calldata, 0)
 	txHash := tx.Hash()
@@ -149,14 +187,23 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 	for _, a := range []common.Address{tokenAddr, complianceAddr, controllerAddr, vaultAddr, escrowAddr, strategyAddr, factoryAddr} {
 		client.Code[a] = []byte{0x60, 0x60}
 	}
-	stubExpectedRoleHolders(t, client, &models.Project{
+	roleProject := &models.Project{
 		Addresses: models.Addresses{
 			Token: tokenAddr.Hex(), Compliance: complianceAddr.Hex(), SupplyController: controllerAddr.Hex(),
 			Vault: vaultAddr.Hex(), RedemptionEscrow: escrowAddr.Hex(), Strategy: strategyAddr.Hex(),
 		},
 		Admin: cfg.Admin.Hex(), ComplianceOperator: cfg.ComplianceOperator.Hex(),
 		Pricer: cfg.Pricer.Hex(), Treasurer: cfg.Treasurer.Hex(), RedemptionManager: cfg.RedemptionManager.Hex(),
-	})
+	}
+	if o.v3 {
+		client.Code[incomeAddr] = []byte{0x60, 0x60}
+		roleProject.Addresses.IncomeDistributor = incomeAddr.Hex()
+		roleProject.IncomeManager = cfg.IncomeManager.Hex()
+	}
+	if o.oracle {
+		roleProject.StrategyKind = models.StrategyKindOracle
+	}
+	stubExpectedRoleHolders(t, client, roleProject)
 
 	cr := bindings.NewComplianceRegistry()
 	isSystemAddressTrue, err := cr.ABI.Methods["isSystemAddress"].Outputs.Pack(true)
@@ -217,14 +264,34 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 	setViewResponse(controllerABI, "profileDigest", cfg.ProfileDigest)
 	strategyABI := bindings.NewFixedPriceStrategy().ABI
 	setViewResponse(strategyABI, "tokenDecimals", cfg.Decimals)
-	setViewResponse(strategyABI, "purchasePricePerWholeToken", cfg.PurchasePricePerWholeToken)
-	setViewResponse(strategyABI, "redemptionPricePerWholeToken", cfg.RedemptionPricePerWholeToken)
+	if !o.oracle {
+		setViewResponse(strategyABI, "purchasePricePerWholeToken", cfg.PurchasePricePerWholeToken)
+		setViewResponse(strategyABI, "redemptionPricePerWholeToken", cfg.RedemptionPricePerWholeToken)
+	}
+	if o.v3 {
+		setViewResponse(vaultABI, "minPurchaseQuote", cfg.MinPurchaseQuote)
+		incomeABI := bindings.NewIncomeDistributor().ABI
+		setViewResponse(incomeABI, "token", tokenAddr)
+		setViewResponse(incomeABI, "quoteToken", cfg.QuoteToken)
+		setViewResponse(incomeABI, "vault", vaultAddr)
+	}
+	if o.oracle {
+		oracleABI := bindings.NewOraclePriceStrategy().ABI
+		setViewResponse(oracleABI, "feed", cfg.PriceFeed)
+		setViewResponse(oracleABI, "sequencerUptimeFeed", cfg.SequencerUptimeFeed)
+		setViewResponse(oracleABI, "maxAge", cfg.PriceMaxAge)
+		setViewResponse(oracleABI, "gracePeriod", cfg.SequencerGracePeriod)
+		setViewResponse(oracleABI, "purchaseSpreadBps", cfg.PurchaseSpreadBps)
+		setViewResponse(oracleABI, "redemptionSpreadBps", cfg.RedemptionSpreadBps)
+		setViewResponse(oracleABI, "quoteDecimals", uint8(6))
+		stubQuoteTokenDecimals(t, client, cfg.QuoteToken, 6)
+	}
 
 	versionData, err := bindings.NewFactory().ABI.Pack("version")
 	if err != nil {
 		t.Fatal(err)
 	}
-	versionOut, err := bindings.NewFactory().ABI.Methods["version"].Outputs.Pack("rwa-v2")
+	versionOut, err := bindings.NewFactory().ABI.Methods["version"].Outputs.Pack(version)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +300,7 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 	return &verifyFixture{
 		svc: svc, client: client, projectRepo: projectRepo, profileRepo: profileRepo, txHash: txHash, factoryAddr: factoryAddr,
 		tokenAddr: tokenAddr, complianceAddr: complianceAddr, controllerAddr: controllerAddr,
-		vaultAddr: vaultAddr, escrowAddr: escrowAddr, strategyAddr: strategyAddr, cfg: cfg, profile: profile,
+		vaultAddr: vaultAddr, escrowAddr: escrowAddr, strategyAddr: strategyAddr, incomeAddr: incomeAddr, cfg: cfg, profile: profile,
 	}
 }
 
@@ -401,7 +468,7 @@ func TestVerifyDeploymentFailsOnUnsupportedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := bindings.NewFactory().ABI.Events["ProjectDeployed"]
+	event := bindings.NewFactory().ABIV2.Events["ProjectDeployed"]
 	packed, err := event.Inputs.NonIndexed().Pack(f.tokenAddr, f.complianceAddr, f.controllerAddr, f.vaultAddr, f.escrowAddr, f.strategyAddr, "rwa-v99-unknown")
 	if err != nil {
 		t.Fatal(err)
@@ -438,7 +505,7 @@ func TestVerifyDeploymentFailsOnCalldataProfileMismatch(t *testing.T) {
 	f := newVerifyFixture(t)
 	badCfg := f.cfg
 	badCfg.Decimals = 6 // profile says 18
-	calldata, err := bindings.NewFactory().PackDeploy(badCfg)
+	calldata, err := bindings.NewFactory().PackDeployV2(badCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -711,7 +778,7 @@ func (f *verifyFixture) seedLookAlikeDeploy(t *testing.T, chainEvents *memory.Ch
 	}
 
 	factoryABI := bindings.NewFactory()
-	calldata, err := factoryABI.PackDeploy(cfg)
+	calldata, err := factoryABI.PackDeployV2(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -720,7 +787,7 @@ func (f *verifyFixture) seedLookAlikeDeploy(t *testing.T, chainEvents *memory.Ch
 	evilAddr := func(n byte) common.Address {
 		return common.BytesToAddress([]byte{0xE0, n})
 	}
-	event := factoryABI.ABI.Events["ProjectDeployed"]
+	event := factoryABI.ABIV2.Events["ProjectDeployed"]
 	packed, err := event.Inputs.NonIndexed().Pack(evilAddr(1), evilAddr(2), evilAddr(3), evilAddr(4), evilAddr(5), evilAddr(6), "rwa-v2")
 	if err != nil {
 		t.Fatal(err)

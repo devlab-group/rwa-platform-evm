@@ -23,7 +23,7 @@ const rwaTokenABIJSON = `[
     {"name":"amount","type":"uint256","indexed":false}]}
 ]`
 
-// RWAToken decodes the token's ERC-7943 enforcement events.
+// RWAToken decodes the token's ERC-7943 enforcement events
 type RWAToken struct{ ABI abi.ABI }
 
 // NewRWAToken parses the ERC-7943 event ABI

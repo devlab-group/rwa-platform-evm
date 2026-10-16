@@ -191,8 +191,9 @@ type ChainEventRepository interface {
 	DeleteFromBlock(ctx context.Context, chainID int64, address string, fromBlock uint64) (int, error)
 	ListByName(ctx context.Context, chainID int64, address, name string) ([]*models.ChainEvent, error)
 	// ListAll returns unbounded chainID history across addresses, including Removed rows,
-	// for read-model/projector rebuilds rather than paginated API reads
-	ListAll(ctx context.Context, chainID int64) ([]*models.ChainEvent, error)
+	// for read-model/projector rebuilds rather than paginated API reads. Events named in
+	// excludeNames are left out at the query.
+	ListAll(ctx context.Context, chainID int64, excludeNames ...string) ([]*models.ChainEvent, error)
 }
 
 // PurchaseRepository persists Vault.buy fills
@@ -232,6 +233,37 @@ type RedemptionRequestRepository interface {
 	// ListPage follows PurchaseRepository pagination with newest CreatedAt first, optional
 	// exact status, and case-insensitive beneficiary address filtering
 	ListPage(ctx context.Context, status, address, cursor string, limit int) (items []*models.RedemptionRequest, nextCursor string, err error)
+}
+
+// IncomePreparationRepository stores rwa-v3 snapshots. Prepare reuses snapshots, updating
+// only the deadline before indexed distribution; List returns all rows.
+type IncomePreparationRepository interface {
+	// Create returns ErrAlreadyExists for a taken id or (merkleRoot, snapshotSha256)
+	Create(ctx context.Context, p *models.IncomePreparation) error
+	Get(ctx context.Context, id string) (*models.IncomePreparation, error)
+	// SetClaimDeadline replaces the deadline, returning ErrNotFound for an unknown id
+	SetClaimDeadline(ctx context.Context, id string, deadline int64) error
+	// List returns every preparation, oldest first, without SnapshotRaw; use Get for the
+	// full document
+	List(ctx context.Context) ([]*models.IncomePreparation, error)
+}
+
+// IncomeDistributionRepository stores event-derived distributions; income.Service.Reconcile
+// upserts a fresh generation, then calls DeleteStaleGeneration
+type IncomeDistributionRepository interface {
+	Upsert(ctx context.Context, d *models.IncomeDistribution) error
+	// List returns every distribution in creation order (block, log index)
+	List(ctx context.Context) ([]*models.IncomeDistribution, error)
+	DeleteStaleGeneration(ctx context.Context, gen int64) error
+}
+
+// IncomeClaimRepository is the read model of IncomeClaimed events, rebuilt with the
+// same generation swap as IncomeDistributionRepository
+type IncomeClaimRepository interface {
+	Upsert(ctx context.Context, c *models.IncomeClaim) error
+	// ListByAccount matches the account case-insensitively
+	ListByAccount(ctx context.Context, account string) ([]*models.IncomeClaim, error)
+	DeleteStaleGeneration(ctx context.Context, gen int64) error
 }
 
 // WalletSessionRepository stores auth.SessionManager's token digests. MongoDB shares
@@ -409,6 +441,9 @@ type Repositories struct {
 	ChainEvents          ChainEventRepository
 	Purchases            PurchaseRepository
 	RedemptionRequests   RedemptionRequestRepository
+	IncomePreparations   IncomePreparationRepository
+	IncomeDistributions  IncomeDistributionRepository
+	IncomeClaims         IncomeClaimRepository
 	AuditLogs            AuditLogRepository
 	IndexerCheckpoints   IndexerCheckpointRepository
 	IndexerBlockHashes   BlockHashRepository

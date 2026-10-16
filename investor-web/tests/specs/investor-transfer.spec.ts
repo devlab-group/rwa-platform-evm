@@ -20,7 +20,7 @@ test.describe("Investor - transfer compliance gate", () => {
     await investor.connectWallet();
 
     await investor.fillTransferRecipient(BLOCKED_ADDRESS);
-    await expect(investor.transferSection).toContainText("not eligible to receive tokens - transfer disabled");
+    await expect(investor.transferSection).toContainText("Recipient is ineligible - transfer disabled.");
     await expect(investor.transferButton).toBeDisabled();
   });
 
@@ -30,7 +30,7 @@ test.describe("Investor - transfer compliance gate", () => {
     await investor.connectWallet();
 
     await investor.fillTransferRecipient(UNKNOWN_ADDRESS);
-    await expect(investor.transferSection).toContainText("not eligible to receive tokens - transfer disabled");
+    await expect(investor.transferSection).toContainText("Recipient is ineligible - transfer disabled.");
     await expect(investor.transferButton).toBeDisabled();
   });
 

@@ -11,6 +11,26 @@ type Addresses struct {
 	RedemptionEscrow string `json:"redemptionEscrow" bson:"redemptionEscrow"`
 	Strategy         string `json:"strategy" bson:"strategy"`
 	QuoteToken       string `json:"quoteToken" bson:"quoteToken"`
+	// IncomeDistributor is the rwa-v3 income contract; empty for rwa-v2 projects
+	IncomeDistributor string `json:"incomeDistributor,omitempty" bson:"incomeDistributor,omitempty"`
+}
+
+// Strategy kinds of the strategy deployed with a project
+const (
+	StrategyKindFixed  = "Fixed"
+	StrategyKindOracle = "Oracle"
+)
+
+// OracleConfig is the OraclePriceStrategy configuration signed in the rwa-v3 deploy
+// calldata, which verification compares with the strategy's immutables. Addresses are
+// 0x-hex; SequencerUptimeFeed is the zero address and GracePeriod 0 without a sequencer feed.
+type OracleConfig struct {
+	Feed                string `json:"feed" bson:"feed"`
+	MaxAge              uint64 `json:"maxAge" bson:"maxAge"`
+	PurchaseSpreadBps   uint16 `json:"purchaseSpreadBps" bson:"purchaseSpreadBps"`
+	RedemptionSpreadBps uint16 `json:"redemptionSpreadBps" bson:"redemptionSpreadBps"`
+	SequencerUptimeFeed string `json:"sequencerUptimeFeed" bson:"sequencerUptimeFeed"`
+	GracePeriod         uint64 `json:"gracePeriod" bson:"gracePeriod"`
 }
 
 // ProjectStatus tracks deployment lifecycle
@@ -39,16 +59,25 @@ type Project struct {
 	// Admin, ComplianceOperator, Pricer and Treasurer record expected holders from the
 	// adopted deployment. Verification compares enumerated AccessControlEnumerable holders
 	// against this signed allowlist.
-	Admin                        string `json:"admin,omitempty" bson:"admin,omitempty"`
-	ComplianceOperator           string `json:"complianceOperator,omitempty" bson:"complianceOperator,omitempty"`
-	Pricer                       string `json:"pricer,omitempty" bson:"pricer,omitempty"`
-	Treasurer                    string `json:"treasurer,omitempty" bson:"treasurer,omitempty"`
-	QuoteToken                   string `json:"quoteToken" bson:"quoteToken"`
-	TokenUnit                    string `json:"tokenUnit" bson:"tokenUnit"`
-	PurchasePricePerWholeToken   string `json:"purchasePricePerWholeToken" bson:"purchasePricePerWholeToken"`
-	RedemptionPricePerWholeToken string `json:"redemptionPricePerWholeToken" bson:"redemptionPricePerWholeToken"`
-	RedemptionTimeout            int64  `json:"redemptionTimeout" bson:"redemptionTimeout"`
-	TokenDecimals                uint8  `json:"tokenDecimals" bson:"tokenDecimals"`
+	Admin              string `json:"admin,omitempty" bson:"admin,omitempty"`
+	ComplianceOperator string `json:"complianceOperator,omitempty" bson:"complianceOperator,omitempty"`
+	Pricer             string `json:"pricer,omitempty" bson:"pricer,omitempty"`
+	Treasurer          string `json:"treasurer,omitempty" bson:"treasurer,omitempty"`
+	// IncomeManager is the rwa-v3 INCOME_MANAGER_ROLE holder from the deploy calldata
+	IncomeManager string `json:"incomeManager,omitempty" bson:"incomeManager,omitempty"`
+	// MinPurchaseQuote is the rwa-v3 deploy-time Vault minimum in quote-token minimal units,
+	// "0" for none; empty for rwa-v2. Security.MinPurchaseQuote follows later changes.
+	MinPurchaseQuote string `json:"minPurchaseQuote,omitempty" bson:"minPurchaseQuote,omitempty"`
+	// StrategyKind is the kind of the deploy-time strategy at Addresses.Strategy, Fixed for
+	// rwa-v2; Oracle carries the signed OracleConfig in Oracle
+	StrategyKind                 string        `json:"strategyKind,omitempty" bson:"strategyKind,omitempty"`
+	Oracle                       *OracleConfig `json:"oracle,omitempty" bson:"oracle,omitempty"`
+	QuoteToken                   string        `json:"quoteToken" bson:"quoteToken"`
+	TokenUnit                    string        `json:"tokenUnit" bson:"tokenUnit"`
+	PurchasePricePerWholeToken   string        `json:"purchasePricePerWholeToken" bson:"purchasePricePerWholeToken"`
+	RedemptionPricePerWholeToken string        `json:"redemptionPricePerWholeToken" bson:"redemptionPricePerWholeToken"`
+	RedemptionTimeout            int64         `json:"redemptionTimeout" bson:"redemptionTimeout"`
+	TokenDecimals                uint8         `json:"tokenDecimals" bson:"tokenDecimals"`
 	// QuoteDecimals stores Addresses.QuoteToken's decimals() from deployment verification
 	// for API/UI scaling without per-request reads. An unreadable value stays unset and
 	// does not fail deployment.
@@ -110,6 +139,9 @@ type SecurityState struct {
 	// The price projection uses it, and the indexer rebuilds watched addresses after
 	// rotation. Empty means no folded value yet.
 	Strategy string `json:"strategy,omitempty" bson:"strategy,omitempty"`
+	// MinPurchaseQuote follows Vault.MinPurchaseQuoteChanged from the deploy-time minimum;
+	// empty for rwa-v2
+	MinPurchaseQuote string `json:"minPurchaseQuote,omitempty" bson:"minPurchaseQuote,omitempty"`
 	// PurchasePricePerWholeToken and RedemptionPricePerWholeToken are the live
 	// strategy prices
 	PurchasePricePerWholeToken   string              `json:"purchasePricePerWholeToken,omitempty" bson:"purchasePricePerWholeToken,omitempty"`

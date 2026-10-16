@@ -3,21 +3,15 @@ pragma solidity ^0.8.24;
 
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
-import {
-    AccessControlDefaultAdminRules
-} from "@openzeppelin/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
-import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {AccessControlEnumerableAdminRules} from "./access/AccessControlEnumerableAdminRules.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ISupplyController} from "./interfaces/ISupplyController.sol";
 import {IRWAToken} from "./interfaces/IRWAToken.sol";
 
 /// @title SupplyController
 /// @notice Validates EIP-712 auditor attestations to mint to or burn from the Vault
-/// @dev Only DEFAULT_ADMIN_ROLE is enumerable; auditor is an address. See ComplianceRegistry
-///      for inheritance overrides.
-contract SupplyController is ISupplyController, EIP712, AccessControlEnumerable, AccessControlDefaultAdminRules {
+/// @dev Only DEFAULT_ADMIN_ROLE is enumerable; auditor is an address
+contract SupplyController is ISupplyController, EIP712, AccessControlEnumerableAdminRules {
     bytes32 public constant MINT_ATTESTATION_TYPEHASH = keccak256(
         "MintAttestation(address auditor,bytes32 profileDigest,bytes32 recordKey,bytes32 metadataDigest,uint256 amount,uint256 nonce,uint64 validUntil,address vault)"
     );
@@ -45,7 +39,7 @@ contract SupplyController is ISupplyController, EIP712, AccessControlEnumerable,
         address auditor_,
         address admin,
         uint48 adminTransferDelay
-    ) EIP712("RWA-Supply-Attestation", "1") AccessControlDefaultAdminRules(adminTransferDelay, admin) {
+    ) EIP712("RWA-Supply-Attestation", "1") AccessControlEnumerableAdminRules(adminTransferDelay, admin) {
         if (auditor_ == address(0)) revert ZeroAddressAuditor();
         if (token_ == address(0) || vault_ == address(0)) revert ZeroAddress();
         token = token_;
@@ -160,60 +154,5 @@ contract SupplyController is ISupplyController, EIP712, AccessControlEnumerable,
 
     function auditor() external view returns (address) {
         return _auditor;
-    }
-
-    // ---- AccessControl overrides, see ComplianceRegistry.sol ----
-
-    function _grantRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._grantRole(role, account);
-    }
-
-    function _revokeRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._revokeRole(role, account);
-    }
-
-    function _setRoleAdmin(bytes32 role, bytes32 adminRole)
-        internal
-        override(AccessControl, AccessControlDefaultAdminRules)
-    {
-        super._setRoleAdmin(role, adminRole);
-    }
-
-    function grantRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.grantRole(role, account);
-    }
-
-    function revokeRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.revokeRole(role, account);
-    }
-
-    function renounceRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.renounceRole(role, account);
-    }
-
-    function supportsInterface(bytes4 interfaceId)
-        public
-        view
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super.supportsInterface(interfaceId);
     }
 }

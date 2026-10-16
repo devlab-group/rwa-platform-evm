@@ -2,11 +2,15 @@
 pragma solidity ^0.8.24;
 
 import {TestBase} from "../helpers/TestBase.sol";
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {IAccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
+import {
+    IAccessControlDefaultAdminRules
+} from "@openzeppelin/contracts/access/extensions/IAccessControlDefaultAdminRules.sol";
 
-/// @notice Checks getRoleMemberCount, getRoleMember and getRoleMembers against fixture role holders
-///         on all six role-bearing contracts. Enumeration supports post-deploy verification
-///         without complete event history; see ComplianceRegistry for inheritance overrides.
+/// @notice Checks getRoleMemberCount, getRoleMember and getRoleMembers on every role-bearing contract
+/// @dev Enumeration supports deployment verification without full event history; the shared base
+///      preserves two-step admin transfer
 contract RoleEnumerationTest is TestBase {
     function test_complianceRegistry_complianceRoleEnumeration_bootstrapRenounced() public view {
         bytes32 role = compliance.COMPLIANCE_ROLE();
@@ -157,5 +161,28 @@ contract RoleEnumerationTest is TestBase {
         assertTrue(supplyController.supportsInterface(type(IAccessControlEnumerable).interfaceId));
         assertTrue(strategy.supportsInterface(type(IAccessControlEnumerable).interfaceId));
         assertTrue(income.supportsInterface(type(IAccessControlEnumerable).interfaceId));
+    }
+
+    /// @dev Every override chain must enforce the delayed admin transfer and reject direct grants
+    ///      of DEFAULT_ADMIN_ROLE
+    function test_defaultAdminRules_directAdminGrantRevertsOnEveryContract() public {
+        address[7] memory contracts = [
+            address(compliance),
+            address(token),
+            address(supplyController),
+            address(vault),
+            address(escrow),
+            address(strategy),
+            address(income)
+        ];
+        address newAdmin = makeAddr("directAdminGrant");
+        for (uint256 i = 0; i < contracts.length; i++) {
+            IAccessControlDefaultAdminRules c = IAccessControlDefaultAdminRules(contracts[i]);
+            assertTrue(IERC165(contracts[i]).supportsInterface(type(IAccessControlDefaultAdminRules).interfaceId));
+            vm.prank(admin);
+            vm.expectRevert(IAccessControlDefaultAdminRules.AccessControlEnforcedDefaultAdminRules.selector);
+            c.grantRole(bytes32(0), newAdmin);
+            assertEq(c.defaultAdmin(), admin);
+        }
     }
 }

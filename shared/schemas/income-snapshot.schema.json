@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwa-platform/schemas/income-snapshot.schema.json",
+  "title": "Income Distribution Snapshot",
+  "description": "Entitlements for one IncomeDistributor distribution. The server publishes RFC 8785 canonical bytes to IPFS; createDistribution records their SHA-256 and ipfs:// URI. merkleRoot is OpenZeppelin StandardMerkleTree.of(entries.map(e => [e.account, e.amount]), leafEncoding).root.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "formatVersion",
+    "chainId",
+    "token",
+    "incomeDistributor",
+    "quoteToken",
+    "recordBlock",
+    "total",
+    "eligibleSupply",
+    "distributed",
+    "merkleRoot",
+    "leafEncoding",
+    "entries"
+  ],
+  "properties": {
+    "formatVersion": { "type": "string", "const": "1" },
+    "chainId": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+    "token": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+    "incomeDistributor": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+    "quoteToken": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+    "recordBlock": {
+      "description": "Block whose end-of-block balances define entitlements",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "total": {
+      "description": "Quote-token minimal units funded by createDistribution",
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
+    "eligibleSupply": {
+      "description": "Total supply at recordBlock minus the Vault's unsold inventory, in RWA minimal units",
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
+    "distributed": {
+      "description": "Sum of entry amounts; total minus distributed is rounding dust that stays until reclaimUnclaimed",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "merkleRoot": { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+    "leafEncoding": { "const": ["address", "uint256"] },
+    "entries": {
+      "description": "One entry per account with a positive amount, sorted by lowercase account hex ascending",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["account", "balance", "amount"],
+        "properties": {
+          "account": {
+            "description": "EIP-55 holder address; escrowed RWA counts for the beneficiary of each Pending or Funded request",
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "balance": {
+            "description": "Attributed RWA balance at recordBlock, in minimal units",
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "amount": {
+            "description": "floor(total * balance / eligibleSupply) in quote-token minimal units",
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          }
+        }
+      }
+    }
+  }
+}

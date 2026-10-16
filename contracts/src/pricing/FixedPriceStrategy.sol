@@ -2,18 +2,13 @@
 pragma solidity ^0.8.24;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {
-    AccessControlDefaultAdminRules
-} from "@openzeppelin/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
-import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {AccessControlEnumerableAdminRules} from "../access/AccessControlEnumerableAdminRules.sol";
 import {IFixedPriceStrategy} from "../interfaces/IFixedPriceStrategy.sol";
 
 /// @title FixedPriceStrategy
 /// @notice PRICER_ROLE can update fixed purchase/redemption prices
-/// @dev Enumerable PRICER_ROLE and DEFAULT_ADMIN_ROLE; see ComplianceRegistry for inheritance overrides
-contract FixedPriceStrategy is IFixedPriceStrategy, AccessControlEnumerable, AccessControlDefaultAdminRules {
+/// @dev Enumerable PRICER_ROLE and DEFAULT_ADMIN_ROLE
+contract FixedPriceStrategy is IFixedPriceStrategy, AccessControlEnumerableAdminRules {
     bytes32 public constant PRICER_ROLE = keccak256("PRICER_ROLE");
 
     uint8 private immutable _tokenDecimals;
@@ -28,7 +23,7 @@ contract FixedPriceStrategy is IFixedPriceStrategy, AccessControlEnumerable, Acc
         address pricer,
         address admin,
         uint48 adminTransferDelay
-    ) AccessControlDefaultAdminRules(adminTransferDelay, admin) {
+    ) AccessControlEnumerableAdminRules(adminTransferDelay, admin) {
         if (purchasePricePerWholeToken_ == 0 || redemptionPricePerWholeToken_ == 0) {
             revert ZeroPrice();
         }
@@ -78,60 +73,5 @@ contract FixedPriceStrategy is IFixedPriceStrategy, AccessControlEnumerable, Acc
 
     function tokenDecimals() external view returns (uint8) {
         return _tokenDecimals;
-    }
-
-    // ---- AccessControl overrides, see ComplianceRegistry.sol ----
-
-    function _grantRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._grantRole(role, account);
-    }
-
-    function _revokeRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._revokeRole(role, account);
-    }
-
-    function _setRoleAdmin(bytes32 role, bytes32 adminRole)
-        internal
-        override(AccessControl, AccessControlDefaultAdminRules)
-    {
-        super._setRoleAdmin(role, adminRole);
-    }
-
-    function grantRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.grantRole(role, account);
-    }
-
-    function revokeRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.revokeRole(role, account);
-    }
-
-    function renounceRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.renounceRole(role, account);
-    }
-
-    function supportsInterface(bytes4 interfaceId)
-        public
-        view
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super.supportsInterface(interfaceId);
     }
 }

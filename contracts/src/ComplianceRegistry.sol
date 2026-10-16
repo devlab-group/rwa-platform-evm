@@ -1,12 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {
-    AccessControlDefaultAdminRules
-} from "@openzeppelin/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
-import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {AccessControlEnumerableAdminRules} from "./access/AccessControlEnumerableAdminRules.sol";
 import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 
 /// @title ComplianceRegistry
@@ -14,7 +9,7 @@ import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 /// @dev After wiring, Vault and RedemptionEscrow status updates require Allowed with no expiry.
 ///      AccessControlEnumerable exposes complete COMPLIANCE_ROLE and DEFAULT_ADMIN_ROLE
 ///      holder sets for verification, including bootstrap-role removal, without event history.
-contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable, AccessControlDefaultAdminRules {
+contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerableAdminRules {
     bytes32 public constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
 
     /// @notice Deployer (normally RWAFactory), authorized to call setSystemAddresses once
@@ -31,7 +26,7 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable, Acc
     ///      RWAFactory renounces it after wiring. Records the deployer for setSystemAddresses,
     ///      following RWAToken's one-time deployer-only setter pattern.
     constructor(uint48 adminTransferDelay, address admin, address complianceOperator)
-        AccessControlDefaultAdminRules(adminTransferDelay, admin)
+        AccessControlEnumerableAdminRules(adminTransferDelay, admin)
     {
         _deployer = msg.sender;
         _grantRole(COMPLIANCE_ROLE, complianceOperator);
@@ -77,62 +72,6 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable, Acc
 
     function getRecord(address account) external view returns (ComplianceRecord memory) {
         return _records[account];
-    }
-
-    /// @dev Both AccessControl extensions override shared members, requiring explicit resolution.
-    ///      Enumerable tracks grants/revokes and exposes its interface; DefaultAdminRules enforces
-    ///      two-step admin transfers. Calling super preserves the full linearized override chain.
-    function _grantRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._grantRole(role, account);
-    }
-
-    function _revokeRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._revokeRole(role, account);
-    }
-
-    function _setRoleAdmin(bytes32 role, bytes32 adminRole)
-        internal
-        override(AccessControl, AccessControlDefaultAdminRules)
-    {
-        super._setRoleAdmin(role, adminRole);
-    }
-
-    function grantRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.grantRole(role, account);
-    }
-
-    function revokeRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.revokeRole(role, account);
-    }
-
-    function renounceRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.renounceRole(role, account);
-    }
-
-    function supportsInterface(bytes4 interfaceId)
-        public
-        view
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super.supportsInterface(interfaceId);
     }
 
     function _setStatus(address account, ComplianceStatus status, uint64 validUntil) private {

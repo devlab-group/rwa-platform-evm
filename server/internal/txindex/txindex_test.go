@@ -234,3 +234,43 @@ func TestFreezesWhileReconciliationRequired(t *testing.T) {
 		t.Fatalf("projector wrote %d records while frozen mid-reorg, want 0", len(all))
 	}
 }
+
+// An ERC-20 Transfer is indexed for income snapshots and is not history: a plain
+// wallet-to-wallet transfer produces no record, and a transaction that also carries
+// a business event keeps that event as its primary
+func TestTransferLogsAreNotTransactionHistory(t *testing.T) {
+	repos := memory.New()
+	seedEvent(t, repos, tokenAddr, "0xplain", "Transfer", 10, 0, false,
+		map[string]any{"from": callerAddr, "to": senderAddr, "value": "5"})
+	seedEvent(t, repos, tokenAddr, "0xmint", "Transfer", 11, 0, false,
+		map[string]any{"from": common.Address{}.Hex(), "to": vaultAddr, "value": "5"})
+	seedEvent(t, repos, tokenAddr, "0xmint", "Minted", 11, 1, false, map[string]any{"amount": "5"})
+	run(t, repos)
+
+	if _, err := repos.Transactions.Get(context.Background(), models.EventDerivedTxIDPrefix+"0xplain"); err == nil {
+		t.Error("a plain Transfer became a transaction record")
+	}
+	if tx := getEvtTx(t, repos, "0xmint"); tx.Kind != "mint" {
+		t.Errorf("mint transaction Kind = %q, want mint", tx.Kind)
+	}
+}
+
+func TestIncomeEventsAreMapped(t *testing.T) {
+	repos := memory.New()
+	seedEvent(t, repos, vaultAddr, "0xc1", "IncomeClaimed", 10, 0, false, map[string]any{"id": "0", "account": callerAddr, "amount": "75"})
+	seedEvent(t, repos, vaultAddr, "0xc2", "DistributionCreated", 11, 0, false, map[string]any{"id": "0", "caller": senderAddr, "total": "100"})
+	seedEvent(t, repos, vaultAddr, "0xc3", "MinPurchaseQuoteChanged", 12, 0, false, map[string]any{"caller": senderAddr, "newMinimum": "9"})
+	run(t, repos)
+
+	for hash, kind := range map[string]string{"0xc1": "income_claimed", "0xc2": "income_distribution_created", "0xc3": "min_purchase_changed"} {
+		if got := getEvtTx(t, repos, hash).Kind; got != kind {
+			t.Errorf("%s Kind = %q, want %q", hash, got, kind)
+		}
+	}
+	if tx := getEvtTx(t, repos, "0xc1"); tx.From != callerAddr || tx.Value != "75" {
+		t.Errorf("claim tx = from %q value %q", tx.From, tx.Value)
+	}
+	if tx := getEvtTx(t, repos, "0xc2"); tx.Value != "100" {
+		t.Errorf("distribution tx value = %q, want its total", tx.Value)
+	}
+}

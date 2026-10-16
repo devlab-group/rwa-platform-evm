@@ -5,12 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-import {
-    AccessControlDefaultAdminRules
-} from "@openzeppelin/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
-import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {AccessControlEnumerableAdminRules} from "./access/AccessControlEnumerableAdminRules.sol";
 import {IIncomeDistributor} from "./interfaces/IIncomeDistributor.sol";
 import {IRWAToken} from "./interfaces/IRWAToken.sol";
 import {IVault} from "./interfaces/IVault.sol";
@@ -25,12 +20,7 @@ import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 ///      (to the Vault treasury after the deadline); both are blocked while paused.
 ///      Initial windows last at least MIN_CLAIM_WINDOW. The income manager may only
 ///      extend deadlines, including while paused to restore claim time.
-contract IncomeDistributor is
-    IIncomeDistributor,
-    AccessControlEnumerable,
-    AccessControlDefaultAdminRules,
-    ReentrancyGuard
-{
+contract IncomeDistributor is IIncomeDistributor, AccessControlEnumerableAdminRules, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     bytes32 public constant INCOME_MANAGER_ROLE = keccak256("INCOME_MANAGER_ROLE");
@@ -52,7 +42,7 @@ contract IncomeDistributor is
         address admin,
         address incomeManager,
         uint48 adminTransferDelay
-    ) AccessControlDefaultAdminRules(adminTransferDelay, admin) {
+    ) AccessControlEnumerableAdminRules(adminTransferDelay, admin) {
         if (token_ == address(0) || quoteToken_ == address(0) || vault_ == address(0) || incomeManager == address(0)) {
             revert ZeroAddress();
         }
@@ -166,60 +156,5 @@ contract IncomeDistributor is
 
     function isClaimed(uint256 id, address account) external view returns (bool) {
         return _claimed[id][account];
-    }
-
-    // AccessControl overrides; see ComplianceRegistry for the inheritance rationale
-
-    function _grantRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._grantRole(role, account);
-    }
-
-    function _revokeRole(bytes32 role, address account)
-        internal
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super._revokeRole(role, account);
-    }
-
-    function _setRoleAdmin(bytes32 role, bytes32 adminRole)
-        internal
-        override(AccessControl, AccessControlDefaultAdminRules)
-    {
-        super._setRoleAdmin(role, adminRole);
-    }
-
-    function grantRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.grantRole(role, account);
-    }
-
-    function revokeRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.revokeRole(role, account);
-    }
-
-    function renounceRole(bytes32 role, address account)
-        public
-        override(AccessControl, IAccessControl, AccessControlDefaultAdminRules)
-    {
-        super.renounceRole(role, account);
-    }
-
-    function supportsInterface(bytes4 interfaceId)
-        public
-        view
-        override(AccessControlEnumerable, AccessControlDefaultAdminRules)
-        returns (bool)
-    {
-        return super.supportsInterface(interfaceId);
     }
 }

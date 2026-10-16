@@ -11,6 +11,9 @@ import (
 type BootstrapConfigResponse struct {
 	ChainID        int64  `json:"chainId"`
 	FactoryAddress string `json:"factoryAddress"`
+	// FactoryVersion is RWAFactory.version() of the configured factory, or "" when it
+	// cannot be read; the console selects the ProjectConfig encoding from it
+	FactoryVersion string `json:"factoryVersion"`
 	// ProjectID is the configured deployment projectId (UUID), or "" when none is
 	// set. The admin console refuses to create a profile while it is empty.
 	ProjectID string `json:"projectId"`
@@ -18,8 +21,8 @@ type BootstrapConfigResponse struct {
 
 // NewBootstrapConfigResponse builds the bootstrap view from server
 // configuration; no model backs it
-func NewBootstrapConfigResponse(chainID int64, factoryAddress, projectID string) BootstrapConfigResponse {
-	return BootstrapConfigResponse{ChainID: chainID, FactoryAddress: factoryAddress, ProjectID: projectID}
+func NewBootstrapConfigResponse(chainID int64, factoryAddress, factoryVersion, projectID string) BootstrapConfigResponse {
+	return BootstrapConfigResponse{ChainID: chainID, FactoryAddress: factoryAddress, FactoryVersion: factoryVersion, ProjectID: projectID}
 }
 
 // ProjectResponse mirrors components.schemas.Project
@@ -57,6 +60,14 @@ type ProjectResponse struct {
 	// governance fields below.
 	PurchasePricePerWholeToken   string `json:"purchasePricePerWholeToken,omitempty"`
 	RedemptionPricePerWholeToken string `json:"redemptionPricePerWholeToken,omitempty"`
+
+	// MinPurchaseQuote is the rwa-v3 Vault minimum quote per purchase, from the projection
+	// with the deploy-time value as fallback; omitted for rwa-v2
+	MinPurchaseQuote string `json:"minPurchaseQuote,omitempty"`
+	// StrategyKind (Fixed, Oracle or Unknown) and Oracle describe the Vault's current
+	// strategy as read from the chain; see ApplyPricing
+	StrategyKind string               `json:"strategyKind,omitempty"`
+	Oracle       *OraclePriceResponse `json:"oracle,omitempty"`
 
 	// Paused, Auditor, Treasury, RedemptionManager, PendingAdmin, Roles and prices reflect
 	// indexed AccessControl and governance events through project.ReconcileSecurity,
@@ -130,6 +141,34 @@ type Addresses struct {
 	RedemptionEscrow string `json:"redemptionEscrow"`
 	Strategy         string `json:"strategy"`
 	QuoteToken       string `json:"quoteToken"`
+	// IncomeDistributor is the rwa-v3 income contract; omitted for rwa-v2
+	IncomeDistributor string `json:"incomeDistributor,omitempty"`
+}
+
+// OraclePriceResponse mirrors components.schemas.OraclePrice
+type OraclePriceResponse struct {
+	Feed                string `json:"feed"`
+	MaxAge              uint64 `json:"maxAge"`
+	PurchaseSpreadBps   uint16 `json:"purchaseSpreadBps"`
+	RedemptionSpreadBps uint16 `json:"redemptionSpreadBps"`
+	FeedDecimals        uint8  `json:"feedDecimals"`
+	SequencerUptimeFeed string `json:"sequencerUptimeFeed,omitempty"`
+	GracePeriod         uint64 `json:"gracePeriod,omitempty"`
+	Available           bool   `json:"available"`
+	Price               string `json:"price,omitempty"`
+	UpdatedAt           *int64 `json:"updatedAt,omitempty"`
+	Error               string `json:"error,omitempty"`
+}
+
+// ApplyPricing sets strategy fields from the supplied read result. Oracle prices replace
+// projected values, clearing failed reads; other kinds retain projected prices.
+func (r *ProjectResponse) ApplyPricing(kind string, oracle *OraclePriceResponse, purchase, redemption string) {
+	r.StrategyKind = kind
+	if kind != "Oracle" {
+		return
+	}
+	r.Oracle = oracle
+	r.PurchasePricePerWholeToken, r.RedemptionPricePerWholeToken = purchase, redemption
 }
 
 // RoleHolders mirrors components.schemas.RoleHolders
@@ -148,8 +187,9 @@ func ToProjectResponse(p *models.Project, tokenUnit string, legal *models.LegalD
 		Addresses: Addresses{
 			Token: p.Addresses.Token, Compliance: p.Addresses.Compliance, SupplyController: p.Addresses.SupplyController,
 			Vault: p.Addresses.Vault, RedemptionEscrow: p.Addresses.RedemptionEscrow, Strategy: p.Addresses.Strategy,
-			QuoteToken: p.Addresses.QuoteToken,
+			QuoteToken: p.Addresses.QuoteToken, IncomeDistributor: p.Addresses.IncomeDistributor,
 		},
+		MinPurchaseQuote: p.MinPurchaseQuote,
 		// Deploy-time values are the fallback until a projection exists
 		Paused: p.Paused, Auditor: p.Auditor, Treasury: p.Treasury, RedemptionManager: p.RedemptionManager,
 		FinalityConfirmations: finalityConfirmations, BytecodeVerified: p.BytecodeVerified, Roles: RoleHolders(p.Roles),
@@ -176,6 +216,9 @@ func ToProjectResponse(p *models.Project, tokenUnit string, legal *models.LegalD
 			for label, byRole := range s.RolesByContract {
 				resp.RolesByContract[label] = RoleHolders(byRole)
 			}
+		}
+		if s.MinPurchaseQuote != "" {
+			resp.MinPurchaseQuote = s.MinPurchaseQuote
 		}
 		// A price the projection does not carry keeps its deploy-time value
 		if s.PurchasePricePerWholeToken != "" {

@@ -4,7 +4,7 @@
 // available, and passed to the injected script as plain data, which keeps the
 // in-page script free of imports.
 import type { Page } from "@playwright/test";
-import { encodeFunctionResult, erc20Abi } from "viem";
+import { encodeFunctionResult, erc20Abi, toFunctionSelector } from "viem";
 
 export const MOCK_WALLET_ADDRESS = "0x1111111111111111111111111111111111111111" as const;
 export const MOCK_CHAIN_ID = 31337;
@@ -15,6 +15,8 @@ const BALANCE_OF_SELECTOR = "0x70a08231";
 const DECIMALS_SELECTOR = "0x313ce567";
 const APPROVE_SELECTOR = "0x095ea7b3";
 const ALLOWANCE_SELECTOR = "0xdd62ed3e";
+// An empty mock distributor makes the pre-send duplicate check return no match
+const NEXT_ID_SELECTOR = toFunctionSelector("nextId()");
 
 export interface InstallMockWalletOptions {
   /** Chain ID the mock wallet reports through eth_chainId; defaults to MOCK_CHAIN_ID */
@@ -46,6 +48,7 @@ export async function installMockWallet(
       decimalsSelector: string;
       approveSelector: string;
       allowanceSelector: string;
+      nextIdSelector: string;
     }) => {
       let txNonce = 0;
       let blockNumber = 1000;
@@ -142,6 +145,7 @@ export async function installMockWallet(
               const data = call.data ?? "";
               if (data.startsWith(args.balanceOfSelector)) return args.balanceOfResult;
               if (data.startsWith(args.decimalsSelector)) return args.decimalsResult;
+              if (data.startsWith(args.nextIdSelector)) return `0x${"0".repeat(64)}`;
               if (data.startsWith(args.allowanceSelector)) {
                 const spender = `0x${data.slice(74, 138).slice(24)}`.toLowerCase();
                 const token = (call.to ?? "").toLowerCase();
@@ -170,6 +174,7 @@ export async function installMockWallet(
       decimalsSelector: DECIMALS_SELECTOR,
       approveSelector: APPROVE_SELECTOR,
       allowanceSelector: ALLOWANCE_SELECTOR,
+      nextIdSelector: NEXT_ID_SELECTOR,
     },
   );
 }

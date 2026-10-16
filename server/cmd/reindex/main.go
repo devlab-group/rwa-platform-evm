@@ -1,7 +1,11 @@
 // Command reindex deletes chain_events for stored child addresses, the chain's shared
-// indexer checkpoint/hash history, purchases and redemption_requests. Factory events,
-// Asset Profiles, investor OwnershipVerified flags, audit logs and idempotency records
-// remain.
+// indexer checkpoint/hash history, purchases, redemption_requests and the rwa-v3 income
+// read models (income_distributions, income_claims). Factory events, Asset Profiles,
+// prepared income snapshots (income_preparations), investor OwnershipVerified flags,
+// audit logs and idempotency records remain.
+//
+// Deployments indexed before RWAToken Transfer logs were stored need one reindex before
+// POST /api/v1/income/distributions can prepare snapshots.
 //
 // A running platform rebuilds indexed data; reindex does not scan. Use
 // server/ops/reindex_rehearsal.sh for before/after counts or internal/indexer's
@@ -62,12 +66,13 @@ func main() {
 		log.Fatalf("reindex: loading project record (contract addresses come from the database, not config): %v", err)
 	}
 	addresses := map[string]string{
-		"token":            p.Addresses.Token,
-		"compliance":       p.Addresses.Compliance,
-		"supplyController": p.Addresses.SupplyController,
-		"vault":            p.Addresses.Vault,
-		"redemptionEscrow": p.Addresses.RedemptionEscrow,
-		"strategy":         p.Addresses.Strategy,
+		"token":             p.Addresses.Token,
+		"compliance":        p.Addresses.Compliance,
+		"supplyController":  p.Addresses.SupplyController,
+		"vault":             p.Addresses.Vault,
+		"redemptionEscrow":  p.Addresses.RedemptionEscrow,
+		"strategy":          p.Addresses.Strategy,
+		"incomeDistributor": p.Addresses.IncomeDistributor,
 	}
 
 	fmt.Println("=== reindex rehearsal ===")
@@ -75,8 +80,8 @@ func main() {
 	for role, addr := range addresses {
 		fmt.Printf("  %-16s %s\n", role, addr)
 	}
-	fmt.Println("This will DROP chain_events, indexer_checkpoints, purchases, and")
-	fmt.Println("redemption_requests, then rely on the platform server's own background reconcile")
+	fmt.Println("This will DROP chain_events, indexer_checkpoints, purchases,")
+	fmt.Println("redemption_requests, income_distributions and income_claims, then rely on the platform server's own background reconcile")
 	fmt.Println("loops to rebuild them from the chain. Asset profiles, investor ownership flags,")
 	fmt.Println("and audit logs are NOT touched.")
 
@@ -116,6 +121,12 @@ func main() {
 	if err := repos.RedemptionRequests.DeleteAll(ctx); err != nil {
 		log.Fatalf("reindex: dropping redemption_requests: %v", err)
 	}
+	// Income read models are derived from events; prepared snapshots are not and stay
+	for _, coll := range []string{"income_distributions", "income_claims"} {
+		if _, err := db.Collection(coll).DeleteMany(ctx, bson.M{}); err != nil {
+			log.Fatalf("reindex: dropping %s: %v", coll, err)
+		}
+	}
 
 	fmt.Println("\nDone. Read models are empty; they will repopulate as the running platform")
 	fmt.Println("server's background reconcile loops (5-15s tickers) re-scan the chain from")
@@ -126,7 +137,7 @@ func main() {
 // rehearsal script polls before/after counts while platform rebuilds
 func snapshotCounts(ctx context.Context, db *mongo.Database) map[string]int64 {
 	counts := map[string]int64{}
-	for _, coll := range []string{"chain_events", "purchases", "redemption_requests"} {
+	for _, coll := range []string{"chain_events", "purchases", "redemption_requests", "income_distributions", "income_claims"} {
 		n, err := db.Collection(coll).CountDocuments(ctx, bson.M{})
 		if err != nil {
 			counts[coll] = -1

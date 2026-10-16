@@ -23,11 +23,14 @@ Requires an EVM chain with conventional JSON-RPC and a conventional ERC-20 quote
 - Mints only to the **Vault** (digital warehouse).
 - Requires currently allowed sender and recipient for ordinary transfers (mint/burn exempt;
   enforcement and escrow-return exceptions apply).
-- Sells on-chain through `Vault.buy` with one quote token.
+- Sells through `Vault.buy` for one quote token, with fixed or oracle prices and an optional
+  minimum purchase.
 - Redeems through `requestRedemption` → issuer `fundRedemption` → permissionless
   `claimRedemption`. Funded quote stays in isolated escrow, payable only to the recorded
   beneficiary, with no role-based withdrawal. An Allowed beneficiary can cancel a Pending
   request after its timeout.
+- Pays quote-token income, such as dividends or interest, from an issuer-funded holder
+  snapshot. Each holder claims its share with a Merkle proof.
 - Burns Vault inventory with auditor authorization, including inventory returned by redemption.
 - Signs attestations offline through the air-gapped Go CLI, without network access during signing.
 
@@ -63,15 +66,15 @@ jurisdiction responsibilities.
     ▼                    ▼                                  │                           ▼
  ┌─────────────────────────────────────── EVM chain ────────┴───────────────────────────────┐
  │ RWAFactory deploys ComplianceRegistry · RWAToken · SupplyController ·                    │
- │ Vault · FixedPriceStrategy · RedemptionEscrow                                            │
+ │ Vault · Fixed/OraclePriceStrategy · RedemptionEscrow · IncomeDistributor                 │
  └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The admin console encodes deployment, minting, role changes, pause, prices, redemption funding,
-rejection and proceeds withdrawal. It submits wallet transactions or exports batches for a
-role-holding Safe. Submit burns directly to `SupplyController.burn`. Investors send purchases,
-redemption requests, claims and cancellations from their wallets. The server's sole on-chain
-key capability is submitting compliance-status changes.
+The admin console encodes deployment, minting, role changes, pause, pricing and minimum
+purchase updates, redemption funding and rejection, proceeds withdrawals and income distributions.
+It submits wallet transactions or exports batches for a role-holding Safe. Submit burns directly
+to `SupplyController.burn`. Investors buy, request redemption, claim, cancel and collect income
+from their wallets. The server's only on-chain key submits compliance-status changes.
 
 ## Monorepo layout
 
@@ -206,8 +209,8 @@ bash server/e2e/run_e2e.sh      # HTTP API and wallet transactions drive the sam
 ## Testing & CI
 
 - **Contracts** - `forge test`: unit, fuzz, invariant conservation, adversarial reentrancy/token
-  mocks and integration. Size tests cover the factory, four helpers and six child contracts
-  against EIP-170's 24,576-byte limit; gas snapshots are committed. Slither runs in CI.
+  mocks and integration. Size tests enforce EIP-170's 24,576-byte limit on the factory, helpers,
+  project contracts and `OraclePriceStrategy`. Gas snapshots are committed; Slither runs in CI.
 - **Server** - `go test ./... -race`, `cmd/verifyabi` for compiled-contract ABI drift, and
   `server/e2e/run_e2e.sh` for black-box API and wallet flows.
 - **Signer** - `go test ./...`, including byte-for-byte reproduction of `shared/vectors`.
@@ -234,10 +237,11 @@ dependency scanning, Slither and end-to-end flows. Mythril runs weekly and on de
 
 ## Deployment
 
-`RWAFactory.deploy(ProjectConfig)` deploys the stack atomically through four helper contracts,
-keeping factory/helper runtime code below EIP-170's limit. The console reads the factory address
-from `GET /api/v1/config` and submits the admin wallet's transaction. The server checks deployed
-bytecode presence, roles and allowlisting before accepting the observed `ProjectDeployed`.
+`RWAFactory.deploy(ProjectConfig)` atomically deploys the stack through helpers that keep
+runtime code below EIP-170's limit. The console reads the factory address and version from
+`GET /api/v1/config`, encodes the matching `ProjectConfig` and submits the admin wallet's
+transaction. The server supports rwa-v3 and existing rwa-v2 deployments, checking bytecode
+presence, roles and allowlisting before accepting `ProjectDeployed`.
 Qualify each chain with [`docs/operator/testnet-qualification.md`](docs/operator/testnet-qualification.md).
 
 ## Documentation

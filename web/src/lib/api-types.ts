@@ -85,7 +85,7 @@ export interface paths {
     };
     /**
      * Public bootstrap chain configuration
-     * @description Chain ID, RWAFactory address and configured projectId for wallet-side RWAFactory.deploy(ProjectConfig). Available before deployment, when GET /api/v1/project returns 404; the server does not relay deployment.
+     * @description Chain ID, RWAFactory address and version, and configured projectId for wallet-side RWAFactory.deploy(ProjectConfig). Available before deployment, when GET /api/v1/project returns 404; the server does not relay deployment.
      */
     get: operations["getConfig"];
     put?: never;
@@ -491,6 +491,50 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/income/distributions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List income distributions, newest first (admin-only)
+     * @description Prepared snapshots with indexed IncomeDistributor state for Active rwa-v3 projects. Preparations remain listed when no active deployment is available. Repeat on-chain creations appear as separate rows with the same preparationId; each funds another payout of the snapshot.
+     */
+    get: operations["listIncomeDistributions"];
+    put?: never;
+    /**
+     * Build and publish an income snapshot (admin-only)
+     * @description Replays finalized RWAToken Transfer and RedemptionEscrow events through recordBlock, builds a StandardMerkleTree and pins the RFC 8785 snapshot to IPFS (shared/schemas/income-snapshot.schema.json). Returns Prepared; the income manager's wallet or Safe approves funding and calls IncomeDistributor.createDistribution with the returned fields. The server never sends it. A matching indexed DistributionCreated (merkleRoot and snapshotSha256) supplies the on-chain state. Returns 400 (invalid_request, claim_window_too_short); 409 (income_unsupported without an Active rwa-v3 deployment, record_block_not_final, no_eligible_holders, transfer_history_incomplete for a replayed balance or minted-minus-burned supply mismatch, already_distributed for an indexed creation using the same snapshot, snapshot_too_large above the 1 MiB snapshot limit); or 503 (ipfs_unavailable). Deployments indexed before Transfer logs were stored need reindexing.
+     */
+    post: operations["prepareIncomeDistribution"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/income/claims/{address}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Public income entitlements of one wallet
+     * @description Entitlements from readable server-prepared snapshots matched to on-chain distributions, newest first, with IncomeDistributor.claim(distributionId, amount, proof) arguments. Status follows indexed events and time; claim separately requires an unpaused project and an Allowed caller. Snapshot addresses, balances and entitlements are public on IPFS.
+     */
+    get: operations["listIncomeClaims"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/transactions": {
     parameters: {
       query?: never;
@@ -576,10 +620,18 @@ export interface components {
       decimals?: number;
       /** @description Cached on-chain quote-token decimals for display scaling; omitted when unresolved or zero */
       quoteDecimals?: number;
-      /** @description Purchase price per whole RWA token in quote-token minimal units (display using quoteDecimals). Starts at the deployment price and follows FixedPriceStrategy PurchasePriceUpdated events; omitted when unavailable. */
+      /** @description Purchase price per whole RWA token in quote-token minimal units (display using quoteDecimals). For a Fixed strategy, starts at the deployment price and follows PurchasePriceUpdated events; for an Oracle strategy, read from the strategy and cached for 15 seconds. Omitted when unavailable, including a failing oracle read (see oracle.error). */
       purchasePricePerWholeToken?: string;
-      /** @description Projected redemption price per whole RWA token in quote-token minimal units; see purchasePricePerWholeToken. */
+      /** @description Redemption price per whole RWA token in quote-token minimal units; see purchasePricePerWholeToken. */
       redemptionPricePerWholeToken?: string;
+      /** @description rwa-v3 only: Vault minimum quote per purchase in quote-token minimal units, "0" for none. Starts at the deploy config and follows MinPurchaseQuoteChanged events; omitted for rwa-v2. */
+      minPurchaseQuote?: string;
+      /**
+       * @description Kind of the Vault's current strategy, probed from its views; Unknown when inconclusive, including RPC failures. Omitted before deployment.
+       * @enum {string}
+       */
+      strategyKind?: "Fixed" | "Oracle" | "Unknown";
+      oracle?: components["schemas"]["OraclePrice"];
       tokenUnit?: string;
       profileDigest?: string;
       legal?: components["schemas"]["LegalDescriptor"];
@@ -591,11 +643,11 @@ export interface components {
       /** @description Incoming DEFAULT_ADMIN for the first governance contract with a pending two-step transfer, projected from scheduling, cancellation and role events; see securityStale. Set while any contract awaits acceptance. The console offers wallet acceptance or a Safe batch for a pending Safe. */
       pendingAdmin?: string;
       finalityConfirmations?: number;
-      /** @description Non-empty code exists at all six project contract addresses; checks presence, not identity against released artifacts. */
+      /** @description Non-empty code exists at every project contract address; checks presence, not identity against released artifacts. */
       bytecodeVerified?: boolean;
       /** @description Platform-defined role holders enumerated on each project contract through AccessControlEnumerable and checked against deployment allowlists. After governance projection, follows role events; see securityStale. */
       roles?: components["schemas"]["RoleHolders"];
-      /** @description Role holders by contract label: token, compliance, supplyController, vault, redemptionEscrow, strategy. Holders may differ across contracts; omitted before projection. */
+      /** @description Role holders by contract label: token, compliance, supplyController, vault, redemptionEscrow, strategy (Fixed only; OraclePriceStrategy has no roles) and incomeDistributor (rwa-v3). Holders may differ across contracts; omitted before projection. */
       rolesByContract?: {
         [key: string]: components["schemas"]["RoleHolders"];
       };
@@ -637,8 +689,51 @@ export interface components {
       supplyController?: string;
       vault?: string;
       redemptionEscrow?: string;
+      /** @description Vault's current strategy */
       strategy?: string;
       quoteToken?: string;
+      /** @description rwa-v3 only; omitted for rwa-v2 */
+      incomeDistributor?: string;
+    };
+    /** @description Present for an identified Oracle strategy. Parameters are immutable; price-read results, including failures, are cached for 15 seconds. */
+    OraclePrice: {
+      /** @description AggregatorV3Interface price feed */
+      feed: string;
+      /**
+       * Format: int64
+       * @description Maximum feed age in seconds
+       */
+      maxAge: number;
+      purchaseSpreadBps: number;
+      redemptionSpreadBps: number;
+      feedDecimals: number;
+      /** @description L2 sequencer uptime feed; omitted when not configured */
+      sequencerUptimeFeed?: string;
+      /**
+       * Format: int64
+       * @description Seconds after a sequencer restart before prices are valid; omitted without a sequencer feed
+       */
+      gracePeriod?: number;
+      /** @description latestPrice() succeeded on the cached read */
+      available: boolean;
+      /** @description Validated feed answer in feed units; omitted when unavailable */
+      price?: string;
+      /**
+       * Format: int64
+       * @description Feed's last update in Unix seconds, also when stale; omitted when the feed cannot be read
+       */
+      updatedAt?: number;
+      /**
+       * @description Why the price is unavailable; omitted when available. ReadFailed covers RPC failures and unknown reverts.
+       * @enum {string}
+       */
+      error?:
+        | "StalePrice"
+        | "InvalidPrice"
+        | "SequencerDown"
+        | "GracePeriodNotOver"
+        | "FeedDecimalsChanged"
+        | "ReadFailed";
     };
     /** @description Admin-only ERC-7943 state from GET /api/v1/project/enforcement */
     Enforcement: {
@@ -684,6 +779,8 @@ export interface components {
       chainId: number;
       /** @description RWAFactory address for wallet-side deploy(ProjectConfig) */
       factoryAddress: string;
+      /** @description Configured RWAFactory.version(); supported encodings are rwa-v2 and rwa-v3. The first nonempty result is cached; failed reads return empty and retry after 30 seconds. The console blocks deployment for empty or unsupported versions. */
+      factoryVersion: string;
       /** @description Configured contract.project_id UUID; the console uses it in the Asset Profile and the server rejects mismatches. If unset, returns empty and the console blocks profile creation. */
       projectId: string;
     };
@@ -801,8 +898,21 @@ export interface components {
     Inventory: {
       inventory?: string;
       quoteBalance?: string;
+      /** @description Per whole RWA token; omitted when the strategy read fails */
       purchasePrice?: string;
+      /** @description Per whole RWA token; omitted when the strategy read fails */
       redemptionPrice?: string;
+      /**
+       * @description Why the prices are omitted; same values as OraclePrice.error
+       * @enum {string}
+       */
+      priceError?:
+        | "StalePrice"
+        | "InvalidPrice"
+        | "SequencerDown"
+        | "GracePeriodNotOver"
+        | "FeedDecimalsChanged"
+        | "ReadFailed";
     };
     /** @description On-chain status, plus server-derived claimable: Funded with confirmations >= finalityConfirmations. Claimable is not an on-chain enum member; Pending does not guarantee payment. */
     Redemption: {
@@ -818,6 +928,88 @@ export interface components {
       timeoutAt?: number;
       beneficiaryAllowed?: boolean;
       confirmations?: number;
+    };
+    PrepareIncomeDistributionRequest: {
+      /**
+       * Format: int64
+       * @description Block whose end-of-block balances define entitlements; at or below the indexed checkpoint minus finalityConfirmations, and below the block that mines createDistribution
+       */
+      recordBlock: number;
+      /** @description Positive base-10 quote-token minimal units to distribute */
+      total: string;
+      /**
+       * Format: int64
+       * @description Unix seconds; at least 7 days plus 1 hour after the request. The extra hour allows mining time; createDistribution still requires MIN_CLAIM_WINDOW at inclusion
+       */
+      claimDeadline: number;
+    };
+    /** @description A prepared snapshot and, once created on-chain, its IncomeDistributor state. Prepared: pinned, no matching DistributionCreated yet. Active: created and the claim deadline not passed. Expired: deadline passed, not reclaimed. Reclaimed: remainder sent to the treasury. */
+    IncomeDistribution: {
+      /** @description Server ID of the prepared snapshot */
+      preparationId: string;
+      /** @enum {string} */
+      status: "Prepared" | "Active" | "Expired" | "Reclaimed";
+      /** @description On-chain distribution id; present once created */
+      distributionId?: string;
+      /** @description createDistribution merkleRoot */
+      merkleRoot: string;
+      /** @description createDistribution total, quote-token minimal units */
+      total: string;
+      /**
+       * Format: int64
+       * @description createDistribution recordBlock
+       */
+      recordBlock: number;
+      /**
+       * Format: int64
+       * @description Unix seconds; follows ClaimDeadlineExtended once created
+       */
+      claimDeadline: number;
+      /** @description createDistribution snapshotURI, ipfs://<cid> */
+      snapshotURI: string;
+      /** @description createDistribution snapshotSha256: 0x-hex SHA-256 of the canonical snapshot bytes */
+      snapshotSha256: string;
+      /** @description RWA minimal units the entitlements divide */
+      eligibleSupply: string;
+      /** @description Sum of entry amounts; total minus distributed is rounding dust */
+      distributed: string;
+      /** @description Snapshot entries */
+      holderCount: number;
+      /** @description Claimed quote-token units; present once created */
+      claimed?: string;
+      /** @description Present once Reclaimed */
+      reclaimedAmount?: string;
+      /** @description createDistribution transaction; present once created */
+      createTxHash?: string;
+      /**
+       * Format: date-time
+       * @description Preparation time
+       */
+      createdAt: string;
+    };
+    /** @description One wallet's entitlement in an on-chain distribution, with the claim() arguments */
+    IncomeClaim: {
+      /** @description claim() id */
+      distributionId: string;
+      account: string;
+      /** @description claim() amount in quote-token minimal units */
+      amount: string;
+      /** @description claim() proof, 0x-hex bytes32 values */
+      proof: string[];
+      merkleRoot: string;
+      /**
+       * Format: int64
+       * @description Unix seconds; claims are accepted through this second
+       */
+      claimDeadline: number;
+      snapshotURI: string;
+      /**
+       * @description Claimable: open and not yet claimed. Expired: deadline passed or remainder reclaimed without a claim.
+       * @enum {string}
+       */
+      status: "Claimable" | "Claimed" | "Expired";
+      /** @description Present when Claimed */
+      claimTxHash?: string;
     };
     ChallengeVerify: {
       address: string;
@@ -1761,6 +1953,87 @@ export interface operations {
           "application/json": components["schemas"]["Redemption"];
         };
       };
+    };
+  };
+  listIncomeDistributions: {
+    parameters: {
+      query?: {
+        /** @description Item limit, capped at the server maximum even when omitted or exceeded */
+        limit?: components["parameters"]["Limit"];
+        /** @description Opaque X-Next-Cursor from a previous response; omit for the first page */
+        cursor?: components["parameters"]["Cursor"];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Distributions (bounded/paginated, see Limit/Cursor) */
+      200: {
+        headers: {
+          "X-Total-Count": components["headers"]["XTotalCount"];
+          "X-Page-Size": components["headers"]["XPageSize"];
+          "X-Next-Cursor": components["headers"]["XNextCursor"];
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IncomeDistribution"][];
+        };
+      };
+    };
+  };
+  prepareIncomeDistribution: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description Required on state-changing admin POSTs; maximum 256 bytes. Scoped to principal, operation, concrete path and normalized query to isolate cached responses across path parameters. */
+        "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PrepareIncomeDistributionRequest"];
+      };
+    };
+    responses: {
+      /** @description Prepared */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IncomeDistribution"];
+        };
+      };
+      400: components["responses"]["Error"];
+      409: components["responses"]["Error"];
+      503: components["responses"]["Error"];
+    };
+  };
+  listIncomeClaims: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        address: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Entitlements */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IncomeClaim"][];
+        };
+      };
+      400: components["responses"]["Error"];
     };
   };
   listTransactions: {

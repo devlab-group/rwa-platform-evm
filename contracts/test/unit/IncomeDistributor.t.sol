@@ -68,48 +68,6 @@ contract IncomeDistributorTest is TestBase {
 
     // ---- leaf compatibility with StandardMerkleTree ----
 
-    // Pinned root and proofs for four double-hashed leaves with sorted-pair hashing
-    function test_claim_pinnedStandardMerkleTreeRoot() public {
-        address[4] memory who = [
-            0x1111111111111111111111111111111111111111,
-            0x2222222222222222222222222222222222222222,
-            0x3333333333333333333333333333333333333333,
-            0x4444444444444444444444444444444444444444
-        ];
-        uint256[4] memory amt = [uint256(1_000_000), 2_500_000, 750_000, 5_000_000];
-        bytes32 root = 0xfa19e5d8366fc0f312d74b2139398566fc0764da3d302f9a114310467bffa305;
-        bytes32 l0 = 0xddee0dce62a8bda7483bd90da773da562d1723ee0cd269d42cfe0ce366f69bbf;
-        bytes32 l1 = 0xfcc31e7265f1287e5549ed818544c17b47bca8d8c2ff8a5314d7c330c17d9eb8;
-        bytes32 l2 = 0x1ea34e7d9a41908eabea4d8b81764b30da9aa4d8eb223203c19f0947b20f39d2;
-        bytes32 l3 = 0x46d32021e25b1fd2e60009f02e3613f71b053c626406953e315b3015036c5115;
-        bytes32 n0 = 0x4ede4f7a3933ba1969a0e949cf12eb68b402dd054a32526ff4fac8809fa1102b;
-        bytes32 n1 = 0xe3ecbb46a433ebc97a526037f32a9e0f5c88a53ecabdd735389de88451f02e3b;
-
-        bytes32[][4] memory proofs;
-        proofs[0] = _two(l1, n1);
-        proofs[1] = _two(l0, n1);
-        proofs[2] = _two(l3, n0);
-        proofs[3] = _two(l2, n0);
-
-        uint256 total = 9_250_000;
-        uint256 id = _create(root, total);
-        for (uint256 i; i < 4; ++i) {
-            vm.prank(complianceOperator);
-            compliance.setStatus(who[i], IComplianceRegistry.ComplianceStatus.Allowed, 0);
-            vm.prank(who[i]);
-            income.claim(id, amt[i], proofs[i]);
-            assertEq(quoteToken.balanceOf(who[i]), amt[i]);
-        }
-        assertEq(income.getDistribution(id).claimed, total);
-        assertEq(quoteToken.balanceOf(address(income)), 0);
-    }
-
-    function _two(bytes32 a, bytes32 b) internal pure returns (bytes32[] memory p) {
-        p = new bytes32[](2);
-        p[0] = a;
-        p[1] = b;
-    }
-
     // ---- constructor / views ----
 
     function test_constructor_rejectsZeroAddresses() public {

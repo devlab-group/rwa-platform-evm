@@ -6,7 +6,8 @@
 // .rwa package with the offline CLI before broadcasting mint. It then waits for
 // Minted, burns part of the record and checks Burned, supply and remaining amount.
 // It also tests purchase, redemption funding and claim, timeout/cancellation,
-// and ERC-7943 freeze and seizure.
+// ERC-7943 freeze and seizure, and the rwa-v3 income flow: snapshot, createDistribution
+// by the income manager, and an investor claim with the served proof.
 //
 // Wallet transactions use the existing go-ethereum dependency. Configuration comes
 // from the environment; see run_e2e.sh. Every step and read-model assertion must
@@ -83,6 +84,7 @@ type config struct {
 	keystorePass   string
 	workDir        string
 	redeemTimeout  int64
+	incomeAddr     common.Address
 }
 
 func envOr(key, def string) string {
@@ -289,6 +291,11 @@ func run() error {
 	step("ERC-7943 enforcement: freeze, seize, release (admin wallet), projected into GET /project/enforcement")
 	if err := enforcementLifecycle(ctx, api, chain, cfg, deployerKey, deployerAddr, investorAddr); err != nil {
 		return fmt.Errorf("erc-7943 enforcement: %w", err)
+	}
+
+	step("income distribution (rwa-v3): snapshot, createDistribution, claim")
+	if err := incomeLifecycle(ctx, api, chain, cfg, deployerKey, deployerAddr, investorKey, investorAddr); err != nil {
+		return fmt.Errorf("income distribution: %w", err)
 	}
 
 	return nil
@@ -669,15 +676,57 @@ type projectResponse struct {
 	ChainID          int64  `json:"chainId"`
 	Decimals         uint8  `json:"decimals"`
 	Addresses        struct {
-		Token            string `json:"token"`
-		Compliance       string `json:"compliance"`
-		SupplyController string `json:"supplyController"`
-		Vault            string `json:"vault"`
-		RedemptionEscrow string `json:"redemptionEscrow"`
-		Strategy         string `json:"strategy"`
-		QuoteToken       string `json:"quoteToken"`
+		Token             string `json:"token"`
+		Compliance        string `json:"compliance"`
+		SupplyController  string `json:"supplyController"`
+		Vault             string `json:"vault"`
+		RedemptionEscrow  string `json:"redemptionEscrow"`
+		Strategy          string `json:"strategy"`
+		QuoteToken        string `json:"quoteToken"`
+		IncomeDistributor string `json:"incomeDistributor"`
 	} `json:"addresses"`
-	Auditor string `json:"auditor"`
+	Auditor          string                         `json:"auditor"`
+	Version          string                         `json:"version"`
+	MinPurchaseQuote *string                        `json:"minPurchaseQuote"`
+	StrategyKind     string                         `json:"strategyKind"`
+	RolesByContract  map[string]map[string][]string `json:"rolesByContract"`
+}
+
+// checkV3ProjectFields checks GET /api/v1/project's rwa-v3 fields, polling for the
+// security projection's 15-second refresh
+func checkV3ProjectFields(api *apiClient, incomeManager common.Address) error {
+	var proj projectResponse
+	return poll("GET /api/v1/project to show the rwa-v3 fields and projected rolesByContract", 90*time.Second, 3*time.Second, func() (bool, error) {
+		proj = projectResponse{}
+		if err := api.getJSON("/api/v1/project", "", &proj); err != nil {
+			return false, err
+		}
+		if proj.Version != "rwa-v3" {
+			return false, fmt.Errorf("GET /api/v1/project: version = %q, want rwa-v3", proj.Version)
+		}
+		if proj.MinPurchaseQuote == nil {
+			return false, fmt.Errorf("GET /api/v1/project: minPurchaseQuote is missing for an rwa-v3 project")
+		}
+		if !common.IsHexAddress(proj.Addresses.IncomeDistributor) || common.HexToAddress(proj.Addresses.IncomeDistributor) == (common.Address{}) {
+			return false, fmt.Errorf("GET /api/v1/project: addresses.incomeDistributor = %q, want the deployed distributor", proj.Addresses.IncomeDistributor)
+		}
+		if proj.StrategyKind != "Fixed" {
+			// strategyKind is probed from the chain once the sales service is wired
+			return false, fmt.Errorf("GET /api/v1/project: strategyKind = %q, want Fixed", proj.StrategyKind)
+		}
+		if len(proj.RolesByContract["vault"]) == 0 {
+			return false, fmt.Errorf("GET /api/v1/project: rolesByContract.vault is empty (projection not run yet?)")
+		}
+		inc := proj.RolesByContract["incomeDistributor"]
+		if len(inc) == 0 {
+			return false, fmt.Errorf("GET /api/v1/project: rolesByContract.incomeDistributor is empty")
+		}
+		holders := inc["INCOME_MANAGER_ROLE"]
+		if len(holders) != 1 || !strings.EqualFold(holders[0], incomeManager.Hex()) {
+			return false, fmt.Errorf("GET /api/v1/project: rolesByContract.incomeDistributor.INCOME_MANAGER_ROLE = %v, want [%s]", holders, incomeManager.Hex())
+		}
+		return true, nil
+	})
 }
 
 // deployProject broadcasts RWAFactory.deploy(config) from the admin wallet and
@@ -690,9 +739,13 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 	var boot struct {
 		ChainID        int64  `json:"chainId"`
 		FactoryAddress string `json:"factoryAddress"`
+		FactoryVersion string `json:"factoryVersion"`
 	}
 	if err := api.getJSON("/api/v1/config", "", &boot); err != nil {
 		return fmt.Errorf("GET /api/v1/config: %w", err)
+	}
+	if boot.FactoryVersion != "rwa-v3" {
+		return fmt.Errorf("GET /api/v1/config: factoryVersion = %q, want rwa-v3 (the version() read from the deployed factory)", boot.FactoryVersion)
 	}
 	if !common.IsHexAddress(boot.FactoryAddress) || common.HexToAddress(boot.FactoryAddress) == (common.Address{}) {
 		return fmt.Errorf("GET /api/v1/config returned no factory address (got %q)", boot.FactoryAddress)
@@ -713,6 +766,7 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 		QuoteToken:                   cfg.quoteAddr,
 		PurchasePricePerWholeToken:   cfg.purchasePrice,
 		RedemptionPricePerWholeToken: cfg.redemptionPrice,
+		MinPurchaseQuote:             big.NewInt(0),
 		RedemptionTimeout:            uint64(cfg.redeemTimeout),
 		Admin:                        deployerAddr,
 		Auditor:                      deployerAddr,
@@ -720,6 +774,7 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 		Pricer:                       deployerAddr,
 		Treasurer:                    deployerAddr,
 		RedemptionManager:            deployerAddr,
+		IncomeManager:                deployerAddr,
 		Treasury:                     deployerAddr,
 		AdminTransferDelay:           big.NewInt(0),
 	}
@@ -756,6 +811,7 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 	cfg.supplyCtrlAddr = common.HexToAddress(proj.Addresses.SupplyController)
 	cfg.vaultAddr = common.HexToAddress(proj.Addresses.Vault)
 	cfg.escrowAddr = common.HexToAddress(proj.Addresses.RedemptionEscrow)
+	cfg.incomeAddr = common.HexToAddress(proj.Addresses.IncomeDistributor)
 
 	if !strings.EqualFold(proj.Addresses.QuoteToken, cfg.quoteAddr.Hex()) {
 		return fmt.Errorf("GET /api/v1/project: quoteToken = %q, want the deployed %q", proj.Addresses.QuoteToken, cfg.quoteAddr.Hex())
@@ -779,6 +835,10 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 		return err == nil, nil
 	}); err != nil {
 		return fmt.Errorf("services not wired after activation: %w", err)
+	}
+
+	if err := checkV3ProjectFields(api, deployerAddr); err != nil {
+		return err
 	}
 
 	fmt.Printf("    project Active: token=%s vault=%s supplyController=%s escrow=%s\n",
@@ -1274,7 +1334,12 @@ func requestRedemption(ctx context.Context, api *apiClient, chain *chainClient, 
 	}
 
 	escrow := bindings.NewRedemptionEscrow()
-	deadline := uint64(time.Now().Add(1 * time.Hour).Unix())
+	// the chain clock may be ahead of the wall clock after earlier time jumps
+	deadlineBase := time.Now()
+	if hdr, herr := chain.eth.HeaderByNumber(ctx, nil); herr == nil && int64(hdr.Time) > deadlineBase.Unix() {
+		deadlineBase = time.Unix(int64(hdr.Time), 0)
+	}
+	deadline := uint64(deadlineBase.Add(1 * time.Hour).Unix())
 	data, err := escrow.PackRequestRedemption(rwaAmount, minQuoteOut, deadline)
 	if err != nil {
 		return "", err
@@ -1531,4 +1596,259 @@ func allowRecoveryWallet(api *apiClient, cfg config, addr common.Address) error 
 		}
 		return false, nil
 	})
+}
+
+// incomeLifecycle tests the HTTP API and real-chain income flow. A Pending 5 RWA
+// redemption checks escrow attribution: historical eth_calls on Anvil independently
+// compute eligible supply (totalSupply minus Vault inventory) and the investor's balance
+// plus escrowed RWA. A wrong payout exposes omitted escrow or included inventory.
+func incomeLifecycle(ctx context.Context, api *apiClient, chain *chainClient, cfg config, managerKey *ecdsa.PrivateKey, manager common.Address, investorKey *ecdsa.PrivateKey, investor common.Address) error {
+	if _, err := requestRedemption(ctx, api, chain, cfg, investorKey, investor, amount5); err != nil {
+		return fmt.Errorf("pending redemption for the escrow attribution: %w", err)
+	}
+	head, err := chain.eth.BlockNumber(ctx)
+	if err != nil {
+		return fmt.Errorf("block number: %w", err)
+	}
+	recordBlock := head // the request is mined in this block, so it is Pending at recordBlock
+	for i := 0; i < 4; i++ {
+		if err := chain.mineEmptyBlock(ctx); err != nil {
+			return fmt.Errorf("evm_mine: %w", err)
+		}
+	}
+
+	// claimDeadline: the server wants 7 days + 1 hour from its clock, the contract 7 days
+	// from the chain's clock, which earlier steps pushed ahead
+	headHdr, err := chain.eth.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("head header: %w", err)
+	}
+	base := time.Now().Unix()
+	if int64(headHdr.Time) > base {
+		base = int64(headHdr.Time)
+	}
+	claimDeadline := base + 8*24*3600
+	total := mustBig("1000000000") // quote-token minimal units
+
+	type distribution struct {
+		PreparationID  string `json:"preparationId"`
+		Status         string `json:"status"`
+		DistributionID string `json:"distributionId"`
+		MerkleRoot     string `json:"merkleRoot"`
+		Total          string `json:"total"`
+		RecordBlock    uint64 `json:"recordBlock"`
+		ClaimDeadline  int64  `json:"claimDeadline"`
+		SnapshotURI    string `json:"snapshotURI"`
+		SnapshotSha256 string `json:"snapshotSha256"`
+		EligibleSupply string `json:"eligibleSupply"`
+		HolderCount    int    `json:"holderCount"`
+		Claimed        string `json:"claimed"`
+	}
+
+	var prep distribution
+	// the indexer must be confirmations (1) blocks past recordBlock, so retry while the
+	// server says the record block is not final yet
+	if err := poll("POST /api/v1/income/distributions to accept recordBlock "+fmt.Sprint(recordBlock), 60*time.Second, 2*time.Second, func() (bool, error) {
+		err := api.postJSON("/api/v1/income/distributions", cfg.adminBearer, map[string]any{
+			"recordBlock": recordBlock, "total": total.String(), "claimDeadline": claimDeadline,
+		}, &prep, "e2e-income-prepare")
+		if apiErr, ok := err.(*apiError); ok && apiErr.status == http.StatusConflict && strings.Contains(string(apiErr.body), "record_block_not_final") {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("prepare snapshot failed (not a finality retry): %w", err)
+		}
+		return true, nil
+	}); err != nil {
+		return err
+	}
+	if prep.Status != "Prepared" || prep.Total != total.String() || prep.RecordBlock != recordBlock || prep.PreparationID == "" ||
+		!strings.HasPrefix(prep.SnapshotURI, "ipfs://") || len(prep.MerkleRoot) != 66 || len(prep.SnapshotSha256) != 66 {
+		return fmt.Errorf("prepared distribution has unexpected fields: %+v", prep)
+	}
+
+	// independent expectation from chain state at recordBlock
+	at := new(big.Int).SetUint64(recordBlock)
+	balanceAt := func(token, holder common.Address) (*big.Int, error) {
+		data, err := bindings.NewERC20().PackBalanceOf(holder)
+		if err != nil {
+			return nil, err
+		}
+		out, err := chain.eth.CallContract(ctx, ethereum.CallMsg{To: &token, Data: data}, at)
+		if err != nil {
+			return nil, fmt.Errorf("balanceOf at block %d: %w", recordBlock, err)
+		}
+		return new(big.Int).SetBytes(out), nil
+	}
+	supplyOut, err := chain.eth.CallContract(ctx, ethereum.CallMsg{To: &cfg.tokenAddr, Data: common.FromHex("0x18160ddd")}, at)
+	if err != nil {
+		return fmt.Errorf("totalSupply at block %d: %w", recordBlock, err)
+	}
+	supply := new(big.Int).SetBytes(supplyOut)
+	vaultBal, err := balanceAt(cfg.tokenAddr, cfg.vaultAddr)
+	if err != nil {
+		return err
+	}
+	escrowBal, err := balanceAt(cfg.tokenAddr, cfg.escrowAddr)
+	if err != nil {
+		return err
+	}
+	if escrowBal.Cmp(amount5) != 0 {
+		return fmt.Errorf("escrow holds %s RWA at the record block, want exactly the 5 RWA pending request (an earlier step left escrowed RWA?)", escrowBal)
+	}
+	investorBal, err := balanceAt(cfg.tokenAddr, investor)
+	if err != nil {
+		return err
+	}
+	eligible := new(big.Int).Sub(supply, vaultBal) // the escrow's 5 RWA is attributed to the investor, so it stays in
+	if prep.EligibleSupply != eligible.String() {
+		return fmt.Errorf("eligibleSupply = %s, want totalSupply %s - vault %s = %s", prep.EligibleSupply, supply, vaultBal, eligible)
+	}
+	investorShare := new(big.Int).Add(investorBal, amount5)
+	wantAmount := new(big.Int).Div(new(big.Int).Mul(total, investorShare), eligible)
+	if wantAmount.Sign() == 0 {
+		return fmt.Errorf("fixture: the investor's expected amount is zero")
+	}
+
+	// the income manager funds and creates the distribution on-chain
+	if _, err := chain.sendTx(ctx, managerKey, cfg.quoteAddr, packMint(manager, total)); err != nil {
+		return fmt.Errorf("mint quote tokens for the income manager: %w", err)
+	}
+	if _, err := chain.sendTx(ctx, managerKey, cfg.quoteAddr, packApprove(cfg.incomeAddr, total)); err != nil {
+		return fmt.Errorf("approve the income distributor: %w", err)
+	}
+	root, err := hexToBytes32Local(prep.MerkleRoot)
+	if err != nil {
+		return fmt.Errorf("merkleRoot: %w", err)
+	}
+	sha, err := hexToBytes32Local(prep.SnapshotSha256)
+	if err != nil {
+		return fmt.Errorf("snapshotSha256: %w", err)
+	}
+	dist := bindings.NewIncomeDistributor().ABI
+	createData, err := dist.Pack("createDistribution", root, total, prep.RecordBlock, uint64(prep.ClaimDeadline), prep.SnapshotURI, sha)
+	if err != nil {
+		return fmt.Errorf("encode createDistribution: %w", err)
+	}
+	if _, err := chain.sendTx(ctx, managerKey, cfg.incomeAddr, createData); err != nil {
+		return fmt.Errorf("IncomeDistributor.createDistribution: %w", err)
+	}
+
+	var active distribution
+	if err := poll("distribution shown Active with a distributionId in GET /api/v1/income/distributions", 90*time.Second, 3*time.Second, func() (bool, error) {
+		var list []distribution
+		if err := api.getJSON("/api/v1/income/distributions", cfg.adminBearer, &list); err != nil {
+			return false, err
+		}
+		for _, d := range list {
+			if d.PreparationID == prep.PreparationID {
+				active = d
+				return d.Status == "Active" && d.DistributionID != "", nil
+			}
+		}
+		return false, fmt.Errorf("prepared distribution %s is not listed", prep.PreparationID)
+	}); err != nil {
+		return err
+	}
+
+	type claimEntry struct {
+		DistributionID string   `json:"distributionId"`
+		Account        string   `json:"account"`
+		Amount         string   `json:"amount"`
+		Proof          []string `json:"proof"`
+		MerkleRoot     string   `json:"merkleRoot"`
+		Status         string   `json:"status"`
+		ClaimTxHash    string   `json:"claimTxHash"`
+	}
+	findClaim := func() (*claimEntry, error) {
+		var entries []claimEntry
+		if err := api.getJSON("/api/v1/income/claims/"+investor.Hex(), "", &entries); err != nil {
+			return nil, err
+		}
+		for i := range entries {
+			if entries[i].DistributionID == active.DistributionID {
+				return &entries[i], nil
+			}
+		}
+		return nil, nil
+	}
+	var entry *claimEntry
+	if err := poll("GET /api/v1/income/claims/{investor} to list a Claimable entry", 60*time.Second, 3*time.Second, func() (bool, error) {
+		e, err := findClaim()
+		if err != nil || e == nil {
+			return false, err
+		}
+		entry = e
+		return e.Status == "Claimable", nil
+	}); err != nil {
+		return err
+	}
+	if entry.Amount != wantAmount.String() {
+		return fmt.Errorf("served claim amount = %s, want %s = floor(%s * (%s balance + 5 escrowed) / %s eligible); the pending redemption was not attributed to its beneficiary",
+			entry.Amount, wantAmount, total, investorBal, eligible)
+	}
+	if !strings.EqualFold(entry.Account, investor.Hex()) || !strings.EqualFold(entry.MerkleRoot, prep.MerkleRoot) {
+		return fmt.Errorf("claim entry names %s / %s, want %s / %s", entry.Account, entry.MerkleRoot, investor.Hex(), prep.MerkleRoot)
+	}
+
+	proof := make([][32]byte, len(entry.Proof))
+	for i, p := range entry.Proof {
+		if proof[i], err = hexToBytes32Local(p); err != nil {
+			return fmt.Errorf("proof[%d]: %w", i, err)
+		}
+	}
+	id, _ := new(big.Int).SetString(entry.DistributionID, 10)
+	amount, _ := new(big.Int).SetString(entry.Amount, 10)
+	claimData, err := dist.Pack("claim", id, amount, proof)
+	if err != nil {
+		return fmt.Errorf("encode claim: %w", err)
+	}
+	before, err := chain.quoteBalance(ctx, cfg.quoteAddr, investor)
+	if err != nil {
+		return err
+	}
+	receipt, err := chain.sendTx(ctx, investorKey, cfg.incomeAddr, claimData)
+	if err != nil {
+		return fmt.Errorf("IncomeDistributor.claim with the served amount and proof: %w", err)
+	}
+	after, err := chain.quoteBalance(ctx, cfg.quoteAddr, investor)
+	if err != nil {
+		return err
+	}
+	if delta := new(big.Int).Sub(after, before); delta.Cmp(amount) != 0 {
+		return fmt.Errorf("investor quote balance changed by %s on claim, want %s", delta, amount)
+	}
+
+	return poll("claim shown Claimed with claimTxHash and the distribution's claimed amount updated", 90*time.Second, 3*time.Second, func() (bool, error) {
+		e, err := findClaim()
+		if err != nil || e == nil {
+			return false, err
+		}
+		if e.Status != "Claimed" || !strings.EqualFold(e.ClaimTxHash, receipt.TxHash.Hex()) {
+			return false, nil
+		}
+		var list []distribution
+		if err := api.getJSON("/api/v1/income/distributions", cfg.adminBearer, &list); err != nil {
+			return false, err
+		}
+		for _, d := range list {
+			if d.PreparationID == prep.PreparationID {
+				return d.Claimed == amount.String(), nil
+			}
+		}
+		return false, nil
+	})
+}
+
+// quoteBalance reads an ERC-20 balance at the latest block
+func (cc *chainClient) quoteBalance(ctx context.Context, token, holder common.Address) (*big.Int, error) {
+	data, err := bindings.NewERC20().PackBalanceOf(holder)
+	if err != nil {
+		return nil, err
+	}
+	out, err := cc.call(ctx, token, data)
+	if err != nil {
+		return nil, fmt.Errorf("balanceOf: %w", err)
+	}
+	return new(big.Int).SetBytes(out), nil
 }

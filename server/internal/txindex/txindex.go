@@ -23,7 +23,9 @@ import (
 // stackTxKinds ranks events for Kind, From, To and Value. Business/value-bearing events
 // outrank RoleGranted/RoleRevoked; both price events map to "price_updated". Unlisted
 // names, including generic topic0 strings, get lowest priority. Empty and literal
-// "unknown" names are ignored; hashes without eligible events produce no record.
+// "unknown" names are ignored, and ReconcileStackTransactions does not load the token's
+// ERC-20 "Transfer" (indexed for income snapshots, not shown as history); hashes without
+// eligible events produce no record.
 var stackTxKinds = []struct{ event, kind string }{
 	{"ProceedsWithdrawn", "treasury_withdrawal"},
 	{"Purchased", "purchase"},
@@ -35,6 +37,11 @@ var stackTxKinds = []struct{ event, kind string }{
 	{"RedemptionCompleted", "redemption_claimed"},
 	{"RedemptionRejected", "redemption_rejected"},
 	{"RedemptionCancelled", "redemption_cancelled"},
+	{"DistributionCreated", "income_distribution_created"},
+	{"IncomeClaimed", "income_claimed"},
+	{"UnclaimedReclaimed", "income_reclaimed"},
+	{"ClaimDeadlineExtended", "income_deadline_extended"},
+	{"MinPurchaseQuoteChanged", "min_purchase_changed"},
 	{"StatusChanged", "compliance_status_changed"},
 	{"PurchasePriceUpdated", "price_updated"},
 	{"RedemptionPriceUpdated", "price_updated"},
@@ -66,7 +73,7 @@ func init() {
 var actorKeys = []string{"caller", "sender", "funder", "buyer", "account", "beneficiary"}
 
 // valueKeys orders amount fields for Value; none yields "0", as for role changes
-var valueKeys = []string{"quoteAmount", "amount", "rwaAmount"}
+var valueKeys = []string{"quoteAmount", "amount", "rwaAmount", "total"}
 
 // ReconcileStackTransactions replays chainID's events, skipping hashes owned by the
 // transaction manager. Each remaining hash with a non-Removed, eligible event gets one
@@ -84,7 +91,8 @@ func ReconcileStackTransactions(ctx context.Context, txs repository.TransactionR
 		return fmt.Errorf("txindex: load indexer checkpoint: %w", err)
 	}
 
-	events, err := chainEvents.ListAll(ctx, chainID)
+	// Exclude high-volume token Transfer logs used by income snapshots from transaction history
+	events, err := chainEvents.ListAll(ctx, chainID, "Transfer")
 	if err != nil {
 		return fmt.Errorf("txindex: list all chain events: %w", err)
 	}

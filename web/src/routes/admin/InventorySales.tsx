@@ -102,6 +102,16 @@ export function InventorySales() {
                   {formatTokenAmount(data.redemptionPrice ?? "", quoteDecimals)}
                 </dd>
               </div>
+              {data.priceError && (
+                <div className="tx-preview__row">
+                  <dt>Price status</dt>
+                  <dd className="async-state--error" role="alert">
+                    Unavailable: the oracle strategy reports {data.priceError}.
+                    Purchases and redemption requests revert until the feed
+                    recovers.
+                  </dd>
+                </div>
+              )}
               {project.status === "success" &&
                 project.data.addresses?.strategy && (
                   <div className="tx-preview__row">

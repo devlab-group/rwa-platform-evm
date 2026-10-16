@@ -17,6 +17,7 @@ import {
   sendForcedTransfer,
   sendRoleChange,
   sendSetFrozenTokens,
+  sendSetMinPurchaseQuote,
   pauseCall,
   sendSetPaused,
   sendSetStrategyPrice,
@@ -40,30 +41,38 @@ vi.mock("../../lib/safeBatch", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/safeBatch")>();
   return {
     ...actual,
-    exportSafeBatch: vi.fn().mockReturnValue("Saved batch."),
+    exportSafeBatch: vi.fn(() => "Saved batch."),
   };
 });
 
-// Stub decimals and spy on writes to verify privileged calls without a chain
+// Stub decimals and spy on writes to verify privileged calls without a chain. Defaults are
+// vi.fn implementations, which mockReset restores.
 vi.mock("../../lib/wallet", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/wallet")>();
   return {
     ...actual,
-    readErc20Decimals: vi.fn().mockResolvedValue(6),
-    sendSetPaused: vi.fn().mockResolvedValue("0xhash"),
-    sendSetStrategyPrice: vi.fn().mockResolvedValue("0xhash"),
-    sendRoleChange: vi.fn().mockResolvedValue("0xhash"),
-    sendSetFrozenTokens: vi.fn().mockResolvedValue("0xhash"),
-    sendForcedTransfer: vi.fn().mockResolvedValue("0xhash"),
-    sendBeginAdminTransfer: vi.fn().mockResolvedValue("0xhash"),
-    sendAcceptAdminTransfer: vi.fn().mockResolvedValue("0xhash"),
-    waitForTxReceipt: vi.fn().mockResolvedValue(undefined),
+    readErc20Decimals: vi.fn(async () => 6),
+    sendSetPaused: vi.fn(async () => "0xhash"),
+    sendSetStrategyPrice: vi.fn(async () => "0xhash"),
+    sendSetMinPurchaseQuote: vi.fn(async () => "0xhash"),
+    sendRoleChange: vi.fn(async () => "0xhash"),
+    sendSetFrozenTokens: vi.fn(async () => "0xhash"),
+    sendForcedTransfer: vi.fn(async () => "0xhash"),
+    sendBeginAdminTransfer: vi.fn(async () => "0xhash"),
+    sendAcceptAdminTransfer: vi.fn(async () => "0xhash"),
+    waitForTxReceipt: vi.fn(async () => undefined),
     // Keep the real revert decoder for error-message assertions
   };
 });
 
 // Default enforcement fixture
 const NO_ENFORCEMENT = { securityStale: false };
+
+// Reset mocks to keep tests independent
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.mocked(api.getEnforcement).mockResolvedValue(NO_ENFORCEMENT);
+});
 
 const BASE = {
   chainId: 31337,
@@ -840,5 +849,350 @@ describe("Security ERC-7943 enforcement controls", () => {
         callsBefore,
       ),
     );
+  });
+});
+
+const DISTRIBUTOR = "0x0000000000000000000000000000000000000080";
+const V3 = {
+  ...DEPLOYED,
+  version: "rwa-v3",
+  strategyKind: "Fixed" as const,
+  minPurchaseQuote: "25000000",
+  addresses: { ...DEPLOYED.addresses, incomeDistributor: DISTRIBUTOR },
+};
+const ORACLE = {
+  feed: "0x00000000000000000000000000000000000000fe",
+  maxAge: 3600,
+  purchaseSpreadBps: 50,
+  redemptionSpreadBps: 75,
+  feedDecimals: 8,
+  available: true,
+  price: "250000000",
+  updatedAt: 1_800_000_000,
+};
+
+describe("Security rwa-v3 minimum purchase", () => {
+  let wallet: ReturnType<typeof installFakeWallet>;
+
+  beforeEach(() => {
+    wallet = installFakeWallet({ account: ADMIN, chainId: 31337 });
+    vi.mocked(api.getEnforcement).mockReset().mockResolvedValue(NO_ENFORCEMENT);
+    vi.mocked(sendSetMinPurchaseQuote).mockClear().mockResolvedValue("0xhash");
+    vi.mocked(exportSafeBatch).mockClear();
+  });
+
+  afterEach(() => {
+    wallet.uninstall();
+  });
+
+  it("shows the current minimum scaled by quote decimals", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({ ...V3, roles: {} });
+    renderWithWallet(<Security />, { connected: true });
+
+    expect(
+      await screen.findByText(/Minimum purchase \(quote token\)/),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(priceValue(/Minimum purchase \(quote token\)/)).toBe("25"),
+    );
+  });
+
+  it("shows None for a zero minimum", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({ ...V3, minPurchaseQuote: "0", roles: {} });
+    renderWithWallet(<Security />, { connected: true });
+    await waitFor(() =>
+      expect(priceValue(/Minimum purchase \(quote token\)/)).toBe("None"),
+    );
+  });
+
+  it("broadcasts setMinPurchaseQuote to the Vault, scaled, when the wallet is Vault admin", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({ ...V3, roles: { DEFAULT_ADMIN_ROLE: [ADMIN] } });
+    renderWithWallet(<Security />, { connected: true });
+
+    fireEvent.change(
+      await screen.findByLabelText(/Minimum purchase \(whole quote-token/),
+      { target: { value: "12.5" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Set minimum purchase" }),
+    );
+
+    await waitFor(() =>
+      expect(sendSetMinPurchaseQuote).toHaveBeenCalledWith(
+        31337,
+        ADMIN,
+        V3.addresses.vault,
+        12_500_000n,
+      ),
+    );
+    // The result survives the project reload that follows a confirmed write
+    expect(await screen.findByText("Minimum purchase updated.")).toBeVisible();
+    await waitFor(() => expect(api.getProject).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("Minimum purchase updated.")).toBeVisible();
+  });
+
+  it("keeps the chain and quote decimals while the project reloads after a write", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValueOnce({ ...V3, roles: { DEFAULT_ADMIN_ROLE: [ADMIN] } })
+      .mockReturnValue(new Promise(() => {}) as never); // reloads stay pending
+    renderWithWallet(<Security />, { connected: true });
+
+    fireEvent.change(
+      await screen.findByLabelText(/Minimum purchase \(whole quote-token/),
+      { target: { value: "12.5" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Set minimum purchase" }),
+    );
+    await screen.findByText("Minimum purchase updated.");
+    await waitFor(() => expect(api.getProject).toHaveBeenCalledTimes(2));
+
+    // a second write during the reload targets the project's chain with the same scaling
+    expect(
+      screen.getByText(/Current minimum:/).querySelector("strong")?.textContent,
+    ).toBe("25");
+    fireEvent.change(
+      screen.getByLabelText(/Minimum purchase \(whole quote-token/),
+      { target: { value: "20" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Set minimum purchase" }),
+    );
+    await waitFor(() =>
+      expect(sendSetMinPurchaseQuote).toHaveBeenLastCalledWith(
+        31337,
+        ADMIN,
+        V3.addresses.vault,
+        20_000_000n,
+      ),
+    );
+  });
+
+  it("hides the form from a wallet that lacks DEFAULT_ADMIN_ROLE on the Vault", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({
+        ...V3,
+        roles: { DEFAULT_ADMIN_ROLE: [ADMIN] },
+        rolesByContract: {
+          vault: {
+            DEFAULT_ADMIN_ROLE: ["0x00000000000000000000000000000000000000a1"],
+          },
+        },
+      });
+    renderWithWallet(<Security />, { connected: true });
+
+    const heading = await screen.findByRole("heading", {
+      name: "Minimum purchase",
+    });
+    const section = heading.closest("section") as HTMLElement;
+    expect(
+      within(section).queryByRole("button", { name: "Set minimum purchase" }),
+    ).toBeNull();
+    expect(within(section).getByText("DEFAULT_ADMIN_ROLE")).toBeInTheDocument();
+  });
+
+  it("saves a Safe batch holding the Vault call for a Safe admin", async () => {
+    const SAFE = "0x00000000000000000000000000000000000000a1";
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({
+        ...V3,
+        roles: { DEFAULT_ADMIN_ROLE: [SAFE] },
+        rolesByContract: { vault: { DEFAULT_ADMIN_ROLE: [SAFE] } },
+      });
+    renderWithWallet(<Security />, { connected: true });
+
+    const heading = await screen.findByRole("heading", {
+      name: "Minimum purchase",
+    });
+    const section = heading.closest("section") as HTMLElement;
+    fireEvent.change(within(section).getByRole("combobox"), {
+      target: { value: SAFE },
+    });
+    fireEvent.change(
+      within(section).getByLabelText(/Minimum purchase \(whole quote-token/),
+      { target: { value: "1" } },
+    );
+    fireEvent.click(
+      within(section).getByRole("button", { name: "Set minimum purchase" }),
+    );
+
+    await waitFor(() => expect(exportSafeBatch).toHaveBeenCalled());
+    const [chainId, safe, name, calls] =
+      vi.mocked(exportSafeBatch).mock.calls[0];
+    expect([chainId, safe, name]).toEqual([
+      31337,
+      SAFE,
+      "Set minimum purchase",
+    ]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].to).toBe(V3.addresses.vault);
+    expect(sendSetMinPurchaseQuote).not.toHaveBeenCalled();
+  });
+
+  it("disables the action while paused, since the Vault would revert", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({
+        ...V3,
+        paused: true,
+        roles: { DEFAULT_ADMIN_ROLE: [ADMIN] },
+      });
+    renderWithWallet(<Security />, { connected: true });
+
+    fireEvent.change(
+      await screen.findByLabelText(/Minimum purchase \(whole quote-token/),
+      { target: { value: "1" } },
+    );
+    expect(
+      screen.getByRole("button", { name: "Set minimum purchase" }),
+    ).toBeDisabled();
+  });
+
+  it("has no minimum section on an rwa-v2 project", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({ ...DEPLOYED, roles: {} });
+    renderWithWallet(<Security />, { connected: true });
+    await screen.findByRole("heading", { name: "Update prices" });
+    expect(
+      screen.queryByRole("heading", { name: "Minimum purchase" }),
+    ).toBeNull();
+  });
+});
+
+describe("Security oracle strategy", () => {
+  let wallet: ReturnType<typeof installFakeWallet>;
+
+  beforeEach(() => {
+    wallet = installFakeWallet({ account: ADMIN, chainId: 31337 });
+    vi.mocked(api.getEnforcement).mockReset().mockResolvedValue(NO_ENFORCEMENT);
+  });
+
+  afterEach(() => {
+    wallet.uninstall();
+  });
+
+  it("hides the price setters and shows the oracle parameters", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({
+        ...V3,
+        strategyKind: "Oracle",
+        oracle: {
+          ...ORACLE,
+          sequencerUptimeFeed: "0x00000000000000000000000000000000000000fd",
+          gracePeriod: 1800,
+        },
+        roles: { PRICER_ROLE: [ADMIN] },
+      });
+    renderWithWallet(<Security />, { connected: true });
+
+    const oracleHeading = await screen.findByRole("heading", {
+      name: "Price oracle",
+    });
+    const card = oracleHeading.closest("section") as HTMLElement;
+    expect(within(card).getByText("Available")).toBeInTheDocument();
+    expect(within(card).getByText("3600 s")).toBeInTheDocument();
+    expect(within(card).getByText("50 bps")).toBeInTheDocument();
+    expect(within(card).getByText("75 bps")).toBeInTheDocument();
+    expect(within(card).getByText("1800 s")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Update prices" })).toBeNull();
+    expect(screen.queryByLabelText(/Purchase price \(whole/)).toBeNull();
+  });
+
+  it("names the failure when the feed is unavailable", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({
+        ...V3,
+        strategyKind: "Oracle",
+        oracle: {
+          ...ORACLE,
+          available: false,
+          price: undefined,
+          error: "StalePrice",
+        },
+        roles: {},
+      });
+    renderWithWallet(<Security />, { connected: true });
+
+    const card = (
+      await screen.findByRole("heading", { name: "Price oracle" })
+    ).closest("section") as HTMLElement;
+    expect(within(card).getByText("StalePrice")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/price feed is unavailable \(StalePrice\)/),
+    ).toBeInTheDocument();
+  });
+
+  it("starts an admin transfer on the IncomeDistributor and skips the Oracle strategy", async () => {
+    const SAFE = "0x00000000000000000000000000000000000000a1";
+    vi.mocked(exportSafeBatch).mockClear();
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({
+        ...V3,
+        strategyKind: "Oracle",
+        oracle: ORACLE,
+        roles: { DEFAULT_ADMIN_ROLE: [SAFE] },
+        rolesByContract: {
+          token: { DEFAULT_ADMIN_ROLE: [SAFE] },
+          compliance: { DEFAULT_ADMIN_ROLE: [SAFE] },
+          supplyController: { DEFAULT_ADMIN_ROLE: [SAFE] },
+          vault: { DEFAULT_ADMIN_ROLE: [SAFE] },
+          redemptionEscrow: { DEFAULT_ADMIN_ROLE: [SAFE] },
+          incomeDistributor: { DEFAULT_ADMIN_ROLE: [SAFE] },
+        },
+      });
+    renderWithWallet(<Security />, { connected: true });
+
+    const heading = await screen.findByRole("heading", {
+      name: "Manage roles & admin",
+    });
+    const section = heading.closest("section") as HTMLElement;
+    // The second gate (transfer admin) offers the Safe holding admin on every contract
+    const selects = await within(section).findAllByRole("combobox");
+    fireEvent.change(selects[selects.length - 1], { target: { value: SAFE } });
+    fireEvent.change(within(section).getByLabelText(/New admin address/), {
+      target: { value: "0x00000000000000000000000000000000000000b2" },
+    });
+    fireEvent.click(
+      within(section).getByRole("button", { name: "Begin admin transfer" }),
+    );
+
+    await waitFor(() => expect(exportSafeBatch).toHaveBeenCalled());
+    const calls = vi.mocked(exportSafeBatch).mock.calls[0][3];
+    const targets = calls.map((c) => c.to);
+    expect(targets).toContain(DISTRIBUTOR);
+    expect(targets).not.toContain(V3.addresses.strategy);
+    expect(targets).toHaveLength(6);
+  });
+
+  it("warns on the admin handover when the strategy kind is unknown", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({
+        ...V3,
+        strategyKind: "Unknown",
+        roles: { DEFAULT_ADMIN_ROLE: [ADMIN] },
+      });
+    renderWithWallet(<Security />, { connected: true });
+
+    const heading = await screen.findByRole("heading", {
+      name: "Manage roles & admin",
+    });
+    const section = heading.closest("section") as HTMLElement;
+    expect(
+      await within(section).findByText(/pricing strategy contract is excluded/),
+    ).toBeInTheDocument();
   });
 });

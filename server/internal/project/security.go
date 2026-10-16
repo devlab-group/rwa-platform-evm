@@ -90,6 +90,16 @@ func foldSecurity(ctx context.Context, chainEvents repository.ChainEventReposito
 			state.Treasury = v
 		}
 	}
+	if p.Version == bindings.FactoryVersionV3 {
+		state.MinPurchaseQuote = p.MinPurchaseQuote
+		if a.Vault != "" {
+			if v, ok, err := latestStringField(ctx, chainEvents, chainID, a.Vault, "MinPurchaseQuoteChanged", "newMinimum"); err != nil {
+				return nil, err
+			} else if ok {
+				state.MinPurchaseQuote = v
+			}
+		}
+	}
 	// Resolve the live Vault strategy before folding prices and roles; cmd/platform also
 	// uses Security.Strategy for the indexer watch set. Replacement-strategy price events
 	// override deploy prices; without them, the deploy baseline remains.
@@ -133,7 +143,7 @@ func foldSecurity(ctx context.Context, chainEvents repository.ChainEventReposito
 	state.Roles = unionRoles(perContract)
 	state.RolesByContract = rolesByContract(perContract, p.Addresses, state.Strategy)
 	// derive selects stable single-value role fields from current holders
-	state.Admin = derive(p.Admin, unionHolders(perContract, "DEFAULT_ADMIN_ROLE", a.Token, a.Compliance, a.SupplyController, a.Vault, a.RedemptionEscrow, state.Strategy))
+	state.Admin = derive(p.Admin, unionHolders(perContract, "DEFAULT_ADMIN_ROLE", a.Token, a.Compliance, a.SupplyController, a.Vault, a.RedemptionEscrow, state.Strategy, a.IncomeDistributor))
 	state.ComplianceOperator = derive(p.ComplianceOperator, unionHolders(perContract, "COMPLIANCE_ROLE", a.Compliance))
 	state.Pricer = derive(p.Pricer, unionHolders(perContract, "PRICER_ROLE", state.Strategy))
 	state.Treasurer = derive(p.Treasurer, unionHolders(perContract, "TREASURER_ROLE", a.Vault, a.RedemptionEscrow))
@@ -143,7 +153,7 @@ func foldSecurity(ctx context.Context, chainEvents repository.ChainEventReposito
 	// below. A scheduled newAdmin holding DEFAULT_ADMIN_ROLE counts as accepted; other
 	// contracts remain pending until their transfers are accepted, cancelled or
 	// superseded.
-	for _, addr := range []string{a.Token, a.Compliance, a.SupplyController, a.Vault, a.RedemptionEscrow, a.Strategy} {
+	for _, addr := range []string{a.Token, a.Compliance, a.SupplyController, a.Vault, a.RedemptionEscrow, a.Strategy, a.IncomeDistributor} {
 		if addr == "" {
 			continue
 		}
@@ -227,9 +237,11 @@ func foldRoles(ctx context.Context, chainEvents repository.ChainEventRepository,
 	contracts := []struct{ label, addr string }{
 		{"token", a.Token}, {"compliance", a.Compliance}, {"supplyController", a.SupplyController},
 		{"vault", a.Vault}, {"redemptionEscrow", a.RedemptionEscrow}, {"strategy", strategyAddr},
+		{"incomeDistributor", a.IncomeDistributor},
 	}
-	// Do not seed deploy-time roles onto an unverified replacement strategy
-	swappedStrategy := strategyAddr != a.Strategy
+	// Do not seed deploy-time roles onto an unverified replacement strategy, nor onto a
+	// deployed OraclePriceStrategy, which has no roles
+	swappedStrategy := strategyAddr != a.Strategy || p.StrategyKind == models.StrategyKindOracle
 	for _, c := range contracts {
 		if c.label == "strategy" && swappedStrategy {
 			continue
@@ -244,6 +256,7 @@ func foldRoles(ctx context.Context, chainEvents repository.ChainEventRepository,
 	seed(a.Vault, "TREASURER_ROLE", p.Treasurer)
 	seed(a.RedemptionEscrow, "TREASURER_ROLE", p.Treasurer)
 	seed(a.RedemptionEscrow, "REDEMPTION_MANAGER_ROLE", p.RedemptionManager)
+	seed(a.IncomeDistributor, "INCOME_MANAGER_ROLE", p.IncomeManager)
 
 	for _, c := range contracts {
 		if c.addr == "" {
@@ -431,6 +444,7 @@ func rolesByContract(perContract map[string]map[string]map[string]bool, a models
 	for label, addr := range map[string]string{
 		"token": a.Token, "compliance": a.Compliance, "supplyController": a.SupplyController,
 		"vault": a.Vault, "redemptionEscrow": a.RedemptionEscrow, "strategy": strategy,
+		"incomeDistributor": a.IncomeDistributor,
 	} {
 		if addr == "" {
 			continue

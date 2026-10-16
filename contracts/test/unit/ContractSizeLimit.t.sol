@@ -23,7 +23,7 @@ contract ContractSizeLimitTest is TestBase {
         _assertUnderLimit(factory.incomeDistributorDeployer(), "IncomeDistributorDeployer");
     }
 
-    /// @dev Check all six project contracts so runtime growth fails CI before deployment
+    /// @dev Catch project runtime growth in CI before deployment
     function test_deployedProjectContractsUnderSizeLimit() public view {
         _assertUnderLimit(address(token), "RWAToken");
         _assertUnderLimit(address(compliance), "ComplianceRegistry");

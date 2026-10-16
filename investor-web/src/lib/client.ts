@@ -208,6 +208,21 @@ export const api = {
     opts: Pick<RequestOptions<operations["getProject"]>, "signal"> = {},
   ) => request<operations["getProject"]>("GET", "/api/v1/project", opts),
 
+  getInventory: (
+    opts: Pick<RequestOptions<operations["getInventory"]>, "signal"> = {},
+  ) =>
+    request<operations["getInventory"]>("GET", "/api/v1/sales/inventory", opts),
+
+  listIncomeClaims: (
+    address: string,
+    opts: Pick<RequestOptions<operations["listIncomeClaims"]>, "signal"> = {},
+  ) =>
+    request<operations["listIncomeClaims"]>(
+      "GET",
+      "/api/v1/income/claims/{address}",
+      { ...opts, path: { address } },
+    ),
+
   createChallenge: (body: OpBody<operations["createChallenge"]>) =>
     request<operations["createChallenge"]>(
       "POST",
