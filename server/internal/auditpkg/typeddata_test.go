@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -22,7 +23,7 @@ func loadTypedDataSchema(t *testing.T) *jsonschema.Schema {
 	p := filepath.Join("..", "..", "..", "shared", "schemas", "typed-data.schema.json")
 	data, err := os.ReadFile(p)
 	if err != nil {
-		t.Skipf("shared schema not found: %v", err)
+		t.Fatalf("shared schema not found: %v", err)
 	}
 	c := jsonschema.NewCompiler()
 	if err := c.AddResource("typed-data.json", bytes.NewReader(data)); err != nil {
@@ -55,6 +56,17 @@ func TestMintTypedDataDocConformsToSchema(t *testing.T) {
 		Vault:          common.HexToAddress("0xe7f1725E7734CE288F8367e1Bb143E90bb3F051"),
 	}
 	doc := NewMintTypedDataDoc(domain, "GOLD-BAR-12345", a)
+	m := doc.Message
+	if doc.PrimaryType != "MintAttestation" || doc.Domain.Name != domain.Name || doc.Domain.ChainID != 31337 ||
+		doc.Domain.VerifyingContract != domain.VerifyingContract.Hex() {
+		t.Errorf("domain/primaryType = %+v / %s", doc.Domain, doc.PrimaryType)
+	}
+	if m.Auditor != a.Auditor.Hex() || m.Vault != a.Vault.Hex() || m.RecordID != "GOLD-BAR-12345" ||
+		m.RecordKey != "0x22"+strings.Repeat("00", 31) || m.ProfileDigest != "0x11"+strings.Repeat("00", 31) ||
+		m.MetadataDigest != "0x33"+strings.Repeat("00", 31) || m.Amount != "1000000000000000000" || m.Nonce != "42" ||
+		m.ValidUntil != 1800000000 || m.OperationID != "" {
+		t.Errorf("mint message fields mapped wrongly: %+v", m)
+	}
 
 	raw, err := json.Marshal(doc)
 	if err != nil {
@@ -89,6 +101,15 @@ func TestBurnTypedDataDocConformsToSchema(t *testing.T) {
 		Vault:          common.HexToAddress("0xe7f1725E7734CE288F8367e1Bb143E90bb3F051"),
 	}
 	doc := NewBurnTypedDataDoc(domain, a)
+	m := doc.Message
+	if doc.PrimaryType != "BurnAttestation" {
+		t.Errorf("primaryType = %s", doc.PrimaryType)
+	}
+	if m.Auditor != a.Auditor.Hex() || m.Vault != a.Vault.Hex() || m.OperationID != "0x44"+strings.Repeat("00", 31) ||
+		m.ProfileDigest != "0x11"+strings.Repeat("00", 31) || m.MetadataDigest != "0x33"+strings.Repeat("00", 31) ||
+		m.Amount != "500" || m.Nonce != "43" || m.ValidUntil != 1800000000 || m.RecordKey != "" || m.RecordID != "" {
+		t.Errorf("burn message fields mapped wrongly: %+v", m)
+	}
 
 	raw, err := json.Marshal(doc)
 	if err != nil {

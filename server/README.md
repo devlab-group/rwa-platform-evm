@@ -24,7 +24,7 @@ Shared implementation lives in `internal/`; `cmd/` contains executable entry poi
 | `internal/blockchain`                                          | RPC wrapper, `Signer` interface and `TxManager`: nonce coordination, EIP-1559/legacy fees, submission/replacement and pending, mined, confirmed, reverted and reorged states.                                                                                                                                                        |
 | `internal/indexer`                                             | Stores logs by `(chainId, address, txHash, logIndex)`, checkpoints progress and rolls back to a common ancestor within its recovery window. Deeper reorgs require operator reconciliation.                                                                                                                                           |
 | `internal/project`                                             | Adopts profile-matching, admin-authorized deployments; checks code presence, enumerated roles, wiring and system allowlisting against signed calldata; projects governance and prices.                                                                                                                                               |
-| `internal/assets`, `internal/auditpkg`                         | Validate profiles, including the optional [legal descriptor](../docs/spec/asset-profile.md#legal-descriptor), canonicalize JSON (RFC 8785/JCS), compute digests/CIDs, assemble `.rwa` packages and verify `signed-result.json`. `GET /api/v1/project` exposes legal terms; indexed `Minted` events advance wallet-submitted records. |
+| `internal/assets`, `internal/auditpkg`                         | Validate profiles, including the optional [legal descriptor](../docs/spec/asset-profile.md#legal-descriptor), canonicalize JSON (RFC 8785/JCS), compute digests/CIDs and assemble `.rwa` packages. The admin console checks `signed-result.json`. `GET /api/v1/project` exposes legal terms; indexed `Minted` events advance wallet-submitted records. |
 | `internal/compliance`                                          | EIP-191 wallet-ownership challenges, authenticated KYC decisions, replay/ownership checks and `ComplianceRegistry.setStatus` submission.                                                                                                                                                                                             |
 | `internal/sales`, `internal/redemption`                        | Live inventory and indexed purchases/redemptions. Clients quote through `Vault.previewBuy`/`RedemptionEscrow.previewRedeem` and submit wallet transactions, including treasurer funding/withdrawals and manager rejection.                                                                                                           |
 | `internal/income` | Computes holder entitlements, builds OpenZeppelin-compatible Merkle trees and snapshots, and maintains distribution and claim read models for rwa-v3. See [Income distribution](#income-distribution). |
@@ -97,7 +97,8 @@ writes may leave it pending. See [Security posture](#security-posture) for reser
 Errors use `{code, message}` from `internal/api/errors.go`.
 
 The router explicitly registers health, readiness, login and `/api/v1/` endpoints. Unmatched
-GET/HEAD paths use the SPA fallback; unmatched `/api/` paths and other methods return JSON 404.
+GET/HEAD paths use the SPA fallback unless a missing path has a file extension (e.g. a stale
+`/assets/*.js` chunk). Those files, unmatched `/api/` paths and other methods return JSON 404.
 
 ## Burns
 

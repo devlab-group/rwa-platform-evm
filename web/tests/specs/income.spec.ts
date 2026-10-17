@@ -208,12 +208,15 @@ test.describe("Income distribution", () => {
     await expect(page.getByText("Claim deadline extended.")).toBeVisible();
     const [tx] = await getMockSentTransactions(page);
     expect(tx.to?.toLowerCase()).toBe(DISTRIBUTOR.toLowerCase());
-    expect(
-      decodeFunctionData({
-        abi: incomeDistributorAbi,
-        data: tx.data as `0x${string}`,
-      }),
-    ).toMatchObject({ functionName: "extendClaimDeadline" });
+    const extend = decodeFunctionData({
+      abi: incomeDistributorAbi,
+      data: tx.data as `0x${string}`,
+    });
+    expect(extend.functionName).toBe("extendClaimDeadline");
+    // Distribution 4, moved five days later (the picker truncates to the minute)
+    const [id, newDeadline] = extend.args as [bigint, bigint];
+    expect(id).toBe(4n);
+    expect(Math.abs(Number(newDeadline) - (deadline + 5 * DAY))).toBeLessThan(120);
   });
 
   test("reclaim is offered only after the deadline and is disabled while paused", async ({

@@ -48,6 +48,7 @@ type ChallengeService struct {
 	investors repository.InvestorRepository
 	ttl       time.Duration
 	domain    string
+	now       func() time.Time // clock; tests replace it to pin challenge expiry
 	// MaxActiveChallengesPerAddress is Create's pre-insert count limit for unused,
 	// unexpired challenges. At the limit it returns ErrTooManyActiveChallenges; <= 0
 	// disables checking. The constructor uses DefaultMaxActiveChallengesPerAddress.
@@ -59,7 +60,7 @@ type ChallengeService struct {
 // VerifyOwnership is unused.
 func NewChallengeService(repo repository.WalletChallengeRepository, investors repository.InvestorRepository, ttl time.Duration, domainName string) *ChallengeService {
 	return &ChallengeService{
-		repo: repo, investors: investors, ttl: ttl, domain: domainName,
+		repo: repo, investors: investors, ttl: ttl, domain: domainName, now: time.Now,
 		MaxActiveChallengesPerAddress: DefaultMaxActiveChallengesPerAddress,
 	}
 }
@@ -72,7 +73,7 @@ func (s *ChallengeService) Create(ctx context.Context, address string) (*models.
 	}
 	if s.MaxActiveChallengesPerAddress > 0 {
 		normalized := common.HexToAddress(address).Hex()
-		now := time.Now().UTC()
+		now := s.now().UTC()
 		active, err := s.repo.CountActive(ctx, normalized, now)
 		if err != nil {
 			return nil, fmt.Errorf("compliance: count active challenges: %w", err)
@@ -86,7 +87,7 @@ func (s *ChallengeService) Create(ctx context.Context, address string) (*models.
 		return nil, fmt.Errorf("compliance: generate nonce: %w", err)
 	}
 	nonce := hex.EncodeToString(nonceBytes)
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	expiresAt := now.Add(s.ttl)
 	addr := common.HexToAddress(address)
 
@@ -115,7 +116,7 @@ func (s *ChallengeService) Verify(ctx context.Context, nonce string, signature [
 	if c.Used {
 		return common.Address{}, ErrChallengeUsed
 	}
-	if time.Now().UTC().After(c.ExpiresAt) {
+	if s.now().UTC().After(c.ExpiresAt) {
 		return common.Address{}, ErrChallengeExpired
 	}
 
@@ -153,7 +154,7 @@ func (s *ChallengeService) VerifyOwnership(ctx context.Context, address, nonce s
 		return nil, ErrAddressMismatch
 	}
 
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	inv, err := s.investors.Get(ctx, recovered.Hex())
 	if err != nil {
 		if !errors.Is(err, repository.ErrNotFound) {

@@ -35,8 +35,8 @@ func FS() fs.FS {
 // /healthz, /readyz from internal/api.NewRouter) take precedence. Unmatched /api/ paths
 // and methods other than GET/HEAD return JSON 404.
 //
-// Existing embedded paths use http.FileServer; other GET/HEAD paths fall back to
-// index.html for react-router navigation.
+// Existing assets use http.FileServer. Missing paths with extensions return JSON 404;
+// other GET/HEAD paths serve index.html for react-router navigation.
 func Attach(r *gin.Engine) {
 	attach(r, FS())
 }
@@ -61,6 +61,11 @@ func attach(r *gin.Engine, assets fs.FS) {
 			if f, err := assets.Open(strings.TrimPrefix(clean, "/")); err == nil {
 				_ = f.Close()
 				fileServer.ServeHTTP(c.Writer, c.Request)
+				return
+			}
+			// Missing assets must return 404 instead of HTML interpreted as JavaScript or CSS
+			if path.Ext(clean) != "" {
+				c.JSON(http.StatusNotFound, gin.H{"code": "not_found", "message": "not found"})
 				return
 			}
 		}

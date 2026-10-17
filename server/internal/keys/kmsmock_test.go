@@ -26,23 +26,23 @@ func TestKMSMockDifferentRolesGetDifferentKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	p2, err := Load("pricer", Config{Mode: ModeKMSMock, KMSMockSeedHex: "shared-seed"})
+	p2, err := Load("second-role", Config{Mode: ModeKMSMock, KMSMockSeedHex: "shared-seed"})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	addr1, _ := p1.Address(context.Background())
 	addr2, _ := p2.Address(context.Background())
 	if addr1 == addr2 {
-		t.Error("compliance and pricer roles derived the same address from the same seed")
+		t.Error("compliance and second-role roles derived the same address from the same seed")
 	}
 }
 
 func TestKMSMockEmptySeedIsRandomAndEphemeral(t *testing.T) {
-	p1, err := Load("relayer", Config{Mode: ModeKMSMock})
+	p1, err := Load("compliance", Config{Mode: ModeKMSMock})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	p2, err := Load("relayer", Config{Mode: ModeKMSMock})
+	p2, err := Load("compliance", Config{Mode: ModeKMSMock})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

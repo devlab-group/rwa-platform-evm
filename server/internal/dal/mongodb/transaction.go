@@ -73,7 +73,12 @@ func (r *transactionRepo) Update(ctx context.Context, tx *models.Transaction) er
 func (r *transactionRepo) UpdateConditional(ctx context.Context, tx *models.Transaction, expectedVersion int) (bool, error) {
 	cp := *tx
 	cp.Version = expectedVersion + 1
-	res, err := r.coll.ReplaceOne(ctx, bson.M{"_id": tx.ID, "version": expectedVersion}, cp)
+	// omitempty may omit version 0; include null to match an absent field
+	versionFilter := any(expectedVersion)
+	if expectedVersion == 0 {
+		versionFilter = bson.M{"$in": bson.A{0, nil}}
+	}
+	res, err := r.coll.ReplaceOne(ctx, bson.M{"_id": tx.ID, "version": versionFilter}, cp)
 	if err != nil {
 		return false, err
 	}

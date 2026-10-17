@@ -419,9 +419,7 @@ func TestVerifyDeploymentFailsOnRevertedReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "deploy transaction reverted")
 }
 
 func TestVerifyDeploymentFailsOnWrongLogEmitter(t *testing.T) {
@@ -436,9 +434,7 @@ func TestVerifyDeploymentFailsOnWrongLogEmitter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "no ProjectDeployed log emitted by the configured factory")
 }
 
 func TestVerifyDeploymentFailsOnProjectIDMismatch(t *testing.T) {
@@ -457,9 +453,7 @@ func TestVerifyDeploymentFailsOnProjectIDMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "projectId/profileDigest does not match")
 }
 
 func TestVerifyDeploymentFailsOnUnsupportedVersion(t *testing.T) {
@@ -479,9 +473,7 @@ func TestVerifyDeploymentFailsOnUnsupportedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "unsupported version \"rwa-v99-unknown\"")
 }
 
 // Reject undecodable deploy calldata even when ProjectDeployed matches the profile: no
@@ -495,9 +487,7 @@ func TestVerifyDeploymentFailsOnUndecodableCalldata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "could not be decoded")
 }
 
 // Reject signed calldata whose decimals disagree with the stored profile
@@ -515,9 +505,7 @@ func TestVerifyDeploymentFailsOnCalldataProfileMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "decimals 6 disagrees")
 }
 
 func TestVerifyDeploymentFailsOnMissingRequiredRole(t *testing.T) {
@@ -528,9 +516,7 @@ func TestVerifyDeploymentFailsOnMissingRequiredRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "missing required roles")
 }
 
 func TestVerifyDeploymentFailsOnUnexpectedRoleHolder(t *testing.T) {
@@ -542,9 +528,7 @@ func TestVerifyDeploymentFailsOnUnexpectedRoleHolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed (unexpected role holder must block Active)", updated.Status)
-	}
+	requireFailed(t, updated, "unexpected role holders")
 }
 
 func TestVerifyDeploymentFailsWhenFactoryRetainsRole(t *testing.T) {
@@ -563,9 +547,7 @@ func TestVerifyDeploymentFailsWhenFactoryRetainsRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "factory retains roles")
 }
 
 func TestVerifyDeploymentFailsOnMissingSystemAllowlist(t *testing.T) {
@@ -585,9 +567,7 @@ func TestVerifyDeploymentFailsOnMissingSystemAllowlist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "not Allowed in the compliance registry")
 }
 
 func TestVerifyDeploymentFailsOnSystemAddressWithFiniteExpiry(t *testing.T) {
@@ -610,9 +590,7 @@ func TestVerifyDeploymentFailsOnSystemAddressWithFiniteExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "not Allowed in the compliance registry")
 }
 
 func TestVerifyDeploymentFailsWhenFactoryRetainsComplianceRole(t *testing.T) {
@@ -631,9 +609,7 @@ func TestVerifyDeploymentFailsWhenFactoryRetainsComplianceRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "factory retains roles")
 }
 
 func TestVerifyDeploymentFailsOnLiveVersionMismatch(t *testing.T) {
@@ -652,9 +628,7 @@ func TestVerifyDeploymentFailsOnLiveVersionMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "factory.version() = \"rwa-v2-unannounced\"")
 }
 
 func TestVerifyDeploymentActiveClearsVerificationNote(t *testing.T) {
@@ -688,9 +662,7 @@ func TestVerifyDeploymentFailsOnImmutableConfigMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "vault.quoteToken")
 }
 
 func TestVerifyDeploymentFailsOnRedemptionEscrowPointerMismatch(t *testing.T) {
@@ -710,9 +682,7 @@ func TestVerifyDeploymentFailsOnRedemptionEscrowPointerMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyDeployment: %v", err)
 	}
-	if updated.Status != models.ProjectStatusFailed {
-		t.Errorf("Status = %s, want Failed", updated.Status)
-	}
+	requireFailed(t, updated, "token.redemptionEscrow")
 }
 
 // Deployment adoption and reorg demotion
@@ -906,6 +876,68 @@ func TestVerifyDeploymentFailsForUnauthorizedDeployer(t *testing.T) {
 	}
 }
 
+// namesRealAdmin makes a look-alike deploy calldata name the configured admin, so only the
+// transaction sender check can reject it
+func namesRealAdmin(cfg *bindings.ProjectConfig) { cfg.Admin = keyAddress(adminKey) }
+
+// An attacker-sent deploy whose calldata names the real admin must not be adopted
+func TestReconcileDeploymentIgnoresAttackerSentDeployNamingRealAdmin(t *testing.T) {
+	f := newVerifyFixture(t)
+	chainEvents := memory.NewChainEventRepository()
+	f.seedLookAlikeDeploy(t, chainEvents, attackerKey, namesRealAdmin)
+
+	if err := f.svc.ReconcileDeployment(context.Background(), chainEvents, f.profileRepo); err != nil {
+		t.Fatalf("ReconcileDeployment: %v", err)
+	}
+	if p, err := f.svc.GetProject(context.Background()); err == nil {
+		t.Fatalf("adopted a deployment sent by a non-admin: %+v", p)
+	}
+}
+
+func TestReconcileDeploymentAttackerSentDeployNamingRealAdminKeepsLegitimateProject(t *testing.T) {
+	f := newVerifyFixture(t)
+	chainEvents := memory.NewChainEventRepository()
+	f.seedDeployEvent(t, chainEvents)
+	if err := f.svc.ReconcileDeployment(context.Background(), chainEvents, f.profileRepo); err != nil {
+		t.Fatalf("ReconcileDeployment: %v", err)
+	}
+
+	f.seedLookAlikeDeploy(t, chainEvents, attackerKey, namesRealAdmin)
+	if err := f.svc.ReconcileDeployment(context.Background(), chainEvents, f.profileRepo); err != nil {
+		t.Fatalf("ReconcileDeployment with a look-alike present: %v", err)
+	}
+	after, err := f.svc.GetProject(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != models.ProjectStatusActive {
+		t.Fatalf("Status = %s (%s), want Active", after.Status, after.VerificationNote)
+	}
+	if !strings.EqualFold(after.DeployTxHash, f.txHash.Hex()) {
+		t.Errorf("DeployTxHash = %s, want the legitimate %s", after.DeployTxHash, f.txHash.Hex())
+	}
+	if strings.EqualFold(after.Auditor, "0x00000000000000000000000000000000000BAD1") {
+		t.Errorf("Auditor = %s, want the legitimate auditor", after.Auditor)
+	}
+}
+
+func TestVerifyDeploymentFailsWhenSenderIsNotAdminDespiteCalldataNamingAdmin(t *testing.T) {
+	f := newVerifyFixture(t)
+	txHash := f.seedLookAlikeDeploy(t, nil, attackerKey, namesRealAdmin)
+
+	updated, err := f.svc.VerifyDeployment(context.Background(), txHash, f.profile)
+	if err != nil {
+		t.Fatalf("VerifyDeployment: %v", err)
+	}
+	if updated.Status != models.ProjectStatusFailed {
+		t.Fatalf("Status = %s, want Failed", updated.Status)
+	}
+	want := "sent by " + keyAddress(attackerKey).Hex()
+	if !strings.Contains(updated.VerificationNote, want) {
+		t.Errorf("VerificationNote = %q, want it to contain %q", updated.VerificationNote, want)
+	}
+}
+
 // With no admin configured, any profile-matching deployment may be adopted in
 // development; production configuration rejects a missing admin
 func TestVerifyDeploymentUnauthenticatedWhenNoAdminConfigured(t *testing.T) {
@@ -968,4 +1000,59 @@ func TestReconcileDeploymentDemotesOnReorg(t *testing.T) {
 	if p.Addresses.Token != "" {
 		t.Errorf("expected addresses cleared on demotion, got token %s", p.Addresses.Token)
 	}
+}
+
+// A Removed ProjectDeployed event is a reorged-out log. It must neither be adopted nor
+// keep an already adopted project Active.
+func TestReconcileDeploymentIgnoresRemovedEvent(t *testing.T) {
+	ctx := context.Background()
+	mk := func(removed bool, f *verifyFixture) *models.ChainEvent {
+		return &models.ChainEvent{
+			ChainID: 31337, Address: f.factoryAddr.Hex(), TxHash: f.txHash.Hex(), LogIndex: 0, BlockNumber: 1,
+			Name: "ProjectDeployed", Removed: removed,
+			Data: map[string]any{
+				"projectId":     common.Hash(f.cfg.ProjectID).Hex(),
+				"profileDigest": common.Hash(f.cfg.ProfileDigest).Hex(),
+			},
+		}
+	}
+
+	t.Run("a removed event is not adopted", func(t *testing.T) {
+		f := newVerifyFixture(t)
+		chainEvents := memory.NewChainEventRepository()
+		if err := chainEvents.Create(ctx, mk(true, f)); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.svc.ReconcileDeployment(ctx, chainEvents, f.profileRepo); err != nil {
+			t.Fatalf("ReconcileDeployment: %v", err)
+		}
+		if p, err := f.svc.GetProject(ctx); err == nil && p.Status != models.ProjectStatusUndeployed {
+			t.Errorf("project adopted from a Removed event: status %s", p.Status)
+		}
+	})
+
+	t.Run("an adopted project is demoted when its event is flagged Removed", func(t *testing.T) {
+		f := newVerifyFixture(t)
+		chainEvents := memory.NewChainEventRepository()
+		f.seedDeployEvent(t, chainEvents)
+		if err := f.svc.ReconcileDeployment(ctx, chainEvents, f.profileRepo); err != nil {
+			t.Fatal(err)
+		}
+		if p, _ := f.svc.GetProject(ctx); p.Status != models.ProjectStatusActive {
+			t.Fatalf("precondition: status %s, want Active", p.Status)
+		}
+		// replace the stored event by its Removed twin
+		if _, err := chainEvents.DeleteFromBlock(ctx, 31337, f.factoryAddr.Hex(), 1); err != nil {
+			t.Fatal(err)
+		}
+		if err := chainEvents.Create(ctx, mk(true, f)); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.svc.ReconcileDeployment(ctx, chainEvents, f.profileRepo); err != nil {
+			t.Fatal(err)
+		}
+		if p, _ := f.svc.GetProject(ctx); p.Status != models.ProjectStatusUndeployed {
+			t.Errorf("status = %s, want Undeployed once the only matching event is Removed", p.Status)
+		}
+	})
 }

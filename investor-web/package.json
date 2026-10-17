@@ -11,7 +11,7 @@
     "lint": "eslint . --ext ts,tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx,scss}\"",
     "preview": "vite preview",
-    "test:e2e": "npm run build && playwright test",
+    "test:e2e": "playwright test",
     "typecheck:e2e": "tsc -p tsconfig.playwright.json --noEmit"
   },
   "dependencies": {
@@ -20,7 +20,7 @@
     "onfido-sdk-ui": "^14.79.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.28.0",
+    "react-router-dom": "^7.18.4",
     "viem": "^2.21.54"
   },
   "overrides": {
@@ -45,6 +45,6 @@
     "sass": "^1.80.6",
     "typescript": "^5.6.3",
     "vite": "^7.3.6",
-    "vitest": "^3.2.7"
+    "vitest": "^4.1.12"
   }
 }

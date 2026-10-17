@@ -32,8 +32,8 @@ func TestBuildAndOpenPackageRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPackage: %v", err)
 	}
-	if sha == "" {
-		t.Fatal("empty package sha256")
+	if zipSum := sha256.Sum256(zipBytes); sha != hex.EncodeToString(zipSum[:]) && sha != "0x"+hex.EncodeToString(zipSum[:]) {
+		t.Errorf("returned package sha256 = %q, want the SHA-256 of the archive bytes %x", sha, zipSum)
 	}
 
 	opened, err := OpenPackage(zipBytes)
@@ -51,6 +51,12 @@ func TestBuildAndOpenPackageRoundTrip(t *testing.T) {
 	}
 	if string(opened.Files["proofs/report.pdf"]) != "%PDF-fake" {
 		t.Errorf("proofs/report.pdf mismatch")
+	}
+	if want := "0x" + hex.EncodeToString(profileDigest[:]); !strings.EqualFold(opened.Manifest.ProfileDigest, want) {
+		t.Errorf("manifest profileDigest = %s, want %s", opened.Manifest.ProfileDigest, want)
+	}
+	if want := "0x" + hex.EncodeToString(metadataDigest[:]); !strings.EqualFold(opened.Manifest.MetadataDigest, want) {
+		t.Errorf("manifest metadataDigest = %s, want %s", opened.Manifest.MetadataDigest, want)
 	}
 	if len(opened.Manifest.Files) != 4 {
 		t.Errorf("manifest.Files len = %d, want 4", len(opened.Manifest.Files))

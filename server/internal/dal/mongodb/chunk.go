@@ -64,10 +64,16 @@ func (r *chainChunkRepo) CommitChunk(ctx context.Context, c repository.ChunkComm
 		}
 
 		for _, e := range c.Events {
+			// Skip existing events before insert: duplicate-key errors abort the transaction
+			key := models.EventKey{ChainID: e.ChainID, Address: e.Address, TxHash: e.TxHash, LogIndex: e.LogIndex}
+			findErr := r.events.FindOne(txCtx, eventFilter(key)).Err()
+			if findErr == nil {
+				continue
+			}
+			if !errors.Is(findErr, mongo.ErrNoDocuments) {
+				return nil, findErr
+			}
 			if _, insErr := r.events.InsertOne(txCtx, e); insErr != nil {
-				if mongo.IsDuplicateKeyError(insErr) {
-					continue // idempotent re-ingestion, matches chainEventRepo.Create
-				}
 				return nil, insErr
 			}
 		}

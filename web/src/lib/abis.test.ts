@@ -109,6 +109,18 @@ function artifact(contract: string) {
   ).abi;
 }
 
+// Missing artifacts fail CI with a fix; local runs explain the skip
+if (process.env.CI) {
+  it("forge artifacts exist (CI requires them)", () => {
+    expect(
+      FORGE_BUILT,
+      "contracts/out has no forge artifacts: run `forge build` in contracts/ before the web tests",
+    ).toBe(true);
+  });
+} else if (!FORGE_BUILT) {
+  it.skip("pinned ABI check skipped: contracts/out is not built (run `forge build` in contracts/)", () => {});
+}
+
 describe.skipIf(!FORGE_BUILT && !process.env.CI)(
   "pinned ABIs match the forge artifacts",
   () => {

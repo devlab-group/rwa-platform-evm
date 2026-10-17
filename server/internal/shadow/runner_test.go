@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -99,7 +100,7 @@ func TestRunnerReplaysScriptedScenarioAndReconciles(t *testing.T) {
 
 // A transient fault recovered within one Poll with ExpectPollError=false adds no report
 // errors
-func TestRunnerExpectPollErrorForDeepReorg(t *testing.T) {
+func TestRunnerRecoversFromATransientFaultWithoutReportingAnError(t *testing.T) {
 	sc := &Scenario{
 		ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1, MaxLogRange: 10,
 		Steps: []Step{
@@ -167,5 +168,27 @@ func TestSampleReturnsPlausibleValues(t *testing.T) {
 	}
 	if s.Timestamp.After(time.Now().UTC()) {
 		t.Fatal("Timestamp is in the future")
+	}
+}
+
+// A step that promises a Poll failure but gets a clean Poll is reported, and the run is then
+// not reconciled
+func TestRunnerReportsAStepThatWasExpectedToFailButSucceeded(t *testing.T) {
+	sc := &Scenario{
+		ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1,
+		Steps: []Step{{
+			Description: "claims a failure that never comes", Headers: []HeaderSpec{{Number: 1, Seed: 1}}, Head: 1,
+			ExpectPollError: true,
+		}},
+	}
+	report, err := NewRunner(sc).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Errors) != 1 || !strings.Contains(report.Errors[0], "expected Poll to fail but it succeeded") {
+		t.Fatalf("errors = %v, want the missed expected failure", report.Errors)
+	}
+	if report.Reconciled {
+		t.Error("a run with a step error must not be reported as reconciled")
 	}
 }

@@ -48,13 +48,19 @@ func failInternal(c *gin.Context, err error) {
 		failErr(c, http.StatusRequestEntityTooLarge, "request_too_large", err)
 		return
 	}
+	failLogged(c, http.StatusInternalServerError, "internal error", err)
+}
+
+// failLogged logs err with a reference and returns msg plus that reference, hiding
+// hosts, URLs and upstream response text from 5xx responses
+func failLogged(c *gin.Context, status int, msg string, err error) {
 	route := c.FullPath()
 	if route == "" {
 		route = c.Request.URL.Path
 	}
 	ref := errorReference()
-	log.Printf("api: internal error [%s] %s %s: %v", ref, c.Request.Method, route, err)
-	fail(c, http.StatusInternalServerError, CodeInternal, "internal error (reference "+ref+")")
+	log.Printf("api: %s [%s] %s %s: %v", msg, ref, c.Request.Method, route, err)
+	fail(c, status, CodeInternal, msg+" (reference "+ref+")")
 }
 
 // errorReference generates a short random tag linking a client-reported 500 to its log

@@ -2,6 +2,8 @@ package ipfs
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,22 +15,18 @@ import (
 // TestKuboClientTimesOutOnSlowServer checks that an unresponsive endpoint
 // fails the call at the client timeout instead of hanging it
 func TestKuboClientTimesOutOnSlowServer(t *testing.T) {
+	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(500 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"Hash":"bafkstub"}`))
+		<-release // never answers until the test is over
 	}))
 	defer srv.Close()
+	defer close(release)
 
 	client := NewKuboClientWithLimits(srv.URL, 50*time.Millisecond, DefaultMaxResponseBytes)
-	start := time.Now()
 	_, err := client.AddRaw(context.Background(), []byte("data"))
-	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatal("expected a timeout error from a server slower than the configured overall timeout")
-	}
-	if elapsed > 400*time.Millisecond {
-		t.Fatalf("expected the call to time out well before the server's 500ms response, took %s", elapsed)
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("AddRaw error = %v, want a client timeout", err)
 	}
 }
 

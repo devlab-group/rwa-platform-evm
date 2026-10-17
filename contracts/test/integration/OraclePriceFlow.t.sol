@@ -151,4 +151,31 @@ contract OraclePriceFlowTest is TestBase {
         assertEq(oldQuote, 9_800_000);
         assertEq(escrow.getRedemption(oldId).quoteAmount, oldQuote, "existing request keeps its quote");
     }
+
+    /// @dev Zero-spread rounding must not let the investor profit from a buy/redeem round trip
+    function testFuzz_zeroSpread_buyThenRedeemNeverProfits(uint256 amount, int256 answer) public {
+        amount = bound(amount, 1e15, 100 ether);
+        answer = int256(bound(uint256(answer), 1e6, 1e12));
+        feed.setAnswer(answer);
+        OraclePriceStrategy flat = new OraclePriceStrategy(address(feed), address(0), MAX_AGE, 0, 0, 0, 18, 6);
+        vm.prank(admin);
+        vault.setStrategy(address(flat));
+
+        quoteToken.mint(investor, 1e15);
+        uint256 quoteBefore = quoteToken.balanceOf(investor);
+        _buy(amount);
+        uint256 id = _request(amount);
+        uint256 quote = escrow.getRedemption(id).quoteAmount;
+
+        quoteToken.mint(treasurer, quote);
+        vm.startPrank(treasurer);
+        quoteToken.approve(address(escrow), quote);
+        escrow.fundRedemption(id);
+        vm.stopPrank();
+        escrow.claimRedemption(id);
+
+        assertEq(token.balanceOf(investor), 0, "the investor gave back every token");
+        assertLe(quoteToken.balanceOf(investor), quoteBefore, "the round trip must not leave the investor better off");
+        assertGe(quoteToken.balanceOf(investor) + 1, quoteBefore, "only one unit of rounding is lost");
+    }
 }

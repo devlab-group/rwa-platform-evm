@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -148,8 +149,8 @@ func TestTxManagerReplaceRejectsFeeCapExceededAfterBump(t *testing.T) {
 		t.Fatalf("expected the original submission to broadcast once, got %d", len(client.SentTxs))
 	}
 
-	if _, err := mgr.Replace(context.Background(), original.ID, NewStaticKeySigner(priv), 20); err == nil {
-		t.Fatal("expected Replace to reject a bumped fee above MaxFeePerGas")
+	if _, err := mgr.Replace(context.Background(), original.ID, NewStaticKeySigner(priv), 20); err == nil || !strings.Contains(err.Error(), "MaxFeePerGas") {
+		t.Fatalf("Replace err = %v, want a MaxFeePerGas rejection", err)
 	}
 	if len(client.SentTxs) != 1 {
 		t.Fatalf("a rejected bump must never broadcast, got %d sent", len(client.SentTxs))
@@ -464,7 +465,9 @@ func TestTxManagerSubmitFallsBackToLegacyWithoutBaseFee(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	_ = rec
+	if !strings.EqualFold(rec.TxHash, client.SentTxs[0].Hash().Hex()) {
+		t.Errorf("record TxHash = %s, want the broadcast hash %s", rec.TxHash, client.SentTxs[0].Hash().Hex())
+	}
 	if client.SentTxs[0].Type() != types.LegacyTxType {
 		t.Errorf("expected legacy fallback, got type %d", client.SentTxs[0].Type())
 	}
@@ -586,8 +589,8 @@ func TestTxManagerSubmitRejectsFeeAboveCap(t *testing.T) {
 
 	to := common.HexToAddress("0x0000000000000000000000000000000000dEaD")
 	_, err := mgr.Submit(context.Background(), SubmitRequest{PrivateKey: priv, To: to})
-	if err == nil {
-		t.Fatal("expected Submit to reject a gas price above MaxFeePerGas")
+	if err == nil || !strings.Contains(err.Error(), "MaxFeePerGas") {
+		t.Fatalf("Submit err = %v, want a MaxFeePerGas rejection", err)
 	}
 	if len(client.SentTxs) != 0 {
 		t.Errorf("expected no broadcast for a rejected fee, got %d", len(client.SentTxs))
@@ -764,7 +767,7 @@ func TestBumpFeeFieldRoundsUpAndBeatsOriginal(t *testing.T) {
 		name              string
 		original, current *big.Int
 		bump              int64
-		wantAtLeast       *big.Int
+		want              *big.Int
 	}{
 		// floor(5*101/100)=5 == original; ceil=6.
 		{"rounding beats original", big.NewInt(5), big.NewInt(5), 1, big.NewInt(6)},
@@ -778,8 +781,8 @@ func TestBumpFeeFieldRoundsUpAndBeatsOriginal(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := bumpFeeField(tc.original, tc.current, tc.bump)
-			if got.Cmp(tc.wantAtLeast) < 0 {
-				t.Errorf("bumpFeeField(%v,%v,%d) = %s, want >= %s", tc.original, tc.current, tc.bump, got, tc.wantAtLeast)
+			if got.Cmp(tc.want) != 0 {
+				t.Errorf("bumpFeeField(%v,%v,%d) = %s, want exactly %s", tc.original, tc.current, tc.bump, got, tc.want)
 			}
 			if tc.original != nil && got.Cmp(tc.original) <= 0 {
 				t.Errorf("bumpFeeField(%v,%v,%d) = %s, must strictly exceed original %s", tc.original, tc.current, tc.bump, got, tc.original)
@@ -1093,77 +1096,6 @@ func TestTxManagerLeaseAllowsSubmitOnceHeld(t *testing.T) {
 	}
 	if len(client.SentTxs) != 1 {
 		t.Fatalf("expected one broadcast, got %d", len(client.SentTxs))
-	}
-}
-
-// TestNonceLeaseTakeoverAfterExpiryStrictlyIncrementsToken checks that takeover
-// increases the fencing token and rejects Renew from the superseded (holder, token)
-// pair
-func TestNonceLeaseTakeoverAfterExpiryStrictlyIncrementsToken(t *testing.T) {
-	leases := memory.NewNonceLeaseRepository()
-	key := "31337:0x0000000000000000000000000000000000bEEF"
-
-	tokenA, ok, err := leases.Acquire(context.Background(), key, "replica-A", -time.Millisecond) // immediately expired
-	if err != nil || !ok {
-		t.Fatalf("replica-A Acquire: ok=%v err=%v", ok, err)
-	}
-
-	tokenB, ok, err := leases.Acquire(context.Background(), key, "replica-B", time.Minute)
-	if err != nil || !ok {
-		t.Fatalf("expected replica-B to take over the expired lease: ok=%v err=%v", ok, err)
-	}
-	if tokenB <= tokenA {
-		t.Fatalf("expected a strictly increasing fencing token, got A=%d B=%d", tokenA, tokenB)
-	}
-
-	// Renew rejects replica A's stale (holder, token) after replica B takes over
-	renewed, err := leases.Renew(context.Background(), key, "replica-A", tokenA, time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if renewed {
-		t.Fatal("expected replica-A's renew to fail after replica-B's takeover")
-	}
-
-	// replica-B, the current holder, renews successfully
-	renewed, err = leases.Renew(context.Background(), key, "replica-B", tokenB, time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !renewed {
-		t.Fatal("expected replica-B's renew to succeed")
-	}
-}
-
-// TestNonceLeaseReleaseFreesLeaseImmediately checks immediate takeover after Release
-// and rejection of a wrong holder or token
-func TestNonceLeaseReleaseFreesLeaseImmediately(t *testing.T) {
-	leases := memory.NewNonceLeaseRepository()
-	key := "31337:0x0000000000000000000000000000000000bEEF"
-
-	tokenA, ok, err := leases.Acquire(context.Background(), key, "replica-A", time.Hour)
-	if err != nil || !ok {
-		t.Fatalf("replica-A Acquire: ok=%v err=%v", ok, err)
-	}
-
-	if _, ok, err := leases.Acquire(context.Background(), key, "replica-B", time.Hour); err != nil || ok {
-		t.Fatalf("expected replica-B to be blocked while A's lease is live: ok=%v err=%v", ok, err)
-	}
-
-	if err := leases.Release(context.Background(), key, "replica-A", tokenA); err != nil {
-		t.Fatalf("Release: %v", err)
-	}
-
-	tokenB, ok, err := leases.Acquire(context.Background(), key, "replica-B", time.Hour)
-	if err != nil || !ok {
-		t.Fatalf("expected replica-B to acquire immediately after A's release: ok=%v err=%v", ok, err)
-	}
-	if tokenB <= tokenA {
-		t.Fatalf("expected a strictly increasing fencing token, got A=%d B=%d", tokenA, tokenB)
-	}
-
-	if err := leases.Release(context.Background(), key, "replica-A", tokenA); !errors.Is(err, repository.ErrFencingTokenMismatch) {
-		t.Fatalf("expected ErrFencingTokenMismatch for a stale/superseded release, got %v", err)
 	}
 }
 

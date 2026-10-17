@@ -1,4 +1,10 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { installFakeWallet, renderWithWallet } from "../../test/walletHarness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Investor } from "./Investor";
@@ -241,7 +247,65 @@ describe("Investor redemptions list (connected wallet)", () => {
     ).toBeNull();
   });
 
-  it("claims a claimable request by encoding claimRedemption(id) for the escrow", async () => {
+  // Cancel only Pending requests; offer permissionless claim for Funded ones once the server
+  // marks them claimable. Claimed/Cancelled requests are final.
+  it.each([
+    ["Funded", false, false],
+    ["Funded", true, true],
+    ["Claimed", false, false],
+    ["Cancelled", false, false],
+  ])(
+    "never offers Cancel on a %s request with an elapsed timeout (claimable: %s, Claim shown: %s)",
+    async (status, claimable, claimShown) => {
+      const now = Math.floor(Date.now() / 1000);
+      vi.mocked(api.listRedemptions)
+        .mockReset()
+        .mockResolvedValue({
+          items: [
+            makeRedemption({
+              id: "20",
+              status,
+              claimable,
+              timeoutAt: now - 3600,
+            }),
+          ],
+        });
+
+      renderWithWallet(<Investor />, { connected: true });
+      await screen.findByText("20");
+
+      const row = rowById("20");
+      expect(
+        within(row).queryByRole("button", { name: "Cancel (timeout elapsed)" }),
+      ).toBeNull();
+      expect(
+        within(row).queryByRole("button", {
+          name: "Claim (permissionless)",
+        }) !== null,
+      ).toBe(claimShown);
+    },
+  );
+
+  it("offers no Cancel on a Pending request without a timeout", async () => {
+    vi.mocked(api.listRedemptions)
+      .mockReset()
+      .mockResolvedValue({
+        items: [
+          makeRedemption({ id: "21", status: "Pending", timeoutAt: undefined }),
+        ],
+      });
+
+    renderWithWallet(<Investor />, { connected: true });
+    await screen.findByText("21");
+
+    expect(
+      within(rowById("21")).queryByRole("button", {
+        name: "Cancel (timeout elapsed)",
+      }),
+    ).toBeNull();
+  });
+
+  it("calls the claim sender with the escrow and the request id", async () => {
     vi.mocked(api.listRedemptions)
       .mockReset()
       .mockResolvedValue({
@@ -270,7 +334,42 @@ describe("Investor redemptions list (connected wallet)", () => {
     await screen.findByText(/Claim submitted:/);
   });
 
-  it("cancels a timed-out Pending request by encoding cancelRedemption(id) for the escrow", async () => {
+  // The timeout guard permits cancellation at createdAt + timeout, including that exact second
+  describe("cancel at the timeout boundary", () => {
+    const T = 1_900_000_000;
+
+    beforeEach(() => {
+      // Only Date is frozen, so the async rendering helpers keep working
+      vi.useFakeTimers({ toFake: ["Date"], now: T * 1000 });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it.each([
+      { when: "one second before", timeoutAt: T + 1, offered: false },
+      { when: "exactly at", timeoutAt: T, offered: true },
+      { when: "one second after", timeoutAt: T - 1, offered: true },
+    ])(
+      "timeoutAt $when now: Cancel offered is $offered",
+      async ({ timeoutAt, offered }) => {
+        vi.mocked(api.listRedemptions)
+          .mockReset()
+          .mockResolvedValue({
+            items: [makeRedemption({ id: "12", status: "Pending", timeoutAt })],
+          });
+        renderWithWallet(<Investor />, { connected: true });
+        await screen.findByText("12");
+
+        const cancel = within(rowById("12")).queryByRole("button", {
+          name: "Cancel (timeout elapsed)",
+        });
+        expect(cancel !== null).toBe(offered);
+      },
+    );
+  });
+
+  it("calls the cancel sender with the escrow and the request id", async () => {
     const now = Math.floor(Date.now() / 1000);
     vi.mocked(api.listRedemptions)
       .mockReset()
@@ -371,6 +470,84 @@ describe("Investor buy and redemption request (client-encoded)", () => {
     );
 
     await screen.findByText(/Buy submitted:/);
+  });
+
+  it("disables Approve and Buy once the wallet leaves the project chain", async () => {
+    renderWithWallet(<Investor />, { connected: true });
+    await waitFor(() => expect(api.getProject).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("RWA token amount (whole units)"), {
+      target: { value: "1" },
+    });
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Preview quote" })[0],
+    );
+    const approve = await screen.findByRole("button", {
+      name: "1. Approve quote token spend",
+    });
+    await waitFor(() => expect(approve).toBeEnabled());
+    fireEvent.click(approve);
+    await screen.findByText(/Approval submitted:/);
+    const buy = screen.getByRole("button", { name: "2. Buy" });
+    await waitFor(() => expect(buy).toBeEnabled());
+
+    act(() => wallet.emitChainChanged(1));
+
+    await waitFor(() => expect(buy).toBeDisabled());
+    expect(approve).toBeDisabled();
+  });
+
+  it("disables Approve and Request redemption once the wallet leaves the project chain", async () => {
+    renderWithWallet(<Investor />, { connected: true });
+    await waitFor(() => expect(api.getProject).toHaveBeenCalled());
+    fireEvent.change(
+      screen.getByLabelText("RWA amount to redeem (whole units)"),
+      { target: { value: "2.5" } },
+    );
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Preview quote" })[1],
+    );
+    const approve = await screen.findByRole("button", {
+      name: "1. Approve RWA spend",
+    });
+    await waitFor(() => expect(approve).toBeEnabled());
+    fireEvent.click(approve);
+    await screen.findByText(/Approval submitted:/);
+    const request = screen.getByRole("button", {
+      name: "2. Request redemption",
+    });
+    await waitFor(() => expect(request).toBeEnabled());
+
+    act(() => wallet.emitChainChanged(1));
+
+    await waitFor(() => expect(request).toBeDisabled());
+    expect(approve).toBeDisabled();
+  });
+
+  it("disables Claim and Cancel once the wallet leaves the project chain", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    vi.mocked(api.listRedemptions)
+      .mockReset()
+      .mockResolvedValue({
+        items: [
+          makeRedemption({ id: "20", status: "Funded", claimable: true }),
+          makeRedemption({ id: "21", status: "Pending", timeoutAt: now - 60 }),
+        ],
+      });
+    renderWithWallet(<Investor />, { connected: true });
+    await screen.findByText("20");
+    const claim = within(rowById("20")).getByRole("button", {
+      name: "Claim (permissionless)",
+    });
+    const cancel = within(rowById("21")).getByRole("button", {
+      name: "Cancel (timeout elapsed)",
+    });
+    await waitFor(() => expect(claim).toBeEnabled());
+    expect(cancel).toBeEnabled();
+
+    act(() => wallet.emitChainChanged(1));
+
+    await waitFor(() => expect(claim).toBeDisabled());
+    expect(cancel).toBeDisabled();
   });
 
   it("requests a redemption with the minimal-unit amount and the slippage-floored min quote out", async () => {

@@ -20,6 +20,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -193,6 +194,11 @@ func run() error {
 	step("wait for platform server readiness")
 	if err := waitServerReady(api); err != nil {
 		return fmt.Errorf("server readiness: %w", err)
+	}
+
+	step("auth gate: an admin route without a valid JWT is refused by the real binary")
+	if err := checkAdminRouteRefusesAnonymous(api); err != nil {
+		return fmt.Errorf("auth gate: %w", err)
 	}
 
 	step("admin wallet login: challenge + JWT for " + deployerAddr.Hex())
@@ -644,6 +650,19 @@ func waitServerReady(api *apiClient) error {
 		_, err := api.do(http.MethodGet, "/healthz", "", nil, "")
 		return err == nil, nil
 	})
+}
+
+// checkAdminRouteRefusesAnonymous requires 403 with missing or malformed credentials on an
+// admin route, checking the binary's auth wiring against api/openapi.yaml
+func checkAdminRouteRefusesAnonymous(api *apiClient) error {
+	for name, bearer := range map[string]string{"no token": "", "malformed token": "not-a-jwt"} {
+		_, err := api.do(http.MethodGet, "/api/v1/compliance/wallets", bearer, nil, "")
+		var ae *apiError
+		if !errors.As(err, &ae) || ae.status != http.StatusForbidden {
+			return fmt.Errorf("GET /api/v1/compliance/wallets with %s: got %v, want http 403", name, err)
+		}
+	}
+	return nil
 }
 
 // checkHealthReady checks that /healthz and /readyz report the platform up on the

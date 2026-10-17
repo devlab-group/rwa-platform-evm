@@ -231,10 +231,9 @@ func TestLoadRejectsWeakWebhookSecretAnyEnvironment(t *testing.T) {
 
 // TestLoadProductionRequiresWebhookSecret rejects a missing active generic secret
 func TestLoadProductionRequiresWebhookSecret(t *testing.T) {
-	_, err := LoadFromMap(map[string]string{"ENVIRONMENT": "production"})
-	if err == nil {
-		t.Fatal("expected production startup to fail with no KYC_WEBHOOK_HMAC_SECRET configured")
-	}
+	env := prodEnv()
+	delete(env, "KYC_WEBHOOK_HMAC_SECRET")
+	wantLoadError(t, env, "KYC_WEBHOOK_HMAC_SECRET")
 }
 
 // TestLoadProductionAcceptsStrongWebhookSecret accepts the fixture's valid production settings
@@ -286,72 +285,50 @@ func TestLoadProductionSumsubProvider(t *testing.T) {
 func TestLoadProductionRequiresAdminAuth(t *testing.T) {
 	env := prodEnv()
 	delete(env, "ADMIN_ADDRESS")
-	if _, err := LoadFromMap(env); err == nil {
-		t.Fatal("expected production startup to fail without ADMIN_ADDRESS")
-	}
+	wantLoadError(t, env, "ADMIN_ADDRESS")
 	env = prodEnv()
 	delete(env, "JWT_SECRET")
-	if _, err := LoadFromMap(env); err == nil {
-		t.Fatal("expected production startup to fail without JWT_SECRET")
-	}
+	wantLoadError(t, env, "JWT_SECRET")
 	env = prodEnv()
 	env["ADMIN_ADDRESS"] = "not-a-hex-address"
-	if _, err := LoadFromMap(env); err == nil {
-		t.Fatal("expected production startup to fail with a malformed ADMIN_ADDRESS")
-	}
+	wantLoadError(t, env, "ADMIN_ADDRESS")
 }
 
 // TestLoadProductionRejectsMockAndRawKeyProviders rejects mock providers and configured raw keys
 func TestLoadProductionRejectsMockAndRawKeyProviders(t *testing.T) {
 	env := prodEnv()
 	env["KEY_PROVIDER_MODE"] = "kms-mock"
-	if _, err := LoadFromMap(env); err == nil {
-		t.Fatal("expected production startup to fail with KEY_PROVIDER_MODE=kms-mock")
-	}
+	wantLoadError(t, env, "KEY_PROVIDER_MODE=kms-mock")
 	env = prodEnv()
 	env["KEY_PROVIDER_MODE"] = "raw"
 	env["COMPLIANCE_KEY"] = "0x" + "11"
-	if _, err := LoadFromMap(env); err == nil {
-		t.Fatal("expected production startup to fail with a raw-mode hot key configured")
-	}
+	wantLoadError(t, env, "KEY_PROVIDER_MODE=raw")
 }
 
 // TestLoadProductionRejectsMemoryPersistence requires durable repositories
 func TestLoadProductionRejectsMemoryPersistence(t *testing.T) {
-	env := map[string]string{
-		"ENVIRONMENT":             "production",
-		"KYC_WEBHOOK_HMAC_SECRET": "01234567890123456789012345678901",
-		"PERSISTENCE_MODE":        "memory",
-	}
-	if _, err := LoadFromMap(env); err == nil {
-		t.Fatal("expected production startup to fail with PERSISTENCE_MODE=memory")
-	}
+	env := prodEnv()
+	env["PERSISTENCE_MODE"] = "memory"
+	wantLoadError(t, env, "PERSISTENCE_MODE")
 }
 
 // TestLoadProductionRequiresProjectID requires a pinned profile identity before startup
 func TestLoadProductionRequiresProjectID(t *testing.T) {
 	env := prodEnv()
 	delete(env, "PROJECT_ID")
-	if _, err := LoadFromMap(env); err == nil {
-		t.Fatal("expected production startup to fail with no PROJECT_ID set")
-	}
+	wantLoadError(t, env, "PROJECT_ID")
 }
 
 // TestLoadRejectsMalformedProjectID rejects invalid UUID settings at load
 func TestLoadRejectsMalformedProjectID(t *testing.T) {
-	env := map[string]string{"PROJECT_ID": "not-a-uuid"}
-	if _, err := LoadFromMap(env); err == nil {
-		t.Fatal("expected load to reject a malformed PROJECT_ID")
-	}
+	wantLoadError(t, map[string]string{"PROJECT_ID": "not-a-uuid"}, "PROJECT_ID")
 }
 
 // TestLoadProductionRequiresIPFSBackupDestination rejects primary-only publication settings
 func TestLoadProductionRequiresIPFSBackupDestination(t *testing.T) {
 	env := prodEnv()
 	delete(env, "IPFS_BACKUP_ARCHIVE_DIR")
-	if _, err := LoadFromMap(env); err == nil {
-		t.Fatal("expected production startup to fail with IPFS_API_URL enabled but no backup destination configured")
-	}
+	wantLoadError(t, env, "backup destination")
 }
 
 // TestLoadProductionRejectsReplicationThresholdOutOfRange enforces 1 through backup count
@@ -361,9 +338,7 @@ func TestLoadProductionRejectsReplicationThresholdOutOfRange(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			env := prodEnv() // exactly one backup destination configured
 			env["IPFS_REPLICATION_THRESHOLD"] = threshold
-			if _, err := LoadFromMap(env); err == nil {
-				t.Fatalf("expected production startup to fail with IPFS_REPLICATION_THRESHOLD=%s and 1 configured backup", threshold)
-			}
+			wantLoadError(t, env, "IPFS_REPLICATION_THRESHOLD")
 		})
 	}
 }
@@ -581,5 +556,49 @@ func TestLoadExplorerURLTrimsTrailingSlash(t *testing.T) {
 	}
 	if cfg.ExplorerURL != "https://sepolia.etherscan.io" {
 		t.Fatalf("ExplorerURL = %q", cfg.ExplorerURL)
+	}
+}
+
+// Check the 32-byte JWT floor at load and in the production validator separately;
+// load rejects short secrets before the production check can run
+func TestJWTSecretLengthBoundary(t *testing.T) {
+	secret := func(n int) string { return strings.Repeat("k", n) }
+
+	t.Run("load rejects 31 bytes and accepts 32 outside production", func(t *testing.T) {
+		if _, err := LoadFromMap(map[string]string{"JWT_SECRET": secret(31)}); err == nil || !strings.Contains(err.Error(), "JWT_SECRET") {
+			t.Errorf("31 bytes: err = %v, want a JWT_SECRET length error", err)
+		}
+		if _, err := LoadFromMap(map[string]string{"JWT_SECRET": secret(32)}); err != nil {
+			t.Errorf("32 bytes: err = %v, want accepted", err)
+		}
+	})
+
+	t.Run("production load accepts exactly 32 bytes", func(t *testing.T) {
+		env := prodEnv()
+		env["JWT_SECRET"] = secret(32)
+		if _, err := LoadFromMap(env); err != nil {
+			t.Errorf("production with a 32-byte JWT secret: %v", err)
+		}
+	})
+
+	t.Run("production check rejects 31 bytes and accepts 32 on its own", func(t *testing.T) {
+		if err := validateProductionSecrets(Config{JWTSecret: secret(31), KYCProvider: "sumsub"}); err == nil || !strings.Contains(err.Error(), "JWT_SECRET") {
+			t.Errorf("31 bytes: err = %v, want a JWT_SECRET length error", err)
+		}
+		if err := validateProductionSecrets(Config{JWTSecret: secret(32), KYCProvider: "sumsub"}); err != nil {
+			t.Errorf("32 bytes: err = %v, want accepted", err)
+		}
+	})
+}
+
+// wantLoadError requires rejection naming the setting, excluding unrelated config failures
+func wantLoadError(t *testing.T, env map[string]string, setting string) {
+	t.Helper()
+	_, err := LoadFromMap(env)
+	if err == nil {
+		t.Fatalf("expected %s to be rejected", setting)
+	}
+	if !strings.Contains(err.Error(), setting) {
+		t.Fatalf("error = %v, want it to name %s", err, setting)
 	}
 }

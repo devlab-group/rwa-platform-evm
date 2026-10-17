@@ -158,12 +158,16 @@ func TestPrepareIncomeDistributionErrors(t *testing.T) {
 			p, _ := env.app.Repos.Projects.Get(context.Background())
 			p.Version = "rwa-v2"
 			p.Addresses.IncomeDistributor = ""
-			_ = env.app.Repos.Projects.Upsert(context.Background(), p)
+			if err := env.app.Repos.Projects.Upsert(context.Background(), p); err != nil {
+				t.Fatalf("Upsert: %v", err)
+			}
 		}, 409, CodeIncomeUnsupported},
 		{"project not active", prepareBody(50, "5", deadline), func(t *testing.T, env *testEnv) {
 			p, _ := env.app.Repos.Projects.Get(context.Background())
 			p.Status = models.ProjectStatusVerifying
-			_ = env.app.Repos.Projects.Upsert(context.Background(), p)
+			if err := env.app.Repos.Projects.Upsert(context.Background(), p); err != nil {
+				t.Fatalf("Upsert: %v", err)
+			}
 		}, 409, CodeIncomeUnsupported},
 		{"nobody holds RWA", prepareBody(50, "5", deadline), func(t *testing.T, env *testEnv) {
 			if _, err := env.app.Repos.ChainEvents.DeleteFromBlock(context.Background(), incomeChain, incToken.Hex(), 2); err != nil {
@@ -171,10 +175,12 @@ func TestPrepareIncomeDistributionErrors(t *testing.T) {
 			}
 		}, 409, CodeNoEligibleHolders},
 		{"transfer history missing", prepareBody(50, "5", deadline), func(t *testing.T, env *testEnv) {
-			_ = env.app.Repos.ChainEvents.Create(context.Background(), &models.ChainEvent{
+			if err := env.app.Repos.ChainEvents.Create(context.Background(), &models.ChainEvent{
 				ChainID: incomeChain, Address: incToken.Hex(), TxHash: "0xbad", BlockNumber: 4, Name: "Transfer",
 				Data: map[string]any{"from": incAlice.Hex(), "to": incBob.Hex(), "value": "9999"},
-			})
+			}); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
 		}, 409, CodeTransferHistoryMissing},
 		// 12,000 one-unit holders make a canonical snapshot of about 1.3 MB
 		{"snapshot over one IPFS block", prepareBody(50, "1"+strings.Repeat("0", 30), deadline), func(t *testing.T, env *testEnv) {
@@ -206,7 +212,9 @@ func TestPrepareIncomeDistributionErrors(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", w.Code, tc.status, w.Body.String())
 			}
 			var e dto.ErrorResponse
-			_ = json.Unmarshal(w.Body.Bytes(), &e)
+			if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
 			if e.Code != tc.code {
 				t.Errorf("code = %q, want %q", e.Code, tc.code)
 			}
@@ -223,7 +231,9 @@ func TestPrepareIncomeDistributionIPFSDown(t *testing.T) {
 	env.app.Income = income.New(incomeChain, env.app.Repos, nil, 3)
 	w := doJSON(t, env.router, http.MethodPost, "/api/v1/income/distributions", prepareBody(50, "5", time.Now().Add(8*24*time.Hour)), adminHeaders(env, "k-ipfs"))
 	var e dto.ErrorResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &e)
+	if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if w.Code != http.StatusServiceUnavailable || e.Code != CodeIPFSUnavailable {
 		t.Fatalf("status=%d code=%q body=%s", w.Code, e.Code, w.Body.String())
 	}
@@ -270,7 +280,9 @@ func TestListIncomeClaims(t *testing.T) {
 
 	w := doJSON(t, env.router, http.MethodPost, "/api/v1/income/distributions", prepareBody(50, "1000", deadline), adminHeaders(env, "prep-claims"))
 	var prep dto.IncomeDistributionResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &prep)
+	if err := json.Unmarshal(w.Body.Bytes(), &prep); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 
 	// the manager creates it on-chain; alice claims
 	for _, e := range []*models.ChainEvent{
@@ -291,7 +303,12 @@ func TestListIncomeClaims(t *testing.T) {
 	claims := func(address string) (int, []dto.IncomeClaimResponse) {
 		w := doJSON(t, env.router, http.MethodGet, "/api/v1/income/claims/"+address, nil, nil)
 		var out []dto.IncomeClaimResponse
-		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		// error responses are JSON objects, not claim arrays
+		if w.Code == http.StatusOK {
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+		}
 		return w.Code, out
 	}
 	code, aliceClaims := claims(strings.ToLower(incAlice.Hex()))
@@ -334,18 +351,23 @@ func TestListIncomeClaims(t *testing.T) {
 func TestListIncomeDistributionsPaginates(t *testing.T) {
 	env := setupTestApp(t)
 	withIncome(t, env)
-	deadline := time.Now().Add(8 * 24 * time.Hour)
-	for i := 1; i <= 3; i++ {
-		w := doJSON(t, env.router, http.MethodPost, "/api/v1/income/distributions", prepareBody(50, fmt.Sprint(i*100), deadline), adminHeaders(env, fmt.Sprint("p", i)))
-		if w.Code != http.StatusCreated {
-			t.Fatalf("prepare %d: %d %s", i, w.Code, w.Body.String())
+	// the fake clock of a synctest bubble gives each preparation a distinct, known CreatedAt
+	synctest.Test(t, func(t *testing.T) {
+		deadline := time.Now().Add(8 * 24 * time.Hour)
+		for i := 1; i <= 3; i++ {
+			w := doJSON(t, env.router, http.MethodPost, "/api/v1/income/distributions", prepareBody(50, fmt.Sprint(i*100), deadline), adminHeaders(env, fmt.Sprint("p", i)))
+			if w.Code != http.StatusCreated {
+				t.Fatalf("prepare %d: %d %s", i, w.Code, w.Body.String())
+			}
+			time.Sleep(time.Second)
 		}
-		time.Sleep(2 * time.Millisecond) // distinct CreatedAt so newest-first is well defined
-	}
+	})
 	h := map[string]string{"Authorization": env.bearer}
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/income/distributions?limit=2", nil, h)
 	var page []dto.IncomeDistributionResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &page)
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if len(page) != 2 || page[0].Total != "300" || page[1].Total != "200" {
 		t.Fatalf("first page = %+v", page)
 	}
@@ -355,7 +377,9 @@ func TestListIncomeDistributionsPaginates(t *testing.T) {
 	}
 	w = doJSON(t, env.router, http.MethodGet, "/api/v1/income/distributions?limit=2&cursor="+next, nil, h)
 	page = nil
-	_ = json.Unmarshal(w.Body.Bytes(), &page)
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if len(page) != 1 || page[0].Total != "100" || w.Header().Get("X-Next-Cursor") != "" {
 		t.Errorf("second page = %+v cursor=%q", page, w.Header().Get("X-Next-Cursor"))
 	}
@@ -441,7 +465,9 @@ func TestProjectResponseReportsAnOracleStrategy(t *testing.T) {
 			// stale projected prices must not leak through when the oracle read fails
 			p.Security = &models.SecurityState{PurchasePricePerWholeToken: "777", RedemptionPricePerWholeToken: "666", MinPurchaseQuote: "42"}
 			p.MinPurchaseQuote = "1"
-			_ = env.app.Repos.Projects.Upsert(ctx, p)
+			if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
+				t.Fatalf("Upsert: %v", err)
+			}
 			env.app.Sales = sales.New(oracleClient(t, feed, tc.stale), env.vaultAddr, common.HexToAddress("0xA001"), env.app.Repos.Purchases)
 
 			resp := getProjectResp(t, env)
@@ -474,7 +500,9 @@ func TestProjectResponseFixedStrategyKeepsProjectedPrices(t *testing.T) {
 	p, _ := env.app.Repos.Projects.Get(ctx)
 	p.Addresses.Strategy = common.HexToAddress("0x000000000000000000000000000000000000c0c0").Hex()
 	p.Security = &models.SecurityState{PurchasePricePerWholeToken: "1500", RedemptionPricePerWholeToken: "1400"}
-	_ = env.app.Repos.Projects.Upsert(ctx, p)
+	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 	fixed := blockchain.NewFakeClient()
 	strategyABI := bindings.NewFixedPriceStrategy()
 	data, _ := strategyABI.PackPurchasePricePerWholeToken()
@@ -505,7 +533,9 @@ func TestProjectResponseV3Fields(t *testing.T) {
 	ctx := context.Background()
 	p, _ := env.app.Repos.Projects.Get(ctx)
 	p.MinPurchaseQuote = "5000000"
-	_ = env.app.Repos.Projects.Upsert(ctx, p)
+	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 	resp := getProjectResp(t, env)
 	if resp.Addresses.IncomeDistributor != incDistrib.Hex() || resp.MinPurchaseQuote != "5000000" {
 		t.Errorf("income=%q min=%q", resp.Addresses.IncomeDistributor, resp.MinPurchaseQuote)
@@ -534,7 +564,9 @@ func TestInventoryReportsPriceErrorForAStaleOracle(t *testing.T) {
 		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 	}
 	var got map[string]any
-	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if got["priceError"] != "StalePrice" || got["inventory"] != "500" {
 		t.Errorf("body = %v", got)
 	}
@@ -548,7 +580,9 @@ func TestConfigReportsTheFactoryVersion(t *testing.T) {
 	// no project service: nothing can be read, so the version is empty but present
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/config", nil, nil)
 	var raw map[string]any
-	_ = json.Unmarshal(w.Body.Bytes(), &raw)
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if v, has := raw["factoryVersion"]; !has || v != "" {
 		t.Errorf("factoryVersion = %v (present=%v), want an empty string", v, has)
 	}
@@ -570,7 +604,9 @@ func TestPrepareIncomeDistributionAlreadyOnChain(t *testing.T) {
 	}
 	w = doJSON(t, env.router, http.MethodPost, "/api/v1/income/distributions", prepareBody(50, "1000", deadline.Add(24*time.Hour)), adminHeaders(env, "dup-2"))
 	var e dto.ErrorResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &e)
+	if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if w.Code != http.StatusConflict || e.Code != CodeAlreadyDistributed {
 		t.Fatalf("status = %d code = %q, want 409 %s", w.Code, e.Code, CodeAlreadyDistributed)
 	}
@@ -582,7 +618,9 @@ func TestProjectResponseKeepsStoredKindWhenTheProbeFails(t *testing.T) {
 	p, _ := env.app.Repos.Projects.Get(ctx)
 	p.Addresses.Strategy = common.HexToAddress("0x000000000000000000000000000000000000c0c0").Hex()
 	p.StrategyKind = models.StrategyKindFixed
-	_ = env.app.Repos.Projects.Upsert(ctx, p)
+	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 	down := true
 	calls := 0
 	env.app.Sales = sales.New(callScript{FakeClient: blockchain.NewFakeClient(), fn: func(ethereum.CallMsg) ([]byte, error) {
@@ -620,7 +658,9 @@ func TestProjectResponseCachesLivePricing(t *testing.T) {
 	ctx := context.Background()
 	p, _ := env.app.Repos.Projects.Get(ctx)
 	p.Addresses.Strategy = common.HexToAddress("0x000000000000000000000000000000000000c0c0").Hex()
-	_ = env.app.Repos.Projects.Upsert(ctx, p)
+	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 	inner := oracleClient(t, common.HexToAddress("0x000000000000000000000000000000000000feed"), false)
 	calls := 0
 	env.app.Sales = sales.New(callScript{FakeClient: inner.FakeClient, fn: func(msg ethereum.CallMsg) ([]byte, error) {
@@ -653,7 +693,9 @@ func TestProjectResponseIgnoresACancelledRequestForTheCache(t *testing.T) {
 	ctx := context.Background()
 	p, _ := env.app.Repos.Projects.Get(ctx)
 	p.Addresses.Strategy = common.HexToAddress("0x000000000000000000000000000000000000c0c0").Hex()
-	_ = env.app.Repos.Projects.Upsert(ctx, p)
+	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 	inner := oracleClient(t, common.HexToAddress("0x000000000000000000000000000000000000feed"), false)
 	env.app.Sales = sales.New(ctxScript{inner}, env.vaultAddr, common.HexToAddress("0xA001"), env.app.Repos.Purchases)
 
@@ -675,7 +717,9 @@ func TestProjectResponseCollapsesConcurrentPricingMisses(t *testing.T) {
 	ctx := context.Background()
 	p, _ := env.app.Repos.Projects.Get(ctx)
 	p.Addresses.Strategy = common.HexToAddress("0x000000000000000000000000000000000000c0c0").Hex()
-	_ = env.app.Repos.Projects.Upsert(ctx, p)
+	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 	inner := oracleClient(t, common.HexToAddress("0x000000000000000000000000000000000000feed"), false)
 	oracle := bindings.NewOraclePriceStrategy()
 	var release chan struct{}
@@ -703,7 +747,9 @@ func TestProjectResponseCollapsesConcurrentPricingMisses(t *testing.T) {
 				w := httptest.NewRecorder()
 				env.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/project", nil))
 				codes[i] = w.Code
-				_ = json.Unmarshal(w.Body.Bytes(), &bodies[i])
+				if err := json.Unmarshal(w.Body.Bytes(), &bodies[i]); err != nil {
+					t.Fatalf("Unmarshal: %v", err)
+				}
 			})
 		}
 		synctest.Wait() // one request holds the probe, the others wait on its result

@@ -20,7 +20,9 @@ func postStatus(t *testing.T, env *testEnv, address, status, key string) (int, d
 		SetStatusRequestBody{Address: address, Status: status},
 		map[string]string{"Authorization": env.bearer, "Idempotency-Key": key})
 	var e dto.ErrorResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &e)
+	if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	return w.Code, e
 }
 

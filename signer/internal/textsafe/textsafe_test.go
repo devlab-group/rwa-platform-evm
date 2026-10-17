@@ -41,6 +41,14 @@ func TestSanitizeForTerminal_NeutralizesTerminalControls(t *testing.T) {
 		{"tab", "a\tb", `a\x09b`},
 		{"bidi override", "gram\u202e", `gram\u202e`},
 		{"invalid utf-8", "gram\xff", `gram\xff`},
+		// Graphic but not printable: IsGraphic would let these through
+		{"no-break space", "a\u00a0b", `a\xa0b`},
+		{"em space", "a\u2003b", `a\u2003b`},
+		{"ideographic space", "a\u3000b", `a\u3000b`},
+		{"zero width space", "a\u200bb", `a\u200bb`},
+		{"byte order mark", "a\ufeffb", `a\ufeffb`},
+		{"bidi isolate", "a\u2066b", `a\u2066b`},
+		{"line separator", "a\u2028b", `a\u2028b`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

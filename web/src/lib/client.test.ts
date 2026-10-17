@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./client";
+import { getSession, setSession } from "./authSession";
 
 // Minimal Response fake for ok, status, headers.get() and json()
 function fakeResponse(
@@ -113,5 +114,55 @@ describe("client Idempotency-Key", () => {
     const options = fetchMock.mock.calls[0][1] as RequestInit;
     const headers = options.headers as Record<string, string>;
     expect(headers["Idempotency-Key"]).toBe("create-r1");
+  });
+});
+
+describe("client session handling on error responses", () => {
+  const SESSION = {
+    token: "jwt",
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+    role: "admin",
+    address: "0x1111111111111111111111111111111111111111",
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setSession(undefined);
+  });
+
+  it("clears the admin session when the server answers 401", async () => {
+    setSession(SESSION);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(fakeResponse({ code: "unauthorized" }, { status: 401 })),
+    );
+
+    await expect(api.getProject({})).rejects.toMatchObject({ status: 401 });
+
+    expect(getSession()).toBeUndefined();
+  });
+
+  it.each([403, 500])("keeps the session on a %i response", async (status) => {
+    setSession(SESSION);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(fakeResponse({ code: "nope" }, { status })),
+    );
+
+    await expect(api.getProject({})).rejects.toMatchObject({ status });
+
+    expect(getSession()).toEqual(SESSION);
+  });
+
+  it("sends the session token as a bearer header", async () => {
+    setSession(SESSION);
+    const fetchMock = vi.fn().mockResolvedValue(fakeResponse({}));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.getProject({});
+
+    const headers = (fetchMock.mock.calls[0][1] as RequestInit)
+      .headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer jwt");
   });
 });

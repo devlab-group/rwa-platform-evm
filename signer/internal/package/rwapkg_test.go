@@ -7,13 +7,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // buildZip uses zip.Writer to build an archive from name/content pairs
-func buildZip(t *testing.T, entries map[string][]byte) []byte {
+func buildZip(t testing.TB, entries map[string][]byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
@@ -354,4 +355,86 @@ func TestManifest_VerifyFiles_MissingFile(t *testing.T) {
 	if err := manifest.VerifyFiles(map[string][]byte{}); err == nil {
 		t.Fatal("expected missing-file error")
 	}
+}
+
+// An archive exactly at each limit is accepted, one over is rejected
+func TestExtract_LimitBoundaries(t *testing.T) {
+	const size = 10
+	body := func(n int) []byte { return bytes.Repeat([]byte("x"), n) }
+	tests := []struct {
+		name    string
+		entries map[string][]byte
+		opts    Options
+		wantErr string // empty: accepted
+	}{
+		{"single file at limit", map[string][]byte{"a": body(size)}, Options{MaxFileCount: 10, MaxSingleFileUncompressed: size, MaxTotalUncompressed: 1000}, ""},
+		{"single file one over", map[string][]byte{"a": body(size + 1)}, Options{MaxFileCount: 10, MaxSingleFileUncompressed: size, MaxTotalUncompressed: 1000}, "possible zip bomb"},
+		{"total at limit", map[string][]byte{"a": body(size), "b": body(size)}, Options{MaxFileCount: 10, MaxSingleFileUncompressed: size, MaxTotalUncompressed: 2 * size}, ""},
+		{"total one over", map[string][]byte{"a": body(size), "b": body(size)}, Options{MaxFileCount: 10, MaxSingleFileUncompressed: size, MaxTotalUncompressed: 2*size - 1}, "possible zip bomb"},
+		{"file count at limit", map[string][]byte{"a": nil, "b": nil}, Options{MaxFileCount: 2, MaxSingleFileUncompressed: size, MaxTotalUncompressed: 1000}, ""},
+		{"file count one over", map[string][]byte{"a": nil, "b": nil, "c": nil}, Options{MaxFileCount: 2, MaxSingleFileUncompressed: size, MaxTotalUncompressed: 1000}, "exceeds max of 2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files, err := Extract(buildZip(t, tt.entries), tt.opts)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Extract: %v, want accepted", err)
+				}
+				if len(files) != len(tt.entries) {
+					t.Fatalf("Extract returned %d files, want %d", len(files), len(tt.entries))
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Extract error = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func FuzzExtract(f *testing.F) {
+	f.Add(buildZip(f, map[string][]byte{"manifest.json": []byte(`{}`), "proofs/a.pdf": []byte("pdf")}))
+	f.Add(buildZip(f, map[string][]byte{"../evil": []byte("x")}))
+	f.Add(buildZip(f, map[string][]byte{"a//b": []byte("x"), `c\d`: nil}))
+	f.Add([]byte("PK\x05\x06" + strings.Repeat("\x00", 18)))
+	f.Add([]byte{})
+	opts := Options{MaxFileCount: 8, MaxSingleFileUncompressed: 1 << 16, MaxTotalUncompressed: 1 << 17}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		files, err := Extract(data, opts)
+		if err != nil {
+			return
+		}
+		for name := range files {
+			if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) ||
+				path.Clean(name) != name || name == ".." || strings.HasPrefix(name, "../") {
+				t.Fatalf("Extract returned unsafe name %q", name)
+			}
+		}
+	})
+}
+
+func FuzzParseManifest(f *testing.F) {
+	good, err := json.Marshal(Manifest{
+		PackageVersion: "1.0", PrimaryType: "MintAttestation",
+		ProfileDigest: "0x" + strings.Repeat("a", 64), MetadataDigest: "0x" + strings.Repeat("b", 64),
+		Files: []ManifestFile{
+			manifestFileEntry("profile.json", []byte("p"), "application/json"),
+			manifestFileEntry("metadata.json", []byte("m"), "application/json"),
+			manifestFileEntry("typed-data.json", []byte("t"), "application/json"),
+		},
+	})
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(good)
+	f.Add([]byte(`{"packageVersion":"1.0"}`))
+	f.Add([]byte(`{} {}`))
+	f.Add([]byte(``))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		m, err := ParseManifest(raw)
+		if err == nil && m == nil {
+			t.Fatal("ParseManifest returned nil manifest and nil error")
+		}
+	})
 }

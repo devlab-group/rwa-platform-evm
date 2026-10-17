@@ -2,8 +2,6 @@ package redemption
 
 import (
 	"context"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -99,9 +97,8 @@ func TestBuildStatesCancelledPath(t *testing.T) {
 	}
 }
 
-func TestBuildStatesIgnoresOutOfOrderTransitions(t *testing.T) {
-	// Funded without Requested, or after a terminal state, must not create or overwrite
-	// state
+func TestBuildStatesIgnoresFundedWithoutRequested(t *testing.T) {
+	// a Funded event for an id that was never requested must not create state
 	events := []*models.ChainEvent{
 		ev("RedemptionFunded", "4", 5, 0, map[string]any{"funder": "0xBBB", "quoteAmount": "1"}),
 	}
@@ -137,28 +134,42 @@ func TestBuildStatesRejectedCannotBeReFunded(t *testing.T) {
 	}
 }
 
-// delayedRedemptionRequestRepo delays generation writes to expose delete-first gaps to
-// concurrent List calls, like sales.delayedPurchaseRepo
-type delayedRedemptionRequestRepo struct {
+// probedRedemptionRequestRepo reads the read model between every generation write, like
+// sales.probedPurchaseRepo
+type probedRedemptionRequestRepo struct {
 	repository.RedemptionRequestRepository
+	probe func()
 }
 
-func (d delayedRedemptionRequestRepo) Upsert(ctx context.Context, r *models.RedemptionRequest) error {
-	time.Sleep(2 * time.Millisecond)
+func (d probedRedemptionRequestRepo) Upsert(ctx context.Context, r *models.RedemptionRequest) error {
+	d.probe()
 	return d.RedemptionRequestRepository.Upsert(ctx, r)
 }
 
-func (d delayedRedemptionRequestRepo) DeleteStaleGeneration(ctx context.Context, gen int64) error {
-	time.Sleep(2 * time.Millisecond)
+func (d probedRedemptionRequestRepo) DeleteStaleGeneration(ctx context.Context, gen int64) error {
+	d.probe()
 	return d.RedemptionRequestRepository.DeleteStaleGeneration(ctx, gen)
 }
 
 // Replace every seeded request ID during a reorg; concurrent reads must not fall below
 // the seeded count, as in the sales test
-func TestReconcileNeverExposesEmptyOrPartialRedemptionsToConcurrentReaders(t *testing.T) {
+func TestReconcileNeverExposesEmptyOrPartialRedemptionsBetweenWrites(t *testing.T) {
 	escrowAddr := common.HexToAddress("0x0000000000000000000000000000000000000B")
 	events := memory.NewChainEventRepository()
-	repo := delayedRedemptionRequestRepo{memory.NewRedemptionRequestRepository()}
+	inner := memory.NewRedemptionRequestRepository()
+	armed, probes, minObserved := false, 0, 1<<30
+	repo := probedRedemptionRequestRepo{RedemptionRequestRepository: inner, probe: func() {
+		if !armed {
+			return // only the rebuild under test is observed
+		}
+		probes++
+		list, err := inner.List(context.Background(), "")
+		if err != nil {
+			t.Errorf("probe List: %v", err)
+			return
+		}
+		minObserved = min(minObserved, len(list))
+	}}
 	svc := New(nil, escrowAddr, repo, common.Address{})
 
 	ctx := context.Background()
@@ -189,43 +200,13 @@ func TestReconcileNeverExposesEmptyOrPartialRedemptionsToConcurrentReaders(t *te
 		seedRequested(id, uint64(30+i))
 	}
 
-	var minObserved int32 = 1 << 30
-	stop := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			list, err := repo.List(ctx, "")
-			if err != nil {
-				t.Errorf("concurrent List: %v", err)
-				return
-			}
-			if len(list) == 0 {
-				t.Error("concurrent reader observed an EMPTY redemption read model mid-rebuild")
-				return
-			}
-			for {
-				cur := atomic.LoadInt32(&minObserved)
-				if int32(len(list)) >= cur || atomic.CompareAndSwapInt32(&minObserved, cur, int32(len(list))) {
-					break
-				}
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-
+	armed = true
 	if err := svc.Reconcile(ctx, events, 31337, 1209600); err != nil {
 		t.Fatalf("second Reconcile: %v", err)
 	}
-	close(stop)
-	wg.Wait()
-
+	if probes == 0 {
+		t.Fatal("the rebuild never wrote, so no intermediate state was observed")
+	}
 	if minObserved < 3 {
 		t.Errorf("concurrent reader observed as few as %d redemption requests mid-rebuild, want always >= 3", minObserved)
 	}
@@ -259,5 +240,62 @@ func TestBuildStatesMultipleIndependentRequests(t *testing.T) {
 	}
 	if states["2"].Status != models.RedemptionPending {
 		t.Errorf("id2 status = %s, want Pending", states["2"].Status)
+	}
+}
+
+// Illegal transitions must preserve state (docs/spec/redemption-state-machine.md);
+// each row replays Requested, a legal prefix, then an illegal event
+func TestBuildStatesIgnoresTransitionsTheStateMachineForbids(t *testing.T) {
+	req := func() *models.ChainEvent {
+		return ev("RedemptionRequested", "9", 1, 0, map[string]any{"beneficiary": "0xAAA", "rwaAmount": "1000", "quoteAmount": "950", "createdAt": uint64(1000)})
+	}
+	funded := func(b uint64) *models.ChainEvent {
+		return ev("RedemptionFunded", "9", b, 0, map[string]any{"funder": "0xBBB"})
+	}
+	completed := func(b uint64) *models.ChainEvent { return ev("RedemptionCompleted", "9", b, 0, nil) }
+	rejected := func(b uint64) *models.ChainEvent {
+		return ev("RedemptionRejected", "9", b, 0, map[string]any{"reasonCode": "0xdead"})
+	}
+	cancelled := func(b uint64) *models.ChainEvent { return ev("RedemptionCancelled", "9", b, 0, nil) }
+
+	tests := []struct {
+		name   string
+		events []*models.ChainEvent
+		want   models.RedemptionStatus
+	}{
+		{"Pending cannot jump to Completed", []*models.ChainEvent{req(), completed(2)}, models.RedemptionPending},
+		{"Funded cannot be Cancelled", []*models.ChainEvent{req(), funded(2), cancelled(3)}, models.RedemptionFunded},
+		{"Funded cannot be Rejected", []*models.ChainEvent{req(), funded(2), rejected(3)}, models.RedemptionFunded},
+		{"Funded cannot be funded twice", []*models.ChainEvent{req(), funded(2), funded(3)}, models.RedemptionFunded},
+		{"Completed is terminal against a duplicate Completed", []*models.ChainEvent{req(), funded(2), completed(3), completed(4)}, models.RedemptionCompleted},
+		{"Completed cannot be Cancelled", []*models.ChainEvent{req(), funded(2), completed(3), cancelled(4)}, models.RedemptionCompleted},
+		{"Completed cannot be Rejected", []*models.ChainEvent{req(), funded(2), completed(3), rejected(4)}, models.RedemptionCompleted},
+		{"Rejected cannot be Completed", []*models.ChainEvent{req(), rejected(2), completed(3)}, models.RedemptionRejected},
+		{"Rejected cannot be Cancelled", []*models.ChainEvent{req(), rejected(2), cancelled(3)}, models.RedemptionRejected},
+		{"Rejected cannot be rejected again", []*models.ChainEvent{req(), rejected(2), rejected(3)}, models.RedemptionRejected},
+		{"Cancelled cannot be Funded", []*models.ChainEvent{req(), cancelled(2), funded(3)}, models.RedemptionCancelled},
+		{"Cancelled cannot be Rejected", []*models.ChainEvent{req(), cancelled(2), rejected(3)}, models.RedemptionCancelled},
+		{"Cancelled cannot be Completed", []*models.ChainEvent{req(), cancelled(2), completed(3)}, models.RedemptionCancelled},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			states := BuildStates(tt.events, 1209600)
+			if got := states["9"].Status; got != tt.want {
+				t.Errorf("Status = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// An illegal event must not overwrite the data of the transition that already happened
+func TestBuildStatesIllegalTransitionKeepsEarlierDetails(t *testing.T) {
+	events := []*models.ChainEvent{
+		ev("RedemptionRequested", "7", 1, 0, map[string]any{"beneficiary": "0xAAA", "rwaAmount": "1000", "quoteAmount": "950", "createdAt": uint64(1000)}),
+		ev("RedemptionRejected", "7", 2, 0, map[string]any{"reasonCode": "0xdead"}),
+		ev("RedemptionRejected", "7", 3, 0, map[string]any{"reasonCode": "0xbeef"}),
+	}
+	r := BuildStates(events, 100)["7"]
+	if r.ReasonCode != "0xdead" || r.Status != models.RedemptionRejected {
+		t.Errorf("status/reason = %s/%s, want Rejected/0xdead", r.Status, r.ReasonCode)
 	}
 }

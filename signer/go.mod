@@ -1,11 +1,11 @@
 module github.com/rwa-platform/signer
 
-go 1.25.0
+go 1.26.9
 
 require (
 	github.com/ethereum/go-ethereum v1.17.4
-	golang.org/x/crypto v0.48.0
-	golang.org/x/term v0.45.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/term v0.47.0
 )
 
 require (
@@ -21,5 +21,5 @@ require (
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/supranational/blst v0.3.16 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 )

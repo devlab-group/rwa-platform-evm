@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -123,7 +124,9 @@ func TestVerifyChallengeRejectsWrongAddress(t *testing.T) {
 
 	w := doJSON(t, env.router, http.MethodPost, "/api/v1/compliance/challenge", map[string]string{"address": walletAddr.Hex()}, nil)
 	var ch dto.ChallengeResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &ch)
+	if err := json.Unmarshal(w.Body.Bytes(), &ch); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 
 	hash := accounts.TextHash([]byte(ch.Message))
 	sig, _ := crypto.Sign(hash, priv)
@@ -171,7 +174,9 @@ func TestCreateChallengeEnforcesActiveCapWith429(t *testing.T) {
 func TestKYCWebhookDropsDecisionWithNoProviderTimestamp(t *testing.T) {
 	env := setupTestApp(t)
 	walletAddr := addr("0xB0B0")
-	_ = env.app.Repos.Investors.Upsert(context.Background(), &models.Investor{Address: walletAddr, OwnershipVerified: true})
+	if err := env.app.Repos.Investors.Upsert(context.Background(), &models.Investor{Address: walletAddr, OwnershipVerified: true}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 
 	// Swap the generic provider for Onfido, whose webhook payload carries the
 	// decision timestamp
@@ -239,12 +244,22 @@ func TestKYCWebhookDropsDecisionWithNoProviderTimestamp(t *testing.T) {
 	if w2.Code != http.StatusAccepted {
 		t.Fatalf("timestamped delivery: status = %d, want 202, body=%s", w2.Code, w2.Body.String())
 	}
+	// both outcomes answer 202, so the difference is the recorded decision
+	recorded, err := env.app.Repos.KYCEvents.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorded) != 1 || recorded[0].Address != walletAddr || recorded[0].Outcome != "Allowed" {
+		t.Fatalf("the timestamped delivery recorded %+v, want one Allowed decision for %s", recorded, walletAddr)
+	}
 }
 
 func TestKYCWebhookRecordsWebhookEventAndListsIt(t *testing.T) {
 	env := setupTestApp(t)
 	walletAddr := addr("0xB0B0")
-	_ = env.app.Repos.Investors.Upsert(context.Background(), &models.Investor{Address: walletAddr, OwnershipVerified: true})
+	if err := env.app.Repos.Investors.Upsert(context.Background(), &models.Investor{Address: walletAddr, OwnershipVerified: true}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 
 	payload := []byte(`{"eventId":"evt-1","provider":"test-provider","address":"` + walletAddr + `","status":"Allowed","occurredAt":` + strconv.FormatInt(time.Now().UTC().Unix(), 10) + `}`)
 	sig := sign(payload, "webhook-secret")
@@ -319,7 +334,9 @@ func TestListAuditLogsFiltersByCategory(t *testing.T) {
 
 	w = doJSON(t, env.router, http.MethodGet, "/api/v1/audit-logs?category=assets", nil, map[string]string{"Authorization": env.bearer})
 	var noneLogs []dto.AuditLogResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &noneLogs)
+	if err := json.Unmarshal(w.Body.Bytes(), &noneLogs); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if len(noneLogs) != 0 {
 		t.Errorf("expected 0 assets-category logs, got %d", len(noneLogs))
 	}
@@ -332,7 +349,9 @@ func TestListPurchasesEmpty(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 	var purchases []any
-	_ = json.Unmarshal(w.Body.Bytes(), &purchases)
+	if err := json.Unmarshal(w.Body.Bytes(), &purchases); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if len(purchases) != 0 {
 		t.Errorf("expected empty, got %d", len(purchases))
 	}
@@ -355,6 +374,7 @@ func TestListPurchasesPaginatesViaKeysetCursor(t *testing.T) {
 	}
 
 	seen := map[string]bool{}
+	var sizes []int
 	cursor := ""
 	for pages := 0; ; pages++ {
 		if pages > total {
@@ -374,6 +394,7 @@ func TestListPurchasesPaginatesViaKeysetCursor(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
 			t.Fatal(err)
 		}
+		sizes = append(sizes, len(page))
 		for _, p := range page {
 			if seen[p.TxHash] {
 				t.Fatalf("purchase %s returned twice across pages", p.TxHash)
@@ -393,6 +414,9 @@ func TestListPurchasesPaginatesViaKeysetCursor(t *testing.T) {
 		cursor = next
 	}
 
+	if want := []int{20, 20, 15}; !slices.Equal(sizes, want) {
+		t.Fatalf("page sizes = %v, want %v (limit=20 must cap each page)", sizes, want)
+	}
 	if len(seen) != total {
 		t.Fatalf("visited %d of %d purchases across all pages", len(seen), total)
 	}
@@ -415,6 +439,7 @@ func TestListWalletsPaginatesViaKeysetCursor(t *testing.T) {
 	}
 
 	seen := map[string]bool{}
+	var sizes []int
 	cursor := ""
 	for pages := 0; ; pages++ {
 		if pages > total {
@@ -432,6 +457,7 @@ func TestListWalletsPaginatesViaKeysetCursor(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
 			t.Fatal(err)
 		}
+		sizes = append(sizes, len(page))
 		for _, inv := range page {
 			if seen[inv.Address] {
 				t.Fatalf("wallet %s returned twice across pages", inv.Address)
@@ -445,6 +471,9 @@ func TestListWalletsPaginatesViaKeysetCursor(t *testing.T) {
 		cursor = next
 	}
 
+	if want := []int{20, 20, 15}; !slices.Equal(sizes, want) {
+		t.Fatalf("page sizes = %v, want %v (limit=20 must cap each page)", sizes, want)
+	}
 	if len(seen) != total {
 		t.Fatalf("visited %d of %d wallets across all pages", len(seen), total)
 	}
@@ -517,14 +546,18 @@ func TestListTransactionsFiltersByAddress(t *testing.T) {
 	env := setupTestApp(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	_ = env.app.Repos.Transactions.Create(ctx, &models.Transaction{
+	if err := env.app.Repos.Transactions.Create(ctx, &models.Transaction{
 		ID: "tx1", Kind: "compliance.setStatus", From: addr("0xAAAA"), To: addr("0xBBBB"),
 		TxHash: "0x01", Status: models.TxPending, SubmittedAt: now, UpdatedAt: now,
-	})
-	_ = env.app.Repos.Transactions.Create(ctx, &models.Transaction{
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := env.app.Repos.Transactions.Create(ctx, &models.Transaction{
 		ID: "tx2", Kind: "assets.relaySignedResult", From: addr("0xCCCC"), To: addr("0xDDDD"),
 		TxHash: "0x02", Status: models.TxPending, SubmittedAt: now, UpdatedAt: now,
-	})
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/transactions?address="+addr("0xAAAA"), nil, map[string]string{"Authorization": env.bearer})
 	if w.Code != http.StatusOK {
@@ -540,7 +573,9 @@ func TestListTransactionsFiltersByAddress(t *testing.T) {
 
 	w = doJSON(t, env.router, http.MethodGet, "/api/v1/transactions", nil, map[string]string{"Authorization": env.bearer})
 	var all []dto.TransactionResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &all)
+	if err := json.Unmarshal(w.Body.Bytes(), &all); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if len(all) != 2 {
 		t.Errorf("expected 2 unfiltered transactions, got %d", len(all))
 	}
@@ -590,14 +625,18 @@ func TestListRedemptionsFiltersByBeneficiary(t *testing.T) {
 	now := time.Now().UTC()
 	alice := addr("0xAAAA")
 	bob := addr("0xBBBB")
-	_ = env.app.Repos.RedemptionRequests.Upsert(ctx, &models.RedemptionRequest{
+	if err := env.app.Repos.RedemptionRequests.Upsert(ctx, &models.RedemptionRequest{
 		ID: "1", Beneficiary: alice, RWAAmount: "100", QuoteAmount: "95",
 		Status: models.RedemptionPending, CreatedAt: 1, UpdatedAt: now,
-	})
-	_ = env.app.Repos.RedemptionRequests.Upsert(ctx, &models.RedemptionRequest{
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := env.app.Repos.RedemptionRequests.Upsert(ctx, &models.RedemptionRequest{
 		ID: "2", Beneficiary: bob, RWAAmount: "200", QuoteAmount: "190",
 		Status: models.RedemptionPending, CreatedAt: 2, UpdatedAt: now,
-	})
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 
 	// Public: no Authorization header, and the address filter is case-insensitive
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/redemptions?address="+strings.ToLower(alice), nil, nil)
@@ -615,7 +654,9 @@ func TestListRedemptionsFiltersByBeneficiary(t *testing.T) {
 	// Unfiltered (also public) returns both
 	w = doJSON(t, env.router, http.MethodGet, "/api/v1/redemptions", nil, nil)
 	var all []dto.RedemptionResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &all)
+	if err := json.Unmarshal(w.Body.Bytes(), &all); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if len(all) != 2 {
 		t.Errorf("expected 2 unfiltered redemptions, got %d", len(all))
 	}
@@ -641,6 +682,7 @@ func TestListTransactionsPaginatesViaKeysetCursor(t *testing.T) {
 	}
 
 	seen := map[string]bool{}
+	var sizes []int
 	cursor := ""
 	for pages := 0; ; pages++ {
 		if pages > total {
@@ -658,6 +700,7 @@ func TestListTransactionsPaginatesViaKeysetCursor(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
 			t.Fatal(err)
 		}
+		sizes = append(sizes, len(page))
 		for _, tx := range page {
 			if seen[tx.TxHash] {
 				t.Fatalf("transaction %s returned twice across pages", tx.TxHash)
@@ -674,6 +717,9 @@ func TestListTransactionsPaginatesViaKeysetCursor(t *testing.T) {
 		cursor = next
 	}
 
+	if want := []int{20, 20, 15}; !slices.Equal(sizes, want) {
+		t.Fatalf("page sizes = %v, want %v (limit=20 must cap each page)", sizes, want)
+	}
 	if len(seen) != total {
 		t.Fatalf("visited %d of %d transactions across all pages", len(seen), total)
 	}

@@ -275,13 +275,14 @@ paths:
         Starts the configured provider's flow for the X-Wallet-Session address, returning an SDK token or
         hosted URL. Request parameters cannot select another wallet. No on-chain change occurs here;
         authenticated webhook decisions are applied asynchronously. Returns 501 when server-initiated
-        verification is unsupported, including provider none.
+        verification is unsupported, including provider none, and 502 when the provider call fails.
       security:
         - WalletSession: []
       responses:
         "200": { description: Provider verification session, content: { application/json: { schema: { $ref: "#/components/schemas/KYCSession" } } } }
         "401": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
 
   /api/v1/assets/records:
     get:

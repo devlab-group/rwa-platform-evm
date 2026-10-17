@@ -376,3 +376,94 @@ func TestCombineSafeSignatures_RejectsNonECDSAv(t *testing.T) {
 		t.Fatal("expected an error for no signatures")
 	}
 }
+
+type burnVector struct {
+	Domain struct {
+		ChainID           int64  `json:"chainId"`
+		VerifyingContract string `json:"verifyingContract"`
+	} `json:"domain"`
+	Message struct {
+		Auditor        string `json:"auditor"`
+		ProfileDigest  string `json:"profileDigest"`
+		BurnID         string `json:"burnId"`
+		OperationID    string `json:"operationId"`
+		MetadataDigest string `json:"metadataDigest"`
+		Amount         string `json:"amount"`
+		Nonce          string `json:"nonce"`
+		ValidUntil     uint64 `json:"validUntil"`
+		Vault          string `json:"vault"`
+	} `json:"message"`
+	DomainSeparator  string `json:"domainSeparator"`
+	HashStruct       string `json:"hashStruct"`
+	Digest           string `json:"digest"`
+	SignerPrivateKey string `json:"signerPrivateKey"`
+	Signature        string `json:"signature"`
+}
+
+// Reproduce domain separator, struct hash, digest and exact signature from
+// shared/vectors/burn-eip712.json
+func TestVectors_Burn(t *testing.T) {
+	bv := loadJSON[burnVector](t, filepath.Join(sharedVectorsDir(t), "burn-eip712.json"))
+
+	domain := Domain{ChainID: big.NewInt(bv.Domain.ChainID), VerifyingContract: common.HexToAddress(bv.Domain.VerifyingContract)}
+	sep, err := domain.Separator()
+	if err != nil {
+		t.Fatalf("Domain.Separator: %v", err)
+	}
+	if got := sep.Hex(); !strings.EqualFold(got, bv.DomainSeparator) {
+		t.Errorf("domainSeparator = %s, want %s", got, bv.DomainSeparator)
+	}
+
+	// operationId is keccak256(utf8(burnId))
+	if got, want := crypto.Keccak256Hash([]byte(bv.Message.BurnID)), mustHash32(t, bv.Message.OperationID); got != want {
+		t.Errorf("keccak256(burnId) = %s, want operationId 0x%x", got.Hex(), want)
+	}
+
+	msg := BurnAttestation{
+		Auditor:        common.HexToAddress(bv.Message.Auditor),
+		ProfileDigest:  mustHash32(t, bv.Message.ProfileDigest),
+		OperationID:    mustHash32(t, bv.Message.OperationID),
+		MetadataDigest: mustHash32(t, bv.Message.MetadataDigest),
+		Amount:         mustBigInt(t, bv.Message.Amount),
+		Nonce:          mustBigInt(t, bv.Message.Nonce),
+		ValidUntil:     bv.Message.ValidUntil,
+		Vault:          common.HexToAddress(bv.Message.Vault),
+	}
+	hs, err := msg.HashStruct()
+	if err != nil {
+		t.Fatalf("HashStruct: %v", err)
+	}
+	if got := hs.Hex(); !strings.EqualFold(got, bv.HashStruct) {
+		t.Errorf("hashStruct = %s, want %s", got, bv.HashStruct)
+	}
+	digest, err := BurnDigest(domain, msg)
+	if err != nil {
+		t.Fatalf("BurnDigest: %v", err)
+	}
+	if got := digest.Hex(); !strings.EqualFold(got, bv.Digest) {
+		t.Errorf("digest = %s, want %s", got, bv.Digest)
+	}
+
+	keyBytes, err := hex.DecodeString(strings.TrimPrefix(bv.SignerPrivateKey, "0x"))
+	if err != nil {
+		t.Fatalf("decoding signerPrivateKey: %v", err)
+	}
+	privKey, err := crypto.ToECDSA(keyBytes)
+	if err != nil {
+		t.Fatalf("ToECDSA: %v", err)
+	}
+	sig, err := Sign(digest, privKey)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if got := "0x" + hex.EncodeToString(sig); !strings.EqualFold(got, bv.Signature) {
+		t.Errorf("signature = %s, want %s", got, bv.Signature)
+	}
+	recovered, err := Recover(digest, sig)
+	if err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	if want := common.HexToAddress(bv.Message.Auditor); recovered != want {
+		t.Errorf("recovered signer = %s, want auditor %s", recovered.Hex(), want.Hex())
+	}
+}

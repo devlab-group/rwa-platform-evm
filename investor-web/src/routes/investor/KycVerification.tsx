@@ -153,6 +153,14 @@ export function KycVerificationSection({
             <p className="field__hint" role="status">
               This wallet is already Allowed; no further verification is needed.
             </p>
+          ) : status === "Blocked" ? (
+            // After a submission, ReviewProgress reports the Blocked decision instead
+            phase.kind !== "submitted" && (
+              <p className="async-state--error" role="status">
+                This wallet is Blocked. Contact the issuer to resolve it;
+                verification cannot be restarted here.
+              </p>
+            )
           ) : (
             <>
               {status === "Expired" && (
@@ -169,22 +177,24 @@ export function KycVerificationSection({
             </>
           )}
 
-          {(phase.kind === "idle" ||
-            phase.kind === "starting" ||
-            phase.kind === "error") && (
-            <button
-              type="button"
-              className="button button--primary"
-              onClick={handleStart}
-              disabled={phase.kind === "starting"}
-            >
-              {phase.kind === "starting"
-                ? "Starting…"
-                : phase.kind === "error"
-                  ? "Retry verification"
-                  : "Start verification"}
-            </button>
-          )}
+          {/* A current Allowed or Blocked decision leaves nothing to start */}
+          {!decided &&
+            (phase.kind === "idle" ||
+              phase.kind === "starting" ||
+              phase.kind === "error") && (
+              <button
+                type="button"
+                className="button button--primary"
+                onClick={handleStart}
+                disabled={phase.kind === "starting"}
+              >
+                {phase.kind === "starting"
+                  ? "Starting…"
+                  : phase.kind === "error"
+                    ? "Retry verification"
+                    : "Start verification"}
+              </button>
+            )}
 
           {phase.kind === "error" && (
             <p className="async-state--error" role="alert">

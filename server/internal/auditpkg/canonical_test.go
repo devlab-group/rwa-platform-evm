@@ -1,9 +1,13 @@
 package auditpkg
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 	"testing"
+
+	gocid "github.com/ipfs/go-cid"
+	"github.com/multiformats/go-multihash"
 )
 
 func TestCanonicalizeSortsKeysAndStripsWhitespace(t *testing.T) {
@@ -68,40 +72,42 @@ func TestCanonicalizeRejectsEmpty(t *testing.T) {
 	}
 }
 
-func TestDigestIsDeterministic(t *testing.T) {
+// Check the spec's SHA-256 digest against the standard library, independently of Digest
+func TestDigestIsSHA256OfTheCanonicalBytes(t *testing.T) {
 	canon, err := Canonicalize([]byte(`{"b":2,"a":1}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	d1 := Digest(canon)
-	d2 := Digest(canon)
-	if d1 != d2 {
-		t.Fatal("digest not deterministic")
+	if string(canon) != `{"a":1,"b":2}` {
+		t.Fatalf("canonical bytes = %s", canon)
 	}
-	if got := hex.EncodeToString(d1[:]); len(got) != 64 {
-		t.Errorf("digest hex length = %d, want 64", len(got))
+	want := sha256.Sum256([]byte(`{"a":1,"b":2}`))
+	if got := Digest(canon); got != want {
+		t.Errorf("Digest = %s, want %s", hex.EncodeToString(got[:]), hex.EncodeToString(want[:]))
 	}
 }
 
-func TestCIDv1RawIsStableAndCodecRaw(t *testing.T) {
+// The CID is a CIDv1 with the raw codec and a sha2-256 multihash, derived here with
+// go-cid and go-multihash; "bafkrei" is the base32 prefix of that combination
+func TestCIDv1RawIsRawCodecSha256(t *testing.T) {
 	canon, err := Canonicalize([]byte(`{"a":1}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	c1, err := CIDv1Raw(canon)
+	mh, err := multihash.Sum(canon, multihash.SHA2_256, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c2, err := CIDv1Raw(canon)
+	want := gocid.NewCidV1(gocid.Raw, mh).String()
+	got, err := CIDv1Raw(canon)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c1 != c2 {
-		t.Errorf("CID not stable: %s != %s", c1, c2)
+	if got != want {
+		t.Errorf("CIDv1Raw = %s, want %s", got, want)
 	}
-	if !strings.HasPrefix(c1, "b") {
-		// the multibase prefix for base32 is 'b'
-		t.Errorf("CID %s does not look like a base32 CIDv1", c1)
+	if !strings.HasPrefix(got, "bafkrei") {
+		t.Errorf("CID %s lacks the base32 raw/sha2-256 prefix bafkrei", got)
 	}
 }
 

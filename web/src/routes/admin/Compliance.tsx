@@ -258,7 +258,8 @@ function SetStatusForm({ onSubmitted }: { onSubmitted: () => void }) {
           status,
           validUntil: validUntil ? Number(validUntil) : undefined,
         },
-        `compliance-${address}-${status}`,
+        // A fresh key lets a later re-allow submit instead of replaying an earlier response
+        `compliance-${address}-${status}-${crypto.randomUUID()}`,
       );
       setResult(ref.txHash ?? "submitted");
       setConfirmGateKey((k) => k + 1); // Close the confirmation panel

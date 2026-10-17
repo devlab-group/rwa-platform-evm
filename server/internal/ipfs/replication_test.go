@@ -3,6 +3,10 @@ package ipfs
 import (
 	"context"
 	"errors"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rwa-platform/server/internal/dal/memory"
@@ -53,13 +57,20 @@ func TestReplicationManagerPublishRejectsWrongReturnedCID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.State == models.PublicationReplicated {
-		t.Fatal("expected a wrong-CID backup to NOT count toward the replication threshold")
+	if rec.State != models.PublicationReplicationFailed {
+		t.Fatalf("State = %s, want %s: a wrong-CID backup must not count toward the threshold", rec.State, models.PublicationReplicationFailed)
 	}
+	var found bool
 	for _, d := range rec.Destinations {
-		if d.Name == "backup-node" && (d.Pinned || d.LastError == "") {
-			t.Fatalf("expected the wrong-CID destination to be recorded as failed, got %+v", d)
+		if d.Name == "backup-node" {
+			found = true
+			if d.Pinned || !strings.Contains(d.LastError, "destination returned CID") {
+				t.Fatalf("expected the wrong-CID destination to be recorded as failed with the mismatch, got %+v", d)
+			}
 		}
+	}
+	if !found {
+		t.Fatalf("the backup destination is missing from the record: %+v", rec.Destinations)
 	}
 }
 
@@ -79,8 +90,8 @@ func TestReplicationManagerPublishDetectsPinOKRetrieveFailSynchronously(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.State == models.PublicationReplicated {
-		t.Fatal("expected a pin-ok-but-unretrievable backup to NOT count toward the replication threshold, without waiting for a later Verify call")
+	if rec.State != models.PublicationReplicationFailed {
+		t.Fatalf("State = %s, want %s: a pinned but unretrievable backup must not count toward the threshold, without waiting for a later Verify call", rec.State, models.PublicationReplicationFailed)
 	}
 }
 
@@ -287,8 +298,9 @@ func TestRestoreLocalRejectsWrongReturnedCID(t *testing.T) {
 	// a local node that returns a wrong CID from AddRaw during restore
 	badLocal := &wrongCIDClient{FakeClient: NewFakeClient()}
 	rm2 := NewReplicationManager(badLocal, []Destination{{Name: "b", Client: backup}}, 1, records)
-	if err := rm2.RestoreLocal(context.Background(), "record-1"); err == nil {
-		t.Fatal("expected RestoreLocal to reject a local node returning a CID != recorded CID")
+	err := rm2.RestoreLocal(context.Background(), "record-1")
+	if err == nil || !strings.Contains(err.Error(), "restored local CID") {
+		t.Fatalf("RestoreLocal err = %v, want a restored-local-CID mismatch", err)
 	}
 }
 
@@ -364,14 +376,20 @@ func TestReplicationManagerVerifyDetectsUnretrievableContent(t *testing.T) {
 	if rec.State == models.PublicationReplicated {
 		t.Fatal("expected verification to demote the record once the backup can no longer serve the CID")
 	}
+	for _, d := range rec.Destinations {
+		if d.Name == "backup-node" && (d.Verified || d.LastError == "") {
+			t.Fatalf("backup destination = %+v, want unverified with the retrieval error recorded", d)
+		}
+	}
 	if rec.CID != cid {
 		t.Fatalf("CID changed unexpectedly: %s -> %s", cid, rec.CID)
 	}
 }
 
-// TestFileArchiveClientDownloadVerifiesCID checks that content read from the
-// archive hashes to the CID it was stored under
-func TestFileArchiveClientDownloadVerifiesCID(t *testing.T) {
+// TestFileArchiveClientRoundTripsContentUnderItsCID rehashes retrieved bytes against their CID.
+// Archive reads do not verify integrity; TestReplicationManagerVerifyDemotesACorruptedArchiveBlock
+// checks corruption detection by ReplicationManager.Verify.
+func TestFileArchiveClientRoundTripsContentUnderItsCID(t *testing.T) {
 	archive, err := NewFileArchiveClient(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -394,5 +412,109 @@ func TestFileArchiveClientDownloadVerifiesCID(t *testing.T) {
 	}
 	if gotCID != cid {
 		t.Fatalf("retrieved content hashes to %s, want %s", gotCID, cid)
+	}
+}
+
+// countingAddClient counts AddRaw calls on the node it wraps
+type countingAddClient struct {
+	*FakeClient
+	adds int
+}
+
+func (c *countingAddClient) AddRaw(ctx context.Context, data []byte) (string, error) {
+	c.adds++
+	return c.FakeClient.AddRaw(ctx, data)
+}
+
+// A rejected rebind must not store the new bytes on the local node
+func TestReplicationManagerPublishRejectedRebindStoresNothingLocally(t *testing.T) {
+	local := &countingAddClient{FakeClient: NewFakeClient()}
+	rm := NewReplicationManager(local, nil, 0, memory.NewPublicationRepository())
+
+	if _, err := rm.Publish(context.Background(), "record-1", []byte(`{"asset":"gold-bar-A"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if local.adds != 1 {
+		t.Fatalf("AddRaw calls after the first publish = %d, want 1", local.adds)
+	}
+
+	rebound := []byte(`{"asset":"gold-bar-B"}`)
+	if _, err := rm.Publish(context.Background(), "record-1", rebound); !errors.Is(err, ErrPublicationCIDConflict) {
+		t.Fatalf("err = %v, want ErrPublicationCIDConflict", err)
+	}
+	if local.adds != 1 {
+		t.Errorf("AddRaw calls after the rejected rebind = %d, want still 1 (no orphan block)", local.adds)
+	}
+	orphan, err := ComputeCIDv1Raw(rebound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.Get(context.Background(), orphan); err == nil {
+		t.Error("the rejected content is retrievable from the local node")
+	}
+}
+
+// mislabelingClient is a node that can be switched to answer AddRaw with the CID of
+// other bytes, as a node with a different chunker or hash setting would
+type mislabelingClient struct {
+	*FakeClient
+	lie bool
+}
+
+func (c *mislabelingClient) AddRaw(ctx context.Context, data []byte) (string, error) {
+	if c.lie {
+		return c.FakeClient.AddRaw(ctx, append([]byte("different:"), data...))
+	}
+	return c.FakeClient.AddRaw(ctx, data)
+}
+
+// replicate must check the node's returned CID, even after Publish checks the locally computed one
+func TestReplicationManagerReplicateRejectsNodeReturningADifferentCID(t *testing.T) {
+	ctx := context.Background()
+	local := &mislabelingClient{FakeClient: NewFakeClient()}
+	records := memory.NewPublicationRepository()
+	rm := NewReplicationManager(local, nil, 0, records)
+
+	content := []byte(`{"asset":"gold-bar-A"}`)
+	cidA, err := rm.Publish(ctx, "record-1", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	local.lie = true
+	if _, err := rm.Publish(ctx, "record-1", content); !errors.Is(err, ErrPublicationCIDConflict) {
+		t.Fatalf("Publish with a node returning another CID: err = %v, want ErrPublicationCIDConflict", err)
+	}
+	rec, err := rm.Status(ctx, "record-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.CID != cidA {
+		t.Errorf("publication CID was rebound: %s -> %s", cidA, rec.CID)
+	}
+}
+
+// A block that was altered on disk after publication must not keep the record Replicated
+func TestReplicationManagerVerifyDemotesACorruptedArchiveBlock(t *testing.T) {
+	dir := t.TempDir()
+	archive, err := NewFileArchiveClient(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := memory.NewPublicationRepository()
+	rm := NewReplicationManager(NewFakeClient(), []Destination{{Name: "car-archive", Client: archive}}, 1, records)
+
+	cid, err := rm.Publish(context.Background(), "record-1", []byte(`{"asset":"gold-bar-6"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, url.PathEscape(cid)), []byte(`{"asset":"tampered"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := rm.Verify(context.Background(), "record-1"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := rm.IsDurablyPublished(context.Background(), "record-1", cid); ok {
+		t.Fatal("a record whose archive block no longer hashes to its CID is still reported durably published")
 	}
 }

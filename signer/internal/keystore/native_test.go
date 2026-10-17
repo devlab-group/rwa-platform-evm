@@ -233,3 +233,32 @@ func hexOfLen(t *testing.T, n int) string {
 	}
 	return fmt.Sprintf("%x", b)
 }
+
+// Each KDF parameter just below its floor is refused; the floor itself unlocks
+func TestLoadNative_KDFFloorBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*nativeKDFParams)
+		wantErr bool
+	}{
+		{"floor values", func(*nativeKDFParams) {}, false},
+		{"time below floor", func(p *nativeKDFParams) { p.Time = MinArgon2Time - 1 }, true},
+		{"memory below floor", func(p *nativeKDFParams) { p.Memory = MinArgon2MemoryKiB - 1 }, true},
+		{"threads below floor", func(p *nativeKDFParams) { p.Threads = MinArgon2Threads - 1 }, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := tamperedNativeFile(t, func(f *nativeKeyFile) { tt.mutate(&f.Crypto.KDFParams) })
+			_, _, err := Load(path, testNativePassword)
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("Load at the floor: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "weaker than the minimum policy") {
+				t.Fatalf("Load error = %v, want the weaker-than-minimum refusal", err)
+			}
+		})
+	}
+}

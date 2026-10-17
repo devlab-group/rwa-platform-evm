@@ -1,6 +1,7 @@
 package api
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/ecdsa"
@@ -520,6 +521,21 @@ func TestComplianceSetStatusSubmitsTx(t *testing.T) {
 	if ref.Status != "pending" {
 		t.Errorf("Status = %s", ref.Status)
 	}
+	// The broadcast must be ComplianceRegistry.setStatus(0xB0B0, Allowed, 0)
+	if len(env.client.SentTxs) != 1 {
+		t.Fatalf("broadcast %d transactions, want 1", len(env.client.SentTxs))
+	}
+	sent := env.client.SentTxs[0]
+	data := sent.Data()
+	if sent.To() == nil || *sent.To() != common.HexToAddress("0x0000000000000000000000000000000000C0A1") {
+		t.Errorf("tx sent to %v, want the compliance registry", sent.To())
+	}
+	if len(data) != 4+3*32 || !bytes.Equal(data[:4], crypto.Keccak256([]byte("setStatus(address,uint8,uint64)"))[:4]) {
+		t.Fatalf("calldata is not setStatus(address,uint8,uint64): %x", data)
+	}
+	if !bytes.Equal(data[4+12:36], common.HexToAddress("0xB0B0").Bytes()) || new(big.Int).SetBytes(data[36:68]).Int64() != 1 || new(big.Int).SetBytes(data[68:100]).Sign() != 0 {
+		t.Errorf("calldata args = %x, want account 0xB0B0, status 1 (Allowed), validUntil 0", data[4:])
+	}
 }
 
 // TestIdempotencyKeyRequiredAtAPILayer checks that a side-effecting route wired
@@ -579,6 +595,10 @@ func TestAssetsCreateListPackageAndSignatureFlow(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
+	if created.RecordID != "GOLD-BAR-API-1" || created.Status != string(models.RecordStatusPending) || created.Amount != createBody.Amount ||
+		created.Nonce == "" || created.RecordKey == "" || created.ValidUntil <= time.Now().Unix() {
+		t.Fatalf("created record = %+v, want a Pending record with its nonce, key and a future expiry", created)
+	}
 
 	w = doJSON(t, env.router, http.MethodGet, "/api/v1/assets/records", nil, map[string]string{"Authorization": env.bearer})
 	if w.Code != http.StatusOK {
@@ -588,8 +608,8 @@ func TestAssetsCreateListPackageAndSignatureFlow(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &listed); err != nil {
 		t.Fatal(err)
 	}
-	if len(listed) != 1 {
-		t.Fatalf("expected 1 record, got %d", len(listed))
+	if len(listed) != 1 || listed[0] != created {
+		t.Fatalf("listed = %+v, want exactly the created record %+v", listed, created)
 	}
 
 	w = doJSON(t, env.router, http.MethodGet, "/api/v1/assets/records/"+created.RecordID+"/package", nil, map[string]string{"Authorization": env.bearer})
@@ -599,8 +619,18 @@ func TestAssetsCreateListPackageAndSignatureFlow(t *testing.T) {
 	if w.Header().Get("Content-Type") != "application/zip" {
 		t.Errorf("Content-Type = %s", w.Header().Get("Content-Type"))
 	}
-	if w.Body.Len() == 0 {
-		t.Error("expected non-empty package bytes")
+	zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	if err != nil {
+		t.Fatalf("package is not a zip archive: %v", err)
+	}
+	names := map[string]bool{}
+	for _, f := range zr.File {
+		names[f.Name] = true
+	}
+	for _, want := range []string{"manifest.json", "profile.json", "metadata.json", "typed-data.json"} {
+		if !names[want] {
+			t.Errorf("package lacks %s, has %v", want, names)
+		}
 	}
 }
 
@@ -643,19 +673,8 @@ func TestRedemptionIDParamAcceptsZero(t *testing.T) {
 	w := doJSON(t, env.router, http.MethodGet, "/api/v1/redemptions/0", nil, nil)
 	// No redemption with id 0 exists in this fixture, so the expected answer is 404,
 	// not a 400 for a malformed id
-	if w.Code == http.StatusBadRequest {
-		t.Errorf("id=0: status = 400 (rejected as a malformed id), want it to reach the lookup and 404 instead")
-	}
-}
-
-func TestSalesInventory(t *testing.T) {
-	env := setupTestApp(t)
-
-	w := doJSON(t, env.router, http.MethodGet, "/api/v1/sales/inventory", nil, nil)
-	// Without a canned CallContract response, expect an internal error. A 404 would mean
-	// the route is missing.
-	if w.Code == http.StatusNotFound {
-		t.Fatalf("route not found: %d", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("id=0: status = %d, want 404 (a well-formed id with no redemption)", w.Code)
 	}
 }
 

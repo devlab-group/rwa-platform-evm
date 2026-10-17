@@ -2,10 +2,13 @@
 pragma solidity ^0.8.24;
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {TestBase} from "../helpers/TestBase.sol";
 import {IRedemptionEscrow} from "../../src/interfaces/IRedemptionEscrow.sol";
 import {IComplianceRegistry} from "../../src/interfaces/IComplianceRegistry.sol";
 import {ISupplyController} from "../../src/interfaces/ISupplyController.sol";
+import {FeeOnTransferRWA} from "../mocks/token/FeeOnTransferRWA.sol";
+import {Vault} from "../../src/Vault.sol";
 import {RedemptionEscrow} from "../../src/RedemptionEscrow.sol";
 
 contract RedemptionEscrowTest is TestBase {
@@ -77,11 +80,54 @@ contract RedemptionEscrowTest is TestBase {
         escrow.requestRedemption(1 ether, 0, uint64(block.timestamp - 1));
     }
 
+    function test_requestRedemption_deadlineEqualToNowIsAccepted() public {
+        vm.prank(investor);
+        uint256 id = escrow.requestRedemption(1 ether, 0, uint64(block.timestamp));
+        assertEq(escrow.getRedemption(id).rwaAmount, 1 ether);
+    }
+
     function test_requestRedemption_belowMinQuoteReverts() public {
         uint256 quote = strategy.quoteRedemption(1 ether);
         vm.prank(investor);
         vm.expectRevert(abi.encodeWithSelector(IRedemptionEscrow.QuoteBelowMin.selector, quote, quote + 1));
         escrow.requestRedemption(1 ether, quote + 1, uint64(block.timestamp + 1 days));
+    }
+
+    function test_requestRedemption_zeroQuoteReverts() public {
+        // 1 wei of RWA floors to a zero quote at the fixed redemption price
+        assertEq(strategy.quoteRedemption(1), 0);
+        vm.prank(investor);
+        vm.expectRevert(IRedemptionEscrow.ZeroQuote.selector);
+        escrow.requestRedemption(1, 0, uint64(block.timestamp + 1 days));
+
+        assertEq(escrow.nextId(), 0);
+        assertEq(token.balanceOf(investor), 50 ether);
+        assertEq(token.balanceOf(address(escrow)), 0);
+    }
+
+    function test_requestRedemption_feeOnTransferRwaReverts() public {
+        FeeOnTransferRWA feeRwa = new FeeOnTransferRWA(500, address(compliance)); // 5% fee
+        RedemptionEscrow feeEscrow = new RedemptionEscrow(
+            address(feeRwa),
+            address(quoteToken),
+            address(vault),
+            REDEMPTION_TIMEOUT,
+            treasurer,
+            redemptionManager,
+            admin,
+            0
+        );
+        feeRwa.mint(investor, 10 ether);
+        vm.prank(investor);
+        feeRwa.approve(address(feeEscrow), type(uint256).max);
+
+        vm.prank(investor);
+        vm.expectRevert(abi.encodeWithSelector(IRedemptionEscrow.RwaDeltaMismatch.selector, 10 ether, 9.5 ether));
+        feeEscrow.requestRedemption(10 ether, 0, uint64(block.timestamp + 1 days));
+
+        assertEq(feeEscrow.nextId(), 0);
+        assertEq(feeRwa.balanceOf(investor), 10 ether);
+        assertEq(feeRwa.balanceOf(address(feeEscrow)), 0);
     }
 
     function test_requestRedemption_idsIncrement() public {
@@ -240,6 +286,36 @@ contract RedemptionEscrowTest is TestBase {
         escrow.rejectRedemption(id, keccak256("x"));
     }
 
+    function test_rejectRedemption_whilePausedReverts() public {
+        uint256 id = _request(10 ether);
+        vm.prank(admin);
+        token.pause();
+
+        vm.prank(redemptionManager);
+        vm.expectRevert(IRedemptionEscrow.ProjectPaused.selector);
+        escrow.rejectRedemption(id, keccak256("x"));
+
+        _assertStillPending(id, 10 ether);
+    }
+
+    function test_rejectRedemption_beneficiaryNotAllowedReverts() public {
+        uint256 id = _request(10 ether);
+        vm.prank(complianceOperator);
+        compliance.setStatus(investor, IComplianceRegistry.ComplianceStatus.Blocked, 0);
+
+        // The escrow reports its own error before the token transfer could fail
+        vm.prank(redemptionManager);
+        vm.expectRevert(abi.encodeWithSelector(IRedemptionEscrow.BeneficiaryNotAllowed.selector, investor));
+        escrow.rejectRedemption(id, keccak256("x"));
+
+        _assertStillPending(id, 10 ether);
+    }
+
+    function _assertStillPending(uint256 id, uint256 escrowed) internal view {
+        assertEq(uint8(escrow.getRedemption(id).status), uint8(IRedemptionEscrow.RedemptionStatus.Pending));
+        assertEq(token.balanceOf(address(escrow)), escrowed);
+    }
+
     // ---- cancelRedemption ----
 
     function test_cancelRedemption_afterTimeout() public {
@@ -319,7 +395,7 @@ contract RedemptionEscrowTest is TestBase {
         escrow.cancelRedemption(id);
 
         vm.prank(investor);
-        vm.expectRevert(); // Pausable.EnforcedPause()
+        vm.expectRevert(Pausable.EnforcedPause.selector);
         token.transfer(investor2, 1 ether);
     }
 
@@ -464,28 +540,64 @@ contract RedemptionEscrowTest is TestBase {
         assertEq(escrow.previewRedeem(1 ether), strategy.quoteRedemption(1 ether));
     }
 
-    function test_beneficiary_immutableAcrossLifecycle() public {
-        // requestRedemption sets beneficiary once; later transitions only read it, and the interface
-        // has no setter. Record this structural property here, like test_noRoleCanWithdrawFundedQuote.
-        uint256 id = _request(1 ether);
-        assertEq(escrow.getRedemption(id).beneficiary, investor);
-
+    /// @dev Test callers try known escrow/Vault outflow paths; funded quote and status must remain
+    ///      unchanged until permissionless claim pays the beneficiary. Fuzz only Vault withdrawal amounts.
+    function testFuzz_noRoleCanMoveFundedQuoteViaKnownPaths(uint256 amount) public {
+        uint256 id = _request(10 ether);
         vm.prank(treasurer);
         escrow.fundRedemption(id);
-        assertEq(escrow.getRedemption(id).beneficiary, investor);
+        uint256 funded = escrow.getRedemption(id).quoteAmount;
+        assertEq(quoteToken.balanceOf(address(escrow)), funded);
 
-        escrow.claimRedemption(id); // Permissionless claim by a third party
-        assertEq(escrow.getRedemption(id).beneficiary, investor);
-        assertEq(quoteToken.balanceOf(investor), escrow.getRedemption(id).quoteAmount);
+        // give the Vault its own proceeds so withdrawProceeds has something to move
+        quoteToken.mint(investor2, 100_000_000);
+        vm.startPrank(investor2);
+        quoteToken.approve(address(vault), type(uint256).max);
+        vault.buy(5 ether, type(uint256).max, investor2, uint64(block.timestamp + 1));
+        vm.stopPrank();
+        uint256 vaultProceeds = quoteToken.balanceOf(address(vault));
+        assertGt(vaultProceeds, 0);
+        amount = bound(amount, 0, type(uint128).max);
+
+        address[9] memory actors = [
+            admin, treasurer, redemptionManager, pricer, complianceOperator, auditor, incomeManager, outsider, treasury
+        ];
+        for (uint256 i; i < actors.length; ++i) {
+            vm.startPrank(actors[i]);
+            _attempt(address(escrow), abi.encodeCall(RedemptionEscrow.rejectRedemption, (id, keccak256("x"))));
+            _attempt(address(escrow), abi.encodeCall(RedemptionEscrow.cancelRedemption, (id)));
+            _attempt(address(escrow), abi.encodeCall(RedemptionEscrow.fundRedemption, (id)));
+            _attempt(address(vault), abi.encodeCall(Vault.setTreasury, (actors[i])));
+            _attempt(address(vault), abi.encodeCall(Vault.withdrawProceeds, (amount)));
+            _attempt(address(vault), abi.encodeCall(Vault.withdrawProceeds, (vaultProceeds)));
+            _attempt(address(token), abi.encodeCall(token.forcedTransfer, (address(escrow), actors[i], 1)));
+            vm.stopPrank();
+
+            assertEq(quoteToken.balanceOf(address(escrow)), funded, "funded quote must not move");
+            assertEq(
+                uint8(escrow.getRedemption(id).status),
+                uint8(IRedemptionEscrow.RedemptionStatus.Funded),
+                "only claim may settle a funded request"
+            );
+        }
+
+        // the Vault's own proceeds are the only quote the roles could reach
+        assertLe(quoteToken.balanceOf(address(vault)), vaultProceeds);
+
+        uint256 investorBefore = quoteToken.balanceOf(investor);
+        uint256 outsiderBefore = quoteToken.balanceOf(outsider);
+        vm.prank(outsider);
+        escrow.claimRedemption(id);
+
+        assertEq(quoteToken.balanceOf(investor) - investorBefore, funded, "beneficiary receives the funded quote");
+        assertEq(quoteToken.balanceOf(outsider), outsiderBefore, "the caller of claim receives nothing");
+        assertEq(quoteToken.balanceOf(address(escrow)), 0);
     }
 
-    function test_noRoleCanWithdrawFundedQuote() public {
-        // The escrow exposes no role-based withdrawal of funded quote; only claim pays the recorded
-        // beneficiary. This records an API property rather than testing it at runtime.
-        uint256 id = _request(1 ether);
-        vm.prank(treasurer);
-        escrow.fundRedemption(id);
-        assertEq(quoteToken.balanceOf(address(escrow)), escrow.getRedemption(id).quoteAmount);
+    /// @dev Calls that are expected to revert are fine; the caller asserts on balances and status
+    function _attempt(address target, bytes memory data) internal {
+        (bool ok,) = target.call(data);
+        ok;
     }
 
     function test_constructor_zeroAddressReverts() public {

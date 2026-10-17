@@ -3,6 +3,7 @@ package mongodb
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,5 +144,31 @@ func TestLiveTransactionListPagePagesPastTheFirstPage(t *testing.T) {
 		if ids[i] != want[i] {
 			t.Fatalf("paged order = %v, want %v", ids, want)
 		}
+	}
+}
+
+// TestLivePurchaseListPageWalksTiedBlockNumbers requires the ID tie-break to return each purchase once
+func TestLivePurchaseListPageWalksTiedBlockNumbers(t *testing.T) {
+	db := liveDB(t)
+	ctx := context.Background()
+	repo := &purchaseRepo{coll: db.Collection(collPurchases)}
+	for _, id := range []string{"a:0", "b:0", "c:0", "d:0", "e:0"} {
+		if err := repo.Create(ctx, &models.Purchase{ID: id, TxHash: id, BlockNumber: 7}); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	ids := pageAll(t, 2, func(cursor string) ([]string, string) {
+		items, next, err := repo.ListPage(ctx, cursor, 2)
+		if err != nil {
+			t.Fatalf("ListPage(%q): %v", cursor, err)
+		}
+		out := make([]string, 0, len(items))
+		for _, it := range items {
+			out = append(out, it.ID)
+		}
+		return out, next
+	})
+	if got, want := strings.Join(ids, ","), "e:0,d:0,c:0,b:0,a:0"; got != want {
+		t.Fatalf("paged order = %s, want %s", got, want)
 	}
 }

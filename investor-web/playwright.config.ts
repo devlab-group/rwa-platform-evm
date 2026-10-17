@@ -7,17 +7,16 @@ import { defineConfig, devices } from "@playwright/test";
 //   mockOnly() specs.
 // See tests/fixtures/fixtures.ts.
 const liveBaseUrl = process.env.BASE_URL;
-const PREVIEW_PORT = 4173;
+const PREVIEW_PORT = 4174; // Keep separate from web/'s preview on 4173
 
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["line"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL: liveBaseUrl ?? `http://localhost:${PREVIEW_PORT}`,
-    trace: "on-first-retry",
+    trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
   projects: [
@@ -31,9 +30,10 @@ export default defineConfig({
   webServer: liveBaseUrl
     ? undefined
     : {
-        command: `npm run preview -- --port ${PREVIEW_PORT} --strictPort`,
+        // Build before starting the preview server
+        command: `npm run build && npm run preview -- --port ${PREVIEW_PORT} --strictPort`,
         url: `http://localhost:${PREVIEW_PORT}`,
         reuseExistingServer: !process.env.CI,
-        timeout: 30_000,
+        timeout: 120_000, // includes the build
       },
 });

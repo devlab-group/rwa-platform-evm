@@ -65,8 +65,14 @@ async function reachDeployFormAndFill(
     purchase: "1",
     redemption: "1",
   },
+  tokenDecimals?: number,
 ) {
   renderWithWallet(<Setup />, { connected: true });
+  if (tokenDecimals !== undefined) {
+    fireEvent.change(await screen.findByLabelText("Token decimals"), {
+      target: { value: String(tokenDecimals) },
+    });
+  }
   // Wait for configured projectId to enable Validate; profile lookup returns 404 for creation tests
   const validateBtn = await screen.findByRole("button", {
     name: "Validate profile",
@@ -140,7 +146,7 @@ describe("Setup deploy price conversion", () => {
   });
 
   it("broadcasts a well-formed ProjectConfig with prices scaled by the on-chain quote decimals", async () => {
-    await reachDeployFormAndFill({ purchase: "1", redemption: "2.5" });
+    await reachDeployFormAndFill({ purchase: "1", redemption: "2.5" }, 8);
 
     fireEvent.click(screen.getByRole("button", { name: "Confirm deploy" }));
 
@@ -163,6 +169,9 @@ describe("Setup deploy price conversion", () => {
     expect(config.admin).toBe(ADDR(3));
     expect(config.auditor).toBe(ADDR(4));
     expect(config.treasury).toBe(ADDR(9));
+    // Decimals and digest come from the profile the admin just persisted
+    expect(config.decimals).toBe(8);
+    expect(config.profileDigest).toBe("0xdig");
   });
 
   it("blocks the deploy when the quote token's decimals can't be read on-chain", async () => {
@@ -587,6 +596,10 @@ describe("Setup by factory version", () => {
       minPurchaseQuote: 10_000_000n,
       pricer: ADDR(6),
       incomeManager: ADDR(10),
+      // Token decimals and digest come from the stored profile, not from the form
+      decimals: 6,
+      profileDigest: "0xdig",
+      projectId: keccak256(toBytes("proj-1")),
     });
   });
 

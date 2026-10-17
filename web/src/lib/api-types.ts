@@ -307,7 +307,7 @@ export interface paths {
     put?: never;
     /**
      * Start KYC for the session wallet
-     * @description Starts the configured provider's flow for the X-Wallet-Session address, returning an SDK token or hosted URL. Request parameters cannot select another wallet. No on-chain change occurs here; authenticated webhook decisions are applied asynchronously. Returns 501 when server-initiated verification is unsupported, including provider none.
+     * @description Starts the configured provider's flow for the X-Wallet-Session address, returning an SDK token or hosted URL. Request parameters cannot select another wallet. No on-chain change occurs here; authenticated webhook decisions are applied asynchronously. Returns 501 when server-initiated verification is unsupported, including provider none, and 502 when the provider call fails.
      */
     post: operations["startKYC"];
     delete?: never;
@@ -1641,6 +1641,7 @@ export interface operations {
       };
       401: components["responses"]["Error"];
       501: components["responses"]["Error"];
+      502: components["responses"]["Error"];
     };
   };
   listRecords: {

@@ -1,4 +1,7 @@
+import { decodeFunctionData, erc20Abi } from "viem";
 import { expect, mockOnly, test } from "../fixtures/fixtures";
+import { ADDRESSES } from "../fixtures/mock-api";
+import { getMockSentTransactions } from "../fixtures/mock-wallet";
 import { InvestorPage } from "../pages/InvestorPage";
 
 const ALLOWED_ADDRESS = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -41,12 +44,22 @@ test.describe("Investor - transfer compliance gate", () => {
     await investor.goto();
     await investor.connectWallet();
 
-    await investor.transfer({ recipient: ALLOWED_ADDRESS, amount: "1000000000000000000" });
+    await investor.transfer({ recipient: ALLOWED_ADDRESS, amount: "1" });
     await expect(page.getByText(/Submitted:/)).toBeVisible();
+
+    // transfer(recipient, amount) goes to the RWA token, not the quote token
+    const sent = (await getMockSentTransactions(page)).at(-1);
+    expect(sent?.to?.toLowerCase()).toBe(ADDRESSES.token.toLowerCase());
+    const decoded = decodeFunctionData({ abi: erc20Abi, data: sent!.data as `0x${string}` });
+    expect(decoded.functionName).toBe("transfer");
+    // viem returns the checksummed address
+    expect((decoded.args[0] as string).toLowerCase()).toBe(ALLOWED_ADDRESS);
+    // 1 whole token at 18 decimals
+    expect(decoded.args[1]).toBe(10n ** 18n);
 
     // The submitted hash appears in the "Submitted this session" list. The
     // server's transaction index has no entry for a plain transfer
     await expect(investor.historySection).toContainText("transfer");
-    await expect(investor.historySection.locator("td.mono")).toBeVisible();
+    await expect(investor.historySection.getByRole("cell", { name: /^0x[0-9a-f]{64}$/ })).toBeVisible();
   });
 });

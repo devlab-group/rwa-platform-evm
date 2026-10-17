@@ -2,7 +2,8 @@
 SHELL := /bin/bash
 
 .PHONY: help bootstrap format lint contracts-test signer-test server-test web-test \
-        investor-web-test vectors-check dialect-check bindings-check e2e ci up down \
+        investor-web-test web-e2e investor-web-e2e vectors-check dialect-check bindings-check \
+        e2e ci up down \
         security-scan platform signer embed-check
 
 help: ## Show this help
@@ -18,8 +19,8 @@ bootstrap: ## Install dependencies for each module
 	  { [ -d lib/forge-std ] || forge install --no-git foundry-rs/forge-std@v1.16.2; }
 	@echo "==> signer";    cd signer && go mod download
 	@echo "==> server";    cd server && go mod download
-	@echo "==> web";       cd web && npm install
-	@echo "==> investor-web"; cd investor-web && npm install
+	@echo "==> web";       cd web && npm install && npx playwright install chromium
+	@echo "==> investor-web"; cd investor-web && npm install && npx playwright install chromium
 
 format: ## Format all code
 	-cd contracts && forge fmt
@@ -50,6 +51,13 @@ web-test: ## Web (admin console) typecheck + tests + build
 investor-web-test: ## Investor example SPA typecheck + tests + build
 	cd investor-web && npm run typecheck --if-present && npm test --if-present && npm run build
 
+# Keep Playwright's mocked API on the preview origin by overriding any .env API URL
+web-e2e: ## Web (admin console) Playwright suite against the built SPA
+	cd web && npm run typecheck:e2e && VITE_API_BASE_URL= npm run test:e2e
+
+investor-web-e2e: ## Investor example SPA Playwright suite against the built SPA
+	cd investor-web && npm run typecheck:e2e && VITE_API_BASE_URL= npm run test:e2e
+
 vectors-check: dialect-check ## Verify shared golden vectors reproduce across languages
 	cd signer && go test ./internal/attestation/... -run Vectors
 	cd contracts && forge test --match-contract Vectors
@@ -59,7 +67,9 @@ vectors-check: dialect-check ## Verify shared golden vectors reproduce across la
 	cd server && go test ./internal/bindings/... -run Vectors -count=1
 	# Check the server tree against the same OpenZeppelin vectors as the contracts
 	cd server && go test ./internal/income -run TestIncomeMerkleVectors -count=1
-	cd web && npm test -- --run src/lib/abis.test.ts
+	# Mint and burn EIP-712 digests
+	cd server && go test ./internal/eip712 -run 'Typehashes|GoldenVector' -count=1
+	cd web && npm test -- --run src/lib/abis.test.ts src/lib/vectors.test.ts
 
 dialect-check: ## Cross-binary parity for the assetSchema dialect
 	# The first run fails on any failing case; the second asserts that a Dialect test
@@ -101,15 +111,14 @@ e2e: ## Full on-chain + HTTP-API end-to-end flow
 	cd contracts && bash script/e2e.sh
 	cd server && bash e2e/run_e2e.sh
 
-ci: lint contracts-test signer-test server-test web-test investor-web-test vectors-check bindings-check embed-check ## Run PR checks; run make format first
+ci: lint contracts-test signer-test server-test web-test investor-web-test web-e2e investor-web-e2e vectors-check bindings-check embed-check ## Run PR checks; run make format first
 	@echo "CI OK"
 
 security-scan: ## Dependency vulnerability scan (fail-closed on reachable advisories)
 	cd server && go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 	cd signer && go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 	# Production deps only: dev tooling (eslint, openapi-typescript, playwright) never
-	# ships in the SPA or binary, and some of its transitive advisories have no upstream
-	# fix (js-yaml via @redocly/openapi-core). Mirrors the ci.yml security-scan job.
+	# ships in the SPA or binary. Mirrors the ci.yml security-scan job.
 	cd web && npm audit --omit=dev --audit-level=high
 
 up: ## Start local dev stack (anvil, mongo, ipfs)

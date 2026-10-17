@@ -16,10 +16,18 @@ func TestChainEventRepositoryListAllIncludesRemovedSortedByPosition(t *testing.T
 	mk := func(chainID int64, addr, txHash string, block uint64, logIndex uint, removed bool) *models.ChainEvent {
 		return &models.ChainEvent{ChainID: chainID, Address: addr, TxHash: txHash, BlockNumber: block, LogIndex: logIndex, Name: "Purchased", Removed: removed}
 	}
-	_ = repo.Create(ctx, mk(31337, "0xA", "0x1", 10, 1, false))
-	_ = repo.Create(ctx, mk(31337, "0xA", "0x2", 10, 0, true)) // removed, earlier logIndex
-	_ = repo.Create(ctx, mk(31337, "0xB", "0x3", 12, 0, false))
-	_ = repo.Create(ctx, mk(999, "0xA", "0x9", 1, 0, false)) // other chain
+	if err := repo.Create(ctx, mk(31337, "0xA", "0x1", 10, 1, false)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := repo.Create(ctx, mk(31337, "0xA", "0x2", 10, 0, true)); err != nil {
+		t.Fatalf("Create: %v", err)
+	} // removed, earlier logIndex
+	if err := repo.Create(ctx, mk(31337, "0xB", "0x3", 12, 0, false)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := repo.Create(ctx, mk(999, "0xA", "0x9", 1, 0, false)); err != nil {
+		t.Fatalf("Create: %v", err)
+	} // other chain
 
 	got, err := repo.ListAll(ctx, 31337)
 	if err != nil {
@@ -45,7 +53,11 @@ func TestTransactionRepositoryGetByTxHash(t *testing.T) {
 		t.Fatalf("empty txHash err = %v, want ErrNotFound", err)
 	}
 
-	_ = repo.Create(ctx, &models.Transaction{ID: "mgr-1", ChainID: 31337, TxHash: "0xabc", Status: models.TxConfirmed})
+	if err := repo.Create(ctx, &models.Transaction{ID: "mgr-1", ChainID: 31337, TxHash: "0xabc", Status: models.TxConfirmed}); err != nil {
+
+		t.Fatalf("Create: %v", err)
+
+	}
 	got, err := repo.GetByTxHash(ctx, 31337, "0xabc")
 	if err != nil {
 		t.Fatal(err)
@@ -60,8 +72,12 @@ func TestTransactionRepositoryGetByTxHash(t *testing.T) {
 
 	// when a manager record and an event-derived record share a hash, the manager
 	// record is returned so the projector dedups
-	_ = repo.Create(ctx, &models.Transaction{ID: models.EventDerivedTxIDPrefix + "0xdef", ChainID: 31337, TxHash: "0xdef", Status: models.TxConfirmed})
-	_ = repo.Create(ctx, &models.Transaction{ID: "mgr-2", ChainID: 31337, TxHash: "0xdef", Status: models.TxConfirmed})
+	if err := repo.Create(ctx, &models.Transaction{ID: models.EventDerivedTxIDPrefix + "0xdef", ChainID: 31337, TxHash: "0xdef", Status: models.TxConfirmed}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := repo.Create(ctx, &models.Transaction{ID: "mgr-2", ChainID: 31337, TxHash: "0xdef", Status: models.TxConfirmed}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 	got, err = repo.GetByTxHash(ctx, 31337, "0xdef")
 	if err != nil {
 		t.Fatal(err)

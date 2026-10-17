@@ -81,6 +81,10 @@ export class InvestorPage {
     await this.redemptionSection.getByRole("button", { name: "Preview quote" }).click();
   }
 
+  async setRedeemSlippage(bps: string): Promise<void> {
+    await this.page.locator("#redeem-slippage").fill(bps);
+  }
+
   async approveRedeem(): Promise<void> {
     await this.redemptionSection.getByRole("button", { name: "1. Approve RWA spend" }).click();
   }

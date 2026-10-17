@@ -256,7 +256,9 @@ func TestReconcilerRefusesSanctionedApproval(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "list.txt")
 	writeList(t, path, wB+"\n", time.Now())
 	l := NewSanctionsList(path)
-	_, _ = l.Reload()
+	if _, err := l.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
 	repos := memory.New()
 	r, raisedAlerts := guardedReconciler(t, repos, NewGuard(repos, 0, nil, l))
 	seedEvent(t, repos, "allow-b", wB, "Allowed")
@@ -383,5 +385,35 @@ func TestSanctionsListReload_MissingFile_KeepsListInForce(t *testing.T) {
 	}
 	if !l.Contains(wA) {
 		t.Fatalf("Contains(%s) after a failed reload = false, want the previous list kept", wA)
+	}
+}
+
+// Exactly the statuses named in countedWallets' doc comment hold a slot: a transaction that
+// may still land (pending, mined, confirmed) or whose broadcast outcome is unknown
+func TestGuard_InFlightAllowHoldsASlotOnlyForLiveStatuses(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	for _, st := range models.AllTxStatuses {
+		want := error(nil)
+		switch st {
+		case models.TxPending, models.TxMined, models.TxConfirmed, models.TxBroadcastUnknown:
+			want = ErrHolderCapReached
+		}
+		t.Run(string(st), func(t *testing.T) {
+			repos := memory.New()
+			g := NewGuard(repos, 1, nil, nil)
+			if err := repos.Transactions.Create(ctx, &models.Transaction{ID: "tx1", Status: st, SubmittedAt: now}); err != nil {
+				t.Fatal(err)
+			}
+			if err := repos.ComplianceOperations.Create(ctx, &models.ComplianceOperation{ID: "tx1", Address: wA, Status: models.ComplianceAllowed, CreatedAt: now}); err != nil {
+				t.Fatal(err)
+			}
+			if err := g.CheckAllow(ctx, wB, now); !errors.Is(err, want) {
+				t.Fatalf("CheckAllow(new wallet) with a %s allow in flight = %v, want %v", st, err, want)
+			}
+			if err := g.CheckAllow(ctx, wA, now); err != nil {
+				t.Fatalf("the in-flight wallet itself must always pass, got %v", err)
+			}
+		})
 	}
 }

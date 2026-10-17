@@ -2,24 +2,45 @@
 // problems, and landmark and heading structure issues. The scans check markup,
 // not seeded state, so mockOnly() does not apply.
 import AxeBuilder from "@axe-core/playwright";
+import type { Page } from "@playwright/test";
 import { expect, requireAdminSession, test } from "../fixtures/fixtures";
 
-const ROUTES = [
-  "/admin/setup",
-  "/admin/assets",
-  "/admin/compliance",
-  "/admin/inventory-sales",
-  "/admin/redemptions",
-  "/admin/transactions",
-  "/admin/security",
-  "/admin/income",
+// Route and its h1; the scan waits for the heading and for every section to finish loading
+const ROUTES: ReadonlyArray<readonly [string, string]> = [
+  ["/admin/setup", "Setup"],
+  ["/admin/assets", "Assets"],
+  ["/admin/compliance", "Compliance"],
+  ["/admin/inventory-sales", "Inventory & Sales"],
+  ["/admin/redemptions", "Redemptions"],
+  ["/admin/transactions", "Transactions"],
+  ["/admin/security", "Security"],
+  ["/admin/income", "Income"],
 ];
+
+// Wait for the heading and for loading placeholders to disappear
+async function expectScreenLoaded(page: Page, heading: string) {
+  await expect(page.getByRole("heading", { name: heading, level: 1 })).toBeVisible();
+  await expect(page.getByText("Loading…")).toHaveCount(0);
+}
+
+// Asserts zero WCAG A/AA violations of any impact
+async function expectNoAxeViolations(page: Page) {
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(
+    results.violations,
+    results.violations
+      .map((v) => `${v.id} [${v.impact}]: ${v.help} (${v.nodes.length} node(s))`)
+      .join("\n"),
+  ).toEqual([]);
+}
 
 // Every test here scans an admin screen
 test.beforeEach(() => requireAdminSession());
 
-for (const path of ROUTES) {
-  test(`${path} has no serious/critical axe violations`, async ({ page, api }) => {
+for (const [path, heading] of ROUTES) {
+  test(`${path} has no axe violations`, async ({ page, api }) => {
     // Income and the v3 Security sections render only for an rwa-v3 project
     if (path === "/admin/income") {
       api.project.version = "rwa-v3";
@@ -40,24 +61,13 @@ for (const path of ROUTES) {
       });
     }
     await page.goto(path);
-    // Wait for the lazy-loaded route chunk to mount before scanning
-    await page.waitForLoadState("networkidle");
+    await expectScreenLoaded(page, heading);
 
-    const results = await new AxeBuilder({ page })
-      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
-      .analyze();
-
-    const seriousOrWorse = results.violations.filter(
-      (v) => v.impact === "serious" || v.impact === "critical",
-    );
-    expect(
-      seriousOrWorse,
-      seriousOrWorse.map((v) => `${v.id}: ${v.help} (${v.nodes.length} node(s))`).join("\n"),
-    ).toEqual([]);
+    await expectNoAxeViolations(page);
   });
 }
 
-test("/admin/security with an rwa-v3 oracle project has no serious/critical axe violations", async ({ page, api }) => {
+test("/admin/security with an rwa-v3 oracle project has no axe violations", async ({ page, api }) => {
   api.project.version = "rwa-v3";
   api.project.strategyKind = "Oracle";
   api.project.minPurchaseQuote = "25000000";
@@ -72,17 +82,20 @@ test("/admin/security with an rwa-v3 oracle project has no serious/critical axe 
     updatedAt: Math.floor(Date.now() / 1000),
   };
   await page.goto("/admin/security");
-  await page.waitForLoadState("networkidle");
-  const results = await new AxeBuilder({ page })
-    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
-    .analyze();
-  const seriousOrWorse = results.violations.filter(
-    (v) => v.impact === "serious" || v.impact === "critical",
-  );
-  expect(
-    seriousOrWorse,
-    seriousOrWorse.map((v) => `${v.id}: ${v.help} (${v.nodes.length} node(s))`).join("\n"),
-  ).toEqual([]);
+  await expectScreenLoaded(page, "Security");
+  // The oracle section renders only for an Oracle strategy
+  await expect(page.getByText(/purchase spread/i).first()).toBeVisible();
+  await expectNoAxeViolations(page);
+});
+
+test.describe("signed-out", () => {
+  test.use({ skipAuthBootstrap: true });
+
+  test("the admin sign-in screen has no axe violations", async ({ page }) => {
+    await page.goto("/admin/setup");
+    await expect(page.getByRole("heading", { name: "Admin sign-in" })).toBeVisible();
+    await expectNoAxeViolations(page);
+  });
 });
 
 test("skip link moves focus to main content", async ({ page }) => {

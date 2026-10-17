@@ -127,6 +127,20 @@ describe("InventorySales amount conversion", () => {
     expect(sendWithdrawProceeds).not.toHaveBeenCalled();
   });
 
+  it("hides the withdrawal form from a wallet without TREASURER_ROLE on the Vault", async () => {
+    vi.mocked(api.getProject).mockResolvedValue({
+      ...PROJECT,
+      roles: { TREASURER_ROLE: ["0x9999999999999999999999999999999999999999"] },
+    });
+    renderWithWallet(<InventorySales />, { connected: true });
+
+    expect(
+      await screen.findByText(/withdraw treasury proceeds/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Withdraw" })).toBeNull();
+    expect(sendWithdrawProceeds).not.toHaveBeenCalled();
+  });
+
   // A stale oracle leaves the prices out of the inventory; the operator needs the reason, not "-"
   it("shows why prices are missing when the oracle strategy reports a price error", async () => {
     vi.mocked(api.getInventory).mockResolvedValue({

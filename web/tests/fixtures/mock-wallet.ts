@@ -4,7 +4,7 @@
 // available, and passed to the injected script as plain data, which keeps the
 // in-page script free of imports.
 import type { Page } from "@playwright/test";
-import { encodeFunctionResult, erc20Abi, toFunctionSelector } from "viem";
+import { encodeFunctionResult, erc20Abi, hexToString, toFunctionSelector, type Hex } from "viem";
 
 export const MOCK_WALLET_ADDRESS = "0x1111111111111111111111111111111111111111" as const;
 export const MOCK_CHAIN_ID = 31337;
@@ -59,6 +59,7 @@ export async function installMockWallet(
       const receipts = new Map<string, { blockNumber: number; to: string | null }>();
       const sentTransactions: { to: string | null; data: string | null }[] = [];
       let currentChainIdHex = args.chainIdHex;
+      const signRequests: { messageHex: string; signer: string }[] = [];
 
       const provider = {
         isMockWallet: true,
@@ -84,6 +85,10 @@ export async function installMockWallet(
         __getSentTransactions() {
           return sentTransactions;
         },
+        // Test-only hook: every personal_sign request, so specs can check what was signed
+        __getSignRequests() {
+          return signRequests;
+        },
         async request({ method, params }: { method: string; params?: unknown[] }) {
           switch (method) {
             case "eth_requestAccounts":
@@ -101,6 +106,10 @@ export async function installMockWallet(
             }
             case "personal_sign":
             case "eth_sign":
+              signRequests.push({
+                messageHex: String(params?.[0]),
+                signer: String(params?.[1]),
+              });
               return `0x${"11".repeat(65)}`;
             case "eth_sendTransaction": {
               txNonce += 1;
@@ -198,4 +207,21 @@ export async function getMockSentTransactions(page: Page): Promise<MockSentTrans
       window as unknown as { ethereum: { __getSentTransactions: () => MockSentTransaction[] } }
     ).ethereum.__getSentTransactions(),
   );
+}
+
+export interface MockSignRequest {
+  message: string;
+  signer: string;
+}
+
+/** Returns every personal_sign request so far, with the message decoded to text */
+export async function getMockSignRequests(page: Page): Promise<MockSignRequest[]> {
+  const raw = await page.evaluate(() =>
+    (
+      window as unknown as {
+        ethereum: { __getSignRequests: () => { messageHex: string; signer: string }[] };
+      }
+    ).ethereum.__getSignRequests(),
+  );
+  return raw.map((r) => ({ message: hexToString(r.messageHex as Hex), signer: r.signer }));
 }

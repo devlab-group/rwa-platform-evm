@@ -74,6 +74,32 @@ contract RWATokenTest is TestBase {
         token.transfer(outsider, 1 ether);
     }
 
+    function test_transferFrom_recipientNotAllowedReverts() public {
+        _mintTo(investor, 100 ether);
+        vm.prank(investor);
+        token.approve(investor2, 10 ether);
+
+        vm.prank(investor2);
+        vm.expectRevert(abi.encodeWithSelector(IRWAToken.RecipientNotAllowed.selector, outsider));
+        token.transferFrom(investor, outsider, 1 ether);
+
+        assertEq(token.balanceOf(investor), 100 ether);
+        assertEq(token.balanceOf(outsider), 0);
+        assertEq(token.allowance(investor, investor2), 10 ether);
+    }
+
+    function test_mintAndBurn_exemptFromEligibility() public {
+        // outsider is not Allowed, yet the controller can mint to and burn from it
+        assertFalse(token.canReceive(outsider));
+        vm.startPrank(address(supplyController));
+        token.controllerMint(outsider, 5 ether);
+        assertEq(token.balanceOf(outsider), 5 ether);
+        token.controllerBurn(outsider, 2 ether);
+        vm.stopPrank();
+        assertEq(token.balanceOf(outsider), 3 ether);
+        assertEq(token.totalSupply(), 3 ether);
+    }
+
     function test_transfer_senderNotAllowedReverts() public {
         _mintTo(investor, 100 ether);
 
@@ -117,7 +143,7 @@ contract RWATokenTest is TestBase {
         assertTrue(token.paused());
 
         vm.prank(investor);
-        vm.expectRevert();
+        vm.expectRevert(Pausable.EnforcedPause.selector);
         token.transfer(investor2, 1 ether);
     }
 
@@ -159,6 +185,7 @@ contract RWATokenTest is TestBase {
         RWAToken fresh = new RWAToken("Fresh", "FRSH", 18, address(compliance), admin, 0);
         vm.expectRevert(RWAToken.ZeroAddress.selector);
         fresh.setRedemptionEscrow(address(0));
+        assertEq(fresh.redemptionEscrow(), address(0));
     }
 
     function test_returnEscrowedRWA_onlyRedemptionEscrow() public {
@@ -196,6 +223,19 @@ contract RWATokenTest is TestBase {
             abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, outsider, pauserRole)
         );
         token.pause();
+    }
+
+    function test_unpause_onlyPauserRole() public {
+        vm.prank(admin);
+        token.pause();
+
+        bytes32 pauserRole = token.PAUSER_ROLE();
+        vm.prank(outsider);
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, outsider, pauserRole)
+        );
+        token.unpause();
+        assertTrue(token.paused());
     }
 
     // ---- ERC-7943 (uRWA) queries ----
@@ -286,7 +326,9 @@ contract RWATokenTest is TestBase {
         assertTrue(token.canTransfer(investor, investor2, 101 ether));
 
         vm.prank(investor);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, investor, 100 ether, 101 ether)
+        );
         token.transfer(investor2, 101 ether);
     }
 

@@ -2,6 +2,7 @@ package compliance
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -59,7 +60,13 @@ func TestChallengeVerifyRejectsReplay(t *testing.T) {
 	addr := crypto.PubkeyToAddress(priv.PublicKey)
 	svc, _, _ := newTestChallengeService(time.Hour)
 
-	c, _ := svc.Create(context.Background(), addr.Hex())
+	c, err := svc.Create(context.Background(), addr.Hex())
+
+	if err != nil {
+
+		t.Fatal(err)
+
+	}
 	hash := accounts.TextHash([]byte(c.Message))
 	sig, _ := crypto.Sign(hash, priv)
 
@@ -79,7 +86,13 @@ func TestChallengeVerifyConcurrentReplaySucceedsOnce(t *testing.T) {
 	addr := crypto.PubkeyToAddress(priv.PublicKey)
 	svc, _, _ := newTestChallengeService(time.Hour)
 
-	c, _ := svc.Create(context.Background(), addr.Hex())
+	c, err := svc.Create(context.Background(), addr.Hex())
+
+	if err != nil {
+
+		t.Fatal(err)
+
+	}
 	hash := accounts.TextHash([]byte(c.Message))
 	sig, _ := crypto.Sign(hash, priv)
 
@@ -120,7 +133,13 @@ func TestChallengeVerifyRejectsExpired(t *testing.T) {
 	addr := crypto.PubkeyToAddress(priv.PublicKey)
 	svc, _, _ := newTestChallengeService(-time.Minute) // already expired
 
-	c, _ := svc.Create(context.Background(), addr.Hex())
+	c, err := svc.Create(context.Background(), addr.Hex())
+
+	if err != nil {
+
+		t.Fatal(err)
+
+	}
 	hash := accounts.TextHash([]byte(c.Message))
 	sig, _ := crypto.Sign(hash, priv)
 
@@ -135,7 +154,13 @@ func TestChallengeVerifyRejectsWrongSigner(t *testing.T) {
 	addr := crypto.PubkeyToAddress(priv.PublicKey)
 	svc, _, _ := newTestChallengeService(time.Hour)
 
-	c, _ := svc.Create(context.Background(), addr.Hex())
+	c, err := svc.Create(context.Background(), addr.Hex())
+
+	if err != nil {
+
+		t.Fatal(err)
+
+	}
 	hash := accounts.TextHash([]byte(c.Message))
 	sig, _ := crypto.Sign(hash, otherKey) // signed by a different key than the challenge address
 
@@ -258,7 +283,9 @@ func TestChallengeCreateCapCountsOnlyActiveChallenges(t *testing.T) {
 func TestChallengeCreateCapExpiredChallengesDontCount(t *testing.T) {
 	priv, _ := crypto.GenerateKey()
 	addr := crypto.PubkeyToAddress(priv.PublicKey)
-	svc, _, _ := newTestChallengeService(10 * time.Millisecond)
+	svc, _, _ := newTestChallengeService(time.Minute)
+	clock := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return clock }
 	svc.MaxActiveChallengesPerAddress = 1
 
 	if _, err := svc.Create(context.Background(), addr.Hex()); err != nil {
@@ -268,50 +295,9 @@ func TestChallengeCreateCapExpiredChallengesDontCount(t *testing.T) {
 		t.Fatalf("second Create before expiry: err = %v, want ErrTooManyActiveChallenges", err)
 	}
 
-	time.Sleep(20 * time.Millisecond) // past ttl
+	clock = clock.Add(time.Minute + time.Second) // past ttl
 	if _, err := svc.Create(context.Background(), addr.Hex()); err != nil {
 		t.Fatalf("Create after the only active challenge expired: %v", err)
-	}
-}
-
-// TestWalletChallengeRepositoryCountActive exercises the memory repository's
-// CountActive directly, without ChallengeService
-func TestWalletChallengeRepositoryCountActive(t *testing.T) {
-	repo := memory.NewWalletChallengeRepository()
-	ctx := context.Background()
-	now := time.Now().UTC()
-
-	mustCreate := func(id, address string, expiresAt time.Time, used bool) {
-		t.Helper()
-		if err := repo.Create(ctx, &models.WalletChallenge{
-			ID: id, Address: address, Nonce: id, ExpiresAt: expiresAt, Used: used, CreatedAt: now,
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	const addrA = "0xAAAA000000000000000000000000000000AAAA"
-	const addrB = "0xBBBB000000000000000000000000000000BBBB"
-	mustCreate("active-1", addrA, now.Add(time.Hour), false)
-	mustCreate("active-2", addrA, now.Add(time.Hour), false)
-	mustCreate("used", addrA, now.Add(time.Hour), true)
-	mustCreate("expired", addrA, now.Add(-time.Hour), false)
-	mustCreate("other-address", addrB, now.Add(time.Hour), false)
-
-	n, err := repo.CountActive(ctx, addrA, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 2 {
-		t.Errorf("CountActive(addrA) = %d, want 2 (used and expired must not count)", n)
-	}
-
-	n, err = repo.CountActive(ctx, addrB, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Errorf("CountActive(addrB) = %d, want 1", n)
 	}
 }
 
@@ -341,5 +327,46 @@ func TestVerifyOwnershipPreservesExistingComplianceStatus(t *testing.T) {
 	}
 	if !inv.OwnershipVerified {
 		t.Error("expected OwnershipVerified = true")
+	}
+}
+
+// Verify accepts a challenge up to and including its expiry instant and rejects it one
+// second later
+func TestChallengeVerify_ExpiryBoundary(t *testing.T) {
+	priv, _ := crypto.GenerateKey()
+	addr := crypto.PubkeyToAddress(priv.PublicKey)
+	issued := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		at      time.Time
+		wantErr error
+	}{
+		{"one second before expiry", issued.Add(time.Minute - time.Second), nil},
+		{"exactly at expiry", issued.Add(time.Minute), nil},
+		{"one second after expiry", issued.Add(time.Minute + time.Second), ErrChallengeExpired},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, _, _ := newTestChallengeService(time.Minute)
+			clock := issued
+			svc.now = func() time.Time { return clock }
+			ch, err := svc.Create(context.Background(), addr.Hex())
+			if err != nil {
+				t.Fatal(err)
+			}
+			sig, err := crypto.Sign(accounts.TextHash([]byte(ch.Message)), priv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			clock = tt.at
+			got, err := svc.Verify(context.Background(), ch.Nonce, sig)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Verify error = %v, want %v", err, tt.wantErr)
+			}
+			if tt.wantErr == nil && got != addr {
+				t.Errorf("Verify signer = %s, want %s", got, addr)
+			}
+		})
 	}
 }

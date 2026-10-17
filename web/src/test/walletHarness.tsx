@@ -2,6 +2,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { render, type RenderResult } from "@testing-library/react";
 import { useEffect, type ReactElement } from "react";
+import { hexToString, type Hex } from "viem";
 import { vi } from "vitest";
 import { WalletProvider } from "../context/WalletContext";
 import { useWalletContext } from "../context/walletContextValue";
@@ -29,6 +30,8 @@ export function installFakeWallet(opts: FakeWalletOptions = {}) {
   const account = opts.account ?? DEFAULT_ACCOUNT;
   const initialChainId = opts.chainId ?? 31337;
   const signature = opts.signature ?? DEFAULT_SIGNATURE;
+  // personal_sign requests, decoded: the message text and the account asked to sign
+  const signedMessages: Array<{ message: string; signer: string }> = [];
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
 
   let currentChainId = initialChainId;
@@ -48,6 +51,10 @@ export function installFakeWallet(opts: FakeWalletOptions = {}) {
           return `0x${currentChainId.toString(16)}`;
         case "personal_sign":
           if (opts.signRejection) throw opts.signRejection;
+          signedMessages.push({
+            message: hexToString(params?.[0] as Hex),
+            signer: params?.[1] as string,
+          });
           return signature;
         case "wallet_switchEthereumChain": {
           const target = Number((params?.[0] as { chainId: string }).chainId);
@@ -96,6 +103,7 @@ export function installFakeWallet(opts: FakeWalletOptions = {}) {
     account,
     chainId: initialChainId,
     signature,
+    signedMessages,
     request,
     /** Fires accountsChanged to every registered handler */
     emitAccountsChanged(accounts: string[]) {

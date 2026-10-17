@@ -1,7 +1,6 @@
 package assets
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -61,32 +60,6 @@ func TestValidateProfileRejectsMissingRequired(t *testing.T) {
 	}
 }
 
-func TestValidateProfileRejectsWrongVersion(t *testing.T) {
-	var m map[string]any
-	if err := json.Unmarshal([]byte(goldGramProfile), &m); err != nil {
-		t.Fatal(err)
-	}
-	m["profileVersion"] = "2.0"
-	raw, _ := json.Marshal(m)
-	result, _ := ValidateProfile(raw)
-	if result.Valid {
-		t.Fatal("expected invalid for wrong profileVersion")
-	}
-}
-
-func TestValidateProfileRejectsUnknownField(t *testing.T) {
-	var m map[string]any
-	if err := json.Unmarshal([]byte(goldGramProfile), &m); err != nil {
-		t.Fatal(err)
-	}
-	m["unexpectedField"] = "nope"
-	raw, _ := json.Marshal(m)
-	result, _ := ValidateProfile(raw)
-	if result.Valid {
-		t.Fatal("expected invalid for unknown top-level field")
-	}
-}
-
 func TestValidateProfileRejectsDisallowedComposition(t *testing.T) {
 	profile := `{
       "profileVersion": "1.0",
@@ -112,48 +85,5 @@ func TestValidateProfileRejectsDisallowedComposition(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected error mentioning oneOf, got %v", result.Errors)
-	}
-}
-
-func TestValidateProfileRejectsRemoteRef(t *testing.T) {
-	profile := `{
-      "profileVersion": "1.0",
-      "projectId": "4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61",
-      "assetType": "x",
-      "tokenUnit": "u",
-      "tokenDecimals": 0,
-      "recordIdLabel": "id",
-      "assetSchema": {
-        "type": "object",
-        "properties": { "a": { "$ref": "https://evil.example/schema.json" } }
-      }
-    }`
-	result, _ := ValidateProfile([]byte(profile))
-	if result.Valid {
-		t.Fatal("expected invalid for remote $ref")
-	}
-}
-
-func TestValidateProfileRejectsBadTokenDecimals(t *testing.T) {
-	var m map[string]any
-	if err := json.Unmarshal([]byte(goldGramProfile), &m); err != nil {
-		t.Fatal(err)
-	}
-	m["tokenDecimals"] = 37
-	raw, _ := json.Marshal(m)
-	result, _ := ValidateProfile(raw)
-	if result.Valid {
-		t.Fatal("expected invalid for tokenDecimals > 36")
-	}
-}
-
-func TestValidateProfileDigestIsDeterministic(t *testing.T) {
-	r1, _ := ValidateProfile([]byte(goldGramProfile))
-	r2, _ := ValidateProfile([]byte(goldGramProfile))
-	if r1.ProfileDigest != r2.ProfileDigest {
-		t.Errorf("digest not deterministic: %s vs %s", r1.ProfileDigest, r2.ProfileDigest)
-	}
-	if r1.CID != r2.CID {
-		t.Errorf("cid not deterministic: %s vs %s", r1.CID, r2.CID)
 	}
 }

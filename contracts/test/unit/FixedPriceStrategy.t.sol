@@ -15,6 +15,12 @@ contract FixedPriceStrategyTest is TestBase {
         new FixedPriceStrategy(18, 1, 0, pricer, admin, 0);
     }
 
+    function test_views_matchConstructorConfig() public view {
+        assertEq(strategy.tokenDecimals(), TOKEN_DECIMALS);
+        assertEq(strategy.purchasePricePerWholeToken(), PURCHASE_PRICE);
+        assertEq(strategy.redemptionPricePerWholeToken(), REDEMPTION_PRICE);
+    }
+
     function test_previewMatchesQuote() public view {
         assertEq(strategy.previewBuy(1 ether), strategy.quotePurchase(1 ether));
         assertEq(strategy.previewRedeem(1 ether), strategy.quoteRedemption(1 ether));
@@ -43,6 +49,23 @@ contract FixedPriceStrategyTest is TestBase {
         assertEq(strategy.purchasePricePerWholeToken(), 3_000_000);
     }
 
+    function test_setRedemptionPrice_onlyPricer() public {
+        bytes32 role = strategy.PRICER_ROLE();
+        vm.prank(outsider);
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, outsider, role)
+        );
+        strategy.setRedemptionPrice(1);
+        assertEq(strategy.redemptionPricePerWholeToken(), REDEMPTION_PRICE);
+    }
+
+    function test_setRedemptionPrice_zeroReverts() public {
+        vm.prank(pricer);
+        vm.expectRevert(IFixedPriceStrategy.ZeroPrice.selector);
+        strategy.setRedemptionPrice(0);
+        assertEq(strategy.redemptionPricePerWholeToken(), REDEMPTION_PRICE);
+    }
+
     function test_setRedemptionPrice_updatesAndEmits() public {
         vm.prank(pricer);
         vm.expectEmit(true, true, true, true, address(strategy));
@@ -59,13 +82,17 @@ contract FixedPriceStrategyTest is TestBase {
         assertEq(after_, before * 2);
     }
 
-    function testFuzz_quotePurchaseNeverBelowExactDivision(uint96 tokenAmount, uint64 price) public {
-        vm.assume(price > 0);
+    /// @dev For 18 token decimals, purchase/redemption must be the exact ceil/floor of amount * price / 1e18
+    function testFuzz_quoteRounding_purchaseIsExactCeilRedemptionIsExactFloor(uint96 tokenAmount, uint64 price) public {
+        price = uint64(bound(price, 1, type(uint64).max));
         FixedPriceStrategy s = new FixedPriceStrategy(18, price, price, pricer, admin, 0);
+        uint256 exactNumerator = uint256(tokenAmount) * price;
         uint256 purchase = s.quotePurchase(tokenAmount);
         uint256 redemption = s.quoteRedemption(tokenAmount);
-        // Ceil >= exact division >= Floor, and they differ by at most 1
-        assertGe(purchase, redemption);
-        assertLe(purchase - redemption, 1);
+
+        assertGe(purchase * 1e18, exactNumerator, "purchase never undercharges");
+        if (purchase > 0) assertLt((purchase - 1) * 1e18, exactNumerator, "purchase is the smallest sufficient");
+        assertLe(redemption * 1e18, exactNumerator, "redemption never overpays");
+        assertGt((redemption + 1) * 1e18, exactNumerator, "redemption is the largest affordable");
     }
 }

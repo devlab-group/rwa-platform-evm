@@ -85,6 +85,31 @@ func TestClientSideRouteFallsBackToIndexHTML(t *testing.T) {
 	}
 }
 
+// Missing chunks from a stale index.html must return 404 to avoid HTML-as-JavaScript errors
+func TestMissingFileWithExtensionIs404NotSPA(t *testing.T) {
+	r := newTestRouter()
+	for _, p := range []string{"/assets/old-chunk.js", "/assets/style.css", "/favicon.ico", "/admin/setup.map"} {
+		rec := doGet(r, p)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s: status = %d, want 404", p, rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "spa shell") {
+			t.Errorf("GET %s: served the SPA shell for a missing file", p)
+		}
+	}
+}
+
+// Client routes are extensionless and stay on the SPA fallback, even under /assets
+func TestExtensionlessUnknownPathsStillFallBackToIndexHTML(t *testing.T) {
+	r := newTestRouter()
+	for _, p := range []string{"/admin/assets", "/assets/not-a-file", "/admin/compliance/0xAbC"} {
+		rec := doGet(r, p)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "spa shell") {
+			t.Errorf("GET %s: status = %d body = %q, want 200 with the SPA shell", p, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestRealStaticFileIsServedAsIs(t *testing.T) {
 	r := newTestRouter()
 	rec := doGet(r, "/assets/app.js")

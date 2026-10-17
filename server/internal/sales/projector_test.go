@@ -2,10 +2,7 @@ package sales
 
 import (
 	"context"
-	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -14,19 +11,19 @@ import (
 	"github.com/rwa-platform/server/internal/dal/repository"
 )
 
-// delayedPurchaseRepo delays generation writes so concurrent List calls can expose
-// delete-first gaps that fast, individually locked memory writes could hide
-type delayedPurchaseRepo struct {
+// probedPurchaseRepo reads between generation writes to detect empty or partial rebuild views
+type probedPurchaseRepo struct {
 	repository.PurchaseRepository
+	probe func()
 }
 
-func (d delayedPurchaseRepo) Upsert(ctx context.Context, p *models.Purchase) error {
-	time.Sleep(2 * time.Millisecond)
+func (d probedPurchaseRepo) Upsert(ctx context.Context, p *models.Purchase) error {
+	d.probe()
 	return d.PurchaseRepository.Upsert(ctx, p)
 }
 
-func (d delayedPurchaseRepo) DeleteStaleGeneration(ctx context.Context, gen int64) error {
-	time.Sleep(2 * time.Millisecond)
+func (d probedPurchaseRepo) DeleteStaleGeneration(ctx context.Context, gen int64) error {
+	d.probe()
 	return d.PurchaseRepository.DeleteStaleGeneration(ctx, gen)
 }
 
@@ -42,8 +39,10 @@ func TestBuildPurchases(t *testing.T) {
 	if len(purchases) != 1 {
 		t.Fatalf("expected 1 purchase, got %d", len(purchases))
 	}
-	if purchases[0].Buyer != "0xBUYER" || purchases[0].TokenAmount != "100" {
-		t.Errorf("got %+v", purchases[0])
+	got := purchases[0]
+	if got.ID != "0xaa:0" || got.Buyer != "0xBUYER" || got.Recipient != "0xRECIP" || got.TokenAmount != "100" ||
+		got.QuoteAmount != "95" || got.TxHash != "0xaa" || got.BlockNumber != 5 {
+		t.Errorf("got %+v, want every field of the Purchased event mapped", got)
 	}
 }
 
@@ -94,10 +93,23 @@ func TestReconcileRebuildsPurchases(t *testing.T) {
 
 // Replace all seeded purchases while another goroutine polls List; its count must not
 // fall below the pre-rebuild value, detecting delete-first gaps
-func TestReconcileNeverExposesEmptyOrPartialPurchasesToConcurrentReaders(t *testing.T) {
+func TestReconcileNeverExposesEmptyOrPartialPurchasesBetweenWrites(t *testing.T) {
 	vaultAddr := common.HexToAddress("0x0000000000000000000000000000000000000A")
 	events := memory.NewChainEventRepository()
-	purchases := delayedPurchaseRepo{memory.NewPurchaseRepository()}
+	inner := memory.NewPurchaseRepository()
+	armed, probes, minObserved := false, 0, 1<<30
+	purchases := probedPurchaseRepo{PurchaseRepository: inner, probe: func() {
+		if !armed {
+			return // only the rebuild under test is observed
+		}
+		probes++
+		list, err := inner.List(context.Background())
+		if err != nil {
+			t.Errorf("probe List: %v", err)
+			return
+		}
+		minObserved = min(minObserved, len(list))
+	}}
 	svc := New(nil, vaultAddr, common.Address{}, purchases)
 
 	ctx := context.Background()
@@ -130,43 +142,13 @@ func TestReconcileNeverExposesEmptyOrPartialPurchasesToConcurrentReaders(t *test
 		}
 	}
 
-	var minObserved int32 = 1 << 30
-	stop := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			list, err := purchases.List(ctx)
-			if err != nil {
-				t.Errorf("concurrent List: %v", err)
-				return
-			}
-			if len(list) == 0 {
-				t.Error("concurrent reader observed an EMPTY purchases read model mid-rebuild")
-				return
-			}
-			for {
-				cur := atomic.LoadInt32(&minObserved)
-				if int32(len(list)) >= cur || atomic.CompareAndSwapInt32(&minObserved, cur, int32(len(list))) {
-					break
-				}
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-
+	armed = true
 	if err := svc.Reconcile(ctx, events, 31337); err != nil {
 		t.Fatalf("second Reconcile: %v", err)
 	}
-	close(stop)
-	wg.Wait()
-
+	if probes == 0 {
+		t.Fatal("the rebuild never wrote, so no intermediate state was observed")
+	}
 	if minObserved < 3 {
 		t.Errorf("concurrent reader observed as few as %d purchases mid-rebuild, want always >= 3 (the pre-rebuild count)", minObserved)
 	}

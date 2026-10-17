@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestOversizedBodyRejected404s checks router-wide auth.MaxRequestBody: exceeding
+// TestOversizedBodyRejected checks router-wide auth.MaxRequestBody: exceeding
 // App.MaxRequestBodyBytes returns 413 on both raw-body profile/validate and
 // JSON-binding compliance/challenge routes, rather than truncating or accepting the
 // body

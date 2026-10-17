@@ -164,12 +164,16 @@ func TestReconcileMintedIsIdempotent(t *testing.T) {
 	events := memory.NewChainEventRepository()
 	ctx := context.Background()
 	rec := &models.AssetRecord{RecordID: "GOLD-3", Status: models.RecordStatusSigned, RecordKey: "0xrk3", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	_ = records.Create(ctx, rec)
+	if err := records.Create(ctx, rec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 	controllerAddr := "0x0000000000000000000000000000000000C0DE"
-	_ = events.Create(ctx, &models.ChainEvent{
+	if err := events.Create(ctx, &models.ChainEvent{
 		ChainID: 31337, Address: controllerAddr, Name: "Minted", TxHash: "0xmint3", LogIndex: 0, BlockNumber: 10,
 		Data: map[string]any{"recordKey": "0xrk3", "amount": "1000"},
-	})
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 
 	svc := &RecordService{}
 	if err := svc.ReconcileMinted(ctx, events, 31337, controllerAddr, records); err != nil {

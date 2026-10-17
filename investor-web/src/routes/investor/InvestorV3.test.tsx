@@ -201,6 +201,12 @@ describe("Investor rwa-v3 surfaces", () => {
     } as never);
     renderWithWallet(<Investor />);
     await screen.findByText(/the L2 sequencer is down/);
+    fireEvent.change(screen.getByLabelText("RWA token amount (whole units)"), {
+      target: { value: "1" },
+    });
+    expect(
+      screen.getAllByRole("button", { name: "Preview quote" })[0],
+    ).toBeDisabled();
   });
 
   it("shows prices unavailable when a preview reverts with an oracle error", async () => {

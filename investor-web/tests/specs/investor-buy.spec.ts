@@ -33,7 +33,7 @@ test.describe("Investor - wallet, balance, and buy", () => {
     await investor.goto();
     await investor.connectWallet();
 
-    await investor.previewBuy("1000000000000000000");
+    await investor.previewBuy("1");
     await expect(page.getByRole("region", { name: "Purchase preview" })).toBeVisible();
 
     const buyButton = investor.buySection.getByRole("button", { name: "2. Buy" });
@@ -56,9 +56,8 @@ test.describe("Investor - wallet, balance, and buy", () => {
       data: buy!.data as `0x${string}`,
     });
     expect(decoded.functionName).toBe("buy");
-    // The form takes whole units, so 1e18 tokens at 18 decimals is 1e36 minimal
-    // units, and that is the amount encoded
-    expect(decoded.args?.[0]).toBe(10n ** 36n);
+    // The form takes whole units, so 1 token at 18 decimals is 1e18 minimal units
+    expect(decoded.args?.[0]).toBe(10n ** 18n);
     expect((decoded.args?.[2] as string).toLowerCase()).toBe(MOCK_WALLET_ADDRESS);
   });
 
@@ -69,7 +68,7 @@ test.describe("Investor - wallet, balance, and buy", () => {
     await investor.goto();
     await investor.connectWallet();
 
-    await investor.previewBuy("1000000000000000000");
+    await investor.previewBuy("1");
     await investor.approveBuy();
     await expect(page.getByText(/Approval submitted:/)).toBeVisible();
 

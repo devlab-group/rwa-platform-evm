@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {VmSafe} from "forge-std/Vm.sol";
 import {TestBase} from "../helpers/TestBase.sol";
 import {OraclePriceStrategy} from "../../src/pricing/OraclePriceStrategy.sol";
 import {MockAggregatorV3} from "../mocks/oracle/MockAggregatorV3.sol";
@@ -15,7 +16,9 @@ contract ContractSizeLimitTest is TestBase {
         _assertUnderLimit(address(factory), "RWAFactory");
     }
 
-    function test_deployerHelpersUnderSizeLimit() public view {
+    function test_deployerHelpersUnderSizeLimit() public {
+        // forge coverage compiles without the optimizer, so the unoptimized helpers exceed the limit
+        vm.skip(vm.isContext(VmSafe.ForgeContext.Coverage));
         _assertUnderLimit(factory.complianceTokenDeployer(), "ComplianceTokenDeployer");
         _assertUnderLimit(factory.marketDeployer(), "MarketDeployer");
         _assertUnderLimit(factory.supplyControllerDeployer(), "SupplyControllerDeployer");

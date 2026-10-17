@@ -15,7 +15,7 @@ func TestJCSCIDGoldenVector(t *testing.T) {
 	p := filepath.Join("..", "..", "..", "shared", "vectors", "jcs-cid.json")
 	data, err := os.ReadFile(p)
 	if err != nil {
-		t.Skipf("golden vector not found: %v", err)
+		t.Fatalf("golden vector not found: %v", err)
 	}
 	var v struct {
 		Input              json.RawMessage `json:"input"`

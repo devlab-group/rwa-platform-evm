@@ -8,7 +8,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KycVerificationSection } from "./KycVerification";
 import { api, ApiError } from "../../lib/client";
-import { setWalletSession } from "../../lib/walletSession";
+import { getWalletSession, setWalletSession } from "../../lib/walletSession";
 
 vi.mock("../../lib/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/client")>();
@@ -142,6 +142,99 @@ describe("KycVerificationSection", () => {
     await screen.findByText(
       /KYC verification is not enabled on this deployment\./,
     );
+  });
+
+  it("drops a rejected session and reloads the status when the server answers 401", async () => {
+    giveSession();
+    const reload = vi.fn();
+    vi.mocked(api.startKYC).mockRejectedValue(
+      new ApiError(401, { code: "unauthorized", message: "session expired" }),
+    );
+
+    render(
+      <KycVerificationSection
+        walletAddress={ADDRESS}
+        ownWalletStatus={statusProp("Unknown", reload)}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start verification" }));
+
+    await screen.findByText("session expired");
+    expect(getWalletSession(ADDRESS)).toBeUndefined();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows another start failure and offers a retry", async () => {
+    giveSession();
+    vi.mocked(api.startKYC).mockRejectedValue(
+      new ApiError(500, { code: "internal", message: "provider down" }),
+    );
+
+    render(
+      <KycVerificationSection
+        walletAddress={ADDRESS}
+        ownWalletStatus={statusProp("Unknown")}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start verification" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("provider down");
+    expect(
+      screen.getByRole("button", { name: "Retry verification" }),
+    ).toBeEnabled();
+    expect(getWalletSession(ADDRESS)).toBeDefined();
+  });
+
+  it("tells an Allowed wallet no further verification is needed", () => {
+    giveSession();
+    render(
+      <KycVerificationSection
+        walletAddress={ADDRESS}
+        ownWalletStatus={statusProp("Allowed")}
+      />,
+    );
+    expect(screen.getByText(/already Allowed/)).toBeInTheDocument();
+    expect(screen.queryByText(/Your verification expired/)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Start verification" }),
+    ).toBeNull();
+  });
+
+  it("sends a Blocked wallet to the issuer instead of offering verification", () => {
+    giveSession();
+    render(
+      <KycVerificationSection
+        walletAddress={ADDRESS}
+        ownWalletStatus={statusProp("Blocked")}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "This wallet is Blocked. Contact the issuer to resolve it; verification cannot be restarted here.",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Start verification" }),
+    ).toBeNull();
+    expect(
+      screen.queryByText(/Documents go directly to the provider/),
+    ).toBeNull();
+    expect(api.startKYC).not.toHaveBeenCalled();
+  });
+
+  it("reports a Blocked decision after a submitted verification", async () => {
+    const reload = vi.fn();
+    const { rerender } = await renderSubmitted(reload);
+    rerender(
+      <KycVerificationSection
+        walletAddress={ADDRESS}
+        ownWalletStatus={statusProp("Blocked", reload)}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /Your wallet is Blocked/,
+    );
+    expect(screen.queryByText(/awaiting approval/)).toBeNull();
+    // The decision is reported once, without the pre-submission notice
+    expect(screen.queryByText(/This wallet is Blocked/)).toBeNull();
   });
 
   it("mounts Sumsub with the server-issued token and waits for approval once submitted", async () => {

@@ -54,6 +54,14 @@ func TestValidateProfileLegal(t *testing.T) {
 			if res.Valid != c.valid {
 				t.Fatalf("valid = %v, want %v (errors %v)", res.Valid, c.valid, res.Errors)
 			}
+			if !c.valid {
+				// the profile is otherwise valid, so every error must come from the legal object
+				for _, e := range res.Errors {
+					if !strings.Contains(e, "legal") {
+						t.Errorf("error %q is not about the legal object", e)
+					}
+				}
+			}
 			if c.valid && (p.Legal == nil || p.Legal.Wrapper == "") {
 				t.Fatal("legal not kept on Profile")
 			}

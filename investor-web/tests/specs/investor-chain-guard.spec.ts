@@ -33,7 +33,7 @@ test.describe("Investor - wallet chain binding", () => {
 
     // The buy quote is an on-chain read from the Vault, so it is blocked too and
     // there is no quote to approve against on the wrong chain
-    await investor.fillBuyAmount("1000000000000000000");
+    await investor.fillBuyAmount("1");
     await expect(investor.buyPreviewButton).toBeDisabled();
     await expect(
       investor.buySection.getByRole("button", { name: "1. Approve quote token spend" }),
@@ -52,7 +52,7 @@ test.describe("Investor - wallet chain binding", () => {
     await investor.connectWallet();
     await expect(investor.chainMismatchBanner).toHaveCount(0);
 
-    await investor.previewBuy("1000000000000000000");
+    await investor.previewBuy("1");
     const approveButton = investor.buySection.getByRole("button", {
       name: "1. Approve quote token spend",
     });

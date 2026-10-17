@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -16,6 +18,7 @@ import (
 	"github.com/rwa-platform/server/internal/config"
 	"github.com/rwa-platform/server/internal/dal/memory"
 	"github.com/rwa-platform/server/internal/dal/models"
+	"github.com/rwa-platform/server/internal/dal/repository"
 	"github.com/rwa-platform/server/internal/indexer"
 	"github.com/rwa-platform/server/internal/keys"
 )
@@ -187,51 +190,74 @@ func TestIndexerUnsafe(t *testing.T) {
 	}
 }
 
-// Skip fn while ReconciliationRequired; resume once safe
+// countingCheckpoints counts every Get so a test can tell how often the ticker checked safety
+type countingCheckpoints struct {
+	repository.IndexerCheckpointRepository
+	gets atomic.Int32
+}
+
+func (c *countingCheckpoints) Get(ctx context.Context, chainID int64, address string) (*models.IndexerCheckpoint, error) {
+	c.gets.Add(1)
+	return c.IndexerCheckpointRepository.Get(ctx, chainID, address)
+}
+
+// Skip fn while ReconciliationRequired, then resume; synctest advances ticks without real waits
 func TestRunIndexDependentTickerSkipsWhileUnsafe(t *testing.T) {
-	repos := memory.New()
-	ctx, cancel := context.WithCancel(context.Background())
-	const chainID = 31337
-	if err := repos.IndexerCheckpoints.Set(ctx, &models.IndexerCheckpoint{
-		ChainID: chainID, Address: indexer.CheckpointAddress, LastBlock: 100, LastBlockHash: "0xabc",
-		ReconciliationRequired: true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	var calls int
-	var mu sync.Mutex
-	done := make(chan struct{})
-	go runIndexDependentTicker(ctx, repos, config.Config{ChainID: chainID}, 5*time.Millisecond, "test", func() error {
-		mu.Lock()
-		calls++
-		mu.Unlock()
-		select {
-		case done <- struct{}{}:
-		default:
+	synctest.Test(t, func(t *testing.T) {
+		const chainID = 31337
+		const interval = time.Second
+		repos := memory.New()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		unsafeCP := &models.IndexerCheckpoint{
+			ChainID: chainID, Address: indexer.CheckpointAddress, LastBlock: 100, LastBlockHash: "0xabc",
+			ReconciliationRequired: true,
 		}
-		return nil
+		if err := repos.IndexerCheckpoints.Set(ctx, unsafeCP); err != nil {
+			t.Fatal(err)
+		}
+		checks := &countingCheckpoints{IndexerCheckpointRepository: repos.IndexerCheckpoints}
+		repos.IndexerCheckpoints = checks
+
+		var calls atomic.Int32
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			runIndexDependentTicker(ctx, repos, config.Config{ChainID: chainID}, interval, "test", func() error {
+				calls.Add(1)
+				return nil
+			})
+		}()
+
+		// three ticks while unsafe: each checks safety, none runs fn
+		time.Sleep(3*interval + interval/2)
+		synctest.Wait()
+		if got := checks.gets.Load(); got != 3 {
+			t.Fatalf("safety checks after 3 ticks = %d, want 3", got)
+		}
+		if got := calls.Load(); got != 0 {
+			t.Fatalf("fn called %d times while unsafe, want 0", got)
+		}
+
+		safeCP := *unsafeCP
+		safeCP.ReconciliationRequired = false
+		if err := repos.IndexerCheckpoints.Set(ctx, &safeCP); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(interval)
+		synctest.Wait()
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("fn calls after one safe tick = %d, want 1", got)
+		}
+
+		cancel()
+		synctest.Wait()
+		select {
+		case <-stopped:
+		default:
+			t.Fatal("the ticker did not stop after its context was cancelled")
+		}
 	})
-
-	time.Sleep(30 * time.Millisecond)
-	mu.Lock()
-	gotWhileUnsafe := calls
-	mu.Unlock()
-	if gotWhileUnsafe != 0 {
-		t.Fatalf("expected fn never called while unsafe, got %d calls", gotWhileUnsafe)
-	}
-
-	if err := repos.IndexerCheckpoints.Set(ctx, &models.IndexerCheckpoint{
-		ChainID: chainID, Address: indexer.CheckpointAddress, LastBlock: 100, LastBlockHash: "0xabc",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("expected fn to be called once safe again")
-	}
-	cancel()
 }
 
 // A held name/chain lease blocks another replica; release allows the next tick to

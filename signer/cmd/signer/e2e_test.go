@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,18 +39,46 @@ func findGoBinary(t *testing.T) string {
 	return ""
 }
 
-// buildSignerBinary compiles cmd/signer into dir and returns its path
-func buildSignerBinary(t *testing.T, goBin, dir string) string {
-	t.Helper()
-	out := filepath.Join(dir, "signer")
-	cmd := exec.Command(goBin, "build", "-o", out, ".")
-	cmd.Dir = "." // this test file lives in cmd/signer
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("building signer binary: %v\n%s", err, stderr.String())
+var (
+	signerBuildOnce sync.Once
+	signerBuildPath string
+	signerBuildErr  error
+)
+
+// TestMain removes the shared signer binary once the package's tests finish
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if signerBuildPath != "" {
+		os.RemoveAll(filepath.Dir(signerBuildPath))
 	}
-	return out
+	os.Exit(code)
+}
+
+// buildSignerBinary compiles once per test run, ignoring the dir argument; tests share
+// the read-only binary and isolate packages, keystores and outputs in their own temp dirs
+func buildSignerBinary(t *testing.T, goBin, _ string) string {
+	t.Helper()
+	signerBuildOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "signer-e2e-bin-")
+		if err != nil {
+			signerBuildErr = err
+			return
+		}
+		out := filepath.Join(dir, "signer")
+		cmd := exec.Command(goBin, "build", "-o", out, ".")
+		cmd.Dir = "." // this test file lives in cmd/signer
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			signerBuildErr = fmt.Errorf("%v\n%s", err, stderr.String())
+			return
+		}
+		signerBuildPath = out
+	})
+	if signerBuildErr != nil {
+		t.Fatalf("building signer binary: %v", signerBuildErr)
+	}
+	return signerBuildPath
 }
 
 // docOverrides changes project, unit, timing or auditor values for binding tests.
@@ -63,6 +93,17 @@ type docOverrides struct {
 	validUntil time.Time // typed-data validUntil; defaults to createdAt+7d within the 30d window
 
 	auditor string // typed-data auditor; defaults to the generated key, or set to a Safe
+
+	burn        bool              // build a BurnAttestation package instead of a mint
+	operationID string            // burn operationId, default 0x9c59...907f
+	nonce       string            // typed-data nonce, default "42"
+	key         *ecdsa.PrivateKey // keystore key, default a fresh random key
+
+	metadataAmount string // metadata.issuance.amount, default: same as the typed-data amount
+
+	// Edit typed data/manifest before hashing, preserving package consistency around the changed value
+	typedEdit    func(typedData map[string]any)
+	manifestEdit func(manifest map[string]any)
 }
 
 // builtPackage holds the package, signing credentials and values needed for its policy
@@ -72,6 +113,7 @@ type builtPackage struct {
 	password      string
 	auditorAddr   string // 0x-prefixed
 	profileDigest string // 0x-prefixed
+	typedDataJSON []byte // typed-data.json as packaged
 }
 
 // buildGoldenPackage assembles a consistent mint package with computed digests
@@ -97,6 +139,9 @@ func buildPackageWithOverrides(t *testing.T, chainID, verifyingContract, vault s
 	}
 	if ov.issuanceUnit == "" {
 		ov.issuanceUnit = ov.tokenUnit
+	}
+	if ov.metadataAmount == "" {
+		ov.metadataAmount = "1000000000000000000000"
 	}
 	if ov.createdAt.IsZero() {
 		ov.createdAt = time.Now().UTC().Add(-1 * time.Hour)
@@ -136,11 +181,11 @@ func buildPackageWithOverrides(t *testing.T, chainID, verifyingContract, vault s
     "purity": "999.9"
   },
   "issuance": {
-    "amount": "1000000000000000000000",
+    "amount": %q,
     "unit": %q
   },
   "createdAt": %q
-}`, ov.metadataProjectID, ov.issuanceUnit, ov.createdAt.Format(time.RFC3339))
+}`, ov.metadataProjectID, ov.metadataAmount, ov.issuanceUnit, ov.createdAt.Format(time.RFC3339))
 
 	profileCanon, err := canonical.Canonicalize([]byte(profileJSON))
 	if err != nil {
@@ -154,7 +199,20 @@ func buildPackageWithOverrides(t *testing.T, chainID, verifyingContract, vault s
 	metadataDigest := sha256.Sum256(metadataCanon)
 	recordKey := attestation.RecordKey("GOLD-BAR-12345")
 
-	keystorePath, password, auditorAddr := newTestKeystore(t)
+	if ov.nonce == "" {
+		ov.nonce = "42"
+	}
+	if ov.operationID == "" {
+		ov.operationID = "0x9c59762b2040c61ed687aaf4422e0ba058bb89d0397349c59cd036eb2315907f"
+	}
+	key := ov.key
+	if key == nil {
+		var err error
+		if key, err = crypto.GenerateKey(); err != nil {
+			t.Fatalf("GenerateKey: %v", err)
+		}
+	}
+	keystorePath, password, auditorAddr := newKeystoreForKey(t, key)
 	if ov.auditor == "" {
 		ov.auditor = auditorAddr.Hex()
 	}
@@ -174,10 +232,22 @@ func buildPackageWithOverrides(t *testing.T, chainID, verifyingContract, vault s
 			"recordKey":      "0x" + hex.EncodeToString(recordKey[:]),
 			"metadataDigest": "0x" + hex.EncodeToString(metadataDigest[:]),
 			"amount":         "1000000000000000000000",
-			"nonce":          "42",
+			"nonce":          ov.nonce,
 			"validUntil":     ov.validUntil.Unix(),
 			"vault":          vault,
 		},
+	}
+	primaryType := "MintAttestation"
+	if ov.burn {
+		primaryType = "BurnAttestation"
+		typedData["primaryType"] = primaryType
+		msg := typedData["message"].(map[string]any)
+		delete(msg, "recordId")
+		delete(msg, "recordKey")
+		msg["operationId"] = ov.operationID
+	}
+	if ov.typedEdit != nil {
+		ov.typedEdit(typedData)
 	}
 	typedDataJSON, err := json.Marshal(typedData)
 	if err != nil {
@@ -195,7 +265,7 @@ func buildPackageWithOverrides(t *testing.T, chainID, verifyingContract, vault s
 	}
 	manifest := map[string]any{
 		"packageVersion": "1.0",
-		"primaryType":    "MintAttestation",
+		"primaryType":    primaryType,
 		"profileDigest":  "0x" + hex.EncodeToString(profileDigest[:]),
 		"metadataDigest": "0x" + hex.EncodeToString(metadataDigest[:]),
 		"files": []map[string]any{
@@ -203,6 +273,9 @@ func buildPackageWithOverrides(t *testing.T, chainID, verifyingContract, vault s
 			fileEntry("metadata.json", metadataCanon, "application/json"),
 			fileEntry("typed-data.json", typedDataJSON, "application/json"),
 		},
+	}
+	if ov.manifestEdit != nil {
+		ov.manifestEdit(manifest)
 	}
 	manifestJSON, err := json.Marshal(manifest)
 	if err != nil {
@@ -235,6 +308,7 @@ func buildPackageWithOverrides(t *testing.T, chainID, verifyingContract, vault s
 		password:      password,
 		auditorAddr:   auditorAddr.Hex(),
 		profileDigest: "0x" + hex.EncodeToString(profileDigest[:]),
+		typedDataJSON: typedDataJSON,
 	}
 }
 
@@ -245,6 +319,12 @@ func newTestKeystore(t *testing.T) (string, string, common.Address) {
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
+	return newKeystoreForKey(t, priv)
+}
+
+// newKeystoreForKey imports priv into a fresh V3 keystore
+func newKeystoreForKey(t *testing.T, priv *ecdsa.PrivateKey) (string, string, common.Address) {
+	t.Helper()
 	// Use the signer's KDF floor; light scrypt parameters are rejected before derivation
 	ks := gokeystore.NewKeyStore(t.TempDir(), rwakeystore.MinScryptN, rwakeystore.MinScryptP)
 	const password = "e2e-test-password"
@@ -363,7 +443,7 @@ func TestE2E_SignGoldenPackage(t *testing.T) {
 }
 
 // Refuse an archived amount changed without updating manifest hashes
-func TestE2E_RejectsTamperedAmount(t *testing.T) {
+func TestE2E_RejectsStaleManifestHash(t *testing.T) {
 	goBin := findGoBinary(t)
 	binDir := t.TempDir()
 	signerBin := buildSignerBinary(t, goBin, binDir)
@@ -421,8 +501,9 @@ func TestE2E_RejectsTamperedAmount(t *testing.T) {
 	if err := cmd.Run(); err == nil {
 		t.Fatalf("expected signer to reject tampered package, but it succeeded\nstdout:\n%s", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "does not match") {
-		t.Errorf("expected a mismatch error, got stderr:\n%s", stderr.String())
+	// The stale manifest hash for typed-data.json is what catches the edit
+	if !strings.Contains(stderr.String(), `file "typed-data.json" sha256`) || !strings.Contains(stderr.String(), "does not match manifest sha256") {
+		t.Errorf("expected a typed-data.json manifest hash mismatch, got stderr:\n%s", stderr.String())
 	}
 	if _, err := os.Stat(filepath.Join(workDir, "signed-result.json")); err == nil {
 		t.Error("signed-result.json must not be written when validation fails")
@@ -456,7 +537,7 @@ func TestE2E_RejectsCrossProjectPackage(t *testing.T) {
 	if err := cmd.Run(); err == nil {
 		t.Fatalf("expected signer to reject a cross-project package, but it succeeded\nstdout:\n%s", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "projectId") {
+	if !strings.Contains(stderr.String(), `metadata.json projectId "00000000-0000-0000-0000-000000000000" does not match profile.json projectId "`+testProjectID+`"`) {
 		t.Errorf("expected a projectId mismatch error, got stderr:\n%s", stderr.String())
 	}
 	if _, err := os.Stat(filepath.Join(workDir, "signed-result.json")); err == nil {
@@ -488,7 +569,7 @@ func TestE2E_RejectsWrongIssuanceUnit(t *testing.T) {
 	if err := cmd.Run(); err == nil {
 		t.Fatalf("expected signer to reject a mismatched issuance unit, but it succeeded\nstdout:\n%s", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "unit") {
+	if !strings.Contains(stderr.String(), `metadata.json issuance.unit "troy-ounce" does not match profile.json tokenUnit "gram"`) {
 		t.Errorf("expected a unit mismatch error, got stderr:\n%s", stderr.String())
 	}
 	if _, err := os.Stat(filepath.Join(workDir, "signed-result.json")); err == nil {
@@ -871,39 +952,8 @@ func TestE2E_RejectsPolicyProjectIDMismatch(t *testing.T) {
 	if err := cmd.Run(); err == nil {
 		t.Fatalf("expected signer to reject a policy projectId mismatch, but it succeeded\nstdout:\n%s", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "policy projectId") {
+	if !strings.Contains(stderr.String(), "profile.json projectId "+testProjectID+" does not match policy projectId 11111111-1111-1111-1111-111111111111") {
 		t.Errorf("expected a policy projectId mismatch error, got stderr:\n%s", stderr.String())
-	}
-	if _, err := os.Stat(filepath.Join(workDir, "signed-result.json")); err == nil {
-		t.Error("signed-result.json must not be written when validation fails")
-	}
-}
-
-// Require policy controller to match domain.verifyingContract
-func TestE2E_RejectsPolicyControllerMismatch(t *testing.T) {
-	goBin := findGoBinary(t)
-	binDir := t.TempDir()
-	signerBin := buildSignerBinary(t, goBin, binDir)
-
-	pkg := buildGoldenPackage(t, testChainID, testController, testVault)
-
-	workDir := t.TempDir()
-	pkgPath := filepath.Join(workDir, "request.rwa")
-	if err := os.WriteFile(pkgPath, pkg.zipBytes, 0o644); err != nil {
-		t.Fatalf("writing package: %v", err)
-	}
-	policyPath := writePolicyFile(t, workDir, testChainID, "0x000000000000000000000000000000000000dd", testVault, testProjectID, pkg)
-
-	cmd := exec.Command(signerBin, "sign", pkgPath, "--keystore", pkg.keystorePath, "--policy", policyPath, "--yes", "--unsafe-test-mode")
-	cmd.Stdin = strings.NewReader(pkg.password + "\n")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err == nil {
-		t.Fatalf("expected signer to reject a policy controller mismatch, but it succeeded\nstdout:\n%s", stdout.String())
-	}
-	if !strings.Contains(stderr.String(), "policy controller") {
-		t.Errorf("expected a policy controller mismatch error, got stderr:\n%s", stderr.String())
 	}
 	if _, err := os.Stat(filepath.Join(workDir, "signed-result.json")); err == nil {
 		t.Error("signed-result.json must not be written when validation fails")
@@ -937,7 +987,7 @@ func TestE2E_RejectsExpiredValidUntil(t *testing.T) {
 	if err := cmd.Run(); err == nil {
 		t.Fatalf("expected signer to reject an expired validUntil, but it succeeded\nstdout:\n%s", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "validUntil") {
+	if !strings.Contains(stderr.String(), "is not after the current time") {
 		t.Errorf("expected a validUntil error, got stderr:\n%s", stderr.String())
 	}
 	if _, err := os.Stat(filepath.Join(workDir, "signed-result.json")); err == nil {

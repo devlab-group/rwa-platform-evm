@@ -280,3 +280,56 @@ func TestAuditLog_AppendFailsOnUnwritableDirectory(t *testing.T) {
 		t.Fatal("expected AppendAuditEvent to fail when it cannot write to the containing directory")
 	}
 }
+
+// appendDurable must surface open, write and sync failures; a log line that was not
+// durably stored must not be reported as recorded
+func TestAppendDurable_ReportsEachFailure(t *testing.T) {
+	t.Run("open fails", func(t *testing.T) {
+		err := appendDurable(filepath.Join(t.TempDir(), "no-such-dir", "log.jsonl"), []byte("x\n"))
+		if err == nil || !strings.Contains(err.Error(), "opening") {
+			t.Errorf("error = %v, want an opening error", err)
+		}
+	})
+	if runtime.GOOS != "linux" {
+		return
+	}
+	t.Run("write fails on a full device", func(t *testing.T) {
+		if _, err := os.Stat("/dev/full"); err != nil {
+			t.Skip("/dev/full is not available, so a failing write cannot be provoked")
+		}
+		err := appendDurable("/dev/full", []byte("x\n"))
+		if err == nil || !strings.Contains(err.Error(), "writing") {
+			t.Errorf("error = %v, want a writing error", err)
+		}
+	})
+	t.Run("sync fails on a device that cannot sync", func(t *testing.T) {
+		f, err := os.OpenFile("/dev/null", os.O_WRONLY, 0)
+		if err != nil {
+			t.Skipf("/dev/null is not writable: %v", err)
+		}
+		syncErr := f.Sync()
+		f.Close()
+		if syncErr == nil {
+			t.Skip("fsync on /dev/null succeeds on this system, so a failing sync cannot be provoked")
+		}
+		err = appendDurable("/dev/null", []byte("x\n"))
+		if err == nil || !strings.Contains(err.Error(), "syncing") {
+			t.Errorf("error = %v, want a syncing error", err)
+		}
+	})
+	t.Run("success appends and keeps earlier lines", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "log.jsonl")
+		for _, line := range []string{"a\n", "b\n"} {
+			if err := appendDurable(path, []byte(line)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != "a\nb\n" {
+			t.Errorf("log = %q, want %q", got, "a\nb\n")
+		}
+	})
+}

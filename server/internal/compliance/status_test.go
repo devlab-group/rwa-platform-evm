@@ -1,6 +1,7 @@
 package compliance
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"testing"
@@ -41,6 +42,25 @@ func TestStatusServiceSetStatusSubmitsExpectedCalldata(t *testing.T) {
 	}
 	if tx.Data != "0x"+common.Bytes2Hex(wantData) {
 		t.Errorf("Data mismatch")
+	}
+
+	// Pin the wire format independently of the binding: selector of
+	// setStatus(address,uint8,uint64) (IComplianceRegistry), then account, status 1, validUntil 999
+	raw := common.FromHex(tx.Data)
+	if len(raw) != 4+3*32 {
+		t.Fatalf("calldata is %d bytes, want 100", len(raw))
+	}
+	if sel := crypto.Keccak256([]byte("setStatus(address,uint8,uint64)"))[:4]; !bytes.Equal(raw[:4], sel) {
+		t.Errorf("selector = %x, want %x", raw[:4], sel)
+	}
+	if !bytes.Equal(raw[4+12:4+32], account.Bytes()) {
+		t.Errorf("account word = %x, want %x", raw[4:36], account.Bytes())
+	}
+	if got := new(big.Int).SetBytes(raw[36:68]); got.Int64() != 1 {
+		t.Errorf("status word = %s, want 1 (Allowed)", got)
+	}
+	if got := new(big.Int).SetBytes(raw[68:100]); got.Int64() != 999 {
+		t.Errorf("validUntil word = %s, want 999", got)
 	}
 }
 

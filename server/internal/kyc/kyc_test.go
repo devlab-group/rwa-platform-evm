@@ -381,3 +381,44 @@ func TestOnfidoWatchlistMonitorIsAMonitoringSignal(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInvalidSignature", err)
 	}
 }
+
+// Every provider must refuse a delivery whose signature header is absent, empty, not hex or
+// computed over different bytes, before looking at the payload
+func TestWebhookSignatureIsRequiredAndBoundToTheBody(t *testing.T) {
+	addr := "0x1111111111111111111111111111111111111111"
+	generic := newGenericProvider("topsecret")
+	sumsub := newTestSumsub(t)
+	onfido := newTestOnfido(t)
+	providers := []struct {
+		name   string
+		p      Provider
+		header string
+		secret string
+		body   string
+	}{
+		{"generic", generic, GenericWebhookSignatureHeader, "topsecret", `{"eventId":"e1","address":"` + addr + `","provider":"acme","status":"Allowed","occurredAt":1700000000}`},
+		{"sumsub", sumsub, sumsubHeaderDigest, "whsecret", `{"applicantId":"a1","externalUserId":"` + addr + `","type":"applicantReviewed","reviewResult":{"reviewAnswer":"GREEN"},"createdAtMs":"1700000000000"}`},
+		{"onfido", onfido, onfidoSigHeader, "whtok", `{"payload":{"resource_type":"workflow_run","action":"workflow_run.completed","object":{"id":"run-1","status":"approved","completed_at_iso8601":"2023-01-02T03:04:05Z"}}}`},
+	}
+	for _, pr := range providers {
+		body := []byte(pr.body)
+		good := hexHMAC(pr.secret, body)
+		// sanity: the untouched delivery is accepted, so the rejections below are about the header
+		h := http.Header{}
+		h.Set(pr.header, good)
+		if _, err := pr.p.VerifyWebhook(body, h); err != nil {
+			t.Fatalf("%s: valid delivery rejected: %v", pr.name, err)
+		}
+		for name, hdr := range map[string]http.Header{
+			"absent":     {},
+			"empty":      {pr.header: {""}},
+			"not hex":    {pr.header: {"zz" + good[2:]}},
+			"truncated":  {pr.header: {good[:len(good)-2]}},
+			"other body": {pr.header: {hexHMAC(pr.secret, append(append([]byte{}, body...), ' '))}},
+		} {
+			if _, err := pr.p.VerifyWebhook(body, hdr); !errors.Is(err, ErrInvalidSignature) {
+				t.Errorf("%s/%s: err = %v, want ErrInvalidSignature", pr.name, name, err)
+			}
+		}
+	}
+}

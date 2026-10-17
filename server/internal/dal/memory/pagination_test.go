@@ -262,3 +262,33 @@ func TestRedemptionRequestRepositoryListPageFiltersByBeneficiary(t *testing.T) {
 		t.Errorf("unfiltered = %d, want 17", n)
 	}
 }
+
+// TestPurchaseRepositoryListPageWalksTiedBlockNumbers is the memory twin of the live
+// tie test: purchases sharing a block come out newest id first, each exactly once
+func TestPurchaseRepositoryListPageWalksTiedBlockNumbers(t *testing.T) {
+	repo := NewPurchaseRepository()
+	ctx := context.Background()
+	for _, id := range []string{"c:0", "a:0", "e:0", "b:0", "d:0"} {
+		if err := repo.Create(ctx, &models.Purchase{ID: id, TxHash: id, BlockNumber: 7}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var ids []string
+	cursor := ""
+	for range 5 {
+		page, next, err := repo.ListPage(ctx, cursor, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range page {
+			ids = append(ids, p.ID)
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	if got, want := strings.Join(ids, ","), "e:0,d:0,c:0,b:0,a:0"; got != want {
+		t.Fatalf("paged order = %s, want %s", got, want)
+	}
+}

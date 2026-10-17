@@ -65,6 +65,11 @@ func TestReindexRehearsalReconstructsIdenticalReadModel(t *testing.T) {
 	if before.Status != models.RedemptionFunded {
 		t.Fatalf("before.Status = %s, want Funded", before.Status)
 	}
+	// the rebuilt model is compared with this one, so pin this one to the logged values
+	if before.RWAAmount != "1000" || before.QuoteAmount != "950" || before.CreatedAt != 1_700_000_000 ||
+		before.Beneficiary != common.HexToAddress("0x00000000000000000000000000000000000AAA").Hex() || before.FundedAtBlock != 2 {
+		t.Fatalf("original read model does not match the indexed logs: %+v", before)
+	}
 
 	// Drop events and the derived model, then use fresh checkpoint storage while
 	// preserving the source chain
