@@ -122,6 +122,26 @@ for name in TOKEN COMPLIANCE SUPPLY_CONTROLLER VAULT ESCROW STRATEGY INCOME_DIST
     fi
 done
 
+# Independent step 1 balances: 1000 minted, 100 sold, 40 redeemed, 40 burned;
+# supply 960, Vault 900, escrow 0. Vault retains 100 * 2.000000 = 200000000 quote units;
+# escrow paid out its funding.
+onchain_uint() {
+    # cast prints "<decimal> [<scientific>]" for large values; keep the decimal
+    cast call "$1" "$2" ${3:+"$3"} --rpc-url "${RPC_URL}" | awk '{print $1}'
+}
+expect_eq() {
+    if [[ "$2" != "$3" ]]; then
+        echo "On-chain check failed: $1 is $2, expected $3" >&2
+        exit 1
+    fi
+}
+expect_eq "token totalSupply" "$(onchain_uint "${TOKEN}" 'totalSupply()(uint256)')" "960000000000000000000"
+expect_eq "vault RWA balance" "$(onchain_uint "${TOKEN}" 'balanceOf(address)(uint256)' "${VAULT}")" "900000000000000000000"
+expect_eq "escrow RWA balance" "$(onchain_uint "${TOKEN}" 'balanceOf(address)(uint256)' "${ESCROW}")" "0"
+expect_eq "vault quote balance" "$(onchain_uint "${QUOTE_TOKEN}" 'balanceOf(address)(uint256)' "${VAULT}")" "200000000"
+expect_eq "escrow quote balance" "$(onchain_uint "${QUOTE_TOKEN}" 'balanceOf(address)(uint256)' "${ESCROW}")" "0"
+echo "Step 1 on-chain state PASSED."
+
 # Step 2: income distribution and claim (required)
 echo "Distributing and claiming income ..."
 if ! forge script script/E2EFlow.s.sol:E2EFlow --sig "distributeIncome()" --broadcast --non-interactive --rpc-url "${RPC_URL}" -vv 2>&1 | tee "${INCOME_LOG}"; then
@@ -163,6 +183,8 @@ if ! grep -q "Cancelled timed-out redemption" "${CANCEL_LOG}"; then
     exit 1
 fi
 
+expect_eq "escrow RWA balance after cancel" "$(onchain_uint "${TOKEN}" 'balanceOf(address)(uint256)' "${ESCROW}")" "0"
+expect_eq "token totalSupply after cancel" "$(onchain_uint "${TOKEN}" 'totalSupply()(uint256)')" "960000000000000000000"
 echo "timeout -> cancel branch PASSED."
 echo "E2E flow PASSED (required flow + income + timeout->cancel)."
 exit 0

@@ -47,12 +47,11 @@ func TestSessionManagerValidateRejectsUnknownToken(t *testing.T) {
 // validating once its TTL elapses
 func TestSessionManagerValidateRejectsExpiredToken(t *testing.T) {
 	ctx := context.Background()
-	sm := NewSessionManager(memory.NewWalletSessionRepository(), 10*time.Millisecond)
+	sm := NewSessionManager(memory.NewWalletSessionRepository(), -time.Hour) // expires as it is issued
 	token, _, err := sm.Issue(ctx, "0xBBBB000000000000000000000000000000BBBB")
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(30 * time.Millisecond)
 	if _, ok := sm.Validate(ctx, token); ok {
 		t.Fatal("expected an expired token to be rejected")
 	}
@@ -63,8 +62,14 @@ func TestSessionManagerValidateRejectsExpiredToken(t *testing.T) {
 func TestSessionManagerIssueIsIndependentPerCall(t *testing.T) {
 	ctx := context.Background()
 	sm := NewSessionManager(memory.NewWalletSessionRepository(), time.Hour)
-	t1, _, _ := sm.Issue(ctx, "0xCCCC000000000000000000000000000000CCCC")
-	t2, _, _ := sm.Issue(ctx, "0xCCCC000000000000000000000000000000CCCC")
+	t1, _, err := sm.Issue(ctx, "0xCCCC000000000000000000000000000000CCCC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t2, _, err := sm.Issue(ctx, "0xCCCC000000000000000000000000000000CCCC")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if t1 == t2 {
 		t.Fatal("expected two independent tokens, got the same value")
 	}

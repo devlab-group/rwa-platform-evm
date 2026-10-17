@@ -100,6 +100,9 @@ func TestWebhookReconcilerSubmitsThenConfirms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if acct, status := submittedStatus(t, tx); acct != common.HexToAddress(addr) || status != 1 {
+		t.Fatalf("relayed setStatus(%s, %d), want (%s, 1 = Allowed)", acct, status, addr)
+	}
 	f.client.SetReceipt(common.HexToHash(tx.TxHash), &types.Receipt{Status: types.ReceiptStatusSuccessful, BlockNumber: big.NewInt(1)})
 	if err := f.txs.RefreshStatuses(ctx, 0); err != nil {
 		t.Fatal(err)
@@ -171,6 +174,9 @@ func TestWebhookReconcilerMarksRevertedTxFailed(t *testing.T) {
 	tx, err := f.txRepo.Get(ctx, got.TxID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if acct, status := submittedStatus(t, tx); acct != common.HexToAddress(addr) || status != 2 {
+		t.Fatalf("relayed setStatus(%s, %d), want (%s, 2 = Blocked)", acct, status, addr)
 	}
 	f.client.SetReceipt(common.HexToHash(tx.TxHash), &types.Receipt{Status: types.ReceiptStatusFailed, BlockNumber: big.NewInt(1)})
 	if err := f.txs.RefreshStatuses(ctx, 0); err != nil {
@@ -342,4 +348,14 @@ func TestWebhookReconcilerLeavesAcceptedEventWithoutStatusService(t *testing.T) 
 	if all[0].ApplyStatus != models.KYCApplyAccepted {
 		t.Fatalf("ApplyStatus = %s, want it to stay Accepted (never fabricate Applied without a signer)", all[0].ApplyStatus)
 	}
+}
+
+// submittedStatus reads the (account, status) arguments of a setStatus transaction
+func submittedStatus(t *testing.T, tx *models.Transaction) (common.Address, int64) {
+	t.Helper()
+	raw := common.FromHex(tx.Data)
+	if len(raw) != 4+3*32 {
+		t.Fatalf("calldata is %d bytes, want a setStatus call of 100", len(raw))
+	}
+	return common.BytesToAddress(raw[4:36]), new(big.Int).SetBytes(raw[36:68]).Int64()
 }

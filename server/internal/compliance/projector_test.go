@@ -187,3 +187,49 @@ func TestReconcileReflectsManualStatusChangeOutsideServer(t *testing.T) {
 		t.Errorf("Status = %s, want Blocked (chain must win over stale server-side state)", updated.Status)
 	}
 }
+
+// Direct decoder, MongoDB int32/int64 and JSON float64 values must yield the same status and expiry
+func TestBuildStatuses_NumericEncodingsOfStatusAndExpiry(t *testing.T) {
+	const acct = "0xAAA"
+	tests := []struct {
+		name       string
+		status     any
+		validUntil any
+		want       models.ComplianceStatus
+		wantUntil  int64
+	}{
+		{"uint8 and uint64", uint8(1), uint64(1900000000), models.ComplianceAllowed, 1900000000},
+		{"int32 from mongo", int32(2), int32(1900000000), models.ComplianceBlocked, 1900000000},
+		{"int64 from mongo", int64(1), int64(1900000000), models.ComplianceAllowed, 1900000000},
+		{"int", 2, 1900000000, models.ComplianceBlocked, 1900000000},
+		{"float64 from json", float64(1), float64(1900000000), models.ComplianceAllowed, 1900000000},
+		{"zero is unknown with no expiry", uint8(0), uint64(0), models.ComplianceUnknown, 0},
+		{"unmapped status is unknown", uint8(3), int64(5), models.ComplianceUnknown, 5},
+		{"unsupported types read as unknown and zero", "1", "1900000000", models.ComplianceUnknown, 0},
+		{"missing fields read as unknown and zero", nil, nil, models.ComplianceUnknown, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := ev("StatusChanged", acct, 1, 0, map[string]any{"newStatus": tt.status, "newValidUntil": tt.validUntil})
+			got := BuildStatuses([]*models.ChainEvent{e})[acct]
+			if got.Status != tt.want || got.ValidUntil != tt.wantUntil {
+				t.Errorf("status/validUntil = %s/%d, want %s/%d", got.Status, got.ValidUntil, tt.want, tt.wantUntil)
+			}
+		})
+	}
+}
+
+// Out-of-range statuses must become Unknown; wrapping 257 would incorrectly produce Allowed
+func TestBuildStatuses_OutOfRangeStatusDoesNotWrapIntoAValidOne(t *testing.T) {
+	for name, v := range map[string]any{
+		"int 257": 257, "int64 257": int64(257), "uint64 257": uint64(257), "float64 257": float64(257),
+		"int32 negative": int32(-255), "int64 negative": int64(-255),
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := ev("StatusChanged", "0xAAA", 1, 0, map[string]any{"newStatus": v})
+			if got := BuildStatuses([]*models.ChainEvent{e})["0xAAA"].Status; got != models.ComplianceUnknown {
+				t.Errorf("newStatus %v read as %s, want Unknown", v, got)
+			}
+		})
+	}
+}

@@ -42,6 +42,7 @@ type CreateBurnRequest struct {
 type BurnService struct {
 	records *RecordService
 	burns   repository.BurnRepository
+	now     func() time.Time // clock; tests replace it to pin reservation expiry
 
 	// mu serializes reservation changes within this service instance.
 	// Multiple instances need a shared database guard.
@@ -50,7 +51,7 @@ type BurnService struct {
 
 // NewBurnService shares rs's records, auditor, domain, Vault and IPFS publisher
 func NewBurnService(rs *RecordService, burns repository.BurnRepository) *BurnService {
-	return &BurnService{records: rs, burns: burns}
+	return &BurnService{records: rs, burns: burns, now: time.Now}
 }
 
 // Remaining subtracts Burned and unexpired Pending amounts from record.Amount,
@@ -64,7 +65,7 @@ func (s *BurnService) Remaining(ctx context.Context, record *models.AssetRecord,
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().Unix()
+	now := s.now().Unix()
 	for _, b := range burns {
 		if b.BurnID == skip {
 			continue
@@ -245,27 +246,35 @@ func (s *BurnService) BuildPackage(burn *models.Burn, profileDigest [32]byte, pr
 	return zipBytes, err
 }
 
-// ReconcileBurned matches indexed Burned events by chain, controller and operationId,
-// marking known burns Burned with the transaction hash, even after expiry or reissue.
-// Unknown operations and already Burned records are ignored.
+// ReconcileBurned matches surviving events by chain, controller and operationId, marking
+// known burns Burned and refreshing their transaction hashes even after expiry or reissue.
+// Unknown operations are ignored; orphaned Burned records return to Pending with no tx hash.
 func (s *BurnService) ReconcileBurned(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, controllerAddr string) error {
 	events, err := chainEvents.ListByName(ctx, chainID, controllerAddr, "Burned")
 	if err != nil {
 		return fmt.Errorf("assets: list Burned events: %w", err)
 	}
+	// backing maps each operationId to the Burned event currently on the canonical chain
+	backing := map[string]*models.ChainEvent{}
 	for _, e := range events {
-		opID, _ := e.Data["operationId"].(string)
-		if opID == "" {
-			continue
+		if e.Removed {
+			continue // a reorged-out log does not back a burn
 		}
-		burn, err := s.burns.GetByOperationID(ctx, strings.ToLower(opID))
+		if opID, _ := e.Data["operationId"].(string); opID != "" {
+			backing[strings.ToLower(opID)] = e
+		}
+	}
+
+	for opID, e := range backing {
+		burn, err := s.burns.GetByOperationID(ctx, opID)
 		if errors.Is(err, repository.ErrNotFound) {
 			continue
 		}
 		if err != nil {
 			return fmt.Errorf("assets: look up burn for operation %s: %w", opID, err)
 		}
-		if burn.Status == models.BurnStatusBurned {
+		// A reorg can re-mine the same burn in another transaction, so refresh the hash too
+		if burn.Status == models.BurnStatusBurned && burn.BurnTxHash == e.TxHash {
 			continue
 		}
 		expectedVersion := burn.Version
@@ -277,5 +286,37 @@ func (s *BurnService) ReconcileBurned(ctx context.Context, chainEvents repositor
 			return fmt.Errorf("assets: update burn %s to Burned: %w", burn.BurnID, err)
 		}
 	}
-	return nil
+	return s.demoteOrphanedBurns(ctx, backing)
+}
+
+// demoteOrphanedBurns resets Burned records without surviving events to Pending and
+// clears BurnTxHash after indexer rollbacks. Remaining stops reserving a Pending burn's
+// amount at validUntil.
+func (s *BurnService) demoteOrphanedBurns(ctx context.Context, backing map[string]*models.ChainEvent) error {
+	cursor := ""
+	for {
+		page, next, err := s.burns.ListPage(ctx, cursor, 200)
+		if err != nil {
+			return fmt.Errorf("assets: list burns: %w", err)
+		}
+		for _, burn := range page {
+			if burn.Status != models.BurnStatusBurned {
+				continue
+			}
+			if _, backed := backing[strings.ToLower(burn.OperationID)]; backed {
+				continue
+			}
+			expectedVersion := burn.Version
+			burn.Status = models.BurnStatusPending
+			burn.BurnTxHash = ""
+			burn.UpdatedAt = time.Now().UTC()
+			if _, err := s.burns.UpdateConditional(ctx, burn, expectedVersion); err != nil {
+				return fmt.Errorf("assets: demote burn %s from orphaned Burned: %w", burn.BurnID, err)
+			}
+		}
+		if next == "" {
+			return nil
+		}
+		cursor = next
+	}
 }

@@ -201,8 +201,8 @@ func TestVerifyRolesDetectsUnexpectedHolder(t *testing.T) {
 	if len(missing) != 0 {
 		t.Errorf("missing = %v, want none (the required admin is still present)", missing)
 	}
-	if len(unexpected) != 1 {
-		t.Fatalf("unexpected = %v, want exactly the extra admin", unexpected)
+	if len(unexpected) != 1 || unexpected[0] != "DEFAULT_ADMIN_ROLE on token held by unexpected "+attacker.Hex() {
+		t.Fatalf("unexpected = %v, want exactly the extra admin on the token", unexpected)
 	}
 }
 
@@ -220,8 +220,9 @@ func TestVerifyRolesDetectsMissingHolder(t *testing.T) {
 	if len(unexpected) != 0 {
 		t.Errorf("unexpected = %v, want none", unexpected)
 	}
-	if len(missing) != 1 {
-		t.Fatalf("missing = %v, want exactly the vault admin", missing)
+	wantMissing := "DEFAULT_ADMIN_ROLE on vault for " + common.HexToAddress(p.Admin).Hex()
+	if len(missing) != 1 || missing[0] != wantMissing {
+		t.Fatalf("missing = %v, want exactly [%s]", missing, wantMissing)
 	}
 }
 

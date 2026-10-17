@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/rwa-platform/server/internal/dal/memory"
 	"github.com/rwa-platform/server/internal/dal/models"
@@ -51,7 +54,9 @@ func TestWebhookProcessAcceptsVerifiedOwnership(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
 	addr := "0x00000000000000000000000000000000000000A1"
-	_ = investors.Upsert(context.Background(), &models.Investor{Address: addr, OwnershipVerified: true, UpdatedAt: time.Now()})
+	if err := investors.Upsert(context.Background(), &models.Investor{Address: addr, OwnershipVerified: true, UpdatedAt: time.Now()}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 
 	svc := NewWebhookService(events, investors, testSecret)
 	payload, _ := json.Marshal(validPayload("evt-1", addr, "Allowed"))
@@ -105,7 +110,9 @@ func TestWebhookProcessRejectsReplay(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
 	addr := "0x00000000000000000000000000000000000000A2"
-	_ = investors.Upsert(context.Background(), &models.Investor{Address: addr, OwnershipVerified: true})
+	if err := investors.Upsert(context.Background(), &models.Investor{Address: addr, OwnershipVerified: true}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 
 	svc := NewWebhookService(events, investors, testSecret)
 	payload, _ := json.Marshal(validPayload("evt-2", addr, "Allowed"))
@@ -125,7 +132,9 @@ func TestWebhookProcessRejectsReplayViaReserializedPayload(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
 	addr := "0x00000000000000000000000000000000000000A2"
-	_ = investors.Upsert(context.Background(), &models.Investor{Address: addr, OwnershipVerified: true})
+	if err := investors.Upsert(context.Background(), &models.Investor{Address: addr, OwnershipVerified: true}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 
 	svc := NewWebhookService(events, investors, testSecret)
 	first := validPayload("evt-reserialize", addr, "Allowed")
@@ -139,7 +148,9 @@ func TestWebhookProcessRejectsReplayViaReserializedPayload(t *testing.T) {
 	// hash
 	raw, _ := json.Marshal(first)
 	var m map[string]any
-	_ = json.Unmarshal(raw, &m)
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	m["note"] = "resent"
 	payload2, _ := json.Marshal(m)
 	sig2 := sign(payload2, testSecret)
@@ -156,7 +167,9 @@ func TestWebhookProcessConcurrentIdenticalDeliveriesOnlyOneApplied(t *testing.T)
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
 	addr := "0x00000000000000000000000000000000000000A9"
-	_ = investors.Upsert(context.Background(), &models.Investor{Address: addr, OwnershipVerified: true})
+	if err := investors.Upsert(context.Background(), &models.Investor{Address: addr, OwnershipVerified: true}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 
 	svc := NewWebhookService(events, investors, testSecret)
 	payload, _ := json.Marshal(validPayload("evt-concurrent", addr, "Allowed"))
@@ -235,8 +248,8 @@ func TestWebhookProcessRejectsUnknownStatus(t *testing.T) {
 	payload, _ := json.Marshal(validPayload("evt-unknown-status", "0xabc", "Maybe"))
 	sig := sign(payload, testSecret)
 
-	if _, err := svc.Process(context.Background(), payload, sig, true); err == nil {
-		t.Fatal("expected error for unsupported status")
+	if _, err := svc.Process(context.Background(), payload, sig, true); err == nil || !strings.Contains(err.Error(), "unsupported status") {
+		t.Fatalf("err = %v, want one containing %q", err, "unsupported status")
 	}
 }
 
@@ -251,8 +264,8 @@ func TestWebhookProcessRejectsMissingProvider(t *testing.T) {
 	payload, _ := json.Marshal(wp)
 	sig := sign(payload, testSecret)
 
-	if _, err := svc.Process(context.Background(), payload, sig, true); err == nil {
-		t.Fatal("expected error for missing provider")
+	if _, err := svc.Process(context.Background(), payload, sig, true); err == nil || !strings.Contains(err.Error(), "missing required provider") {
+		t.Fatalf("err = %v, want one containing %q", err, "missing required provider")
 	}
 }
 
@@ -264,8 +277,8 @@ func TestWebhookProcessRejectsMissingEventID(t *testing.T) {
 	payload, _ := json.Marshal(wp)
 	sig := sign(payload, testSecret)
 
-	if _, err := svc.Process(context.Background(), payload, sig, true); err == nil {
-		t.Fatal("expected error for missing eventId")
+	if _, err := svc.Process(context.Background(), payload, sig, true); err == nil || !strings.Contains(err.Error(), "missing required eventId") {
+		t.Fatalf("err = %v, want one containing %q", err, "missing required eventId")
 	}
 }
 
@@ -277,8 +290,8 @@ func TestWebhookProcessRejectsInvalidAddress(t *testing.T) {
 	payload, _ := json.Marshal(wp)
 	sig := sign(payload, testSecret)
 
-	if _, err := svc.Process(context.Background(), payload, sig, true); err == nil {
-		t.Fatal("expected error for an invalid address")
+	if _, err := svc.Process(context.Background(), payload, sig, true); err == nil || !strings.Contains(err.Error(), "not a valid hex address") {
+		t.Fatalf("err = %v, want one containing %q", err, "not a valid hex address")
 	}
 }
 
@@ -297,8 +310,8 @@ func TestWebhookProcessNormalizesAddressChecksum(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
-	if got.Address == lower {
-		t.Errorf("expected address to be normalized/checksummed, still lowercase: %s", got.Address)
+	if want := common.HexToAddress(lower).Hex(); got.Address != want || got.Address == lower {
+		t.Errorf("Address = %s, want the EIP-55 form %s", got.Address, want)
 	}
 }
 
@@ -313,8 +326,8 @@ func TestWebhookProcessRejectsMissingOccurredAt(t *testing.T) {
 	payload, _ := json.Marshal(wp)
 	sig := sign(payload, testSecret)
 
-	if _, err := svc.Process(context.Background(), payload, sig, true); err == nil {
-		t.Fatal("expected error for missing occurredAt")
+	if _, err := svc.Process(context.Background(), payload, sig, true); err == nil || !strings.Contains(err.Error(), "missing required occurredAt") {
+		t.Fatalf("err = %v, want one containing %q", err, "missing required occurredAt")
 	}
 }
 
@@ -331,6 +344,70 @@ func TestWebhookProcessRejectsStaleOccurredAt(t *testing.T) {
 
 	if _, err := svc.Process(context.Background(), payload, sig, true); !errors.Is(err, ErrStale) {
 		t.Fatalf("err = %v, want ErrStale", err)
+	}
+}
+
+// The delivery window is inclusive: exactly MaxWebhookAge old or exactly
+// MaxWebhookClockSkewAhead ahead passes, one second beyond either is stale
+func TestWebhookProcess_DeliveryWindowBoundaries(t *testing.T) {
+	now := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name      string
+		occurred  time.Time
+		wantStale bool
+	}{
+		{"exactly max age", now.Add(-MaxWebhookAge), false},
+		{"one second past max age", now.Add(-MaxWebhookAge - time.Second), true},
+		{"exactly max skew ahead", now.Add(MaxWebhookClockSkewAhead), false},
+		{"one second past max skew ahead", now.Add(MaxWebhookClockSkewAhead + time.Second), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := NewWebhookService(memory.NewKYCEventRepository(), memory.NewInvestorRepository(), testSecret)
+			svc.now = func() time.Time { return now }
+			wp := validPayload("evt-window", "0x00000000000000000000000000000000000000B1", "Allowed")
+			wp.OccurredAt = tt.occurred.Unix()
+			payload, _ := json.Marshal(wp)
+
+			_, err := svc.Process(context.Background(), payload, sign(payload, testSecret), true)
+			if tt.wantStale {
+				if !errors.Is(err, ErrStale) {
+					t.Fatalf("err = %v, want ErrStale", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err = %v, want accepted", err)
+			}
+		})
+	}
+}
+
+// validUntil may sit exactly MaxValidUntilHorizon ahead of the server clock, no further
+func TestWebhookProcess_ValidUntilHorizonBoundary(t *testing.T) {
+	now := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name       string
+		validUntil int64
+		wantErr    bool
+	}{
+		{"exactly at the horizon", now.Add(MaxValidUntilHorizon).Unix(), false},
+		{"one second past the horizon", now.Add(MaxValidUntilHorizon).Unix() + 1, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := NewWebhookService(memory.NewKYCEventRepository(), memory.NewInvestorRepository(), testSecret)
+			svc.now = func() time.Time { return now }
+			wp := validPayload("evt-horizon", "0x00000000000000000000000000000000000000B2", "Allowed")
+			wp.OccurredAt = now.Unix()
+			wp.ValidUntil = tt.validUntil
+			payload, _ := json.Marshal(wp)
+
+			_, err := svc.Process(context.Background(), payload, sign(payload, testSecret), true)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -437,7 +514,9 @@ func TestWebhookProcessConcurrentDistinctEventsAtomicClaim(t *testing.T) {
 	events := memory.NewKYCEventRepository()
 	investors := memory.NewInvestorRepository()
 	addr := "0x00000000000000000000000000000000000000C1"
-	_ = investors.Upsert(context.Background(), &models.Investor{Address: addr, OwnershipVerified: true})
+	if err := investors.Upsert(context.Background(), &models.Investor{Address: addr, OwnershipVerified: true}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 	svc := NewWebhookService(events, investors, testSecret)
 
 	const n = 20

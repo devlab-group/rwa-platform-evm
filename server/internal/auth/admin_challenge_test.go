@@ -54,7 +54,10 @@ func TestAdminChallengeKeyedByNonce(t *testing.T) {
 
 	t.Run("nonce is single use", func(t *testing.T) {
 		svc := newSvc(time.Hour)
-		n, m, _, _ := svc.Create(ctx, addr)
+		n, m, _, err := svc.Create(ctx, addr)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, err := svc.Verify(ctx, addr, n, sign(m)); err != nil {
 			t.Fatal(err)
 		}
@@ -65,7 +68,10 @@ func TestAdminChallengeKeyedByNonce(t *testing.T) {
 
 	t.Run("nonce of another address is rejected", func(t *testing.T) {
 		svc := newSvc(time.Hour)
-		n, m, _, _ := svc.Create(ctx, addr)
+		n, m, _, err := svc.Create(ctx, addr)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, err := svc.Verify(ctx, otherAddr, n, sign(m)); err != ErrAdminAddressMismatch {
 			t.Fatalf("err = %v, want ErrAdminAddressMismatch", err)
 		}
@@ -77,7 +83,10 @@ func TestAdminChallengeKeyedByNonce(t *testing.T) {
 
 	t.Run("unknown and expired nonces are rejected", func(t *testing.T) {
 		svc := newSvc(-time.Second)
-		n, m, _, _ := svc.Create(ctx, addr)
+		n, m, _, err := svc.Create(ctx, addr)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, err := svc.Verify(ctx, addr, n, sign(m)); err != ErrAdminChallengeExpired {
 			t.Fatalf("expired err = %v", err)
 		}
@@ -88,7 +97,10 @@ func TestAdminChallengeKeyedByNonce(t *testing.T) {
 
 	t.Run("concurrent use succeeds once", func(t *testing.T) {
 		svc := newSvc(time.Hour)
-		n, m, _, _ := svc.Create(ctx, addr)
+		n, m, _, err := svc.Create(ctx, addr)
+		if err != nil {
+			t.Fatal(err)
+		}
 		sig := sign(m)
 		var ok atomic.Int32
 		var wg sync.WaitGroup

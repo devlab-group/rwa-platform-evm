@@ -1,0 +1,25 @@
+{
+  "_comment": "FROZEN golden burn attestation vector. operationId = keccak256(utf8(burnId)). digest is the raw 32-byte EIP-712 digest that ECDSA.recover(digest, signature) must recover to `auditor`. signature produced by anvil account 0 private key over the raw digest (no EIP-191 prefix). Generated with cast (keccak, abi-encode, wallet sign --no-hash), the same recipe that reproduces mint-eip712.json.",
+  "domain": {
+    "name": "RWA-Supply-Attestation",
+    "version": "1",
+    "chainId": 31337,
+    "verifyingContract": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+  },
+  "message": {
+    "auditor": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+    "profileDigest": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "burnId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+    "operationId": "0x9c59762b2040c61ed687aaf4422e0ba058bb89d0397349c59cd036eb2315907f",
+    "metadataDigest": "0x3333333333333333333333333333333333333333333333333333333333333333",
+    "amount": "250000000000000000000",
+    "nonce": "43",
+    "validUntil": 1800000000,
+    "vault": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+  },
+  "domainSeparator": "0xbdfe35c5a8dead8b9a941d41fd18e7e4b773a28fd189d4747d37ac78596f6314",
+  "hashStruct": "0xc99a70a211d4d97a0f16ca040738601d18403d80f99fc7fef7debecd4eaa8ec4",
+  "digest": "0x3ad6545163b566493aee33694e96fc8e1684bc98ef07ab27dc125f65e30fb092",
+  "signerPrivateKey": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+  "signature": "0xc76049dd3cf346bc257c7c71b1bf1c4c74fd980463aa502dbaa455495fb194600304ebe41e58cd1cfb6c9a2c5dfbea2381969d91f5d5d28e0381c4ee8f53f55b1b"
+}

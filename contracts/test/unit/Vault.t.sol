@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {TestBase} from "../helpers/TestBase.sol";
 import {IVault} from "../../src/interfaces/IVault.sol";
 import {ISupplyController} from "../../src/interfaces/ISupplyController.sol";
@@ -90,8 +91,9 @@ contract VaultTest is TestBase {
         vm.prank(investor);
         feeToken.approve(freshVault, type(uint256).max);
 
+        uint256 quote = strategy.quotePurchase(1 ether);
         vm.prank(investor);
-        vm.expectRevert(); // QuoteDeltaMismatch(expected, actual), with actual < expected
+        vm.expectRevert(abi.encodeWithSelector(IVault.QuoteDeltaMismatch.selector, quote, quote - (quote * 5) / 100));
         Vault(freshVault).buy(1 ether, type(uint256).max, investor, uint64(block.timestamp + 1));
     }
 
@@ -103,11 +105,26 @@ contract VaultTest is TestBase {
         falseToken.approve(freshVault, type(uint256).max);
 
         vm.prank(investor);
-        vm.expectRevert(); // SafeERC20FailedOperation
+        vm.expectRevert(abi.encodeWithSelector(SafeERC20.SafeERC20FailedOperation.selector, address(falseToken)));
         Vault(freshVault).buy(1 ether, type(uint256).max, investor, uint64(block.timestamp + 1));
     }
 
     // ---- withdrawProceeds ----
+
+    function test_withdrawProceeds_revertsWhenPaused() public {
+        vm.prank(investor);
+        vault.buy(1 ether, type(uint256).max, investor, uint64(block.timestamp + 1));
+        uint256 proceeds = quoteToken.balanceOf(address(vault));
+        vm.prank(admin);
+        token.pause();
+
+        vm.prank(treasurer);
+        vm.expectRevert(IVault.ProjectPaused.selector);
+        vault.withdrawProceeds(proceeds);
+
+        assertEq(quoteToken.balanceOf(address(vault)), proceeds);
+        assertEq(quoteToken.balanceOf(treasury), 0);
+    }
 
     function test_withdrawProceeds_onlyTreasurer() public {
         bytes32 role = vault.TREASURER_ROLE();
@@ -137,7 +154,9 @@ contract VaultTest is TestBase {
         feeToken.setFeeEnabled(true);
 
         vm.prank(treasurer);
-        vm.expectRevert(); // QuoteDeltaMismatch(expected, actual), with actual < expected after the fee
+        vm.expectRevert(
+            abi.encodeWithSelector(IVault.QuoteDeltaMismatch.selector, proceeds, proceeds - (proceeds * 5) / 100)
+        );
         Vault(freshVault).withdrawProceeds(proceeds);
 
         // Atomic rollback preserves Vault proceeds
@@ -171,6 +190,45 @@ contract VaultTest is TestBase {
         vm.prank(admin);
         vm.expectRevert(IVault.ZeroAddress.selector);
         vault.setStrategy(address(0));
+    }
+
+    function test_setStrategy_revertsWhenPaused() public {
+        vm.startPrank(admin);
+        token.pause();
+        vm.expectRevert(IVault.ProjectPaused.selector);
+        vault.setStrategy(outsider);
+        vm.stopPrank();
+        assertEq(vault.strategy(), address(strategy));
+    }
+
+    function test_setTreasury_revertsWhenPaused() public {
+        vm.startPrank(admin);
+        token.pause();
+        vm.expectRevert(IVault.ProjectPaused.selector);
+        vault.setTreasury(outsider);
+        vm.stopPrank();
+        assertEq(vault.treasury(), treasury);
+    }
+
+    function test_setTreasury_zeroAddressReverts() public {
+        vm.prank(admin);
+        vm.expectRevert(IVault.ZeroAddress.selector);
+        vault.setTreasury(address(0));
+        assertEq(vault.treasury(), treasury);
+    }
+
+    function test_constructor_zeroAddressReverts() public {
+        address q = address(quoteToken);
+        address st = address(strategy);
+        address t = address(token);
+        vm.expectRevert(IVault.ZeroAddress.selector);
+        new Vault(address(0), q, st, treasury, 0, admin, treasurer, 0);
+        vm.expectRevert(IVault.ZeroAddress.selector);
+        new Vault(t, address(0), st, treasury, 0, admin, treasurer, 0);
+        vm.expectRevert(IVault.ZeroAddress.selector);
+        new Vault(t, q, address(0), treasury, 0, admin, treasurer, 0);
+        vm.expectRevert(IVault.ZeroAddress.selector);
+        new Vault(t, q, st, address(0), 0, admin, treasurer, 0);
     }
 
     function test_setStrategy_updatesAndEmits() public {
@@ -258,8 +316,11 @@ contract VaultTest is TestBase {
         vault.buy(10 ether, type(uint256).max, investor, uint64(block.timestamp + 1));
     }
 
-    function testFuzz_minPurchase_boundaries(uint256 minimum, uint256 maxQuote) public {
+    /// @dev Test below/at/above boundaries for both the minimum and the buyer's max quote
+    function testFuzz_minPurchase_boundaries(uint8 minOffset, uint8 maxOffset) public {
         uint256 quote = strategy.quotePurchase(10 ether);
+        uint256 minimum = quote + minOffset % 5 - 2;
+        uint256 maxQuote = quote + maxOffset % 5 - 2;
         vm.prank(admin);
         vault.setMinPurchaseQuote(minimum);
         vm.prank(investor);
@@ -269,6 +330,14 @@ contract VaultTest is TestBase {
             vm.expectRevert(abi.encodeWithSelector(IVault.QuoteAboveMax.selector, quote, maxQuote));
         }
         vault.buy(10 ether, maxQuote, investor, uint64(block.timestamp + 1));
+        if (quote >= minimum && quote <= maxQuote) assertEq(token.balanceOf(investor), 10 ether);
+        else assertEq(token.balanceOf(investor), 0);
+    }
+
+    function test_buy_deadlineEqualToNowIsAccepted() public {
+        vm.prank(investor);
+        vault.buy(1 ether, type(uint256).max, investor, uint64(block.timestamp));
+        assertEq(token.balanceOf(investor), 1 ether);
     }
 
     function test_inventory() public view {

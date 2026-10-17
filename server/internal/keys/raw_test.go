@@ -40,7 +40,7 @@ func TestLoadRawModeLogsWarning(t *testing.T) {
 
 func TestLoadRawModeLogsWarningWhenExplicit(t *testing.T) {
 	out := captureLog(func() {
-		if _, err := Load("relayer", Config{Mode: ModeRaw, RawHexKey: testHexKey}); err != nil {
+		if _, err := Load("compliance", Config{Mode: ModeRaw, RawHexKey: testHexKey}); err != nil {
 			t.Fatalf("Load: %v", err)
 		}
 	})
@@ -83,7 +83,7 @@ func TestLoadRawModeInvalidHexErrors(t *testing.T) {
 }
 
 func TestRawKeyProviderSignsAndRecovers(t *testing.T) {
-	p, err := Load("relayer", Config{Mode: ModeRaw, RawHexKey: testHexKey})
+	p, err := Load("compliance", Config{Mode: ModeRaw, RawHexKey: testHexKey})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

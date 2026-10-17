@@ -281,33 +281,45 @@ export async function waitForTxReceipt(hash: Hex): Promise<void> {
 
 /** Decodes token reverts for raw writes; unknown/unavailable data falls back to wallet/RPC errors */
 export function describeWalletError(err: unknown): string {
-  const data = revertData(err);
-  if (data) {
-    try {
-      const decoded = decodeErrorResult({
-        abi: [
-          ...rwaTokenErrorsAbi,
-          ...supplyControllerErrorsAbi,
-          ...vaultErrorsAbi,
-          ...oracleStrategyErrorsAbi,
-          ...incomeDistributorErrorsAbi,
-        ],
-        data,
-      });
-      const named = explainTokenError(decoded.errorName, decoded.args);
-      if (named) return named;
-    } catch {
-      // Fall back when this ABI cannot decode the revert
-    }
+  const decoded = decodeRevert(err);
+  if (decoded) {
+    const named = explainTokenError(decoded.errorName, decoded.args);
+    if (named) return named;
   }
   return err instanceof Error ? err.message : "Transaction failed.";
+}
+
+// Decodes pinned contract errors, returning undefined for missing or unknown revert data
+function decodeRevert(
+  err: unknown,
+): { errorName: string; args: readonly unknown[] | undefined } | undefined {
+  const data = revertData(err);
+  if (!data) return undefined;
+  try {
+    return decodeErrorResult({
+      abi: [
+        ...rwaTokenErrorsAbi,
+        ...supplyControllerErrorsAbi,
+        ...vaultErrorsAbi,
+        ...oracleStrategyErrorsAbi,
+        ...incomeDistributorErrorsAbi,
+      ],
+      data,
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 // Search data on the error and cause chain, examining up to six objects
 function revertData(err: unknown): Hex | undefined {
   let current: unknown = err;
   for (let depth = 0; current && depth < 6; depth++) {
-    const candidate = (current as { data?: unknown }).data;
+    let candidate = (current as { data?: unknown }).data;
+    // MetaMask nests the revert data one level down: { data: { data: "0x..." } }
+    if (candidate && typeof candidate === "object") {
+      candidate = (candidate as { data?: unknown }).data;
+    }
     if (
       typeof candidate === "string" &&
       candidate.startsWith("0x") &&
@@ -411,20 +423,11 @@ export async function sendErc20Approve(
   spender: Address,
   amount: bigint,
 ): Promise<Hex> {
-  const provider = getInjectedProvider();
-  if (!provider) throw new Error("No injected wallet found.");
-  const chain = projectChain(expectedChainId);
-  const client = createWalletClient({
-    account: owner,
-    chain,
-    transport: custom(provider),
-  });
-  // Setting chain enables viem's live-chain check before sending
-  return client.sendTransaction({
-    account: owner,
-    chain,
-    ...erc20ApproveCall(token, spender, amount),
-  });
+  return sendCall(
+    expectedChainId,
+    owner,
+    erc20ApproveCall(token, spender, amount),
+  );
 }
 
 /** ERC-20 approve(spender, amount) call */
@@ -443,7 +446,7 @@ export function erc20ApproveCall(
   };
 }
 
-// Checks chain and submits local calldata; contracts enforce authorization
+// Simulates, checks chain and submits local calldata; contracts enforce authorization
 async function sendWrite(
   expectedChainId: number,
   from: Address,
@@ -452,13 +455,42 @@ async function sendWrite(
 ): Promise<Hex> {
   const provider = getInjectedProvider();
   if (!provider) throw new Error("No injected wallet found.");
+  await simulateWrite(provider, expectedChainId, from, to, data);
   const chain = projectChain(expectedChainId);
   const client = createWalletClient({
     account: from,
     chain,
     transport: custom(provider),
   });
+  // Setting chain enables viem's live-chain check before sending
   return client.sendTransaction({ account: from, chain, to, data });
+}
+
+// Catch signature, nonce, attestation-expiry, role and pause reverts with eth_call before
+// the wallet prompt. Skip other chains; sendTransaction rejects the mismatch.
+async function simulateWrite(
+  provider: InjectedProvider,
+  expectedChainId: number,
+  from: Address,
+  to: Address,
+  data: Hex,
+): Promise<void> {
+  const client = createPublicClient({ transport: custom(provider) });
+  if ((await client.getChainId()) !== expectedChainId) return;
+  try {
+    await client.call({ account: from, to, data });
+  } catch (err) {
+    const decoded = decodeRevert(err);
+    const reason = decoded
+      ? (explainTokenError(decoded.errorName, decoded.args) ??
+        `${decoded.errorName}(${(decoded.args ?? []).map(String).join(", ")})`)
+      : (revertData(err)?.slice(0, 10) ??
+        (err instanceof Error ? err.message : "unknown error"));
+    throw new Error(
+      `Transaction simulation failed: ${reason.replace(/\.$/, "")}. Nothing was sent.`,
+      { cause: err },
+    );
+  }
 }
 
 function sendCall(

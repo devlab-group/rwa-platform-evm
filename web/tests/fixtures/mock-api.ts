@@ -137,6 +137,23 @@ function nextId(prefix: string): string {
   return `${prefix}-${idCounter}`;
 }
 
+// Endpoints api/openapi.yaml marks `security: []`; every other path needs the admin bearer token
+const PUBLIC_PATHS = [
+  /^\/api\/v1\/project$/,
+  /^\/api\/v1\/config$/,
+  /^\/api\/v1\/compliance\/challenge(\/verify)?$/,
+  /^\/api\/v1\/compliance\/allowed\/[^/]+$/,
+  /^\/api\/v1\/compliance\/webhook$/,
+  /^\/api\/v1\/compliance\/kyc\/start$/,
+  /^\/api\/v1\/me\/wallet-status$/,
+  /^\/api\/v1\/sales\/inventory$/,
+  /^\/api\/v1\/redemptions(\/[^/]+)?$/,
+  /^\/api\/v1\/income\/claims\/[^/]+$/,
+  /^\/api\/v1\/transactions$/,
+];
+// The seeded session token (fixtures.ts) or one issued by the mock /auth/session
+const ADMIN_BEARER = /^Bearer (mock-e2e-session-token|mock-jwt:.+)$/;
+
 /** Intercepts every `/api/v1/**` call and returns the mutable backing store */
 export async function installMockApi(
   page: Page,
@@ -149,6 +166,20 @@ export async function installMockApi(
     const url = new URL(req.url());
     const path = url.pathname;
     const method = req.method();
+    const authorization = (await req.headerValue("authorization")) ?? "";
+    if (
+      !PUBLIC_PATHS.some((re) => re.test(path)) &&
+      !ADMIN_BEARER.test(authorization)
+    ) {
+      return route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({
+          code: "unauthorized",
+          message: "missing or invalid admin token",
+        }),
+      });
+    }
     const idemKey = (await req.headerValue("idempotency-key")) ?? undefined;
 
     const json = (data: unknown, status = 200) =>

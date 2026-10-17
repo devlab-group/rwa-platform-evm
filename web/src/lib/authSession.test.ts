@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearSession,
   getSession,
@@ -21,13 +21,16 @@ function makeSession(overrides: Partial<AuthSession> = {}): AuthSession {
   };
 }
 
-// Lets the background IndexedDB write settle
-const flush = () => new Promise((r) => setTimeout(r, 0));
+// Polls until the background IndexedDB write or delete has landed
+const storedEventually = (expected: AuthSession | undefined) =>
+  vi.waitFor(async () =>
+    expect(await idbGet<AuthSession>(STORAGE_KEY)).toEqual(expected),
+  );
 
 describe("authSession (wallet-JWT)", () => {
   afterEach(async () => {
     clearSession();
-    await flush();
+    await storedEventually(undefined);
   });
 
   it("starts signed out", () => {
@@ -50,14 +53,17 @@ describe("authSession (wallet-JWT)", () => {
     expect(getSession()).toBeUndefined();
   });
 
-  it("treats an already-expired session as absent and drops it", () => {
-    setSession(
-      makeSession({
-        token: "stale",
-        expiresAt: Math.floor(Date.now() / 1000) - 1,
-      }),
-    );
+  it("treats an already-expired session as absent and drops it from IndexedDB", async () => {
+    const stale = makeSession({
+      token: "stale",
+      expiresAt: Math.floor(Date.now() / 1000) - 1,
+    });
+    setSession(stale);
+    // The background write lands first, so the delete below is observable
+    await storedEventually(stale);
+
     expect(getSession()).toBeUndefined();
+    await storedEventually(undefined);
     // Once seen as expired, the session stays cleared
     expect(getSession()).toBeUndefined();
   });
@@ -85,12 +91,10 @@ describe("authSession (wallet-JWT)", () => {
   it("persists the JWT to IndexedDB on set and removes it on clear", async () => {
     const session = makeSession({ token: "persisted-jwt" });
     setSession(session);
-    await flush();
-    expect(await idbGet<AuthSession>(STORAGE_KEY)).toEqual(session);
+    await storedEventually(session);
 
     clearSession();
-    await flush();
-    expect(await idbGet<AuthSession>(STORAGE_KEY)).toBeUndefined();
+    await storedEventually(undefined);
   });
 
   it("hydrates a persisted, unexpired session from IndexedDB into the mirror", async () => {
@@ -103,6 +107,22 @@ describe("authSession (wallet-JWT)", () => {
     expect(getSession()?.token).toBe("rehydrated");
   });
 
+  it("stays signed out when IndexedDB cannot be read, and still notifies", async () => {
+    const original = globalThis.indexedDB;
+    // @ts-expect-error simulate a browser with storage disabled
+    globalThis.indexedDB = undefined;
+    const listener = vi.fn();
+    const unsubscribe = subscribeSession(listener);
+    try {
+      await expect(hydrateSession()).resolves.toBeUndefined();
+    } finally {
+      unsubscribe();
+      globalThis.indexedDB = original;
+    }
+    expect(getSession()).toBeUndefined();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it("does not hydrate an expired persisted session (and drops it)", async () => {
     const expired = makeSession({
       token: "old",
@@ -112,7 +132,7 @@ describe("authSession (wallet-JWT)", () => {
 
     await hydrateSession();
     expect(getSession()).toBeUndefined();
-    await flush(); // hydrateSession deletes expired storage entries in the background
-    expect(await idbGet<AuthSession>(STORAGE_KEY)).toBeUndefined();
+    // hydrateSession deletes expired storage entries in the background
+    await storedEventually(undefined);
   });
 });

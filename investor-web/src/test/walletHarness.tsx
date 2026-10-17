@@ -16,9 +16,12 @@ export interface FakeWalletOptions {
   signRejection?: unknown;
   // Unknown chains reject switching with 4902 until added, exercising the add-chain fallback
   notAddedChains?: number[];
+  // eth_call rejects with this, the way a wallet reports a revert; otherwise it returns 0x
+  callRevert?: unknown;
 }
 
 const DEFAULT_ACCOUNT = "0x1111111111111111111111111111111111111111";
+const SENT_TX_HASH = `0x${"cd".repeat(32)}`;
 const DEFAULT_SIGNATURE = `0x${"ab".repeat(65)}`;
 
 /**
@@ -38,6 +41,11 @@ export function installFakeWallet(opts: FakeWalletOptions = {}) {
     for (const h of listeners.get(event) ?? []) h(payload);
   };
 
+  const sentTransactions: Array<{ from?: string; to?: string; data?: string }> =
+    [];
+  const simulatedCalls: Array<{ from?: string; to?: string; data?: string }> =
+    [];
+
   const request = vi.fn(
     async ({ method, params }: { method: string; params?: unknown[] }) => {
       switch (method) {
@@ -46,6 +54,25 @@ export function installFakeWallet(opts: FakeWalletOptions = {}) {
           return [account];
         case "eth_chainId":
           return `0x${currentChainId.toString(16)}`;
+        case "eth_call":
+          simulatedCalls.push(
+            (params?.[0] ?? {}) as {
+              from?: string;
+              to?: string;
+              data?: string;
+            },
+          );
+          if (opts.callRevert) throw opts.callRevert;
+          return "0x";
+        case "eth_sendTransaction":
+          sentTransactions.push(
+            (params?.[0] ?? {}) as {
+              from?: string;
+              to?: string;
+              data?: string;
+            },
+          );
+          return SENT_TX_HASH;
         case "personal_sign":
           if (opts.signRejection) throw opts.signRejection;
           return signature;
@@ -97,6 +124,11 @@ export function installFakeWallet(opts: FakeWalletOptions = {}) {
     chainId: initialChainId,
     signature,
     request,
+    // eth_sendTransaction params captured in send order
+    sentTransactions,
+    // eth_call params captured in call order, including pre-send simulations
+    simulatedCalls,
+    sentTxHash: SENT_TX_HASH,
     // Emits accountsChanged to registered handlers
     emitAccountsChanged(accounts: string[]) {
       emit("accountsChanged", accounts);

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -64,25 +65,36 @@ func toString(v any) string {
 	return s
 }
 
-// toUint8 and toInt64 handle ChainEvent.Data numbers from direct indexer types and
-// MongoDB decoding, including int32/int64
+// toUint8 and toInt64 accept indexer and MongoDB numeric types, including int32/int64.
+// toUint8 maps values outside 0..255 to 0 (Unknown) to avoid wrapping into a valid status.
 func toUint8(v any) uint8 {
+	var n int64
 	switch t := v.(type) {
 	case uint8:
 		return t
 	case int32:
-		return uint8(t)
+		n = int64(t)
 	case int:
-		return uint8(t)
+		n = int64(t)
 	case int64:
-		return uint8(t)
+		n = t
 	case uint64:
-		return uint8(t)
+		if t > math.MaxUint8 {
+			return 0
+		}
+		n = int64(t)
 	case float64:
-		return uint8(t)
+		if t < 0 || t > math.MaxUint8 {
+			return 0
+		}
+		n = int64(t)
 	default:
 		return 0
 	}
+	if n < 0 || n > math.MaxUint8 {
+		return 0
+	}
+	return uint8(n)
 }
 
 func toInt64(v any) int64 {

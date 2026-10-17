@@ -101,7 +101,7 @@ npm test               # vitest unit and component tests
 npm run typecheck      # tsc, no emit
 npm run typecheck:e2e  # tsc over the Playwright suite, no emit
 npm run lint           # eslint
-npm run test:e2e       # build + Playwright suite (tests/)
+npm run test:e2e       # Playwright tests/; builds before starting preview on port 4174
 ```
 
 `npm run test:e2e` uses mocked API/wallet state. Set `BASE_URL` for a running SPA/API deployment;

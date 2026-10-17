@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {console2} from "forge-std/console2.sol";
 import {DeployBase} from "./Deploy.s.sol";
 import {IRWAFactory} from "../src/interfaces/IRWAFactory.sol";
+import {IRedemptionEscrow} from "../src/interfaces/IRedemptionEscrow.sol";
 import {ISupplyController} from "../src/interfaces/ISupplyController.sol";
 import {IComplianceRegistry} from "../src/interfaces/IComplianceRegistry.sol";
 import {RWAToken} from "../src/RWAToken.sol";
@@ -29,6 +30,14 @@ contract E2EFlow is DeployBase {
     // Anvil's default account 1, used as the investor
     uint256 internal constant ANVIL_ACCT1_PK = 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d;
 
+    // Independent expected prices (quote units per whole token) and amounts, matching Deploy.s.sol defaults
+    uint256 internal constant EXPECTED_PURCHASE_PRICE = 2_000_000;
+    uint256 internal constant EXPECTED_REDEMPTION_PRICE = 1_950_000;
+    uint256 internal constant MINT_TOKENS = 1_000;
+    uint256 internal constant BUY_TOKENS = 100;
+    uint256 internal constant REDEEM_TOKENS = 40;
+    uint256 internal constant CANCEL_DEMO_TOKENS = 5;
+
     uint256 internal _nonce = 1;
 
     uint256 internal _deployerPk;
@@ -48,6 +57,8 @@ contract E2EFlow is DeployBase {
     /// @notice Runs deploy through burn; e2e.sh requires the final "E2E OK" log marker
     function run() external {
         _deploy();
+        require(_token.decimals() == 18, "e2e expects an 18-decimals token");
+        require(_token.totalSupply() == 0, "fresh token has supply");
         _allowInvestor();
         _mint();
         _buy();
@@ -63,13 +74,18 @@ contract E2EFlow is DeployBase {
     function requestForCancelDemo() external returns (uint256 id) {
         _wireExisting();
 
-        uint256 amount = 5 ether;
+        uint256 amount = CANCEL_DEMO_TOKENS * 1 ether;
         uint256 quote = _strategy.quoteRedemption(amount);
+        uint256 investorBefore = _token.balanceOf(_investor);
 
         vm.startBroadcast(_investorPk);
         _token.approve(address(_escrow), amount);
         id = _escrow.requestRedemption(amount, quote, uint64(block.timestamp + 1 hours));
         vm.stopBroadcast();
+        require(quote == CANCEL_DEMO_TOKENS * EXPECTED_REDEMPTION_PRICE, "cancel demo quote");
+        require(_escrow.getRedemption(id).quoteAmount == quote, "cancel demo recorded quote");
+        require(_token.balanceOf(_investor) == investorBefore - amount, "investor RWA escrowed");
+        require(_token.balanceOf(address(_escrow)) == amount, "escrow holds the demo RWA");
         console2.log("Requested (for cancel demo) redemption id", id);
     }
 
@@ -77,10 +93,21 @@ contract E2EFlow is DeployBase {
     ///         with cast rpc evm_increaseTime and evm_mine
     function cancelIt(uint256 id) external {
         _wireExisting();
+        uint256 escrowed = _escrow.getRedemption(id).rwaAmount;
+        require(escrowed == CANCEL_DEMO_TOKENS * 1 ether, "cancel demo request amount");
+        uint256 investorBefore = _token.balanceOf(_investor);
+        uint256 supplyBefore = _token.totalSupply();
 
         vm.startBroadcast(_investorPk);
         _escrow.cancelRedemption(id);
         vm.stopBroadcast();
+        require(
+            uint8(_escrow.getRedemption(id).status) == uint8(IRedemptionEscrow.RedemptionStatus.Cancelled),
+            "status Cancelled"
+        );
+        require(_token.balanceOf(_investor) == investorBefore + escrowed, "RWA returned to the investor");
+        require(_token.balanceOf(address(_escrow)) == 0, "escrow emptied");
+        require(_token.totalSupply() == supplyBefore, "supply unchanged by cancel");
         console2.log("Cancelled timed-out redemption id", id);
     }
 
@@ -160,6 +187,9 @@ contract E2EFlow is DeployBase {
         vm.startBroadcast(_deployerPk);
         _supplyController.mint(a, sig);
         vm.stopBroadcast();
+        require(amount == MINT_TOKENS * 1 ether, "mint amount");
+        require(_token.balanceOf(address(_vault)) == MINT_TOKENS * 1 ether, "vault holds the mint");
+        require(_token.totalSupply() == MINT_TOKENS * 1 ether, "supply after mint");
         console2.log("Minted", amount, "to vault");
     }
 
@@ -175,6 +205,12 @@ contract E2EFlow is DeployBase {
         _quoteToken.approve(address(_vault), quote);
         _vault.buy(amount, quote, _investor, uint64(block.timestamp + 1 hours));
         vm.stopBroadcast();
+        require(quote == BUY_TOKENS * EXPECTED_PURCHASE_PRICE, "purchase quote");
+        require(_token.balanceOf(_investor) == BUY_TOKENS * 1 ether, "investor RWA after buy");
+        require(_token.balanceOf(address(_vault)) == (MINT_TOKENS - BUY_TOKENS) * 1 ether, "vault RWA after buy");
+        require(_quoteToken.balanceOf(address(_vault)) == BUY_TOKENS * EXPECTED_PURCHASE_PRICE, "vault quote");
+        require(_quoteToken.balanceOf(_investor) == 0, "investor quote spent");
+        require(_token.totalSupply() == MINT_TOKENS * 1 ether, "supply unchanged by buy");
         console2.log("Bought", amount, "for quote", quote);
     }
 
@@ -186,6 +222,11 @@ contract E2EFlow is DeployBase {
         _token.approve(address(_escrow), amount);
         id = _escrow.requestRedemption(amount, quote, uint64(block.timestamp + 1 hours));
         vm.stopBroadcast();
+        require(quote == REDEEM_TOKENS * EXPECTED_REDEMPTION_PRICE, "redemption quote");
+        require(_escrow.getRedemption(id).quoteAmount == REDEEM_TOKENS * EXPECTED_REDEMPTION_PRICE, "recorded quote");
+        require(_escrow.getRedemption(id).beneficiary == _investor, "recorded beneficiary");
+        require(_token.balanceOf(address(_escrow)) == REDEEM_TOKENS * 1 ether, "escrow holds the RWA");
+        require(_token.balanceOf(_investor) == (BUY_TOKENS - REDEEM_TOKENS) * 1 ether, "investor RWA after request");
         console2.log("Requested redemption id", id, "for quote", quote);
     }
 
@@ -197,11 +238,27 @@ contract E2EFlow is DeployBase {
         _quoteToken.approve(address(_escrow), quote);
         _escrow.fundRedemption(id);
         vm.stopBroadcast();
+        require(
+            uint8(_escrow.getRedemption(id).status) == uint8(IRedemptionEscrow.RedemptionStatus.Funded), "status Funded"
+        );
+        require(_quoteToken.balanceOf(address(_escrow)) == REDEEM_TOKENS * EXPECTED_REDEMPTION_PRICE, "escrow quote");
         console2.log("Funded redemption id", id);
 
         vm.startBroadcast(_deployerPk);
         _escrow.claimRedemption(id);
         vm.stopBroadcast();
+        require(
+            uint8(_escrow.getRedemption(id).status) == uint8(IRedemptionEscrow.RedemptionStatus.Completed),
+            "status Completed"
+        );
+        require(_quoteToken.balanceOf(_investor) == REDEEM_TOKENS * EXPECTED_REDEMPTION_PRICE, "investor paid");
+        require(_quoteToken.balanceOf(address(_escrow)) == 0, "escrow quote released");
+        require(_token.balanceOf(address(_escrow)) == 0, "escrow RWA released");
+        require(
+            _token.balanceOf(address(_vault)) == (MINT_TOKENS - BUY_TOKENS + REDEEM_TOKENS) * 1 ether,
+            "RWA returned to the vault"
+        );
+        require(_token.totalSupply() == MINT_TOKENS * 1 ether, "supply unchanged by claim");
         console2.log("Claimed redemption id", id, "- status Completed");
     }
 
@@ -231,6 +288,8 @@ contract E2EFlow is DeployBase {
         vm.stopBroadcast();
         require(_quoteToken.balanceOf(_investor) - before == amount, "income claim balance");
         require(_income.isClaimed(id, _investor), "income not claimed");
+        require(_quoteToken.balanceOf(address(_income)) == 0, "income pot paid out in full");
+        require(_income.getDistribution(id).claimed == amount, "income claimed counter");
         console2.log("Distributed and claimed income id", id, "amount", amount);
     }
 
@@ -251,6 +310,10 @@ contract E2EFlow is DeployBase {
         vm.startBroadcast(_deployerPk);
         _supplyController.burn(b, sig);
         vm.stopBroadcast();
+        require(amount == REDEEM_TOKENS * 1 ether, "burn amount");
+        require(_token.balanceOf(address(_vault)) == (MINT_TOKENS - BUY_TOKENS) * 1 ether, "vault RWA after burn");
+        require(_token.totalSupply() == (MINT_TOKENS - REDEEM_TOKENS) * 1 ether, "supply after burn");
+        require(_token.balanceOf(_investor) == (BUY_TOKENS - REDEEM_TOKENS) * 1 ether, "investor RWA after burn");
         console2.log("Burned", amount, "of returned Vault inventory");
     }
 

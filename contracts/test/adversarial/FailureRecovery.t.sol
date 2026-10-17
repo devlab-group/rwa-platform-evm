@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import {TestBase} from "../helpers/TestBase.sol";
 import {IRedemptionEscrow} from "../../src/interfaces/IRedemptionEscrow.sol";
 import {ISupplyController} from "../../src/interfaces/ISupplyController.sol";
@@ -34,8 +35,11 @@ contract FailureRecoveryTest is TestBase {
         assertEq(quoteToken.balanceOf(treasurer), 0);
 
         uint256 escrowRwaBefore = token.balanceOf(address(escrow));
+        uint256 quoteAmount = escrow.getRedemption(id).quoteAmount;
         vm.prank(treasurer);
-        vm.expectRevert(); // OZ ERC20InsufficientBalance from the pull-in transferFrom
+        vm.expectRevert(
+            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, treasurer, 0, quoteAmount)
+        );
         escrow.fundRedemption(id);
 
         IRedemptionEscrow.RedemptionRequest memory r = escrow.getRedemption(id);
@@ -117,7 +121,11 @@ contract FailureRecoveryTest is TestBase {
         feeToken.approve(freshEscrowAddr, quoteAmount);
 
         vm.prank(treasurer);
-        vm.expectRevert(); // QuoteDeltaMismatch(expected, actual), with actual < expected after the fee
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRedemptionEscrow.QuoteDeltaMismatch.selector, quoteAmount, quoteAmount - (quoteAmount * 5) / 100
+            )
+        );
         freshEscrow.fundRedemption(id);
 
         IRedemptionEscrow.RedemptionRequest memory r = freshEscrow.getRedemption(id);
@@ -158,7 +166,11 @@ contract FailureRecoveryTest is TestBase {
         uint256 escrowQuoteBefore = feeToken.balanceOf(freshEscrowAddr);
         uint256 vaultInventoryBefore = Vault(freshVaultAddr).inventory();
 
-        vm.expectRevert(); // QuoteDeltaMismatch(expected, actual), with actual < expected after the fee
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRedemptionEscrow.QuoteDeltaMismatch.selector, quoteAmount, quoteAmount - (quoteAmount * 5) / 100
+            )
+        );
         freshEscrow.claimRedemption(id);
 
         // Atomic rollback preserves status, escrow balances and Vault inventory

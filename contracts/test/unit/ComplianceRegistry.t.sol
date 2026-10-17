@@ -18,6 +18,19 @@ contract ComplianceRegistryTest is TestBase {
         assertFalse(compliance.isAllowed(outsider), "expired validUntil must not be allowed");
     }
 
+    function test_isAllowed_expiryBoundary() public {
+        uint64 validUntil = uint64(block.timestamp + 1 days);
+        vm.prank(complianceOperator);
+        compliance.setStatus(outsider, IComplianceRegistry.ComplianceStatus.Allowed, validUntil);
+
+        vm.warp(validUntil - 1);
+        assertTrue(compliance.isAllowed(outsider), "one second before validUntil");
+        vm.warp(validUntil);
+        assertTrue(compliance.isAllowed(outsider), "exactly validUntil is still allowed");
+        vm.warp(validUntil + 1);
+        assertFalse(compliance.isAllowed(outsider), "one second after validUntil");
+    }
+
     function test_setStatus_noExpiryWhenZero() public {
         vm.prank(complianceOperator);
         compliance.setStatus(outsider, IComplianceRegistry.ComplianceStatus.Allowed, 0);

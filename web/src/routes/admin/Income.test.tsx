@@ -523,7 +523,7 @@ describe("Income page", () => {
     });
   });
 
-  it("extends a deadline from the income manager's wallet, later and in the future only", async () => {
+  it("extends a deadline from the income manager's wallet, and only to a later one", async () => {
     const d = dist({ status: "Active", distributionId: "4" });
     vi.mocked(api.listIncomeDistributions)
       .mockReset()

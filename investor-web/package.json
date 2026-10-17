@@ -11,7 +11,7 @@
     "lint": "eslint . --ext ts,tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx,scss}\"",
     "preview": "vite preview",
-    "test:e2e": "npm run build && playwright test",
+    "test:e2e": "playwright test",
     "typecheck:e2e": "tsc -p tsconfig.playwright.json --noEmit"
   },
   "dependencies": {

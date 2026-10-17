@@ -18,8 +18,6 @@ func TestEvaluatePendingRedemptionSLA(t *testing.T) {
 		{ID: "old-but-funded", Status: models.RedemptionFunded, CreatedAt: now.Add(-72 * time.Hour).Unix()},
 		{ID: "rebuilt-recently", Status: models.RedemptionFunded, FundedAt: now.Add(-48 * time.Hour), UpdatedAt: now},
 		{ID: "no-funded-at", Status: models.RedemptionFunded, UpdatedAt: now.Add(-48 * time.Hour)},
-		{ID: "rebuilt-recently", Status: models.RedemptionFunded, FundedAt: now.Add(-48 * time.Hour), UpdatedAt: now},
-		{ID: "no-funded-at", Status: models.RedemptionFunded, UpdatedAt: now.Add(-48 * time.Hour)},
 		{ID: "old-but-completed", Status: models.RedemptionCompleted, CreatedAt: now.Add(-72 * time.Hour).Unix()},
 	}
 
@@ -47,6 +45,8 @@ func TestEvaluateFundedClaimFailure(t *testing.T) {
 
 	requests := []*models.RedemptionRequest{
 		{ID: "stuck-funded", Status: models.RedemptionFunded, FundedAt: now.Add(-48 * time.Hour)},
+		{ID: "exactly-at-threshold", Status: models.RedemptionFunded, FundedAt: now.Add(-threshold)},
+		{ID: "one-second-short", Status: models.RedemptionFunded, FundedAt: now.Add(-threshold + time.Second)},
 		{ID: "recently-funded", Status: models.RedemptionFunded, FundedAt: now.Add(-1 * time.Hour)},
 		{ID: "rebuilt-recently", Status: models.RedemptionFunded, FundedAt: now.Add(-48 * time.Hour), UpdatedAt: now},
 		{ID: "no-funded-at", Status: models.RedemptionFunded, UpdatedAt: now.Add(-48 * time.Hour)},
@@ -56,11 +56,16 @@ func TestEvaluateFundedClaimFailure(t *testing.T) {
 
 	got := EvaluateFundedClaimFailure(requests, threshold, now)
 
-	if len(got) != 2 {
-		t.Fatalf("got %d alerts, want 2: %+v", len(got), got)
+	// Age uses FundedAt (funding-index time), not UpdatedAt; recent rebuilds still alert,
+	// while requests without FundedAt are skipped
+	want := []string{"stuck-funded", "exactly-at-threshold", "rebuilt-recently"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d alerts, want %v: %+v", len(got), want, got)
 	}
-	if got[0].RedemptionID != "stuck-funded" || got[1].RedemptionID != "rebuilt-recently" {
-		t.Errorf("alert = %+v, want stuck-funded", got[0])
+	for i, id := range want {
+		if got[i].RedemptionID != id {
+			t.Errorf("alert %d = %q, want %q", i, got[i].RedemptionID, id)
+		}
 	}
 	if got[0].Kind != "funded_claim_failure" {
 		t.Errorf("Kind = %q", got[0].Kind)

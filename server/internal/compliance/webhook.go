@@ -81,11 +81,12 @@ type WebhookService struct {
 	events    repository.KYCEventRepository
 	investors repository.InvestorRepository
 	secret    string
+	now       func() time.Time // clock; tests replace it to pin the delivery window
 }
 
 // NewWebhookService constructs a WebhookService
 func NewWebhookService(events repository.KYCEventRepository, investors repository.InvestorRepository, hmacSecret string) *WebhookService {
-	return &WebhookService{events: events, investors: investors, secret: hmacSecret}
+	return &WebhookService{events: events, investors: investors, secret: hmacSecret, now: time.Now}
 }
 
 // Process verifies generic webhook HMAC, decodes JSON and calls ProcessDecision.
@@ -136,7 +137,7 @@ func (s *WebhookService) ProcessDecision(ctx context.Context, rawForHash []byte,
 		return WebhookPayload{}, errors.New("compliance: webhook payload missing required occurredAt")
 	}
 	occurredAt := time.Unix(wp.OccurredAt, 0).UTC()
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	if occurredAt.After(now.Add(MaxWebhookClockSkewAhead)) {
 		return WebhookPayload{}, fmt.Errorf("%w: occurredAt %s is implausibly far in the future", ErrStale, occurredAt)
 	}

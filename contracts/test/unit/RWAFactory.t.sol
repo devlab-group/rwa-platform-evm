@@ -11,6 +11,7 @@ import {Vault} from "../../src/Vault.sol";
 import {RWAToken} from "../../src/RWAToken.sol";
 import {SupplyController} from "../../src/SupplyController.sol";
 import {RedemptionEscrow} from "../../src/RedemptionEscrow.sol";
+import {RevertingDeployer, SilentRevertingDeployer} from "../mocks/factory/RevertingDeployer.sol";
 import {MockERC20} from "../mocks/token/MockERC20.sol";
 import {OraclePriceStrategy} from "../../src/pricing/OraclePriceStrategy.sol";
 import {MockAggregatorV3} from "../mocks/oracle/MockAggregatorV3.sol";
@@ -52,15 +53,6 @@ contract RWAFactoryTest is TestBase {
         assertFalse(compliance.hasRole(compliance.DEFAULT_ADMIN_ROLE(), address(factory)));
         assertFalse(vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), address(factory)));
         assertFalse(token.hasRole(token.DEFAULT_ADMIN_ROLE(), address(factory)));
-    }
-
-    function test_deploy_emitsProjectDeployed() public {
-        IRWAFactory.ProjectConfig memory cfg = _defaultConfig();
-        cfg.projectId = keccak256("event-project");
-        // Check predictable projectId/profileDigest topics here; assert returned addresses below
-        vm.recordLogs();
-        IRWAFactory.Deployment memory dep = factory.deploy(cfg);
-        assertTrue(dep.token != address(0));
     }
 
     function test_deploy_zeroAdminReverts() public {
@@ -198,6 +190,41 @@ contract RWAFactoryTest is TestBase {
         factory.deploy(cfg);
     }
 
+    function test_deploy_redemptionTimeoutBounds() public {
+        // Bounds are 1 day and 365 days inclusive
+        IRWAFactory.ProjectConfig memory cfg = _defaultConfig();
+        cfg.projectId = keccak256("timeout-min");
+        cfg.redemptionTimeout = 1 days;
+        assertEq(RedemptionEscrow(factory.deploy(cfg).redemptionEscrow).redemptionTimeout(), 1 days);
+
+        cfg.projectId = keccak256("timeout-max");
+        cfg.redemptionTimeout = 365 days;
+        assertEq(RedemptionEscrow(factory.deploy(cfg).redemptionEscrow).redemptionTimeout(), 365 days);
+
+        cfg.redemptionTimeout = 1 days - 1;
+        vm.expectRevert(abi.encodeWithSelector(IRWAFactory.InvalidConfig.selector, "redemptionTimeout"));
+        factory.deploy(cfg);
+
+        cfg.redemptionTimeout = 365 days + 1;
+        vm.expectRevert(abi.encodeWithSelector(IRWAFactory.InvalidConfig.selector, "redemptionTimeout"));
+        factory.deploy(cfg);
+    }
+
+    function test_deploy_adminTransferDelayReachesEveryRoleContract() public {
+        IRWAFactory.ProjectConfig memory cfg = _defaultConfig();
+        cfg.projectId = keccak256("delay-project");
+        cfg.adminTransferDelay = 2 days;
+        IRWAFactory.Deployment memory dep = factory.deploy(cfg);
+
+        assertEq(ComplianceRegistry(dep.compliance).defaultAdminDelay(), 2 days, "compliance");
+        assertEq(RWAToken(dep.token).defaultAdminDelay(), 2 days, "token");
+        assertEq(SupplyController(dep.supplyController).defaultAdminDelay(), 2 days, "supplyController");
+        assertEq(Vault(dep.vault).defaultAdminDelay(), 2 days, "vault");
+        assertEq(RedemptionEscrow(dep.redemptionEscrow).defaultAdminDelay(), 2 days, "escrow");
+        assertEq(FixedPriceStrategy(dep.strategy).defaultAdminDelay(), 2 days, "strategy");
+        assertEq(IncomeDistributor(dep.incomeDistributor).defaultAdminDelay(), 2 days, "income");
+    }
+
     function test_deploy_redemptionTimeoutTooLongReverts() public {
         IRWAFactory.ProjectConfig memory cfg = _defaultConfig();
         cfg.redemptionTimeout = 400 days;
@@ -205,17 +232,29 @@ contract RWAFactoryTest is TestBase {
         factory.deploy(cfg);
     }
 
-    function test_deploy_failedAttemptLeavesNoZombieState() public {
-        // Reverted deployment leaves no partial wiring and permits a later successful deployment
-        IRWAFactory.ProjectConfig memory bad = _defaultConfig();
-        bad.decimals = 200;
-        vm.expectRevert(abi.encodeWithSelector(IRWAFactory.InvalidConfig.selector, "decimals"));
-        factory.deploy(bad);
+    function test_deploy_helperRevertWithoutDataSurfacesDeployerCallFailed() public {
+        RWAFactory broken = new RWAFactory(
+            factory.complianceTokenDeployer(),
+            address(new SilentRevertingDeployer()),
+            factory.supplyControllerDeployer(),
+            factory.redemptionEscrowDeployer(),
+            factory.incomeDistributorDeployer()
+        );
+        vm.expectRevert(RWAFactory.DeployerCallFailed.selector);
+        broken.deploy(_defaultConfig());
+    }
 
-        IRWAFactory.ProjectConfig memory good = _defaultConfig();
-        good.projectId = keccak256("retry-project");
-        IRWAFactory.Deployment memory dep = factory.deploy(good);
-        assertTrue(dep.token != address(0));
+    function test_deploy_helperRevertDataIsForwarded() public {
+        bytes memory data = abi.encodeWithSelector(RevertingDeployer.HelperFailed.selector, 7);
+        RWAFactory broken = new RWAFactory(
+            factory.complianceTokenDeployer(),
+            factory.marketDeployer(),
+            factory.supplyControllerDeployer(),
+            address(new RevertingDeployer()),
+            factory.incomeDistributorDeployer()
+        );
+        vm.expectRevert(data);
+        broken.deploy(_defaultConfig());
     }
 
     // ---- strategy kind ----

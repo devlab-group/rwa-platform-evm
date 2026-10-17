@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearWalletSession,
   getWalletSession,
@@ -22,6 +22,51 @@ describe("walletSession", () => {
     expect(getWalletSession(ADDRESS.toLowerCase())).toEqual(SESSION);
     clearWalletSession(ADDRESS);
     expect(getWalletSession(ADDRESS)).toBeUndefined();
+  });
+
+  describe("expiry", () => {
+    const NOW = new Date("2026-03-29T12:00:00.000Z");
+    const KEY = `rwa.walletSession.${ADDRESS.toLowerCase()}`;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it("returns a session that expires in the future", () => {
+      const live = {
+        token: "t",
+        expiresAt: new Date(NOW.getTime() + 1).toISOString(),
+      };
+      setWalletSession(ADDRESS, live);
+      expect(getWalletSession(ADDRESS)).toEqual(live);
+    });
+
+    it("drops and removes a session whose expiry has passed", () => {
+      setWalletSession(ADDRESS, {
+        token: "t",
+        expiresAt: new Date(NOW.getTime() - 1).toISOString(),
+      });
+      expect(getWalletSession(ADDRESS)).toBeUndefined();
+      expect(window.localStorage.getItem(KEY)).toBeNull();
+    });
+
+    it("treats a session expiring exactly now as expired and removes it", () => {
+      setWalletSession(ADDRESS, { token: "t", expiresAt: NOW.toISOString() });
+      expect(getWalletSession(ADDRESS)).toBeUndefined();
+      expect(window.localStorage.getItem(KEY)).toBeNull();
+    });
+
+    it("expires a stored session as the clock advances past its expiry", () => {
+      setWalletSession(ADDRESS, {
+        token: "t",
+        expiresAt: new Date(NOW.getTime() + 60_000).toISOString(),
+      });
+      expect(getWalletSession(ADDRESS)?.token).toBe("t");
+      vi.setSystemTime(new Date(NOW.getTime() + 60_000));
+      expect(getWalletSession(ADDRESS)).toBeUndefined();
+    });
   });
 
   it("treats blocked storage as no session instead of throwing", () => {

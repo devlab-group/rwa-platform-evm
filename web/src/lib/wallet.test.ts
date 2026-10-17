@@ -2,11 +2,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   decodeFunctionData,
   encodeErrorResult,
+  erc20Abi,
   encodeFunctionResult,
   type Hex,
 } from "viem";
 import {
+  accessControlAdminAbi,
+  erc7943Abi,
+  fixedPriceStrategyAbi,
   incomeDistributorAbi,
+  pausableAbi,
+  redemptionEscrowAbi,
   incomeDistributorErrorsAbi,
   oracleStrategyErrorsAbi,
   rwaTokenErrorsAbi,
@@ -16,14 +22,43 @@ import {
   vaultErrorsAbi,
 } from "./abis";
 import {
+  acceptAdminTransferCall,
+  beginAdminTransferCall,
   burnCall,
   createDistributionCall,
+  erc20ApproveCall,
+  escrowCall,
   describeWalletError,
   extendClaimDeadlineCall,
   findOnChainDistribution,
+  forcedTransferCall,
+  pauseCall,
   reclaimUnclaimedCall,
+  rejectRedemptionCall,
+  roleChangeCall,
+  sendAcceptAdminTransfer,
+  sendBeginAdminTransfer,
+  sendBurn,
+  sendCreateDistribution,
+  sendDeployProject,
+  sendErc20Approve,
+  sendExtendClaimDeadline,
+  sendForcedTransfer,
+  sendFundRedemption,
+  sendMint,
+  sendReclaimUnclaimed,
+  sendRejectRedemption,
+  sendRoleChange,
+  sendSetFrozenTokens,
+  sendSetMinPurchaseQuote,
+  sendSetPaused,
+  sendSetStrategyPrice,
+  sendWithdrawProceeds,
+  setFrozenTokensCall,
   setMinPurchaseQuoteCall,
+  strategyPriceCall,
   waitForTxReceipt,
+  withdrawProceedsCall,
 } from "./wallet";
 
 const HASH = "0xaa" as const;
@@ -336,4 +371,480 @@ describe("findOnChainDistribution", () => {
     ).rejects.toThrow(/chain/i);
     expect(request.mock.calls.map(([r]) => r.method)).not.toContain("eth_call");
   });
+});
+
+// Addresses use digits only so viem's checksummed decode output equals the literal
+describe("admin call encoders", () => {
+  const TOKEN = "0x0000000000000000000000000000000000000010";
+  const HOLDER = "0x0000000000000000000000000000000000000021";
+  const RECIPIENT = "0x0000000000000000000000000000000000000032";
+  const VAULT = "0x0000000000000000000000000000000000000040";
+  const ESCROW = "0x0000000000000000000000000000000000000050";
+  const STRATEGY = "0x0000000000000000000000000000000000000060";
+  const ROLE = `0x${"11".repeat(32)}` as const;
+  const REASON = `0x${"22".repeat(32)}` as const;
+
+  it("encodes forcedTransfer with holder before recipient", () => {
+    const call = forcedTransferCall(TOKEN, HOLDER, RECIPIENT, 500n);
+    expect(call.to).toBe(TOKEN);
+    expect(decodeFunctionData({ abi: erc7943Abi, data: call.data })).toEqual({
+      functionName: "forcedTransfer",
+      args: [HOLDER, RECIPIENT, 500n],
+    });
+  });
+
+  it("encodes setFrozenTokens with the account and the absolute amount", () => {
+    const call = setFrozenTokensCall(TOKEN, HOLDER, 75n);
+    expect(call.to).toBe(TOKEN);
+    expect(decodeFunctionData({ abi: erc7943Abi, data: call.data })).toEqual({
+      functionName: "setFrozenTokens",
+      args: [HOLDER, 75n],
+    });
+  });
+
+  it.each([
+    ["grant", "grantRole"],
+    ["revoke", "revokeRole"],
+  ] as const)(
+    "encodes a %s as %s(role, account) on the contract",
+    (action, fn) => {
+      const call = roleChangeCall(VAULT, action, ROLE, HOLDER);
+      expect(call.to).toBe(VAULT);
+      expect(
+        decodeFunctionData({ abi: accessControlAdminAbi, data: call.data }),
+      ).toEqual({ functionName: fn, args: [ROLE, HOLDER] });
+    },
+  );
+
+  it("encodes beginDefaultAdminTransfer with the new admin", () => {
+    const call = beginAdminTransferCall(VAULT, RECIPIENT);
+    expect(call.to).toBe(VAULT);
+    expect(
+      decodeFunctionData({ abi: accessControlAdminAbi, data: call.data }),
+    ).toEqual({ functionName: "beginDefaultAdminTransfer", args: [RECIPIENT] });
+  });
+
+  it("encodes acceptDefaultAdminTransfer without arguments", () => {
+    const call = acceptAdminTransferCall(VAULT);
+    expect(call.to).toBe(VAULT);
+    expect(
+      decodeFunctionData({ abi: accessControlAdminAbi, data: call.data }),
+    ).toEqual({ functionName: "acceptDefaultAdminTransfer", args: undefined });
+  });
+
+  it.each([
+    [true, "pause"],
+    [false, "unpause"],
+  ] as const)("encodes pause=%s as %s() on the token", (pause, fn) => {
+    const call = pauseCall(TOKEN, pause);
+    expect(call.to).toBe(TOKEN);
+    expect(decodeFunctionData({ abi: pausableAbi, data: call.data })).toEqual({
+      functionName: fn,
+      args: undefined,
+    });
+  });
+
+  it.each([
+    ["purchase", "setPurchasePrice"],
+    ["redemption", "setRedemptionPrice"],
+  ] as const)("encodes the %s price as %s on the strategy", (side, fn) => {
+    const call = strategyPriceCall(STRATEGY, side, 2_500_000n);
+    expect(call.to).toBe(STRATEGY);
+    expect(
+      decodeFunctionData({ abi: fixedPriceStrategyAbi, data: call.data }),
+    ).toEqual({ functionName: fn, args: [2_500_000n] });
+  });
+
+  it("encodes withdrawProceeds with the exact amount", () => {
+    const call = withdrawProceedsCall(VAULT, 123_456n);
+    expect(call.to).toBe(VAULT);
+    expect(decodeFunctionData({ abi: vaultAbi, data: call.data })).toEqual({
+      functionName: "withdrawProceeds",
+      args: [123_456n],
+    });
+  });
+
+  it.each(["fundRedemption", "claimRedemption"] as const)(
+    "encodes escrowCall %s with the redemption id",
+    (fn) => {
+      const call = escrowCall(ESCROW, fn, 9n);
+      expect(call.to).toBe(ESCROW);
+      expect(
+        decodeFunctionData({ abi: redemptionEscrowAbi, data: call.data }),
+      ).toEqual({ functionName: fn, args: [9n] });
+    },
+  );
+
+  it("encodes rejectRedemption with the id then the bytes32 reason", () => {
+    const call = rejectRedemptionCall(ESCROW, 9n, REASON);
+    expect(call.to).toBe(ESCROW);
+    expect(
+      decodeFunctionData({ abi: redemptionEscrowAbi, data: call.data }),
+    ).toEqual({ functionName: "rejectRedemption", args: [9n, REASON] });
+  });
+
+  it("encodes ERC-20 approve(spender, amount) on the token", () => {
+    const call = erc20ApproveCall(TOKEN, ESCROW, 475_000n);
+    expect(call.to).toBe(TOKEN);
+    expect(decodeFunctionData({ abi: erc20Abi, data: call.data })).toEqual({
+      functionName: "approve",
+      args: [ESCROW, 475_000n],
+    });
+  });
+});
+
+// Capture eth_sendTransaction to check send* helpers that screen tests stub
+describe("wallet broadcast helpers", () => {
+  const FROM = "0x0000000000000000000000000000000000000001";
+  const TOKEN = "0x0000000000000000000000000000000000000010";
+  const VAULT = "0x0000000000000000000000000000000000000040";
+  const ESCROW = "0x0000000000000000000000000000000000000050";
+  const REASON = `0x${"22".repeat(32)}` as const;
+
+  function installSendProvider() {
+    const sent: { from: string; to: string; data: Hex }[] = [];
+    const request = vi.fn(
+      async ({ method, params }: { method: string; params?: unknown[] }) => {
+        if (method === "eth_chainId") return "0x7a69";
+        if (method === "eth_call") return "0x"; // the pre-send simulation succeeds
+        if (method === "eth_sendTransaction") {
+          sent.push(params![0] as (typeof sent)[number]);
+          return `0x${"ab".repeat(32)}`;
+        }
+        throw new Error(`unexpected method ${method}`);
+      },
+    );
+    (window as unknown as { ethereum: unknown }).ethereum = { request };
+    return sent;
+  }
+
+  it("sendFundRedemption broadcasts fundRedemption(id), never claimRedemption", async () => {
+    const sent = installSendProvider();
+    await sendFundRedemption(31337, FROM, ESCROW, 7n);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].from).toBe(FROM);
+    expect(sent[0].to.toLowerCase()).toBe(ESCROW);
+    expect(
+      decodeFunctionData({ abi: redemptionEscrowAbi, data: sent[0].data }),
+    ).toEqual({ functionName: "fundRedemption", args: [7n] });
+  });
+
+  it("sendRejectRedemption broadcasts rejectRedemption(id, reason)", async () => {
+    const sent = installSendProvider();
+    await sendRejectRedemption(31337, FROM, ESCROW, 7n, REASON);
+    expect(sent[0].to.toLowerCase()).toBe(ESCROW);
+    expect(
+      decodeFunctionData({ abi: redemptionEscrowAbi, data: sent[0].data }),
+    ).toEqual({ functionName: "rejectRedemption", args: [7n, REASON] });
+  });
+
+  it("sendWithdrawProceeds broadcasts the exact amount to the vault", async () => {
+    const sent = installSendProvider();
+    await sendWithdrawProceeds(31337, FROM, VAULT, 1_000n);
+    expect(sent[0].to.toLowerCase()).toBe(VAULT);
+    expect(decodeFunctionData({ abi: vaultAbi, data: sent[0].data })).toEqual({
+      functionName: "withdrawProceeds",
+      args: [1_000n],
+    });
+  });
+
+  it("sendErc20Approve broadcasts approve(spender, amount) to the token", async () => {
+    const sent = installSendProvider();
+    await sendErc20Approve(31337, FROM, TOKEN, ESCROW, 475_000n);
+    expect(sent[0].to.toLowerCase()).toBe(TOKEN);
+    expect(decodeFunctionData({ abi: erc20Abi, data: sent[0].data })).toEqual({
+      functionName: "approve",
+      args: [ESCROW, 475_000n],
+    });
+  });
+
+  it("sendMint broadcasts SupplyController.mint(attestation, signature)", async () => {
+    const sent = installSendProvider();
+    const attestation = {
+      auditor: "0x0000000000000000000000000000000000000099",
+      profileDigest: `0x${"cc".repeat(32)}`,
+      recordKey: `0x${"11".repeat(32)}`,
+      metadataDigest: `0x${"aa".repeat(32)}`,
+      amount: 5n,
+      nonce: 7n,
+      validUntil: 4102444800n,
+      vault: VAULT,
+    } as const;
+    const signature = `0x${"ab".repeat(65)}` as const;
+    const controller = "0x0000000000000000000000000000000000000044";
+    await sendMint(31337, FROM, controller, attestation, signature);
+    expect(sent[0].to.toLowerCase()).toBe(controller);
+    expect(
+      decodeFunctionData({ abi: supplyControllerAbi, data: sent[0].data }),
+    ).toEqual({ functionName: "mint", args: [attestation, signature] });
+  });
+});
+
+// Simulation reverts must stop writes before the wallet prompt
+describe("simulation before broadcast", () => {
+  const FROM = "0x0000000000000000000000000000000000000001" as const;
+  const CONTROLLER = "0x0000000000000000000000000000000000000044" as const;
+  const attestation = {
+    auditor: "0x0000000000000000000000000000000000000099",
+    profileDigest: `0x${"cc".repeat(32)}`,
+    recordKey: `0x${"11".repeat(32)}`,
+    metadataDigest: `0x${"aa".repeat(32)}`,
+    amount: 5n,
+    nonce: 7n,
+    validUntil: 4102444800n,
+    vault: "0x0000000000000000000000000000000000000040",
+  } as const;
+  const signature = `0x${"ab".repeat(65)}` as const;
+
+  // Records each wallet request in order; eth_call answers with callResult or throws callError
+  function installSimulatingProvider(callError?: unknown) {
+    const requests: { method: string; params?: unknown[] }[] = [];
+    (window as unknown as { ethereum: unknown }).ethereum = {
+      request: vi.fn(async (req: { method: string; params?: unknown[] }) => {
+        requests.push(req);
+        if (req.method === "eth_chainId") return "0x7a69";
+        if (req.method === "eth_call") {
+          if (callError) throw callError;
+          return "0x";
+        }
+        if (req.method === "eth_sendTransaction") return `0x${"ab".repeat(32)}`;
+        throw new Error(`unexpected method ${req.method}`);
+      }),
+    };
+    return requests;
+  }
+
+  it("simulates the exact transaction from the sender before sending it", async () => {
+    const requests = installSimulatingProvider();
+    await sendMint(31337, FROM, CONTROLLER, attestation, signature);
+    const methods = requests.map((r) => r.method);
+    expect(methods.indexOf("eth_call")).toBeGreaterThanOrEqual(0);
+    expect(methods.indexOf("eth_call")).toBeLessThan(
+      methods.indexOf("eth_sendTransaction"),
+    );
+    const simulated = requests.find((r) => r.method === "eth_call")!
+      .params![0] as { from: string; to: string; data: Hex };
+    const sent = requests.find((r) => r.method === "eth_sendTransaction")!
+      .params![0] as { from: string; to: string; data: Hex };
+    expect({
+      from: simulated.from.toLowerCase(),
+      to: simulated.to.toLowerCase(),
+      data: simulated.data,
+    }).toEqual({
+      from: sent.from.toLowerCase(),
+      to: sent.to.toLowerCase(),
+      data: sent.data,
+    });
+    expect(
+      decodeFunctionData({ abi: supplyControllerAbi, data: simulated.data }),
+    ).toEqual({ functionName: "mint", args: [attestation, signature] });
+  });
+
+  const invalidSignature = encodeErrorResult({
+    abi: supplyControllerErrorsAbi,
+    errorName: "InvalidSignature",
+  });
+  it.each([
+    [
+      "a flat revert (code 3)",
+      { code: 3, message: "execution reverted", data: invalidSignature },
+      "Transaction simulation failed: The signature does not match this attestation's auditor. Nothing was sent.",
+    ],
+    [
+      "a MetaMask-style nested revert",
+      {
+        code: -32603,
+        message: "Internal JSON-RPC error.",
+        data: {
+          code: 3,
+          message: "execution reverted",
+          data: invalidSignature,
+        },
+      },
+      "Transaction simulation failed: The signature does not match this attestation's auditor.",
+    ],
+    [
+      "a revert no pinned ABI knows",
+      { code: 3, message: "execution reverted", data: "0xdeadbeef" },
+      "Transaction simulation failed: 0xdeadbeef. Nothing was sent.",
+    ],
+  ])(
+    "names the contract error from %s and sends nothing",
+    async (_shape, callError, message) => {
+      const requests = installSimulatingProvider(callError);
+      await expect(
+        sendMint(31337, FROM, CONTROLLER, attestation, signature),
+      ).rejects.toThrow(message);
+      expect(requests.map((r) => r.method)).not.toContain(
+        "eth_sendTransaction",
+      );
+    },
+  );
+
+  it("names an error without console wording by its signature and arguments", async () => {
+    installSimulatingProvider({
+      code: 3,
+      message: "execution reverted",
+      data: encodeErrorResult({
+        abi: rwaTokenErrorsAbi,
+        errorName: "ERC7943CannotSend",
+        args: [FROM],
+      }),
+    });
+    await expect(
+      sendMint(31337, FROM, CONTROLLER, attestation, signature),
+    ).rejects.toThrow(
+      `Transaction simulation failed: ERC7943CannotSend(${FROM}). Nothing was sent.`,
+    );
+  });
+});
+
+// Every browser-broadcast write must refuse a wallet on another chain before anything is sent
+describe("writes on the wrong chain", () => {
+  const FROM = "0x0000000000000000000000000000000000000001" as const;
+  const A = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as const;
+  const B32 = (h: string) => `0x${h.repeat(32)}` as const;
+  const attestation = {
+    auditor: A(0x99),
+    profileDigest: B32("cc"),
+    metadataDigest: B32("aa"),
+    amount: 5n,
+    nonce: 7n,
+    validUntil: 4102444800n,
+    vault: A(0x55),
+  } as const;
+  const signature = `0x${"ab".repeat(65)}` as Hex;
+  const V2_CONFIG = {
+    name: "Acme",
+    symbol: "ACME",
+    decimals: 18,
+    profileDigest: B32("11"),
+    projectId: B32("22"),
+    quoteToken: A(2),
+    purchasePricePerWholeToken: 1n,
+    redemptionPricePerWholeToken: 2n,
+    redemptionTimeout: 604800n,
+    admin: A(3),
+    auditor: A(4),
+    complianceOperator: A(5),
+    pricer: A(6),
+    treasurer: A(7),
+    redemptionManager: A(8),
+    treasury: A(9),
+    adminTransferDelay: 172800,
+  };
+
+  const writes: Array<[string, () => Promise<Hex>]> = [
+    ["deploy", () => sendDeployProject(31337, FROM, A(1), V2_CONFIG)],
+    [
+      "mint",
+      () =>
+        sendMint(
+          31337,
+          FROM,
+          A(0x44),
+          { ...attestation, recordKey: B32("11") },
+          signature,
+        ),
+    ],
+    [
+      "burn",
+      () =>
+        sendBurn(
+          31337,
+          FROM,
+          A(0x44),
+          { ...attestation, operationId: B32("11") },
+          signature,
+        ),
+    ],
+    ["approve", () => sendErc20Approve(31337, FROM, A(0x10), A(0x50), 1n)],
+    ["pause", () => sendSetPaused(31337, FROM, A(0x10), true)],
+    ["unpause", () => sendSetPaused(31337, FROM, A(0x10), false)],
+    [
+      "setMinPurchaseQuote",
+      () => sendSetMinPurchaseQuote(31337, FROM, A(0x40), 1n),
+    ],
+    [
+      "setPrice",
+      () => sendSetStrategyPrice(31337, FROM, A(0x60), "purchase", 1n),
+    ],
+    [
+      "setFrozenTokens",
+      () => sendSetFrozenTokens(31337, FROM, A(0x10), A(0x21), 1n),
+    ],
+    [
+      "forcedTransfer",
+      () => sendForcedTransfer(31337, FROM, A(0x10), A(0x21), A(0x32), 1n),
+    ],
+    [
+      "grantRole",
+      () => sendRoleChange(31337, FROM, A(0x10), "grant", B32("11"), A(0x21)),
+    ],
+    [
+      "revokeRole",
+      () => sendRoleChange(31337, FROM, A(0x10), "revoke", B32("11"), A(0x21)),
+    ],
+    [
+      "beginAdminTransfer",
+      () => sendBeginAdminTransfer(31337, FROM, A(0x10), A(0x21)),
+    ],
+    [
+      "acceptAdminTransfer",
+      () => sendAcceptAdminTransfer(31337, FROM, A(0x10)),
+    ],
+    ["withdrawProceeds", () => sendWithdrawProceeds(31337, FROM, A(0x40), 1n)],
+    ["fundRedemption", () => sendFundRedemption(31337, FROM, A(0x50), 1n)],
+    [
+      "rejectRedemption",
+      () => sendRejectRedemption(31337, FROM, A(0x50), 1n, B32("22")),
+    ],
+    [
+      "createDistribution",
+      () =>
+        sendCreateDistribution(31337, FROM, A(0x80), {
+          merkleRoot: B32("ab"),
+          total: 7n,
+          recordBlock: 3n,
+          claimDeadline: 4_000_000_000n,
+          snapshotURI: "ipfs://x",
+          snapshotSha256: B32("cd"),
+        }),
+    ],
+    [
+      "extendClaimDeadline",
+      () => sendExtendClaimDeadline(31337, FROM, A(0x80), 2n, 4_100_000_000n),
+    ],
+    ["reclaimUnclaimed", () => sendReclaimUnclaimed(31337, FROM, A(0x80), 2n)],
+  ];
+
+  it.each(writes)(
+    "%s rejects with viem ChainMismatchError and sends nothing",
+    async (_name, send) => {
+      const sent: unknown[] = [];
+      // The wallet is on chain 1; the project is on 31337
+      (window as unknown as { ethereum: unknown }).ethereum = {
+        request: vi.fn(
+          async ({
+            method,
+            params,
+          }: {
+            method: string;
+            params?: unknown[];
+          }) => {
+            if (method === "eth_chainId") return "0x1";
+            if (method === "eth_sendTransaction") {
+              sent.push(params);
+              return `0x${"ab".repeat(32)}`;
+            }
+            throw new Error(`unexpected method ${method}`);
+          },
+        ),
+      };
+      await expect(send()).rejects.toMatchObject({
+        cause: { name: "ChainMismatchError" },
+      });
+      expect(sent).toEqual([]);
+    },
+  );
 });

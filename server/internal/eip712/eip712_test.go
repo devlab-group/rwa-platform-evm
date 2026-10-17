@@ -18,7 +18,7 @@ func vectorPath(t *testing.T, name string) string {
 	t.Helper()
 	p := filepath.Join("..", "..", "..", "shared", "vectors", name)
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("shared vectors not found at %s (%v); skipping golden-vector test", p, err)
+		t.Fatalf("shared vectors not found at %s: %v", p, err)
 	}
 	return p
 }
@@ -144,6 +144,10 @@ func TestMintDigestMatchesGoldenVector(t *testing.T) {
 		t.Fatalf("Digest = %s, want %s", got, want)
 	}
 
+	// the one-call wrapper the rest of the server uses must give the same digest
+	if wrapped := MintDigest(d, m); wrapped != gotDigest {
+		t.Errorf("MintDigest = %x, want the composed digest %x", wrapped, gotDigest)
+	}
 	// Sign with the vector key and recover the auditor, checking the complete digest
 	// rather than only intermediate hashes
 	privBytes, err := hex.DecodeString(trim0x(v.SignerPrivateKey))
@@ -224,5 +228,94 @@ func TestSelfSignedRoundTrip(t *testing.T) {
 	}
 	if recovered != m.Auditor {
 		t.Fatalf("recovered %s want %s", recovered.Hex(), m.Auditor.Hex())
+	}
+}
+
+func TestBurnDigestMatchesGoldenVector(t *testing.T) {
+	path := vectorPath(t, "burn-eip712.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var v struct {
+		Domain struct {
+			Name              string `json:"name"`
+			Version           string `json:"version"`
+			ChainID           int64  `json:"chainId"`
+			VerifyingContract string `json:"verifyingContract"`
+		} `json:"domain"`
+		Message struct {
+			Auditor        string `json:"auditor"`
+			ProfileDigest  string `json:"profileDigest"`
+			BurnID         string `json:"burnId"`
+			OperationID    string `json:"operationId"`
+			MetadataDigest string `json:"metadataDigest"`
+			Amount         string `json:"amount"`
+			Nonce          string `json:"nonce"`
+			ValidUntil     uint64 `json:"validUntil"`
+			Vault          string `json:"vault"`
+		} `json:"message"`
+		DomainSeparator string `json:"domainSeparator"`
+		HashStruct      string `json:"hashStruct"`
+		Digest          string `json:"digest"`
+		Signature       string `json:"signature"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	amount, ok := new(big.Int).SetString(v.Message.Amount, 10)
+	if !ok {
+		t.Fatalf("bad amount %q", v.Message.Amount)
+	}
+	nonce, ok := new(big.Int).SetString(v.Message.Nonce, 10)
+	if !ok {
+		t.Fatalf("bad nonce %q", v.Message.Nonce)
+	}
+
+	// operationId is keccak256(utf8(burnId)); check it independently of the struct hash
+	if got := crypto.Keccak256Hash([]byte(v.Message.BurnID)); got.Hex() != v.Message.OperationID {
+		t.Errorf("keccak256(burnId) = %s, want vector operationId %s", got.Hex(), v.Message.OperationID)
+	}
+
+	d := Domain{
+		Name:              v.Domain.Name,
+		Version:           v.Domain.Version,
+		ChainID:           big.NewInt(v.Domain.ChainID),
+		VerifyingContract: common.HexToAddress(v.Domain.VerifyingContract),
+	}
+	b := BurnAttestation{
+		Auditor:        common.HexToAddress(v.Message.Auditor),
+		ProfileDigest:  hexToBytes32(t, v.Message.ProfileDigest),
+		OperationID:    hexToBytes32(t, v.Message.OperationID),
+		MetadataDigest: hexToBytes32(t, v.Message.MetadataDigest),
+		Amount:         amount,
+		Nonce:          nonce,
+		ValidUntil:     v.Message.ValidUntil,
+		Vault:          common.HexToAddress(v.Message.Vault),
+	}
+
+	domainSep := DomainSeparator(d)
+	if got := "0x" + hex.EncodeToString(domainSep[:]); got != v.DomainSeparator {
+		t.Errorf("DomainSeparator = %s, want %s", got, v.DomainSeparator)
+	}
+	hashStruct := HashBurnAttestation(b)
+	if got := "0x" + hex.EncodeToString(hashStruct[:]); got != v.HashStruct {
+		t.Errorf("HashBurnAttestation = %s, want %s", got, v.HashStruct)
+	}
+	digest := BurnDigest(d, b)
+	if got := "0x" + hex.EncodeToString(digest[:]); got != v.Digest {
+		t.Fatalf("BurnDigest = %s, want %s", got, v.Digest)
+	}
+
+	sig, err := hex.DecodeString(trim0x(v.Signature))
+	if err != nil {
+		t.Fatalf("bad signature hex: %v", err)
+	}
+	recovered, err := RecoverSigner(digest, sig)
+	if err != nil {
+		t.Fatalf("RecoverSigner: %v", err)
+	}
+	if recovered != b.Auditor {
+		t.Errorf("vector signature recovered = %s, want auditor %s", recovered.Hex(), b.Auditor.Hex())
 	}
 }

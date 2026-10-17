@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,8 +106,8 @@ func TestDLQRetryRefusedWithoutTypedContract(t *testing.T) {
 	}
 	o := testOpsCtx(repos)
 	err := dispatch(o, config.Config{ChainID: 31337}, "dlq", "retry", []string{"--id=whatever"})
-	if err == nil {
-		t.Fatal("expected dlq retry to be refused when only the generic decoder is available")
+	if err == nil || !strings.Contains(err.Error(), "dlq retry refused") {
+		t.Fatalf("dispatch err = %v, want the typed-contract refusal (raised before any chain access)", err)
 	}
 }
 

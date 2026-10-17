@@ -296,7 +296,7 @@ environment: production
 security:
   kyc_webhook_hmac_secret: "01234567890123456789012345678901"
   admin_address: "0x00000000000000000000000000000000000000A1"
-  jwt_secret: "changeme"
+  jwt_secret: "00000000000000000000000000000000"
 ipfs:
   backup_archive_dir: "./testdata/ipfs-archive"
 chain:
@@ -359,10 +359,27 @@ ipfs:
   backup_archive_dir: "./testdata/ipfs-archive"
 `,
 	}
+	wantErr := map[string]string{
+		"weak webhook secret":             "KYC_WEBHOOK_HMAC_SECRET is 9 bytes, below",
+		"missing jwt secret":              "JWT_SECRET must be set",
+		"missing admin address":           "ADMIN_ADDRESS must be set",
+		"placeholder jwt secret":          "JWT_SECRET is a known placeholder",
+		"malformed admin address":         "ADMIN_ADDRESS",
+		"memory persistence":              "PERSISTENCE_MODE",
+		"raw key provider with hot key":   "KEY_PROVIDER_MODE=raw",
+		"no ipfs backup destination":      "no backup destination",
+		"unbounded fees without override": "TX_MAX_FEE_PER_GAS_WEI",
+	}
+	// every case carries a valid project_id, so only the weakened value can fail it
+	const projectID = "contract:\n  project_id: \"3f2504e0-4f89-41d3-9a0c-0305e82c3301\"\n"
 	for name, yaml := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := LoadFile(writeConfig(t, yaml)); err == nil {
+			_, err := LoadFile(writeConfig(t, projectID+yaml))
+			if err == nil {
 				t.Fatalf("expected production startup to fail for %q", name)
+			}
+			if !strings.Contains(err.Error(), wantErr[name]) {
+				t.Fatalf("error = %v, want it to mention %q", err, wantErr[name])
 			}
 		})
 	}
@@ -371,20 +388,10 @@ ipfs:
 // TestLoadFileProductionExplicitZeroHonored checks that explicit zero reaches
 // production validation and is rejected where it disables a control
 func TestLoadFileProductionExplicitZeroHonored(t *testing.T) {
-	const yaml = `
-environment: production
-security:
-  kyc_webhook_hmac_secret: "01234567890123456789012345678901"
-  admin_address: "0x00000000000000000000000000000000000000A1"
-  jwt_secret: "jwt-secret-0000000000000000000000000000000"
-ipfs:
-  backup_archive_dir: "./testdata/ipfs-archive"
-chain:
-  max_fee_per_gas_wei: "500000000000"
-  confirmations: 0
-`
-	if _, err := LoadFile(writeConfig(t, yaml)); err == nil {
-		t.Fatal("expected production startup to reject chain.confirmations: 0")
+	yaml := strings.Replace(prodYAML, "chain:\n", "chain:\n  confirmations: 0\n", 1)
+	_, err := LoadFile(writeConfig(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "CHAIN_CONFIRMATIONS") {
+		t.Fatalf("error = %v, want production to reject chain.confirmations: 0 by name", err)
 	}
 }
 

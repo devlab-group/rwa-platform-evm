@@ -65,9 +65,13 @@ func TestIncomeRepositoriesContract(t *testing.T) {
 		{ID: "2", CreatedBlock: 5, CreatedLogIndex: 9, Generation: 1},
 		{ID: "stale", CreatedBlock: 1, Generation: 0},
 	} {
-		_ = dists.Upsert(ctx, d)
+		if err := dists.Upsert(ctx, d); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
 	}
-	_ = dists.DeleteStaleGeneration(ctx, 1)
+	if err := dists.DeleteStaleGeneration(ctx, 1); err != nil {
+		t.Fatalf("DeleteStaleGeneration: %v", err)
+	}
 	dl, _ := dists.List(ctx)
 	if len(dl) != 3 || dl[0].ID != "2" || dl[1].ID != "0" || dl[2].ID != "1" {
 		t.Fatalf("distributions = %+v, want creation order 2, 0, 1 with the stale row pruned", dl)
@@ -79,9 +83,13 @@ func TestIncomeRepositoriesContract(t *testing.T) {
 		{ID: "0:0xdef", DistributionID: "0", Account: "0xdef", Amount: "7", Generation: 1},
 		{ID: "9:0xabc", DistributionID: "9", Account: "0xabc", Amount: "1", Generation: 0},
 	} {
-		_ = claims.Upsert(ctx, c)
+		if err := claims.Upsert(ctx, c); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
 	}
-	_ = claims.DeleteStaleGeneration(ctx, 1)
+	if err := claims.DeleteStaleGeneration(ctx, 1); err != nil {
+		t.Fatalf("DeleteStaleGeneration: %v", err)
+	}
 	cl, _ := claims.ListByAccount(ctx, "0xABC")
 	if len(cl) != 2 || cl[0].ID != "0:0xabc" || cl[1].ID != "1:0xabc" {
 		t.Fatalf("ListByAccount = %+v", cl)

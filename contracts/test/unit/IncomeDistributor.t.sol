@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import {Hashes} from "@openzeppelin/contracts/utils/cryptography/Hashes.sol";
 import {IRWAFactory} from "../../src/interfaces/IRWAFactory.sol";
 import {TestBase} from "../helpers/TestBase.sol";
@@ -191,7 +192,9 @@ contract IncomeDistributorTest is TestBase {
     function test_create_revertsWithoutApprovalOrBalance() public {
         vm.prank(incomeManager);
         quoteToken.approve(address(income), TOTAL - 1);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(income), TOTAL - 1, TOTAL)
+        );
         vm.prank(incomeManager);
         income.createDistribution(keccak256("r"), TOTAL, recordBlock, deadline, URI, SHA);
         assertEq(income.nextId(), 0);

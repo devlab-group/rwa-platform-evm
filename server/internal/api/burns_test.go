@@ -46,7 +46,9 @@ func TestBurnEndpointsFlow(t *testing.T) {
 		t.Fatalf("create = %d %s", code, raw)
 	}
 	var created dto.BurnResponse
-	_ = json.Unmarshal(raw, &created)
+	if err := json.Unmarshal(raw, &created); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if created.Status != "Pending" || created.Amount != "400" || created.Remaining != "600" || created.OperationID == "" {
 		t.Fatalf("unexpected burn %+v", created)
 	}
@@ -54,7 +56,9 @@ func TestBurnEndpointsFlow(t *testing.T) {
 	// Replay must not reserve the amount twice
 	code, raw = burnReq(t, env, http.MethodPost, "/api/v1/assets/burns", CreateBurnRequestBody{RecordID: "BURN-API-1", Amount: "400"}, "burn-1")
 	var replay dto.BurnResponse
-	_ = json.Unmarshal(raw, &replay)
+	if err := json.Unmarshal(raw, &replay); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if code != http.StatusCreated || replay.BurnID != created.BurnID {
 		t.Fatalf("replay = %d %s, want the same burn %s", code, raw, created.BurnID)
 	}
@@ -75,7 +79,9 @@ func TestBurnEndpointsFlow(t *testing.T) {
 
 	code, raw = burnReq(t, env, http.MethodGet, "/api/v1/assets/burns", nil, "")
 	var listed []dto.BurnResponse
-	_ = json.Unmarshal(raw, &listed)
+	if err := json.Unmarshal(raw, &listed); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if code != http.StatusOK || len(listed) != 1 || listed[0].BurnID != created.BurnID {
 		t.Fatalf("list = %d %s", code, raw)
 	}
@@ -91,7 +97,9 @@ func TestBurnEndpointsFlow(t *testing.T) {
 
 	code, raw = burnReq(t, env, http.MethodPost, "/api/v1/assets/burns/"+created.BurnID+"/reissue", nil, "reissue-1")
 	var re dto.BurnResponse
-	_ = json.Unmarshal(raw, &re)
+	if err := json.Unmarshal(raw, &re); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if code != http.StatusOK || re.Nonce == created.Nonce || re.BurnID != created.BurnID {
 		t.Fatalf("reissue = %d %s", code, raw)
 	}

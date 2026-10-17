@@ -258,8 +258,8 @@ func (app *App) startKYC(c *gin.Context) {
 			fail(c, http.StatusNotImplemented, CodeNotImplemented, "the configured KYC provider does not support server-initiated verification")
 			return
 		}
-		// Map upstream verification failure to bad gateway
-		failErr(c, http.StatusBadGateway, CodeInternal, err)
+		// Return 502; log provider details without exposing them in the response
+		failLogged(c, http.StatusBadGateway, "KYC provider unavailable", err)
 		return
 	}
 	// Persist the provider reference for webhook resolution and audit history;

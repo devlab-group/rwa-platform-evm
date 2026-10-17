@@ -15,7 +15,7 @@ func TestRecordAndRecent(t *testing.T) {
 	if err := logger.Record(ctx, "compliance", "admin", "compliance.setStatus", "0xabc", map[string]any{"status": "Allowed"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := logger.Record(ctx, "assets", "relayer", "mint.relay", "record-1", nil); err != nil {
+	if err := logger.Record(ctx, "assets", "compliance", "mint.relay", "record-1", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -40,7 +40,9 @@ func TestRecentRespectsLimit(t *testing.T) {
 	logger := New(repo)
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
-		_ = logger.Record(ctx, "compliance", "a", "action", "t", nil)
+		if err := logger.Record(ctx, "compliance", "a", "action", "t", nil); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
 	}
 	entries, err := logger.Recent(ctx, "", 2)
 	if err != nil {
@@ -55,9 +57,15 @@ func TestRecentFiltersByCategory(t *testing.T) {
 	repo := memory.NewAuditLogRepository()
 	logger := New(repo)
 	ctx := context.Background()
-	_ = logger.Record(ctx, "compliance", "a", "compliance.setStatus", "t1", nil)
-	_ = logger.Record(ctx, "assets", "b", "assets.createRecord", "t2", nil)
-	_ = logger.Record(ctx, "compliance", "c", "compliance.webhook", "t3", nil)
+	if err := logger.Record(ctx, "compliance", "a", "compliance.setStatus", "t1", nil); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := logger.Record(ctx, "assets", "b", "assets.createRecord", "t2", nil); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := logger.Record(ctx, "compliance", "c", "compliance.webhook", "t3", nil); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
 
 	entries, err := logger.Recent(ctx, "compliance", 10)
 	if err != nil {

@@ -95,10 +95,10 @@ func TestVaultProviderAddressMatchesKey(t *testing.T) {
 }
 
 func TestVaultProviderSignTxRecoversToItsOwnAddress(t *testing.T) {
-	srv, f := newFakeVaultTransit(t, "rwa-relayer", "test-token")
+	srv, f := newFakeVaultTransit(t, "rwa-compliance", "test-token")
 	defer srv.Close()
 
-	p, err := Load("relayer", Config{
+	p, err := Load("compliance", Config{
 		Mode: ModeVault, VaultAddr: srv.URL, VaultToken: "test-token", VaultKeyPrefix: "rwa-",
 	})
 	if err != nil {

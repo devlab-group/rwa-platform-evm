@@ -6,6 +6,8 @@ import {ISupplyController} from "../../src/interfaces/ISupplyController.sol";
 import {IRedemptionEscrow} from "../../src/interfaces/IRedemptionEscrow.sol";
 import {IComplianceRegistry} from "../../src/interfaces/IComplianceRegistry.sol";
 import {IERC7943} from "../../src/interfaces/IERC7943.sol";
+import {IVault} from "../../src/interfaces/IVault.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {IRWAToken} from "../../src/interfaces/IRWAToken.sol";
 import {RWAToken} from "../../src/RWAToken.sol";
 import {Vm} from "forge-std/Vm.sol";
@@ -92,12 +94,17 @@ contract FullFlowTest is TestBase {
 
         vm.prank(investor);
         token.approve(address(escrow), 20 ether);
+        uint256 requestedAt = block.timestamp;
         vm.prank(investor);
         uint256 requestId = escrow.requestRedemption(20 ether, 0, uint64(block.timestamp + 1 hours));
 
         // Not yet timed out: cancel reverts
         vm.prank(investor);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRedemptionEscrow.TimeoutNotReached.selector, uint64(requestedAt) + REDEMPTION_TIMEOUT, block.timestamp
+            )
+        );
         escrow.cancelRedemption(requestId);
 
         // Cancel after timeout
@@ -128,25 +135,25 @@ contract FullFlowTest is TestBase {
         token.pause();
 
         vm.prank(investor);
-        vm.expectRevert();
+        vm.expectRevert(Pausable.EnforcedPause.selector);
         token.transfer(investor2, 1 ether);
 
         vm.prank(investor);
-        vm.expectRevert();
+        vm.expectRevert(IVault.ProjectPaused.selector);
         vault.buy(1 ether, type(uint256).max, investor, uint64(block.timestamp + 1 hours));
 
         vm.prank(investor);
-        vm.expectRevert();
+        vm.expectRevert(IRedemptionEscrow.ProjectPaused.selector);
         escrow.requestRedemption(1 ether, 0, uint64(block.timestamp + 1 hours));
 
         ISupplyController.MintAttestation memory blockedMint = _mintAttestation(auditor, 1 ether, "GOLD-BAR-4", 2);
         bytes memory blockedSig = _signMint(blockedMint, AUDITOR_PK);
-        vm.expectRevert();
+        vm.expectRevert(ISupplyController.ProjectPaused.selector);
         supplyController.mint(blockedMint, blockedSig);
 
         ISupplyController.BurnAttestation memory blockedBurn = _burnAttestation(auditor, 1 ether, keccak256("OP"), 3);
         bytes memory blockedBurnSig = _signBurn(blockedBurn, AUDITOR_PK);
-        vm.expectRevert();
+        vm.expectRevert(ISupplyController.ProjectPaused.selector);
         supplyController.burn(blockedBurn, blockedBurnSig);
     }
 
@@ -233,14 +240,14 @@ contract FullFlowTest is TestBase {
         // Supply changes still require valid attestations and an unpaused project
         ISupplyController.MintAttestation memory blocked = _mintAttestation(auditor, 1 ether, "GOLD-BAR-7943-B", 2);
         bytes memory blockedSig = _signMint(blocked, AUDITOR_PK);
-        vm.expectRevert();
+        vm.expectRevert(ISupplyController.ProjectPaused.selector);
         supplyController.mint(blocked, blockedSig);
 
         vm.prank(admin);
         token.unpause();
         ISupplyController.MintAttestation memory forged = _mintAttestation(auditor, 1 ether, "GOLD-BAR-7943-C", 3);
         bytes memory forgedSig = _signMint(forged, INVESTOR_PK);
-        vm.expectRevert();
+        vm.expectRevert(ISupplyController.InvalidSignature.selector);
         supplyController.mint(forged, forgedSig);
         assertEq(token.totalSupply(), supplyBefore, "no path in this test changed supply");
     }

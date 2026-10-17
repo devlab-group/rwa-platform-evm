@@ -76,14 +76,18 @@ func (r *kycEventRepo) ClaimLatestForAddress(ctx context.Context, address string
 		},
 	}
 	update := bson.M{"$set": bson.M{"occurredAt": occurredAt, "eventKey": eventKey}}
-	res, err := r.claims.UpdateOne(ctx, filter, update, options.UpdateOne().SetUpsert(true))
-	if err != nil {
-		if mongo.IsDuplicateKeyError(err) {
-			return false, nil
+	// A duplicate key may come from a newer claim or a concurrent insert of an older one.
+	// Retry once against the existing document so an older insert cannot hide our newer claim.
+	for attempt := 0; attempt < 2; attempt++ {
+		res, err := r.claims.UpdateOne(ctx, filter, update, options.UpdateOne().SetUpsert(true))
+		if err == nil {
+			return res.MatchedCount > 0 || res.UpsertedCount > 0, nil
 		}
-		return false, err
+		if !mongo.IsDuplicateKeyError(err) {
+			return false, err
+		}
 	}
-	return res.MatchedCount > 0 || res.UpsertedCount > 0, nil
+	return false, nil
 }
 
 func (r *kycEventRepo) CurrentClaimEventKey(ctx context.Context, address string) (string, error) {

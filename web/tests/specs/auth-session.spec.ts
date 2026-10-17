@@ -5,6 +5,7 @@
 // this spec sets `skipAuthBootstrap` to run the real connect, sign and verify,
 // logout, and 401 flows.
 import { expect, mockOnly, test } from "../fixtures/fixtures";
+import { getMockSignRequests, MOCK_WALLET_ADDRESS } from "../fixtures/mock-wallet";
 
 // Drives the real login: connect with the Login screen's own button, then sign
 // the challenge
@@ -57,8 +58,15 @@ test.describe("Admin wallet-signature session", () => {
     await connectAndSignIn(page);
     const request = await requestPromise;
     const body = request.postDataJSON() as { address: string; signature: string };
-    expect(body.address).toBeTruthy();
+    expect(body.address).toBe(MOCK_WALLET_ADDRESS);
     expect(body.signature).toBeTruthy();
+    // The wallet signed exactly the server's challenge text, as the admin account
+    expect(await getMockSignRequests(page)).toEqual([
+      {
+        message: `Sign in to RWA Platform as ${MOCK_WALLET_ADDRESS} (nonce: mock-nonce)`,
+        signer: MOCK_WALLET_ADDRESS,
+      },
+    ]);
 
     await expect(page.getByRole("heading", { name: "Setup", exact: true })).toBeVisible();
     await expect(page.getByText(/Signed in as/)).toBeVisible();

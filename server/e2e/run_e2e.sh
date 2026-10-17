@@ -9,6 +9,9 @@
 # createDistribution, investor claim). Assertions poll server read models,
 # not just receipts; HTTP calls and readiness need no curl or wget.
 #
+# Ports default to Anvil 8545, API 8090, Mongo 27017 and IPFS 5001 and can be moved with
+# ANVIL_PORT, E2E_HTTP_PORT, E2E_MONGO_PORT and E2E_IPFS_API_PORT when a dev stack holds them.
+#
 # Usage: bash e2e/run_e2e.sh
 # Stops Anvil/platform and removes Mongo/IPFS containers on exit, except successful
 # E2E_KEEP_UP runs (see below).
@@ -41,7 +44,8 @@ MONGO_PORT="${E2E_MONGO_PORT:-27017}"
 MONGO_DB="rwa_e2e"
 MONGO_CONTAINER="rwa-e2e-mongo-$$"
 
-IPFS_IMAGE="${E2E_IPFS_IMAGE:-ipfs/kubo:latest}"
+# The default digest pins the image even if its tag moves
+IPFS_IMAGE="${E2E_IPFS_IMAGE:-ipfs/kubo:v0.32.1@sha256:7cc0e0de8f845d6c9fa1dce414c069974c34ed3cd3742e0d4f5bccda4adc376d}"
 IPFS_API_PORT="${E2E_IPFS_API_PORT:-5001}"
 IPFS_CONTAINER="rwa-e2e-ipfs-$$"
 
@@ -165,8 +169,14 @@ fi
 # Atomic CommitChunk needs MongoDB transactions. Start single-node rs0 as
 # docker/docker-compose.yml does, initiate it and wait for a writable primary before
 # connecting the server.
-docker exec "${MONGO_CONTAINER}" mongosh --quiet --eval \
-    "rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27017'}]})" >/dev/null 2>&1 || true
+# Only "already initialized" is tolerated; any other failure aborts the run.
+if ! rs_init_out="$(docker exec "${MONGO_CONTAINER}" mongosh --quiet --eval \
+    "rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27017'}]})" 2>&1)"; then
+    if ! grep -qi "already initialized" <<<"${rs_init_out}"; then
+        echo "run_e2e.sh: rs.initiate failed: ${rs_init_out}" >&2
+        exit 1
+    fi
+fi
 mongo_primary=false
 for _ in $(seq 1 60); do
     if docker exec "${MONGO_CONTAINER}" mongosh --quiet --eval "db.hello().isWritablePrimary" 2>/dev/null | grep -q "true"; then

@@ -288,8 +288,9 @@ func (c *failOnceCommitter) RewindChunk(ctx context.Context, r repository.ChunkR
 	return c.inner.RewindChunk(ctx, r)
 }
 
-// TestAtomicCommitFailureLeavesNoOrphansThenReorg checks that an aborted commit leaves
-// no events/checkpoint advance and subsequent reorg recovery stores only the new fork
+// TestAtomicCommitFailureLeavesNoOrphansThenReorg requires a failed poll to leave no
+// checkpoint, then rebuild only the new fork. The fake aborts without writing;
+// dal/mongodb.TestLiveCommitChunk_FailureMidChunkWritesNothing tests real transaction rollback.
 func TestAtomicCommitFailureLeavesNoOrphansThenReorg(t *testing.T) {
 	source := NewFakeSource()
 	for i := uint64(1); i <= 3; i++ {

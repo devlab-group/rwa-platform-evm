@@ -14,11 +14,10 @@ export default defineConfig({
   globalSetup: "./tests/global-setup.ts",
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["line"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL: liveBaseUrl ?? `http://localhost:${PREVIEW_PORT}`,
-    trace: "on-first-retry",
+    trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
   projects: [
@@ -32,9 +31,10 @@ export default defineConfig({
   webServer: liveBaseUrl
     ? undefined
     : {
-        command: `npm run preview -- --port ${PREVIEW_PORT} --strictPort`,
+        // Build before starting the preview server
+        command: `npm run build && npm run preview -- --port ${PREVIEW_PORT} --strictPort`,
         url: `http://localhost:${PREVIEW_PORT}`,
         reuseExistingServer: !process.env.CI,
-        timeout: 30_000,
+        timeout: 180_000,
       },
 });

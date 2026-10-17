@@ -271,25 +271,16 @@ export async function sendErc20Approve(
   spender: Address,
   amount: bigint,
 ): Promise<Hex> {
-  const provider = getInjectedProvider();
-  if (!provider) throw new Error("No injected wallet found.");
-  const chain = projectChain(expectedChainId);
-  const client = createWalletClient({
-    account: owner,
-    chain,
-    transport: custom(provider),
-  });
-  // Setting chain enables viem's live-chain check before sending
-  return client.sendTransaction({
-    account: owner,
-    chain,
-    to: token,
-    data: encodeFunctionData({
+  return sendWrite(
+    expectedChainId,
+    owner,
+    token,
+    encodeFunctionData({
       abi: erc20Abi,
       functionName: "approve",
       args: [spender, amount],
     }),
-  });
+  );
 }
 
 /** Sends ERC-20 transfer(to, amount) through the wallet */
@@ -300,30 +291,19 @@ export async function sendErc20Transfer(
   to: Address,
   amount: bigint,
 ): Promise<Hex> {
-  const provider = getInjectedProvider();
-  if (!provider) throw new Error("No injected wallet found.");
-  const chain = projectChain(expectedChainId);
-  const client = createWalletClient({
-    account: owner,
-    chain,
-    transport: custom(provider),
-  });
-  return client.sendTransaction({
-    account: owner,
-    chain,
-    to: token,
-    data: encodeFunctionData({
+  return sendWrite(
+    expectedChainId,
+    owner,
+    token,
+    encodeFunctionData({
       abi: erc20Abi,
       functionName: "transfer",
       args: [to, amount],
     }),
-  });
+  );
 }
 
-/**
- * Sends an encoded project-chain write with the same chain check as sendErc20Approve;
- * shared by buy and redemption helpers
- */
+// Sends every investor write: simulates it, checks the chain, then asks the wallet
 async function sendWrite(
   expectedChainId: number,
   from: Address,
@@ -332,13 +312,56 @@ async function sendWrite(
 ): Promise<Hex> {
   const provider = getInjectedProvider();
   if (!provider) throw new Error("No injected wallet found.");
+  await simulateWrite(provider, expectedChainId, from, to, data);
   const chain = projectChain(expectedChainId);
   const client = createWalletClient({
     account: from,
     chain,
     transport: custom(provider),
   });
+  // Setting chain enables viem's live-chain check before sending
   return client.sendTransaction({ account: from, chain, to, data });
+}
+
+// Simulate with eth_call before the wallet prompt to catch compliance, pause, minimum or
+// deadline reverts. Skip other chains; sendTransaction rejects the mismatch.
+async function simulateWrite(
+  provider: InjectedProvider,
+  expectedChainId: number,
+  from: Address,
+  to: Address,
+  data: Hex,
+): Promise<void> {
+  const client = createPublicClient({ transport: custom(provider) });
+  if ((await getInjectedChainId(provider)) !== expectedChainId) return;
+  try {
+    await client.call({ account: from, to, data });
+  } catch (err) {
+    throw new Error(
+      `Transaction simulation failed: ${revertReason(err)}. Nothing was sent.`,
+      { cause: err },
+    );
+  }
+}
+
+// Names a revert by its decoded error and arguments, else its selector or message
+function revertReason(err: unknown): string {
+  const data = revertData(err);
+  if (!data) return err instanceof Error ? err.message : "unknown error";
+  try {
+    const decoded = decodeErrorResult({
+      abi: [
+        ...tokenErrorsAbi,
+        ...vaultErrorsAbi,
+        ...oracleErrorsAbi,
+        ...incomeDistributorAbi,
+      ],
+      data,
+    });
+    return `${decoded.errorName}(${(decoded.args ?? []).map(String).join(", ")})`;
+  } catch {
+    return data.slice(0, 10);
+  }
 }
 
 /**
@@ -544,9 +567,13 @@ export function describeTxError(
 function revertData(err: unknown): Hex | undefined {
   let current: unknown = err;
   for (let depth = 0; current && depth < 6; depth++) {
-    const candidate =
+    let candidate =
       (current as { data?: unknown }).data ??
       (current as { raw?: unknown }).raw;
+    // MetaMask nests the revert data one level down: { data: { data: "0x..." } }
+    if (candidate && typeof candidate === "object") {
+      candidate = (candidate as { data?: unknown }).data;
+    }
     if (
       typeof candidate === "string" &&
       candidate.startsWith("0x") &&

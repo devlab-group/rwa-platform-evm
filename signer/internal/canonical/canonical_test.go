@@ -1,6 +1,10 @@
 package canonical
 
-import "testing"
+import (
+	"math"
+	"strings"
+	"testing"
+)
 
 func TestCanonicalize_KeyOrdering(t *testing.T) {
 	in := []byte(`{ "b": 1, "a": 2, "c": { "z": 1, "y": 2 } }`)
@@ -117,13 +121,56 @@ func TestFormatNumber(t *testing.T) {
 }
 
 func TestFormatNumber_NegativeZero(t *testing.T) {
-	got, err := formatNumber(-0.0)
+	// A literal -0.0 is folded to +0 by Go, so build the sign bit explicitly
+	negZero := math.Copysign(0, -1)
+	if !math.Signbit(negZero) {
+		t.Fatal("test setup: expected a negative zero")
+	}
+	got, err := formatNumber(negZero)
 	if err != nil {
 		t.Fatalf("formatNumber(-0): %v", err)
 	}
 	if got != "0" {
 		t.Fatalf("formatNumber(-0) = %q, want %q", got, "0")
 	}
+}
+
+// JSON text -0 must canonicalize to 0, alone and nested
+func TestCanonicalize_NegativeZeroText(t *testing.T) {
+	for in, want := range map[string]string{"-0": "0", "[-0]": "[0]", `{"a":-0.0}`: `{"a":0}`} {
+		got, err := Canonicalize([]byte(in))
+		if err != nil {
+			t.Fatalf("Canonicalize(%q): %v", in, err)
+		}
+		if string(got) != want {
+			t.Errorf("Canonicalize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func FuzzCanonicalize(f *testing.F) {
+	for _, seed := range []string{
+		`{"b":1,"a":2,"c":{"z":1,"y":[true,null,"\u00e9"]}}`,
+		`[-0,1.5e3,1e21,0.000001,9007199254740991]`,
+		`"\ud83d\ude00"`,
+		`{"a":1,"a":2}`,
+		``,
+	} {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, in []byte) {
+		out, err := Canonicalize(in)
+		if err != nil {
+			return
+		}
+		again, err := Canonicalize(out)
+		if err != nil {
+			t.Fatalf("canonical output %q does not re-parse: %v", out, err)
+		}
+		if string(again) != string(out) {
+			t.Fatalf("not idempotent: %q -> %q -> %q", in, out, again)
+		}
+	})
 }
 
 func TestParseWithLimits_MaxDepth(t *testing.T) {
@@ -158,5 +205,71 @@ func TestParseWithLimits_MaxBytes(t *testing.T) {
 	_, err := ParseWithLimits([]byte(`{"a":1}`), Limits{MaxBytes: 3})
 	if err == nil {
 		t.Fatal("expected max-bytes error, got nil")
+	}
+}
+
+// RFC 8785 section 3.2.2.2: only quote, backslash and U+0000-U+001F are escaped, the
+// short forms use their letters and the rest use lower-case \u00xx; everything else,
+// including DEL, U+2028 and '/', stays raw
+func TestCanonicalize_StringEscapeTable(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{"quote", `"\""`, `"\""`},
+		{"backslash", `"\\"`, `"\\"`},
+		{"backspace", `"\b"`, `"\b"`},
+		{"form feed", `"\f"`, `"\f"`},
+		{"line feed", `"\n"`, `"\n"`},
+		{"carriage return", `"\r"`, `"\r"`},
+		{"tab", `"\t"`, `"\t"`},
+		{"NUL", `"\u0000"`, `"\u0000"`},
+		{"U+000b", `"\u000B"`, `"\u000b"`},
+		{"U+001f upper-case input", `"\u001F"`, `"\u001f"`},
+		{"escaped solidus is emitted raw", `"\/"`, `"/"`},
+		{"DEL stays raw", `"\u007f"`, "\"\u007f\""},
+		{"U+2028 stays raw", `" "`, "\" \""},
+		{"escaped quote in a key", `{"a\"b":1}`, `{"a\"b":1}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Canonicalize([]byte(tt.in))
+			if err != nil {
+				t.Fatalf("Canonicalize(%s): %v", tt.in, err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("Canonicalize(%s) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// DefaultLimits enables SafeIntegers, matching the server: reject integers outside
+// [-(2^53-1), 2^53-1], except literals containing a fraction or exponent
+func TestParseWithLimits_SafeIntegers(t *testing.T) {
+	tests := []struct {
+		in      string
+		wantErr bool
+	}{
+		{`9007199254740991`, false},
+		{`-9007199254740991`, false},
+		{`9007199254740992`, true},
+		{`-9007199254740992`, true},
+		{`[1, 123456789012345678901234567890]`, true},
+		{`9007199254740993.0`, false},
+		{`9007199254740992e0`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			for name, lim := range map[string]Limits{"explicit": {SafeIntegers: true}, "DefaultLimits": DefaultLimits()} {
+				_, err := ParseWithLimits([]byte(tt.in), lim)
+				if (err != nil) != tt.wantErr {
+					t.Errorf("%s: ParseWithLimits(%s) error = %v, wantErr %v", name, tt.in, err, tt.wantErr)
+				}
+				if err != nil && !strings.Contains(err.Error(), "outside the safe range") {
+					t.Errorf("%s: error = %v, want the safe-range message", name, err)
+				}
+			}
+			if _, err := ParseWithLimits([]byte(tt.in), Limits{}); err != nil {
+				t.Errorf("without SafeIntegers, ParseWithLimits(%s) = %v, want success", tt.in, err)
+			}
+		})
 	}
 }

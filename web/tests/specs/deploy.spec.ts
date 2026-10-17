@@ -10,6 +10,14 @@ import { rwaFactoryAbi } from "../../src/lib/abis";
 const ADMIN = `0x${"aa".repeat(20)}`;
 const AUDITOR = "0x9999999999999999999999999999999999999999";
 const QUOTE_TOKEN = "0x8888888888888888888888888888888888888888";
+// Distinct role addresses expose swapped or missing calldata fields
+const ROLES = {
+  complianceOperator: "0x1000000000000000000000000000000000000001",
+  pricer: "0x1000000000000000000000000000000000000002",
+  treasurer: "0x1000000000000000000000000000000000000003",
+  redemptionManager: "0x1000000000000000000000000000000000000004",
+  treasury: "0x1000000000000000000000000000000000000005",
+};
 
 test.describe("Setup - profile then deploy", () => {
   mockOnly();
@@ -47,6 +55,7 @@ test.describe("Setup - profile then deploy", () => {
       quoteToken: QUOTE_TOKEN,
       admin: ADMIN,
       auditor: AUDITOR,
+      ...ROLES,
     });
 
     const reviewButton = page.getByRole("button", {
@@ -80,20 +89,18 @@ test.describe("Setup - profile then deploy", () => {
     expect(config.projectId).toBe(keccak256(toBytes(projectId)));
     // decimals comes from the stored profile
     expect(config.decimals).toBe(18);
-    // Every RWAFactory-required role address is present and non-zero.
-    for (const field of [
-      "quoteToken",
-      "admin",
-      "auditor",
-      "complianceOperator",
-      "pricer",
-      "treasurer",
-      "redemptionManager",
-      "treasury",
-    ]) {
-      expect(BigInt(config[field] as string), `${field} must be set`).not.toBe(
-        0n,
-      );
+    // Every RWAFactory-required address is the one typed for that field
+    const expected: Record<string, string> = {
+      quoteToken: QUOTE_TOKEN,
+      admin: ADMIN,
+      auditor: AUDITOR,
+      ...ROLES,
+    };
+    for (const [field, address] of Object.entries(expected)) {
+      expect(
+        (config[field] as string).toLowerCase(),
+        `${field} must be ${address}`,
+      ).toBe(address);
     }
   });
 

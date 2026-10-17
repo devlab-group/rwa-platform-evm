@@ -69,6 +69,16 @@ func TestCreateRecordPersistsPendingRecord(t *testing.T) {
 	if rec.RecordKey == "" || rec.MetadataDigest == "" || rec.Nonce == "" {
 		t.Errorf("expected recordKey/metadataDigest/nonce to be populated: %+v", rec)
 	}
+	// shared/eip712/types.md: recordKey = keccak256(bytes(recordId))
+	if want := crypto.Keccak256Hash([]byte("GOLD-BAR-99")).Hex(); rec.RecordKey != want {
+		t.Errorf("RecordKey = %s, want keccak256(recordId) %s", rec.RecordKey, want)
+	}
+	if rec.Amount != req.Amount || rec.ProjectID != profile.ProjectID {
+		t.Errorf("amount/projectId = %s/%s, want %s/%s", rec.Amount, rec.ProjectID, req.Amount, profile.ProjectID)
+	}
+	if rec.ValidUntil <= time.Now().Unix() {
+		t.Errorf("ValidUntil = %d, want a future expiry", rec.ValidUntil)
+	}
 
 	stored, err := records.Get(context.Background(), "GOLD-BAR-99")
 	if err != nil {

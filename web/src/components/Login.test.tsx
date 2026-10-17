@@ -19,7 +19,6 @@ vi.mock("../lib/client", async (importOriginal) => {
 });
 
 const ADMIN = "0x1111111111111111111111111111111111111111";
-const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe("Login (wallet-signature)", () => {
   let wallet: ReturnType<typeof installFakeWallet>;
@@ -65,12 +64,17 @@ describe("Login (wallet-signature)", () => {
     expect(sessionBody.address).toBe(ADMIN);
     expect(sessionBody.nonce).toBe("nonce-abc");
     expect(sessionBody.signature).toBe(wallet.signature);
+    // The wallet signs exactly the server's challenge text, as the admin account
+    expect(wallet.signedMessages).toEqual([
+      { message: "sign this: nonce-abc", signer: ADMIN },
+    ]);
 
     // Stored in IndexedDB, not in localStorage or sessionStorage
-    await flush();
-    expect(await idbGet<{ token: string }>("authSession")).toMatchObject({
-      token: "admin-jwt",
-    });
+    await vi.waitFor(async () =>
+      expect(await idbGet<{ token: string }>("authSession")).toMatchObject({
+        token: "admin-jwt",
+      }),
+    );
     expect(window.localStorage.length).toBe(0);
     expect(window.sessionStorage.length).toBe(0);
   });

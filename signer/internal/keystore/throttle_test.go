@@ -3,6 +3,7 @@ package keystore
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -84,4 +85,32 @@ func TestThrottle_CorruptedStateFailsClosed(t *testing.T) {
 	if err := CheckThrottle(path); err == nil {
 		t.Error("expected a corrupted throttle file to fail closed (locked), not open")
 	}
+}
+
+// A failure to clear or save throttle state is reported, because the signer refuses to
+// release a signature when its bookkeeping did not complete
+func TestThrottle_StateIOFailuresAreReported(t *testing.T) {
+	t.Run("clearing fails when the state path cannot be removed", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "auditor.json")
+		stuck := throttlePath(path)
+		if err := os.MkdirAll(filepath.Join(stuck, "child"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		err := RecordUnlockSuccess(path)
+		if err == nil || !strings.Contains(err.Error(), "clearing throttle state") {
+			t.Errorf("RecordUnlockSuccess error = %v, want a clearing error", err)
+		}
+	})
+	t.Run("clearing a missing state file is not an error", func(t *testing.T) {
+		if err := RecordUnlockSuccess(filepath.Join(t.TempDir(), "auditor.json")); err != nil {
+			t.Errorf("RecordUnlockSuccess on a clean keystore: %v", err)
+		}
+	})
+	t.Run("saving fails when the directory is missing", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "no-such-dir", "auditor.json")
+		err := RecordUnlockFailure(path)
+		if err == nil || !strings.Contains(err.Error(), "writing throttle state") {
+			t.Errorf("RecordUnlockFailure error = %v, want a writing error", err)
+		}
+	})
 }

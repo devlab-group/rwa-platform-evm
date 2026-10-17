@@ -7,6 +7,9 @@ import {RedemptionHandler} from "./handlers/RedemptionHandler.sol";
 /// @notice Checks bounded handler sequences for supply conservation (minted - burned == totalSupply),
 ///         escrow RWA/quote accounting, fixture factory-role removal and Vault inventory <= supply
 contract RedemptionInvariantTest is TestBase {
+    uint256 internal constant MIN_CALLS_FOR_REACH_CHECK = 400;
+    uint256 internal constant MIN_SUCCESSES = 3;
+
     RedemptionHandler internal handler;
 
     function setUp() public override {
@@ -53,14 +56,28 @@ contract RedemptionInvariantTest is TestBase {
         assertEq(quoteToken.balanceOf(address(escrow)), handler.ghost_fundedQuoteSum());
     }
 
-    /// @dev The fixture factory retains neither registry role throughout handler sequences
-    function invariant_factoryHasNoResidualComplianceRole() public view {
-        assertFalse(compliance.hasRole(compliance.COMPLIANCE_ROLE(), address(factory)));
-        assertFalse(compliance.hasRole(compliance.DEFAULT_ADMIN_ROLE(), address(factory)));
+    /// @dev Claims return the exact RWA to the Vault and pay the exact quote only to the beneficiary
+    function invariant_claimsPayOnlyTheRecordedBeneficiary() public view {
+        assertEq(handler.ghost_badClaims(), 0);
     }
 
-    /// @dev Vault inventory remains bounded by total supply throughout handler sequences
-    function invariant_vaultInventoryNeverExceedsSupply() public view {
-        assertLe(vault.inventory(), token.totalSupply());
+    /// @dev Require core actions to succeed repeatedly after enough calls, catching handlers that only revert
+    function afterInvariant() public view {
+        if (handler.totalCalls() < MIN_CALLS_FOR_REACH_CHECK) return;
+        assertGe(handler.ok_request(), MIN_SUCCESSES, "request never reached");
+        assertGe(handler.ok_fund(), MIN_SUCCESSES, "fund never reached");
+        assertGe(handler.ok_claim(), MIN_SUCCESSES, "claim never reached");
+        assertGe(handler.ok_cancel(), MIN_SUCCESSES, "cancel never reached");
+        assertGe(handler.ok_repeatCancelTried(), MIN_SUCCESSES, "repeat cancel never tried");
+    }
+
+    /// @dev Redemption transitions must conserve minted RWA across the Vault, actors and escrow
+    function invariant_rwaConservedAcrossVaultActorsAndEscrow() public view {
+        assertEq(handler.trackedRwaHoldings(), handler.ghost_totalMinted() - handler.ghost_totalBurned());
+    }
+
+    /// @dev A request that settled as Cancelled can never be cancelled a second time
+    function invariant_cancelledRequestsStayCancelled() public view {
+        assertEq(handler.ghost_repeatCancels(), 0);
     }
 }

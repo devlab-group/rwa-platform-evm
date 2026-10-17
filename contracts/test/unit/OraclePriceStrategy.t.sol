@@ -107,10 +107,93 @@ contract OraclePriceStrategyTest is Test {
 
     function test_quotes_overflowFailsClosed() public {
         OraclePriceStrategy s = _deploy(8, type(int256).max, 0, 0, 18, 6);
-        vm.expectRevert();
+        // price * BPS overflows uint256: checked arithmetic panics 0x11
+        vm.expectRevert(abi.encodeWithSignature("Panic(uint256)", 0x11));
         s.quotePurchase(1e18);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSignature("Panic(uint256)", 0x11));
         s.quoteRedemption(1e18);
+    }
+
+    // ---- fuzz: independent reference ----
+
+    uint256 internal constant REF_BPS = 10_000;
+
+    /// @dev Independent rational quote: amount * price * (BPS +- spread) * 10^quoteDec
+    ///      / (10^(feedDec + tokenDec) * BPS), without splitting scales. Bounds of amount < 2^80,
+    ///      price < 2^64 and decimals <= 18 keep the numerator within uint256.
+    function _reference(uint256 amount, uint256 price, uint256 bpsFactor, uint8 feedDec, uint8 tokenDec, uint8 quoteDec)
+        internal
+        pure
+        returns (uint256 num, uint256 den)
+    {
+        num = amount * price * bpsFactor * 10 ** quoteDec;
+        den = 10 ** (uint256(feedDec) + tokenDec) * REF_BPS;
+    }
+
+    function testFuzz_quotePurchase_roundsUpExactQuote(
+        uint8 feedDec,
+        uint8 tokenDec,
+        uint8 quoteDec,
+        uint64 price,
+        uint16 spread,
+        uint80 amount
+    ) public {
+        feedDec = uint8(bound(feedDec, 0, 18));
+        tokenDec = uint8(bound(tokenDec, 0, 18));
+        quoteDec = uint8(bound(quoteDec, 0, 18));
+        price = uint64(bound(price, 1, type(uint64).max));
+        spread = uint16(bound(spread, 0, 10_000));
+        OraclePriceStrategy s = _deploy(feedDec, int256(uint256(price)), spread, 0, tokenDec, quoteDec);
+
+        (uint256 num, uint256 den) = _reference(amount, price, REF_BPS + spread, feedDec, tokenDec, quoteDec);
+        uint256 quote = s.quotePurchase(amount);
+
+        // quote is the smallest integer q with q * den >= num
+        assertGe(quote * den, num, "quote must never undercharge");
+        if (quote > 0) assertLt((quote - 1) * den, num, "quote must be the smallest sufficient integer");
+    }
+
+    function testFuzz_quoteRedemption_roundsDownExactQuote(
+        uint8 feedDec,
+        uint8 tokenDec,
+        uint8 quoteDec,
+        uint64 price,
+        uint16 spread,
+        uint80 amount
+    ) public {
+        feedDec = uint8(bound(feedDec, 0, 18));
+        tokenDec = uint8(bound(tokenDec, 0, 18));
+        quoteDec = uint8(bound(quoteDec, 0, 18));
+        price = uint64(bound(price, 1, type(uint64).max));
+        spread = uint16(bound(spread, 0, 9_999));
+        OraclePriceStrategy s = _deploy(feedDec, int256(uint256(price)), 0, spread, tokenDec, quoteDec);
+
+        (uint256 num, uint256 den) = _reference(amount, price, REF_BPS - spread, feedDec, tokenDec, quoteDec);
+        uint256 quote = s.quoteRedemption(amount);
+
+        // quote is the largest integer q with q * den <= num
+        assertLe(quote * den, num, "quote must never overpay");
+        assertGt((quote + 1) * den, num, "quote must be the largest affordable integer");
+    }
+
+    function testFuzz_zeroSpread_purchaseThenRedeemNeverProfits(
+        uint8 feedDec,
+        uint8 tokenDec,
+        uint8 quoteDec,
+        uint64 price,
+        uint80 amount
+    ) public {
+        feedDec = uint8(bound(feedDec, 0, 18));
+        tokenDec = uint8(bound(tokenDec, 0, 18));
+        quoteDec = uint8(bound(quoteDec, 0, 18));
+        price = uint64(bound(price, 1, type(uint64).max));
+        OraclePriceStrategy s = _deploy(feedDec, int256(uint256(price)), 0, 0, tokenDec, quoteDec);
+
+        uint256 paid = s.quotePurchase(amount);
+        uint256 received = s.quoteRedemption(amount);
+
+        assertLe(received, paid, "a round trip must not pay out more than it cost");
+        assertLe(paid - received, 1, "with zero spread only rounding separates the two quotes");
     }
 
     // ---- views ----

@@ -27,11 +27,8 @@ var allowedAnnotationKeywords = map[string]bool{
 	"deprecated": true, "readOnly": true, "writeOnly": true,
 }
 
-// opaqueDataKeywords hold data, not schemas, so their values are not walked
-// (a const of {"oneOf": 1} does not use the oneOf keyword)
-var opaqueDataKeywords = map[string]bool{
-	"enum": true, "const": true, "default": true, "examples": true,
-}
+// enum, const, default and examples hold data, not schemas, so walkSchema never descends
+// into them (a const of {"oneOf": 1} does not use the oneOf keyword)
 
 // allowedTypeValues are the primitive type names the dialect accepts in "type"
 var allowedTypeValues = map[string]bool{

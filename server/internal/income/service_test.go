@@ -191,13 +191,17 @@ func TestPrepareFinalityNeedsACheckpointThatIsNotFrozen(t *testing.T) {
 	e := newEnv(t, nil)
 	cp, _ := e.repos.IndexerCheckpoints.Get(context.Background(), testChain, indexer.CheckpointAddress)
 	cp.ReconciliationRequired = true
-	_ = e.repos.IndexerCheckpoints.Set(context.Background(), cp)
+	if err := e.repos.IndexerCheckpoints.Set(context.Background(), cp); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
 	if _, err := e.svc.Prepare(context.Background(), validRequest()); !errors.Is(err, ErrRecordBlockNotFinal) {
 		t.Errorf("frozen indexer: %v", err)
 	}
 
 	fresh := New(testChain, memory.New(), ipfs.NewFakeClient(), 12)
-	_ = fresh.projects.Upsert(context.Background(), &models.Project{Version: "rwa-v3", Status: models.ProjectStatusActive, Addresses: models.Addresses{IncomeDistributor: distribA.Hex()}})
+	if err := fresh.projects.Upsert(context.Background(), &models.Project{Version: "rwa-v3", Status: models.ProjectStatusActive, Addresses: models.Addresses{IncomeDistributor: distribA.Hex()}}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 	fresh.now = func() time.Time { return fixedNow }
 	if _, err := fresh.Prepare(context.Background(), validRequest()); !errors.Is(err, ErrRecordBlockNotFinal) {
 		t.Errorf("no checkpoint: %v", err)
@@ -206,7 +210,9 @@ func TestPrepareFinalityNeedsACheckpointThatIsNotFrozen(t *testing.T) {
 
 func TestPrepareChainHeadBelowFinalityDepth(t *testing.T) {
 	e := newEnv(t, nil)
-	_ = e.repos.IndexerCheckpoints.Set(context.Background(), &models.IndexerCheckpoint{ChainID: testChain, Address: indexer.CheckpointAddress, LastBlock: 5})
+	if err := e.repos.IndexerCheckpoints.Set(context.Background(), &models.IndexerCheckpoint{ChainID: testChain, Address: indexer.CheckpointAddress, LastBlock: 5}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
 	req := validRequest()
 	req.RecordBlock = 0
 	// 5 < finality 12: the unsigned subtraction must not wrap into a huge allowed block
@@ -343,7 +349,10 @@ func TestListMatchesPreparationsToCreationEvents(t *testing.T) {
 func TestListShowsEveryCreationOfTheSameSnapshot(t *testing.T) {
 	e := newEnv(t, nil)
 	ctx := context.Background()
-	prep, _ := e.svc.Prepare(ctx, validRequest())
+	prep, err := e.svc.Prepare(ctx, validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
 	mustCreate(t, e,
 		distributionCreated(40, 0, "0", prep, deadlineStr(8*24*time.Hour)),
 		distributionCreated(41, 0, "1", prep, deadlineStr(9*24*time.Hour)),
@@ -398,18 +407,24 @@ func TestPrepareSameSnapshotKeepsOnePreparationWithTheLatestDeadline(t *testing.
 func TestListStatusFollowsDeadlineReclaimAndExtension(t *testing.T) {
 	e := newEnv(t, nil)
 	ctx := context.Background()
-	prep, _ := e.svc.Prepare(ctx, validRequest())
-
+	prep, err := e.svc.Prepare(ctx, validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
 	// the deadline passed one second ago
 	mustCreate(t, e, distributionCreated(40, 0, "0", prep, deadlineStr(-time.Second)))
-	_ = e.svc.Reconcile(ctx)
+	if err := e.svc.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
 	if v, _ := e.svc.List(ctx); v[0].Status != StatusExpired {
 		t.Errorf("past deadline: %s", v[0].Status)
 	}
 
 	// claims are accepted through the deadline second itself
 	mustCreate(t, e, distributionCreated(41, 0, "1", prep, deadlineStr(0)))
-	_ = e.svc.Reconcile(ctx)
+	if err := e.svc.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
 	d := &models.IncomeDistribution{ClaimDeadline: fixedNow.Unix()}
 	if got := statusOf(d, fixedNow); got != StatusActive {
 		t.Errorf("deadline second itself: %s", got)
@@ -421,14 +436,18 @@ func TestListStatusFollowsDeadlineReclaimAndExtension(t *testing.T) {
 	// an extension reopens it; a reclaim closes it for good
 	mustCreate(t, e, ev(distribA, &models.ChainEvent{Name: "ClaimDeadlineExtended", BlockNumber: 42, TxHash: "0xe",
 		Data: map[string]any{"id": "0", "previousDeadline": deadlineStr(-time.Second), "newDeadline": deadlineStr(24 * time.Hour)}}))
-	_ = e.svc.Reconcile(ctx)
+	if err := e.svc.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
 	v := viewOf(t, e, "0")
 	if v.Status != StatusActive || v.Dist.ClaimDeadline != fixedNow.Add(24*time.Hour).Unix() {
 		t.Errorf("extended: status=%s deadline=%d", v.Status, v.Dist.ClaimDeadline)
 	}
 	mustCreate(t, e, ev(distribA, &models.ChainEvent{Name: "UnclaimedReclaimed", BlockNumber: 43, TxHash: "0xf",
 		Data: map[string]any{"id": "0", "treasury": bob.Hex(), "amount": "250"}}))
-	_ = e.svc.Reconcile(ctx)
+	if err := e.svc.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
 	v = viewOf(t, e, "0")
 	if v.Status != StatusReclaimed || v.Dist.ReclaimedAmount != "250" {
 		t.Errorf("reclaimed: status=%s amount=%s", v.Status, v.Dist.ReclaimedAmount)
@@ -454,7 +473,10 @@ func viewOf(t *testing.T, e *env, id string) DistributionView {
 func TestClaimsForServesProofsAndStatuses(t *testing.T) {
 	e := newEnv(t, nil)
 	ctx := context.Background()
-	prep, _ := e.svc.Prepare(ctx, validRequest())
+	prep, err := e.svc.Prepare(ctx, validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
 	mustCreate(t, e, distributionCreated(40, 0, "0", prep, deadlineStr(8*24*time.Hour)))
 	// a second distribution of the same snapshot whose deadline has passed
 	mustCreate(t, e, distributionCreated(41, 0, "1", prep, deadlineStr(-time.Hour)))
@@ -503,11 +525,16 @@ func TestClaimsForServesProofsAndStatuses(t *testing.T) {
 func TestClaimsForReclaimedWithoutClaimIsExpired(t *testing.T) {
 	e := newEnv(t, nil)
 	ctx := context.Background()
-	prep, _ := e.svc.Prepare(ctx, validRequest())
+	prep, err := e.svc.Prepare(ctx, validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
 	mustCreate(t, e, distributionCreated(40, 0, "0", prep, deadlineStr(8*24*time.Hour)),
 		ev(distribA, &models.ChainEvent{Name: "UnclaimedReclaimed", BlockNumber: 50, TxHash: "0xrc",
 			Data: map[string]any{"id": "0", "treasury": bob.Hex(), "amount": "1000"}}))
-	_ = e.svc.Reconcile(ctx)
+	if err := e.svc.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
 	got, _ := e.svc.ClaimsFor(ctx, bob)
 	if len(got) != 1 || got[0].Status != ClaimExpired {
 		t.Fatalf("a reclaimed, unclaimed entitlement must read Expired: %+v", got)
@@ -519,7 +546,9 @@ func TestClaimsForSkipsDistributionsWithoutAServerSnapshot(t *testing.T) {
 	ctx := context.Background()
 	foreign := &models.IncomePreparation{MerkleRoot: "0x" + strings.Repeat("ab", 32), SnapshotSha256: "0x" + strings.Repeat("cd", 32), Total: "1", SnapshotURI: "ipfs://x"}
 	mustCreate(t, e, distributionCreated(40, 0, "0", foreign, deadlineStr(8*24*time.Hour)))
-	_ = e.svc.Reconcile(ctx)
+	if err := e.svc.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
 	if got, err := e.svc.ClaimsFor(ctx, alice); err != nil || len(got) != 0 {
 		t.Errorf("got %v err=%v", got, err)
 	}
@@ -557,10 +586,15 @@ func TestBuildDistributionsFoldsEventsInOrder(t *testing.T) {
 func TestReconcileDropsRolledBackRows(t *testing.T) {
 	e := newEnv(t, nil)
 	ctx := context.Background()
-	prep, _ := e.svc.Prepare(ctx, validRequest())
+	prep, err := e.svc.Prepare(ctx, validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
 	created := distributionCreated(40, 0, "0", prep, deadlineStr(8*24*time.Hour))
 	mustCreate(t, e, created, claimedEv(45, "0", alice, "625"))
-	_ = e.svc.Reconcile(ctx)
+	if err := e.svc.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
 	if d, _ := e.repos.IncomeDistributions.List(ctx); len(d) != 1 {
 		t.Fatalf("distributions = %d", len(d))
 	}
@@ -683,7 +717,10 @@ func TestPrepare_ConcurrentPrepareOfTheSameSnapshot_ReturnsTheStoredPreparation(
 func TestDemotedProject_ServesNoDistributionsAndReconcilePrunesThem(t *testing.T) {
 	e := newEnv(t, nil)
 	ctx := context.Background()
-	prep, _ := e.svc.Prepare(ctx, validRequest())
+	prep, err := e.svc.Prepare(ctx, validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
 	mustCreate(t, e, distributionCreated(40, 0, "0", prep, deadlineStr(8*24*time.Hour)), claimedEv(45, "0", alice, "625"))
 	if err := e.svc.Reconcile(ctx); err != nil {
 		t.Fatal(err)
@@ -720,7 +757,10 @@ func TestDemotedProject_ServesNoDistributionsAndReconcilePrunesThem(t *testing.T
 func TestClaimsFor_UnreadableSnapshot_DoesNotHideOtherDistributions(t *testing.T) {
 	e := newEnv(t, nil)
 	ctx := context.Background()
-	good, _ := e.svc.Prepare(ctx, validRequest())
+	good, err := e.svc.Prepare(ctx, validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
 	broken := &models.IncomePreparation{
 		ID: "broken", MerkleRoot: "0x" + strings.Repeat("ab", 32), SnapshotSha256: "0x" + strings.Repeat("cd", 32),
 		Total: "1", SnapshotURI: "ipfs://broken", SnapshotRaw: []byte(`{"entries":[`), CreatedAt: fixedNow,
@@ -767,7 +807,10 @@ func TestDistributions_DeadlineAboveInt64_StaysOpen(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t, nil)
 			ctx := context.Background()
-			prep, _ := e.svc.Prepare(ctx, validRequest())
+			prep, err := e.svc.Prepare(ctx, validRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
 			mustCreate(t, e, tc.events(prep)...)
 			if err := e.svc.Reconcile(ctx); err != nil {
 				t.Fatal(err)

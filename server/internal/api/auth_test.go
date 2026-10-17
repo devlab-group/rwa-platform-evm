@@ -73,8 +73,8 @@ func TestAdminAuthChallengeSessionFlow(t *testing.T) {
 	// The JWT authorizes an admin-only route
 	got := doJSON(t, env.router, http.MethodGet, "/api/v1/compliance/wallets", nil,
 		map[string]string{"Authorization": "Bearer " + resp.Token})
-	if got.Code == http.StatusForbidden || got.Code == http.StatusUnauthorized {
-		t.Fatalf("JWT admin route status = %d, want authorized", got.Code)
+	if got.Code != http.StatusOK {
+		t.Fatalf("JWT admin route status = %d, want 200; body=%s", got.Code, got.Body.String())
 	}
 
 	// Replaying the used challenge signature fails, because challenges are single-use
@@ -204,5 +204,35 @@ func TestAdminAuthSessionRequiresMatchingNonce(t *testing.T) {
 	n3, m3 := requestChallenge(t, env, otherAddr)
 	if c := session(map[string]string{"address": addr, "nonce": n3, "signature": personalSign(t, m3, env.adminKey)}); c != http.StatusUnauthorized {
 		t.Fatalf("other-address nonce status = %d, want 401", c)
+	}
+}
+
+func TestCreateAuthChallenge_NotConfigured_Is501(t *testing.T) {
+	env := setupTestApp(t)
+	env.app.AdminChallenges = nil
+	w := doJSON(t, env.router, http.MethodPost, "/auth/challenge", map[string]string{"address": env.adminAddr.Hex()}, nil)
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestCreateAuthChallenge_RejectsBadRequests(t *testing.T) {
+	tests := []struct {
+		name string
+		body any
+	}{
+		{"malformed address", map[string]string{"address": "0x1234"}},
+		{"not hex", map[string]string{"address": "not-an-address"}},
+		{"empty address", map[string]string{"address": ""}},
+		{"missing address", map[string]string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := setupTestApp(t)
+			w := doJSON(t, env.router, http.MethodPost, "/auth/challenge", tt.body, nil)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400, body=%s", w.Code, w.Body.String())
+			}
+		})
 	}
 }

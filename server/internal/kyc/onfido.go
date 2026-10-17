@@ -19,6 +19,7 @@ type OnfidoConfig struct {
 	WorkflowID   string
 	Region       string // eu | us | ca (default eu)
 	Referrer     string // SDK token referrer pattern, default "*://*/*"
+	BaseURL      string // API host override for fake-provider tests
 }
 
 const (
@@ -44,6 +45,9 @@ func newOnfidoProvider(cfg OnfidoConfig) (Provider, error) {
 	base, err := onfidoBaseURL(cfg.Region)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.BaseURL != "" {
+		base = strings.TrimRight(cfg.BaseURL, "/")
 	}
 	if cfg.Referrer == "" {
 		cfg.Referrer = onfidoDefaultReferer

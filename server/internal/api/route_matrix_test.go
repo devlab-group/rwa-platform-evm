@@ -3,75 +3,147 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"sort"
+	"strings"
 	"testing"
 )
 
-// TestRouteAuthorizationMatrix calls every NewRouter route without Authorization,
-// yielding RoleReadOnly. RequireRole must reject gated routes with 403 before their
-// handlers run, regardless of body or path. Public routes may return parameter, 404 or
-// 501 errors, but never an authorization 403.
+type routeClass int
+
+const (
+	// classAdmin routes need an admin JWT: anonymous callers get 403
+	classAdmin routeClass = iota
+	// classSession routes need an X-Wallet-Session: callers without one get 401
+	classSession
+	// classPublic routes carry no role gate; they authenticate in their own way (login
+	// signature, webhook HMAC) or serve public data
+	classPublic
+)
+
+// routeClasses maps NewRouter routes to auth classes; TestRouteAuthorizationMatrix rejects
+// missing or stale entries
+var routeClasses = map[string]routeClass{
+	"GET /healthz": classPublic,
+	"GET /readyz":  classPublic,
+
+	"POST /auth/challenge": classPublic,
+	"POST /auth/session":   classPublic,
+
+	"GET /api/v1/project":             classPublic,
+	"GET /api/v1/project/enforcement": classAdmin,
+	"GET /api/v1/config":              classPublic,
+
+	"POST /api/v1/profile/validate": classAdmin,
+	"POST /api/v1/profile":          classAdmin,
+	"GET /api/v1/profile":           classAdmin,
+
+	"GET /api/v1/compliance/wallets":                classAdmin,
+	"POST /api/v1/compliance/challenge":             classPublic,
+	"POST /api/v1/compliance/challenge/verify":      classPublic,
+	"GET /api/v1/me/wallet-status":                  classSession,
+	"POST /api/v1/compliance/kyc/start":             classSession,
+	"GET /api/v1/compliance/allowed/:address":       classPublic,
+	"GET /api/v1/compliance/webhooks":               classAdmin,
+	"POST /api/v1/compliance/status":                classAdmin,
+	"POST /api/v1/compliance/webhook":               classPublic, // HMAC-authenticated, not role-gated
+	"GET /api/v1/audit-logs":                        classAdmin,
+	"GET /api/v1/assets/records":                    classAdmin,
+	"POST /api/v1/assets/records":                   classAdmin,
+	"GET /api/v1/assets/records/:recordId/package":  classAdmin,
+	"POST /api/v1/assets/records/:recordId/reissue": classAdmin,
+
+	"GET /api/v1/assets/burns":                  classAdmin,
+	"POST /api/v1/assets/burns":                 classAdmin,
+	"GET /api/v1/assets/burns/:burnId/package":  classAdmin,
+	"POST /api/v1/assets/burns/:burnId/reissue": classAdmin,
+
+	"GET /api/v1/sales/inventory": classPublic,
+	"GET /api/v1/sales/purchases": classAdmin,
+
+	"GET /api/v1/redemptions":     classPublic, // on-chain-public data for investor UIs
+	"GET /api/v1/redemptions/:id": classPublic,
+
+	"GET /api/v1/income/distributions":   classAdmin,
+	"POST /api/v1/income/distributions":  classAdmin,
+	"GET /api/v1/income/claims/:address": classPublic, // snapshots are public on IPFS
+	"GET /api/v1/transactions":           classPublic, // on-chain-public data for investor UIs
+}
+
+// concretePath fills route parameters with values that pass handler-side format checks
+func concretePath(template string) string {
+	out := template
+	for _, seg := range strings.Split(template, "/") {
+		switch seg {
+		case ":address":
+			out = strings.Replace(out, seg, "0x00000000000000000000000000000000000000a1", 1)
+		case "":
+		default:
+			if strings.HasPrefix(seg, ":") {
+				out = strings.Replace(out, seg, "x1", 1)
+			}
+		}
+	}
+	return out
+}
+
+// TestRouteAuthorizationMatrix checks registered routes: anonymous admin/session calls
+// must get 403/401 before handlers run; admin JWTs must clear the admin role gate
 func TestRouteAuthorizationMatrix(t *testing.T) {
 	env := setupTestApp(t)
 
-	type route struct {
-		method string
-		path   string
-		gated  bool
+	seen := map[string]bool{}
+	var keys []string
+	for _, ri := range env.router.Routes() {
+		key := ri.Method + " " + ri.Path
+		seen[key] = true
+		keys = append(keys, key)
 	}
-	routes := []route{
-		{http.MethodGet, "/healthz", false},
-		{http.MethodGet, "/readyz", false},
-
-		{http.MethodGet, "/api/v1/project", false},
-		{http.MethodGet, "/api/v1/project/enforcement", true},
-		{http.MethodGet, "/api/v1/config", false},
-
-		{http.MethodPost, "/api/v1/profile/validate", true},
-		{http.MethodPost, "/api/v1/profile", true},
-
-		{http.MethodGet, "/api/v1/compliance/wallets", true},
-		{http.MethodPost, "/api/v1/compliance/challenge", false},
-		{http.MethodPost, "/api/v1/compliance/challenge/verify", false},
-		{http.MethodGet, "/api/v1/compliance/webhooks", true},
-		{http.MethodPost, "/api/v1/compliance/status", true},
-		{http.MethodPost, "/api/v1/compliance/webhook", false}, // HMAC-authenticated, not role-gated
-
-		{http.MethodGet, "/api/v1/audit-logs", true},
-
-		{http.MethodGet, "/api/v1/assets/records", true},
-		{http.MethodPost, "/api/v1/assets/records", true},
-		{http.MethodGet, "/api/v1/assets/records/rec-1/package", true},
-
-		{http.MethodGet, "/api/v1/assets/burns", true},
-		{http.MethodPost, "/api/v1/assets/burns", true},
-		{http.MethodGet, "/api/v1/assets/burns/b-1/package", true},
-		{http.MethodPost, "/api/v1/assets/burns/b-1/reissue", true},
-
-		{http.MethodGet, "/api/v1/sales/inventory", false},
-		{http.MethodGet, "/api/v1/sales/purchases", true},
-
-		{http.MethodGet, "/api/v1/redemptions", false}, // public: on-chain-public data for investor UIs
-		{http.MethodGet, "/api/v1/redemptions/1", false},
-
-		{http.MethodGet, "/api/v1/income/distributions", true},
-		{http.MethodPost, "/api/v1/income/distributions", true},
-		{http.MethodGet, "/api/v1/income/claims/0x00000000000000000000000000000000000000a1", false}, // public: snapshots are public on IPFS
-
-		{http.MethodGet, "/api/v1/transactions", false}, // public: on-chain-public data for investor UIs
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, ok := routeClasses[key]; !ok {
+			t.Errorf("route %q is registered but not classified in routeClasses; decide whether it is admin, session or public", key)
+		}
+	}
+	for key := range routeClasses {
+		if !seen[key] {
+			t.Errorf("routeClasses lists %q, which the router no longer registers", key)
+		}
 	}
 
-	for _, rt := range routes {
-		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
-			req := httptest.NewRequest(rt.method, rt.path, nil)
-			req.Header.Set("Content-Type", "application/json")
-			w := httptest.NewRecorder()
-			env.router.ServeHTTP(w, req)
-
-			if rt.gated && w.Code != http.StatusForbidden {
-				t.Errorf("gated route with no admin JWT = %d, want 403 (body=%s)", w.Code, w.Body.String())
+	for _, key := range keys {
+		class, ok := routeClasses[key]
+		if !ok {
+			continue
+		}
+		method, template, _ := strings.Cut(key, " ")
+		path := concretePath(template)
+		t.Run(key, func(t *testing.T) {
+			do := func(headers map[string]string) int {
+				req := httptest.NewRequest(method, path, nil)
+				req.Header.Set("Content-Type", "application/json")
+				for k, v := range headers {
+					req.Header.Set(k, v)
+				}
+				w := httptest.NewRecorder()
+				env.router.ServeHTTP(w, req)
+				return w.Code
 			}
-			if !rt.gated && w.Code == http.StatusForbidden {
-				t.Errorf("public route with no admin JWT = 403, want anything else (this route should not require a role)")
+			switch class {
+			case classAdmin:
+				if got := do(nil); got != http.StatusForbidden {
+					t.Errorf("anonymous = %d, want 403", got)
+				}
+				if got := do(map[string]string{"Authorization": env.bearer, "Idempotency-Key": "matrix"}); got == http.StatusForbidden || got == http.StatusUnauthorized {
+					t.Errorf("admin JWT = %d, want the handler to run", got)
+				}
+			case classSession:
+				if got := do(nil); got != http.StatusUnauthorized {
+					t.Errorf("no X-Wallet-Session = %d, want 401", got)
+				}
+			case classPublic:
+				if got := do(nil); got == http.StatusForbidden {
+					t.Errorf("anonymous = 403 on a route classified public")
+				}
 			}
 		})
 	}

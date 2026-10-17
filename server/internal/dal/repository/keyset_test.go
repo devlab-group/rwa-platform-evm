@@ -179,3 +179,31 @@ func TestEncodeDecodeKeysetCursorRoundTrips(t *testing.T) {
 		t.Fatalf("round trip = %+v ok=%v, want %+v", got, ok, c)
 	}
 }
+
+// TestKeysetPageTiesBreakOnID requires cursors to pass the last (value, ID) pair in either
+// direction without skipping or repeating tied items
+func TestKeysetPageTiesBreakOnID(t *testing.T) {
+	for _, desc := range []bool{true, false} {
+		items := []keysetItem{{5, "a"}, {5, "b"}, {5, "c"}, {5, "d"}, {5, "e"}}
+		want := "abcde"
+		if desc {
+			items = []keysetItem{{5, "e"}, {5, "d"}, {5, "c"}, {5, "b"}, {5, "a"}}
+			want = "edcba"
+		}
+		var got string
+		cursor := ""
+		for range 5 {
+			page, next := KeysetPage(items, keysetItem.SortValue, keysetItem.ID, cursor, 2, desc)
+			for _, it := range page {
+				got += it.id
+			}
+			if next == "" {
+				break
+			}
+			cursor = next
+		}
+		if got != want {
+			t.Errorf("desc=%v: walk = %q, want %q", desc, got, want)
+		}
+	}
+}

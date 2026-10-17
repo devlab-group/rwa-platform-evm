@@ -75,12 +75,26 @@ func TestIndexerIngestionIsIdempotentAcrossPolls(t *testing.T) {
 	if err := idx.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// nothing new happened on-chain, so a second poll must neither duplicate events
-	// nor error, even though it re-scans from a stable checkpoint
-	source.SetHeader(4, 1)
-	source.SetHead(3)
+	// Move the checkpoint back to block 1 (same chain, so no reorg) and poll again: blocks
+	// 2..3 are scanned a second time and the log at block 2 is offered a second time
+	cp, err := checkpoints.Get(context.Background(), chainID, CheckpointAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h1, err := source.HeaderByNumber(context.Background(), big.NewInt(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp.LastBlock, cp.LastBlockHash = 1, h1.Hash().Hex()
+	if err := checkpoints.Set(context.Background(), cp); err != nil {
+		t.Fatal(err)
+	}
+	callsBefore := source.FilterLogsCalls
 	if err := idx.Poll(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if source.FilterLogsCalls == callsBefore {
+		t.Fatal("the second poll did not re-scan, so it proves nothing about idempotency")
 	}
 
 	all, err := events.ListByName(context.Background(), chainID, addr1.Hex(), common.HexToHash("0x01").Hex())
@@ -923,5 +937,56 @@ func TestIndexerRetriesWhenLogBlockHashDisagreesWithCanonicalHeader(t *testing.T
 	}
 	if len(evs) != 1 {
 		t.Fatalf("expected exactly 1 event after the retry recovers, got %d", len(evs))
+	}
+}
+
+// With startBlock 0 and depth below maxAutoReorgDepth, both recovery floors are 0;
+// a full-chain replacement must rebuild from genesis without ReconciliationRequired
+func TestIndexerShallowChainFullReplacementRebuildsAutomaticallyFromGenesis(t *testing.T) {
+	ctx := context.Background()
+	source := NewFakeSource()
+	checkpoints := memory.NewIndexerCheckpointRepository()
+	events := memory.NewChainEventRepository()
+	idx := New(source, checkpoints, events, chainID, []common.Address{addr1}, 0, nil,
+		WithBlockHashRepository(memory.NewBlockHashRepository()), WithMaxAutoReorgDepth(100))
+
+	source.SetHeader(0, 1)
+	for i := uint64(1); i <= 10; i++ {
+		source.SetHeader(i, 1)
+	}
+	source.SetHead(10)
+	source.AddLog(types.Log{Address: addr1, BlockNumber: 3, TxHash: common.HexToHash("0xa001"), Index: 0, Topics: []common.Hash{common.HexToHash("0xaaaa")}})
+	if err := idx.Poll(ctx); err != nil {
+		t.Fatalf("first poll: %v", err)
+	}
+
+	// every block of the old chain is replaced, including the checkpoint block
+	for i := uint64(1); i <= 10; i++ {
+		source.SetHeader(i, 2)
+	}
+	source.RemoveLogsAtOrAfter(0)
+	source.AddLog(types.Log{Address: addr1, BlockNumber: 4, TxHash: common.HexToHash("0xb001"), Index: 0, Topics: []common.Hash{common.HexToHash("0xbbbb")}})
+	source.SetHead(11)
+	source.SetHeader(11, 2)
+
+	if err := idx.Poll(ctx); err != nil {
+		if errors.Is(err, ErrReconciliationRequired) {
+			t.Fatalf("a shallow fork with startBlock 0 must rebuild automatically, got %v", err)
+		}
+		t.Fatalf("poll after reorg: %v", err)
+	}
+
+	if old, _ := events.ListByName(ctx, chainID, addr1.Hex(), common.HexToHash("0xaaaa").Hex()); len(old) != 0 {
+		t.Errorf("the orphaned event survived the rebuild: %v", old)
+	}
+	if fresh, _ := events.ListByName(ctx, chainID, addr1.Hex(), common.HexToHash("0xbbbb").Hex()); len(fresh) != 1 {
+		t.Errorf("new-chain events after rebuild = %d, want 1", len(fresh))
+	}
+	cp, err := checkpoints.Get(ctx, chainID, CheckpointAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp.LastBlock != 11 || cp.ReconciliationRequired {
+		t.Errorf("checkpoint = block %d, reconciliationRequired %v; want block 11 and false", cp.LastBlock, cp.ReconciliationRequired)
 	}
 }

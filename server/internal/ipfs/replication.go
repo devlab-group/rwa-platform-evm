@@ -53,6 +53,12 @@ func (rm *ReplicationManager) AddRaw(ctx context.Context, data []byte) (string, 
 
 // Publish is AddRaw with a caller-chosen id as the PublicationRecord key
 func (rm *ReplicationManager) Publish(ctx context.Context, id string, data []byte) (cid string, err error) {
+	// Reject known CID conflicts before storing bytes; replicate rechecks the node's returned CID
+	if want, cerr := ComputeCIDv1Raw(data); cerr == nil {
+		if rec, gerr := rm.records.Get(ctx, id); gerr == nil && rec.CID != "" && rec.CID != want {
+			return "", fmt.Errorf("%w: id %s is bound to %s, refusing to rebind to %s", ErrPublicationCIDConflict, id, rec.CID, want)
+		}
+	}
 	cid, err = rm.local.AddRaw(ctx, data)
 	if err != nil {
 		return "", fmt.Errorf("ipfs: add to local node: %w", err)

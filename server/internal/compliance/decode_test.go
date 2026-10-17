@@ -30,11 +30,26 @@ func TestDecodeLogStatusChanged(t *testing.T) {
 	if name != "StatusChanged" {
 		t.Fatalf("name = %q, want StatusChanged", name)
 	}
-	if data["account"] != account.Hex() {
-		t.Errorf("account = %v", data["account"])
+	want := map[string]any{
+		"account": account.Hex(), "caller": caller.Hex(),
+		"previousStatus": uint8(1), "newStatus": uint8(2),
+		"previousValidUntil": uint64(0), "newValidUntil": uint64(999),
 	}
-	if data["newValidUntil"] != uint64(999) {
-		t.Errorf("newValidUntil = %v", data["newValidUntil"])
+	for k, v := range want {
+		if data[k] != v {
+			t.Errorf("%s = %v (%T), want %v (%T)", k, data[k], data[k], v, v)
+		}
+	}
+	if len(data) != len(want) {
+		t.Errorf("data has %d keys, want %d: %v", len(data), len(want), data)
+	}
+}
+
+func TestDecodeLogStatusChangedRejectsTruncatedData(t *testing.T) {
+	event := bindings.NewComplianceRegistry().ABI.Events["StatusChanged"]
+	log := types.Log{Topics: []common.Hash{event.ID, {}, {}}, Data: []byte{1}}
+	if _, _, err := DecodeLog(log); err == nil {
+		t.Fatal("DecodeLog accepted a truncated StatusChanged log")
 	}
 }
 

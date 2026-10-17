@@ -2,9 +2,10 @@ package assets
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"math/big"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +16,6 @@ import (
 	"github.com/rwa-platform/server/internal/auditpkg"
 	"github.com/rwa-platform/server/internal/dal/memory"
 	"github.com/rwa-platform/server/internal/dal/models"
-	"github.com/rwa-platform/server/internal/eip712"
 )
 
 const burnTestRecordAmount = "1000"
@@ -93,8 +93,12 @@ func TestCreateBurnBuildsVerifiablePackage(t *testing.T) {
 		t.Errorf("burn metadata proofs = %+v, want the burn's own proofs", meta.Proofs)
 	}
 	var recMeta, burnMeta struct{ Asset json.RawMessage }
-	_ = json.Unmarshal(rec.MetadataRaw, &recMeta)
-	_ = json.Unmarshal(burn.MetadataRaw, &burnMeta)
+	if err := json.Unmarshal(rec.MetadataRaw, &recMeta); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if err := json.Unmarshal(burn.MetadataRaw, &burnMeta); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if string(recMeta.Asset) != string(burnMeta.Asset) {
 		t.Errorf("asset changed: %s vs %s", recMeta.Asset, burnMeta.Asset)
 	}
@@ -119,31 +123,20 @@ func TestCreateBurnBuildsVerifiablePackage(t *testing.T) {
 		m.MetadataDigest != burn.MetadataDigest || m.Nonce != burn.Nonce || m.RecordKey != "" {
 		t.Errorf("typed data wrong: %+v", td)
 	}
+	if !strings.EqualFold(m.ProfileDigest, "0x"+hex.EncodeToString(profile.Digest[:])) {
+		t.Errorf("typed data profileDigest = %s, want the profile's", m.ProfileDigest)
+	}
+	if m.ValidUntil != burn.ValidUntil {
+		t.Errorf("typed data validUntil = %d, want the burn's %d", m.ValidUntil, burn.ValidUntil)
+	}
+	if !strings.EqualFold(m.Vault, common.HexToAddress("0x0000000000000000000000000000000000FADE").Hex()) {
+		t.Errorf("typed data vault = %s, want the configured vault", m.Vault)
+	}
+	if !strings.EqualFold(m.Auditor, svc.records.currentAuditor().Hex()) {
+		t.Errorf("typed data auditor = %s, want %s", m.Auditor, svc.records.currentAuditor().Hex())
+	}
 	if string(opened.Files["metadata.json"]) != string(burn.MetadataRaw) {
 		t.Error("package metadata is not the burn's canonical metadata")
-	}
-
-	// Verify a signature using the burn typed data
-	var opID, mdDigest [32]byte
-	copy(opID[:], common.FromHex(m.OperationID))
-	copy(mdDigest[:], common.FromHex(m.MetadataDigest))
-	nonce, _ := new(big.Int).SetString(m.Nonce, 10)
-	att := eip712.BurnAttestation{
-		Auditor: common.HexToAddress(m.Auditor), ProfileDigest: profile.Digest, OperationID: opID, MetadataDigest: mdDigest,
-		Amount: big.NewInt(400), Nonce: nonce, ValidUntil: uint64(m.ValidUntil), Vault: common.HexToAddress(m.Vault),
-	}
-	key, _ := crypto.GenerateKey()
-	att.Auditor = crypto.PubkeyToAddress(key.PublicKey)
-	dom := svc.records.eip712Domain
-	digest := eip712.BurnDigest(dom, att)
-	sig, _ := crypto.Sign(digest[:], key)
-	sig[64] += 27
-	sr := auditpkg.SignedResult{
-		FormatVersion: "1.0", Auditor: att.Auditor.Hex(), PrimaryType: "BurnAttestation",
-		TypedDataDigest: "0x" + common.Bytes2Hex(digest[:]), Signature: "0x" + common.Bytes2Hex(sig),
-	}
-	if err := auditpkg.VerifyBurnSignedResult(sr, dom, att, att.Auditor); err != nil {
-		t.Errorf("VerifyBurnSignedResult: %v", err)
 	}
 }
 
@@ -154,7 +147,9 @@ func TestCreateBurnOmitsProofsKeyWhenNone(t *testing.T) {
 		t.Fatal(err)
 	}
 	var top map[string]json.RawMessage
-	_ = json.Unmarshal(burn.MetadataRaw, &top)
+	if err := json.Unmarshal(burn.MetadataRaw, &top); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
 	if _, ok := top["proofs"]; ok {
 		t.Error("burn without proofs must not inherit the record's proofs")
 	}
@@ -214,6 +209,44 @@ func TestRemainingCountsReservedAndBurnedNotExpired(t *testing.T) {
 	}
 	if _, err := createBurn(t, svc, profile, "700"); err != nil {
 		t.Errorf("exact remaining must fit: %v", err)
+	}
+}
+
+// A Pending reservation stops counting at exactly its validUntil second, one second
+// earlier it still reserves
+func TestRemaining_ReservationExpiresExactlyAtValidUntil(t *testing.T) {
+	svc, profile, rec, burns, _ := newBurnTestEnv(t)
+	ctx := context.Background()
+	pending, err := createBurn(t, svc, profile, "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return clock }
+
+	tests := []struct {
+		name       string
+		validUntil int64
+		want       string
+	}{
+		{"expires one second after now", clock.Unix() + 1, "700"},
+		{"expires exactly now", clock.Unix(), "1000"},
+		{"expired one second ago", clock.Unix() - 1, "1000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cur, err := burns.Get(ctx, pending.BurnID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cur.ValidUntil = tt.validUntil
+			if ok, err := burns.UpdateConditional(ctx, cur, cur.Version); err != nil || !ok {
+				t.Fatal(err, ok)
+			}
+			if rem, _ := svc.Remaining(ctx, rec, ""); rem.String() != tt.want {
+				t.Errorf("Remaining = %s, want %s", rem, tt.want)
+			}
+		})
 	}
 }
 
@@ -341,6 +374,107 @@ func TestReconcileBurned(t *testing.T) {
 		got, _ := burns.Get(ctx, c.id)
 		if got.Status != c.st || got.BurnTxHash != c.tx {
 			t.Errorf("burn %s = %s/%q, want %s/%q", c.id, got.Status, got.BurnTxHash, c.st, c.tx)
+		}
+	}
+}
+
+// Orphaned burns must return to Pending so they can expire or be reissued instead of
+// permanently reducing the record's remaining amount
+func TestReconcileBurned_OrphanedBurnReturnsToPending(t *testing.T) {
+	svc, profile, rec, burns, _ := newBurnTestEnv(t)
+	ctx := context.Background()
+	events := memory.NewChainEventRepository()
+	controller := "0x0000000000000000000000000000000000C0DE"
+
+	burn, err := createBurn(t, svc, profile, "600")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, err := createBurn(t, svc, profile, "100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, b := range []*models.Burn{burn, kept} {
+		if err := events.Create(ctx, &models.ChainEvent{
+			ChainID: 31337, Address: controller, Name: "Burned", TxHash: "0xaa" + string(rune('0'+i)), LogIndex: uint(i), BlockNumber: uint64(10 + i),
+			Data: map[string]any{"operationId": b.OperationID, "amount": b.Amount},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := svc.ReconcileBurned(ctx, events, 31337, controller); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := burns.Get(ctx, burn.BurnID)
+	if got.Status != models.BurnStatusBurned || got.BurnTxHash != "0xaa0" {
+		t.Fatalf("setup: burn = %s/%q, want Burned/0xaa0", got.Status, got.BurnTxHash)
+	}
+
+	// the first burn's block is rolled back; the second one survives
+	if n, err := events.DeleteFromBlock(ctx, 31337, controller, 10); err != nil || n != 2 {
+		t.Fatalf("DeleteFromBlock = %d, %v", n, err)
+	}
+	if err := events.Create(ctx, &models.ChainEvent{
+		ChainID: 31337, Address: controller, Name: "Burned", TxHash: "0xbb1", LogIndex: 0, BlockNumber: 11,
+		Data: map[string]any{"operationId": kept.OperationID, "amount": kept.Amount},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // repeated runs are safe
+		if err := svc.ReconcileBurned(ctx, events, 31337, controller); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, _ = burns.Get(ctx, burn.BurnID)
+	if got.Status != models.BurnStatusPending || got.BurnTxHash != "" {
+		t.Errorf("orphaned burn = %s/%q, want Pending with no tx hash", got.Status, got.BurnTxHash)
+	}
+	if survivor, _ := burns.Get(ctx, kept.BurnID); survivor.Status != models.BurnStatusBurned || survivor.BurnTxHash != "0xbb1" {
+		t.Errorf("a burn whose event survived = %s/%q, want Burned/0xbb1", survivor.Status, survivor.BurnTxHash)
+	}
+
+	// the demoted burn reserves its (unexpired) amount again, and can be reissued
+	if rem, _ := svc.Remaining(ctx, rec, ""); rem.String() != "300" {
+		t.Errorf("Remaining = %s, want 300 (1000 - 600 reserved - 100 burned)", rem)
+	}
+	if _, err := svc.ReissueBurn(ctx, burn.BurnID); err != nil {
+		t.Errorf("ReissueBurn of the demoted burn: %v", err)
+	}
+
+	// once its reservation lapses the amount is free again
+	lapsed, _ := burns.Get(ctx, burn.BurnID)
+	lapsed.ValidUntil = time.Now().Add(-time.Minute).Unix()
+	if ok, err := burns.UpdateConditional(ctx, lapsed, lapsed.Version); err != nil || !ok {
+		t.Fatal(err, ok)
+	}
+	if rem, _ := svc.Remaining(ctx, rec, ""); rem.String() != "900" {
+		t.Errorf("Remaining after the reservation lapsed = %s, want 900", rem)
+	}
+}
+
+// A Pending burn with no event is untouched, and a Removed event does not back a burn
+func TestReconcileBurned_LeavesPendingAloneAndIgnoresRemovedEvents(t *testing.T) {
+	svc, profile, _, burns, _ := newBurnTestEnv(t)
+	ctx := context.Background()
+	events := memory.NewChainEventRepository()
+	controller := "0x0000000000000000000000000000000000C0DE"
+
+	pending, _ := createBurn(t, svc, profile, "100")
+	removed, _ := createBurn(t, svc, profile, "100")
+	if err := events.Create(ctx, &models.ChainEvent{
+		ChainID: 31337, Address: controller, Name: "Burned", TxHash: "0xcc", LogIndex: 0, BlockNumber: 5, Removed: true,
+		Data: map[string]any{"operationId": removed.OperationID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ReconcileBurned(ctx, events, 31337, controller); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range []*models.Burn{pending, removed} {
+		got, _ := burns.Get(ctx, b.BurnID)
+		if got.Status != models.BurnStatusPending || got.Version != 0 {
+			t.Errorf("burn %s = %s v%d, want untouched Pending v0", b.BurnID, got.Status, got.Version)
 		}
 	}
 }

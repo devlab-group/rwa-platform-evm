@@ -30,6 +30,11 @@ contract IncomeHandler is CommonBase, StdCheats, StdUtils {
     mapping(uint256 id => Tree) internal trees;
     uint256 public created;
     uint256 public extended;
+    uint256 public totalCalls;
+    uint256 public ok_claim;
+    uint256 public ok_reclaim;
+    uint256 public flows;
+    uint256 public flowReclaims;
 
     constructor(
         IncomeDistributor income_,
@@ -51,25 +56,52 @@ contract IncomeHandler is CommonBase, StdCheats, StdUtils {
 
     // Excess entitlements exercise ExceedsTotal
     function create(uint256 a0, uint256 a1, uint256 total) external {
+        totalCalls++;
+        _create(bound(a0, 1, 1e12), bound(a1, 1, 1e12), bound(total, 1, 2e12));
+    }
+
+    function claim(uint256 idSeed, uint256 who) external {
+        totalCalls++;
+        if (created == 0) return;
+        _claim(idSeed % created, who % 2);
+    }
+
+    function reclaim(uint256 idSeed) external {
+        totalCalls++;
+        if (created == 0) return;
+        _reclaim(idSeed % created);
+    }
+
+    // Reach claim in one call: fund both entitlements, pay the first holder, then optionally
+    // expire the window and reclaim
+    function settle(uint256 a0, uint256 a1, bool lapseAndReclaim) external {
+        totalCalls++;
+        flows++;
         a0 = bound(a0, 1, 1e12);
         a1 = bound(a1, 1, 1e12);
-        total = bound(total, 1, 2e12);
+        uint256 id = _create(a0, a1, a0 + a1);
+        _claim(id, 0);
+        if (lapseAndReclaim) {
+            flowReclaims++;
+            vm.warp(income.getDistribution(id).claimDeadline + 1);
+            vm.roll(block.number + 1);
+            _reclaim(id);
+        }
+    }
+
+    function _create(uint256 a0, uint256 a1, uint256 total) internal returns (uint256 id) {
         bytes32 root = Hashes.commutativeKeccak256(_leaf(actors[0], a0), _leaf(actors[1], a1));
         quote.mint(manager, total);
         // Read before prank; an external argument call would consume it
         uint64 deadline = uint64(block.timestamp) + income.MIN_CLAIM_WINDOW();
         vm.prank(manager);
-        uint256 id =
-            income.createDistribution(root, total, uint64(block.number - 1), deadline, "ipfs://x", keccak256("s"));
+        id = income.createDistribution(root, total, uint64(block.number - 1), deadline, "ipfs://x", keccak256("s"));
         trees[id] = Tree(a0, a1);
         ghost_funded += total;
         created++;
     }
 
-    function claim(uint256 idSeed, uint256 who) external {
-        if (created == 0) return;
-        uint256 id = idSeed % created;
-        uint256 i = who % 2;
+    function _claim(uint256 id, uint256 i) internal {
         Tree memory t = trees[id];
         uint256 amt = i == 0 ? t.a0 : t.a1;
         bytes32[] memory proof = new bytes32[](1);
@@ -78,19 +110,21 @@ contract IncomeHandler is CommonBase, StdCheats, StdUtils {
         vm.prank(actors[i]);
         try income.claim(id, amt, proof) {
             ghost_paidToHolders += quote.balanceOf(actors[i]) - before;
+            ok_claim++;
         } catch {}
     }
 
-    function reclaim(uint256 idSeed) external {
-        if (created == 0) return;
+    function _reclaim(uint256 id) internal {
         uint256 before = quote.balanceOf(treasury);
-        try income.reclaimUnclaimed(idSeed % created) {
+        try income.reclaimUnclaimed(id) {
             ghost_toTreasury += quote.balanceOf(treasury) - before;
+            ok_reclaim++;
         } catch {}
     }
 
     // Reopening an expired window must preserve the total payout cap
     function extend(uint256 idSeed, uint256 secs) external {
+        totalCalls++;
         if (created == 0) return;
         uint256 id = idSeed % created;
         uint64 current = income.getDistribution(id).claimDeadline;
@@ -103,7 +137,8 @@ contract IncomeHandler is CommonBase, StdCheats, StdUtils {
     }
 
     function warp(uint256 secs) external {
-        vm.warp(block.timestamp + bound(secs, 0, 14 days));
+        totalCalls++;
+        vm.warp(block.timestamp + bound(secs, 0, 5 days));
         vm.roll(block.number + 1);
     }
 }
@@ -132,9 +167,15 @@ contract IncomeInvariantTest is TestBase {
         assertEq(income.getDistribution(0).claimDeadline, uint64(block.timestamp) + minWindow + 60);
     }
 
+    // Require successful claims/reclaims when their flows ran, ruling out runs that only revert
+    function afterInvariant() public view {
+        if (handler.flows() > 0) assertGe(handler.ok_claim(), 1, "claim never reached");
+        if (handler.flowReclaims() > 0) assertGe(handler.ok_reclaim(), 1, "reclaim never reached");
+    }
+
     // Funded tokens remain held or reach holders or the treasury
     /// forge-config: default.invariant.runs = 64
-    /// forge-config: default.invariant.depth = 32
+    /// forge-config: default.invariant.depth = 200
     function invariant_balanceEqualsFundedMinusPaidMinusReclaimed() public view {
         assertEq(
             quoteToken.balanceOf(address(income)),
@@ -144,7 +185,7 @@ contract IncomeInvariantTest is TestBase {
 
     // Outstanding balance sums total - claimed for each unreclaimed distribution
     /// forge-config: default.invariant.runs = 64
-    /// forge-config: default.invariant.depth = 32
+    /// forge-config: default.invariant.depth = 200
     function invariant_balanceEqualsSumOfOutstandingPerDistribution() public view {
         uint256 outstanding;
         for (uint256 id; id < income.nextId(); ++id) {
@@ -157,7 +198,7 @@ contract IncomeInvariantTest is TestBase {
 
     // Claims must stay within each distribution's funded total
     /// forge-config: default.invariant.runs = 64
-    /// forge-config: default.invariant.depth = 32
+    /// forge-config: default.invariant.depth = 200
     function invariant_claimedNeverExceedsTotal() public view {
         for (uint256 id; id < income.nextId(); ++id) {
             assertLe(income.getDistribution(id).claimed, income.getDistribution(id).total);
@@ -166,7 +207,7 @@ contract IncomeInvariantTest is TestBase {
 
     // Claimed counters must match holders' actual receipts
     /// forge-config: default.invariant.runs = 64
-    /// forge-config: default.invariant.depth = 32
+    /// forge-config: default.invariant.depth = 200
     function invariant_claimedCountersMatchHolderReceipts() public view {
         uint256 sum;
         for (uint256 id; id < income.nextId(); ++id) {

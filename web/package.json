@@ -12,7 +12,7 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,scss}\"",
     "gen:api": "openapi-typescript ../api/openapi.yaml -o src/lib/api-types.ts",
     "preview": "vite preview",
-    "test:e2e": "npm run build && playwright test",
+    "test:e2e": "playwright test",
     "typecheck:e2e": "tsc -p tsconfig.playwright.json --noEmit"
   },
   "dependencies": {

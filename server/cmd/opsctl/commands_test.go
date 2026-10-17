@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,6 +58,14 @@ func TestRunTxReplace(t *testing.T) {
 	o := testOpsCtx(repos)
 	if err := runTxReplace(o, txs, signer, original.ID, 25); err != nil {
 		t.Fatalf("runTxReplace: %v", err)
+	}
+	// the command must really replace the transaction, not only write audit entries
+	if len(client.SentTxs) != 2 || client.SentTxs[1].Nonce() != client.SentTxs[0].Nonce() ||
+		client.SentTxs[1].GasPrice().Cmp(client.SentTxs[0].GasPrice()) <= 0 {
+		t.Fatalf("expected the original plus one same-nonce, higher-priced replacement, got %d broadcasts", len(client.SentTxs))
+	}
+	if replaced, err := repos.Transactions.Get(ctx, original.ID); err != nil || replaced.Status != models.TxReplaced || replaced.ReplacedBy == "" {
+		t.Fatalf("original = %+v err=%v, want Replaced with a ReplacedBy link", replaced, err)
 	}
 
 	// Each audited call writes intent before op and a linked result under the same action
@@ -158,8 +167,15 @@ func TestRunDLQListAndInspect(t *testing.T) {
 	if err := runDLQList(o); err != nil {
 		t.Fatalf("runDLQList: %v", err)
 	}
+	if out := o.out.(*bytes.Buffer).String(); !strings.Contains(out, "dlq-1") {
+		t.Errorf("list output %q does not name the entry", out)
+	}
+	o.out.(*bytes.Buffer).Reset()
 	if err := runDLQInspect(o, "dlq-1"); err != nil {
 		t.Fatalf("runDLQInspect: %v", err)
+	}
+	if out := o.out.(*bytes.Buffer).String(); !strings.Contains(out, "id=dlq-1") || !strings.Contains(out, "block=5") || !strings.Contains(out, "error: boom") {
+		t.Errorf("inspect output %q lacks the entry's id, block and error", out)
 	}
 	if err := runDLQInspect(o, "does-not-exist"); err == nil {
 		t.Fatal("expected inspecting an unknown DLQ id to error")
@@ -208,6 +224,10 @@ func TestRunDLQRetry(t *testing.T) {
 	}
 	if !entry.Resolved {
 		t.Fatal("expected the DLQ entry to be Resolved after a successful retry")
+	}
+	evs, err := repos.ChainEvents.ListAll(ctx, 31337)
+	if err != nil || len(evs) != 1 || evs[0].TxHash != logEntry.TxHash.Hex() || evs[0].Address != addr.Hex() || evs[0].BlockNumber != 5 {
+		t.Fatalf("retry ingested %+v (err %v), want exactly the dead-lettered log", evs, err)
 	}
 }
 

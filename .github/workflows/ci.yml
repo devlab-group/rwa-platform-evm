@@ -34,15 +34,30 @@ jobs:
 
   server:
     runs-on: ubuntu-latest
-    services:
-      mongo:
-        image: mongo:7@sha256:340c1c56fb10e95cf79ff547f8664b96bc6ead9909bc355238cbf865a9695a6f
-        ports: ["27017:27017"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with: { go-version: "1.26.9" }
+      # Start a single-node replica set for CommitChunk's transactional Mongo tests
+      - name: start MongoDB replica set
+        run: |
+          docker run -d --name mongo -p 27017:27017 \
+            mongo:7@sha256:340c1c56fb10e95cf79ff547f8664b96bc6ead9909bc355238cbf865a9695a6f \
+            --replSet rs0 --bind_ip_all
+          for _ in $(seq 1 60); do
+            docker exec mongo mongosh --quiet --eval "db.runCommand({ping:1})" >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec mongo mongosh --quiet --eval \
+            "rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27017'}]})"
+          for _ in $(seq 1 60); do
+            docker exec mongo mongosh --quiet --eval "db.hello().isWritablePrimary" | grep -q true && exit 0
+            sleep 1
+          done
+          echo "MongoDB replica set did not elect a primary"; docker logs mongo; exit 1
       - run: cd server && go vet ./... && go test -race ./...
+        env:
+          MONGO_TEST_URI: mongodb://localhost:27017/?replicaSet=rs0&directConnection=true
       # Check hand-written bindings against compiled ABIs
       - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with: { version: v1.5.1 }
@@ -63,6 +78,8 @@ jobs:
       - run: cd contracts && forge build
       # Match `make ci` (web-test): typecheck, test and build
       - run: cd web && npm ci && npm run typecheck && npm test && npm run build
+      # Match `make ci` (web-e2e): Playwright against the built SPA with a mocked API and wallet
+      - run: cd web && npx playwright install --with-deps chromium && npm run typecheck:e2e && npm run test:e2e
 
   # Test the standalone investor SPA, which the server does not embed (investor-web-test)
   investor-web:
@@ -77,6 +94,8 @@ jobs:
       - uses: ./.github/actions/forge-deps
       - run: cd contracts && forge build
       - run: cd investor-web && npm ci && npm run typecheck && npm test && npm run build
+      # Match `make ci` (investor-web-e2e): Playwright against the built SPA with a mocked API and wallet
+      - run: cd investor-web && npx playwright install --with-deps chromium && npm run typecheck:e2e && npm run test:e2e
 
   # Build the SPA and release binary to verify go:embed resolves real assets.
   # Only dist/.gitkeep is tracked; assets/ is gitignored. Check the bundle for API-key

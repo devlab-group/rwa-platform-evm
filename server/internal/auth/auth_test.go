@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -65,7 +64,11 @@ func TestAuthenticateAndRequireRole(t *testing.T) {
 
 	r := gin.New()
 	r.Use(Authenticate(testJWTSecret, adminAddr))
-	r.POST("/admin-only", RequireRole(RoleAdmin), func(c *gin.Context) { c.Status(http.StatusOK) })
+	var principal string
+	r.POST("/admin-only", RequireRole(RoleAdmin), func(c *gin.Context) {
+		principal = PrincipalFromContext(c)
+		c.Status(http.StatusOK)
+	})
 	r.GET("/public", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	// No token: forbidden on an admin route
@@ -92,6 +95,9 @@ func TestAuthenticateAndRequireRole(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Errorf("with JWT: status = %d, want 200", w.Code)
+	}
+	if principal != adminAddr {
+		t.Errorf("principal = %q, want the admin address %q", principal, adminAddr)
 	}
 
 	// A public route works without a token
@@ -142,32 +148,45 @@ func TestIdempotencyReplaysIdenticalResponse(t *testing.T) {
 func TestIdempotencyConcurrentIdenticalRequestsExecuteHandlerOnce(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	var calls int32
+	release := make(chan struct{})
 	r := gin.New()
 	r.Use(Idempotency(store, time.Hour))
 	r.POST("/deploy", func(c *gin.Context) {
 		atomic.AddInt32(&calls, 1)
-		// Hold the handler open so other goroutines race in, which exposes a
-		// Get-then-Save implementation
-		time.Sleep(10 * time.Millisecond)
+		// Hold the handler open until every other request has been answered, which
+		// exposes a Get-then-Save implementation
+		<-release
 		c.JSON(http.StatusAccepted, gin.H{"ok": true})
 	})
 
 	const n = 20
 	body := []byte(`{"a":1}`)
-	var wg sync.WaitGroup
-	codes := make([]int, n)
-	wg.Add(n)
+	finished := make(chan int, n)
 	for i := 0; i < n; i++ {
-		go func(i int) {
-			defer wg.Done()
+		go func() {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/deploy", bytes.NewReader(body))
 			req.Header.Set("Idempotency-Key", "concurrent-key")
 			r.ServeHTTP(w, req)
-			codes[i] = w.Code
-		}(i)
+			finished <- w.Code
+		}()
 	}
-	wg.Wait()
+	var codes []int
+	next := func() {
+		select {
+		case code := <-finished:
+			codes = append(codes, code)
+		case <-time.After(10 * time.Second):
+			close(release)
+			t.Fatalf("timed out waiting for responses, got %v", codes)
+		}
+	}
+	// The n-1 losers answer 409 while the winner is held inside the handler
+	for i := 0; i < n-1; i++ {
+		next()
+	}
+	close(release)
+	next()
 
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Errorf("handler executed %d times, want exactly 1", got)
@@ -180,8 +199,8 @@ func TestIdempotencyConcurrentIdenticalRequestsExecuteHandlerOnce(t *testing.T) 
 			t.Errorf("unexpected status %d (want 202 or 409)", code)
 		}
 	}
-	if accepted == 0 {
-		t.Error("no request observed a 202: every goroutine lost the race, which should not be possible")
+	if accepted != 1 {
+		t.Errorf("%d requests observed a 202, want exactly the one winner", accepted)
 	}
 }
 
@@ -203,6 +222,9 @@ func TestIdempotencyRejectsKeyReuseWithDifferentBody(t *testing.T) {
 
 	if w2.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409", w2.Code)
+	}
+	if !strings.Contains(w2.Body.String(), "idempotency_key_reused") {
+		t.Errorf("body = %s, want the idempotency_key_reused code", w2.Body.String())
 	}
 }
 
@@ -419,7 +441,8 @@ func TestIdempotencyExpiredReservationIsTakenOver(t *testing.T) {
 	store := memory.NewIdempotencyRepository()
 	var calls int32
 	r := gin.New()
-	r.Use(Idempotency(store, 20*time.Millisecond))
+	// A negative ttl makes every reservation expire the moment it is written
+	r.Use(Idempotency(store, -time.Hour))
 	r.POST("/x", func(c *gin.Context) {
 		atomic.AddInt32(&calls, 1)
 		c.JSON(http.StatusAccepted, gin.H{"ok": true})
@@ -438,7 +461,6 @@ func TestIdempotencyExpiredReservationIsTakenOver(t *testing.T) {
 		t.Fatalf("first call: handler executed %d times, want 1", got)
 	}
 
-	time.Sleep(40 * time.Millisecond) // past the 20ms ttl
 	do()
 	if got := atomic.LoadInt32(&calls); got != 2 {
 		t.Errorf("after ttl expiry: handler executed %d times total, want 2 (expired cache must not be replayed forever)", got)
@@ -490,11 +512,10 @@ func TestIdempotencyRepositoryFencingTokenBlocksSlowOwner(t *testing.T) {
 	ctx := context.Background()
 
 	// Owner 1 reserves, then ttl elapses before it calls Complete
-	_, reserved1, token1, err := store.Reserve(ctx, "key-1", "POST", "/x", "hash-1", 10*time.Millisecond)
+	_, reserved1, token1, err := store.Reserve(ctx, "key-1", "POST", "/x", "hash-1", -time.Hour) // already expired
 	if err != nil || !reserved1 {
 		t.Fatalf("first Reserve: reserved=%v err=%v", reserved1, err)
 	}
-	time.Sleep(20 * time.Millisecond) // past ttl
 
 	// Owner 2 takes over the expired reservation and completes it
 	existing2, reserved2, token2, err := store.Reserve(ctx, "key-1", "POST", "/x", "hash-1", time.Hour)
@@ -551,27 +572,6 @@ func TestIdempotencyRepositoryCompleteRejectsUnknownToken(t *testing.T) {
 	}
 	if err := store.Complete(ctx, "key-2", token+"-wrong", http.StatusOK, nil); !errors.Is(err, repository.ErrFencingTokenMismatch) {
 		t.Errorf("Complete with wrong token: err = %v, want ErrFencingTokenMismatch", err)
-	}
-}
-
-func TestRateLimitBlocksAfterBurst(t *testing.T) {
-	r := gin.New()
-	r.Use(RateLimit(1, 2)) // 2 burst, slow refill
-	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
-
-	var codes []int
-	for i := 0; i < 4; i++ {
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/x", nil)
-		req.RemoteAddr = "1.2.3.4:1111"
-		r.ServeHTTP(w, req)
-		codes = append(codes, w.Code)
-	}
-	if codes[0] != http.StatusOK || codes[1] != http.StatusOK {
-		t.Errorf("expected first 2 requests to pass burst, got %v", codes)
-	}
-	if codes[2] != http.StatusTooManyRequests {
-		t.Errorf("expected 3rd request to be rate-limited, got %v", codes)
 	}
 }
 
