@@ -100,7 +100,7 @@ TypeScript in agreement.
 
 1. Docker
 2. Foundry (`forge` / `cast` / `anvil`)
-3. Go 1.26.9+
+3. Go 1.26.10+
 4. Node.js 22+
 
 Install subrepo dependencies with `make bootstrap`.
