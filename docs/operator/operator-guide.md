@@ -96,10 +96,16 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
    - Fixed prices: choose a pricer and purchase/redemption prices; `PRICER_ROLE` can update them.
    - Oracle prices: an `AggregatorV3Interface` feed that reports the value of one whole RWA
      token in the quote token's currency, such as a fund's published USD NAV for a USD
-     stablecoin; a market price of another asset is not valid. Set `maxAge` above the feed's
-     heartbeat, or every quote reverts between updates. Purchase and redemption spreads are in
-     basis points. On an L2, add the sequencer uptime feed and a grace period. The settings are
-     immutable; the strategy does not detect a quote-token depeg.
+     stablecoin; a market price of another asset is not valid. For a scheduled feed, such as a
+     daily NAV, set `maxAge` so each answer expires before the next price can be known. For
+     example, if the next NAV can be known 23 hours after the feed's `updatedAt`, use less than
+     23 hours. Once the answer expires, new purchases and redemption requests revert until the
+     feed updates. If the new price is known before the old answer expires, holders can trade at
+     the old price (§8). For a continuously updated feed, set `maxAge` above its heartbeat to
+     avoid quotes reverting between updates. Purchase and redemption spreads are in basis
+     points; set them to cover the largest price move you expect while trading is open. On an
+     L2, add the sequencer uptime feed and a grace period. The settings are immutable; the
+     strategy does not detect a quote-token depeg.
    - Minimum purchase: the smallest quote per `buy`, in quote-token units; 0 disables it.
 
    The Setup screen reads the factory's version from `GET /api/v1/config` and offers these
@@ -168,7 +174,9 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
 - Pricing: with a fixed strategy, `PRICER_ROLE` sets purchase and redemption prices
   independently on `FixedPriceStrategy`. With an oracle strategy, quotes follow the feed; while
   it is stale or invalid, new purchases and redemption requests revert and `price_feed_stale`
-  fires (§5). Requests already made keep their quotes.
+  fires (§5). With `maxAge` below a scheduled feed's update interval, expect stale-price alerts
+  between expiry and the next update; treat those as incidents only if the update is late.
+  Requests already made keep their quotes.
 - Income: pay holders through income distributions (§4e).
 - Pause: `PAUSER_ROLE` pauses the project. See §4a for the affected operations and exceptions.
 
@@ -468,7 +476,10 @@ quote token. Each holder claims a share based on a published snapshot.
 4. Holders claim in the investor app before the deadline. A claim needs an unpaused project and
    an Allowed wallet; the server serves each holder's amount and proof publicly.
 5. The income manager can extend a deadline, including while paused, until the distribution
-   is reclaimed. The new deadline must be later and in the future.
+   is reclaimed. The new deadline must be later and in the future. Before the deadline, compare
+   the snapshot with the compliance list. Blocked holders and holders with expired approval
+   cannot claim; their unclaimed income goes to the treasury when the remainder is reclaimed.
+   Restore approval for holders who qualify, and extend the deadline while reviews are pending.
 6. After the deadline, anyone can use "Reclaim unclaimed" to send the remainder to the Vault's
    current treasury. Unpause first; reclaim reverts while paused.
 
@@ -685,5 +696,13 @@ drift there.
 - An oracle feed is a trusted pricing source. A wrong price can sell inventory too cheaply or fix
   inflated redemption quotes; `maxAge`, the sequencer check and investors' slippage bounds limit
   but do not remove that risk.
+- Oracle quotes use the feed's latest answer when a purchase or redemption request is made;
+  there is no forward pricing at a dealing cut-off. While that answer is within `maxAge`, a
+  holder who knows the next price before the feed updates can buy at the old price or lock a
+  redemption quote before a drop. A `maxAge` below the update interval (§3) removes this window
+  only if the old answer expires before the next price can be known. Spreads limit this
+  advantage: a purchase followed by a redemption must overcome both spreads to profit, while
+  a redemption locked before a drop must overcome the redemption spread. Rejecting a Pending
+  redemption blocks that payout but does not reverse a purchase.
 - The income manager and the server's snapshot are trusted to compute entitlements; the
   contract pays whatever a valid proof for the root states, up to the funded total.

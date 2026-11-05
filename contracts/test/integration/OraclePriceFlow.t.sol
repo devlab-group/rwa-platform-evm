@@ -133,6 +133,37 @@ contract OraclePriceFlowTest is TestBase {
         assertEq(uint8(escrow.getRedemption(cancelId).status), uint8(IRedemptionEscrow.RedemptionStatus.Cancelled));
     }
 
+    // At maxAge, a holder can buy at the old price, then lock a higher quote after the feed updates
+    function test_oldPriceStaysTradableWithinMaxAge() public {
+        vm.warp(block.timestamp + MAX_AGE);
+        _buy(10 ether);
+        assertEq(quoteToken.balanceOf(address(vault)), 25_250_000);
+
+        feed.setAnswer(3e8);
+        uint256 id = _request(10 ether);
+        assertEq(escrow.getRedemption(id).quoteAmount, 29_400_000);
+    }
+
+    // An expired answer blocks new requests until the feed updates; existing requests keep their quotes
+    function test_expiredAnswerBlocksRequestsUntilTheNextRound() public {
+        _buy(10 ether);
+        uint256 lockedId = _request(1 ether);
+        vm.warp(block.timestamp + MAX_AGE + 1);
+
+        vm.startPrank(investor);
+        token.approve(address(escrow), 1 ether);
+        vm.expectRevert(
+            abi.encodeWithSelector(IOraclePriceStrategy.StalePrice.selector, block.timestamp - MAX_AGE - 1, MAX_AGE)
+        );
+        escrow.requestRedemption(1 ether, 0, uint64(block.timestamp + 1 hours));
+        vm.stopPrank();
+
+        feed.setAnswer(3e8);
+        assertEq(vault.previewBuy(1 ether), 3_030_000);
+        assertEq(escrow.getRedemption(_request(1 ether)).quoteAmount, 2_940_000);
+        assertEq(escrow.getRedemption(lockedId).quoteAmount, 2_450_000);
+    }
+
     function test_setStrategyMovesEscrowStrategyAndNextQuote() public {
         _buy(20 ether);
         uint256 oldId = _request(4 ether);

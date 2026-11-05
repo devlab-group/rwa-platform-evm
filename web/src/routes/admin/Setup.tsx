@@ -1234,8 +1234,10 @@ function DeployFormBody({
               aria-describedby="priceMaxAge-hint"
             />
             <span className="field__hint" id="priceMaxAge-hint">
-              New purchases and redemption requests revert when the feed is older
-              than this.
+              New purchases and redemption requests revert when the feed's
+              answer exceeds this age. For a scheduled feed such as a daily NAV,
+              set this age so the answer expires before the next price can be
+              known.
             </span>
           </div>
           <div className="field">
