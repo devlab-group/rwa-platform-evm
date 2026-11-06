@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -47,6 +48,15 @@ type OracleInfo struct {
 	Error string
 	// TransportFailure marks non-revert latestPrice() failures, which cannot establish feed health
 	TransportFailure bool
+}
+
+// StaleWithin reports whether a StalePrice failure has a readable feed age below a positive sla.
+// This lets alerts tolerate scheduled staleness when maxAge is shorter than the update interval.
+func (o *OracleInfo) StaleWithin(sla time.Duration, now time.Time) bool {
+	if sla <= 0 || o.Error != bindings.PriceErrStalePrice || o.UpdatedAt == nil {
+		return false
+	}
+	return now.Sub(time.Unix(*o.UpdatedAt, 0)) < sla
 }
 
 // StrategyPrices are the per-whole-token prices of a strategy read now. A price is nil when

@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -37,6 +38,8 @@ type oracleChain struct {
 	blockchain.Client
 	oracleKind bool
 	price      error // nil: a fresh price
+	updatedAt  int64 // 0: a fixed old timestamp
+	feedDown   bool  // the feed itself cannot be read
 }
 
 func (c oracleChain) CallContract(_ context.Context, msg ethereum.CallMsg, _ *big.Int) ([]byte, error) {
@@ -49,7 +52,14 @@ func (c oracleChain) CallContract(_ context.Context, msg ethereum.CallMsg, _ *bi
 		return m.Outputs.Pack(alertStrategy)
 	}
 	if m, ok := find(agg.ABI); ok && *msg.To == alertFeed {
-		return m.Outputs.Pack(big.NewInt(1), big.NewInt(1), big.NewInt(1), big.NewInt(1_700_000_000), big.NewInt(1))
+		if c.feedDown {
+			return nil, errors.New("rpc down")
+		}
+		updatedAt := int64(1_700_000_000)
+		if c.updatedAt != 0 {
+			updatedAt = c.updatedAt
+		}
+		return m.Outputs.Pack(big.NewInt(1), big.NewInt(1), big.NewInt(1), big.NewInt(updatedAt), big.NewInt(1))
 	}
 	if m, ok := find(oracle.ABI); ok && *msg.To == alertStrategy {
 		if !c.oracleKind {
@@ -113,6 +123,47 @@ func TestEvaluateAlerts_PriceFeedStale(t *testing.T) {
 			if tc.alerts == 1 && got[0] != alertStrategy.Hex() {
 				t.Errorf("alert target = %q, want the strategy %s", got[0], alertStrategy.Hex())
 			}
+		})
+	}
+}
+
+// Use synctest's clock to test feed ages exactly at the SLA boundary
+func TestEvaluateAlerts_PriceFeedSLA(t *testing.T) {
+	const sla = 26 * time.Hour
+	id := bindings.NewOraclePriceStrategy().ABI.Errors["SequencerDown"].ID
+	stale, sequencerDown := staleErr(t), chainRevert{data: "0x" + common.Bytes2Hex(id[:4])}
+
+	cases := []struct {
+		name     string
+		price    error
+		feedAge  time.Duration
+		feedDown bool
+		sla      time.Duration
+		alerts   int
+	}{
+		{name: "planned stop inside the SLA", price: stale, feedAge: 2 * time.Hour, sla: sla},
+		{name: "one second under the SLA", price: stale, feedAge: sla - time.Second, sla: sla},
+		{name: "feed reached the SLA", price: stale, feedAge: sla, sla: sla, alerts: 1},
+		{name: "late update past the SLA", price: stale, feedAge: sla + time.Minute, sla: sla, alerts: 1},
+		{name: "no SLA alerts at maxAge", price: stale, feedAge: 2 * time.Hour, alerts: 1},
+		{name: "no SLA alerts while the local clock lags the feed", price: stale, feedAge: -time.Hour, alerts: 1},
+		{name: "other price failures ignore the SLA", price: sequencerDown, feedAge: 2 * time.Hour, sla: sla, alerts: 1},
+		{name: "unreadable feed age still alerts", price: stale, feedDown: true, sla: sla, alerts: 1},
+		{name: "rpc failure stays skipped", price: errors.New("i/o timeout"), feedAge: sla + time.Minute, sla: sla},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				app, repos := guardTestApp(t, 0, nil)
+				chain := oracleChain{oracleKind: true, price: tc.price, feedDown: tc.feedDown, updatedAt: time.Now().Add(-tc.feedAge).Unix()}
+				app.Sales = sales.New(chain, alertVault, common.HexToAddress("0xB"), repos.Purchases)
+
+				evaluateAlerts(context.Background(), config.Config{PriceFeedSLA: tc.sla}, repos, app)
+
+				if got := alertTargets(t, repos, sales.AlertPriceFeedStale); len(got) != tc.alerts {
+					t.Fatalf("price_feed_stale alerts = %v, want %d", got, tc.alerts)
+				}
+			})
 		})
 	}
 }

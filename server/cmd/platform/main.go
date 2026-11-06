@@ -729,7 +729,7 @@ func evaluateAlerts(ctx context.Context, cfg config.Config, repos *repository.Re
 	}
 
 	// deferred so it runs after the DB-only checks below: a hung RPC must not hold them back
-	defer evaluateOracleAlert(ctx, app)
+	defer evaluateOracleAlert(ctx, app, cfg.PriceFeedSLA)
 
 	requests, err := repos.RedemptionRequests.List(ctx, "")
 	if err != nil {
@@ -754,9 +754,10 @@ func evaluateAlerts(ctx context.Context, cfg config.Config, repos *repository.Re
 // oracleAlertTimeout bounds the chain reads of evaluateOracleAlert
 const oracleAlertTimeout = 10 * time.Second
 
-// evaluateOracleAlert raises price_feed_stale on Oracle price reverts, skipping transport
-// failures. Only chain reads use oracleAlertTimeout, preserving time for the audit write.
-func evaluateOracleAlert(ctx context.Context, app *api.App) {
+// evaluateOracleAlert raises price_feed_stale for strategy price reverts, skipping transport
+// failures and stale prices younger than a positive sla. Only chain reads use oracleAlertTimeout,
+// leaving time for the audit write.
+func evaluateOracleAlert(ctx context.Context, app *api.App, sla time.Duration) {
 	if app.Sales == nil {
 		return
 	}
@@ -772,6 +773,10 @@ func evaluateOracleAlert(ctx context.Context, app *api.App) {
 	}
 	if info.TransportFailure {
 		log.Printf("platform: alert evaluation: reading the oracle price: RPC failure, skipped")
+		return
+	}
+	if info.StaleWithin(sla, time.Now()) {
+		log.Printf("platform: alert evaluation: oracle price past maxAge but inside alerts.price_feed_sla, skipped")
 		return
 	}
 	app.RaiseAlert(ctx, sales.AlertPriceFeedStale, "system", info.Strategy.Hex(),

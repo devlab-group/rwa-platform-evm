@@ -174,9 +174,9 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
 - Pricing: with a fixed strategy, `PRICER_ROLE` sets purchase and redemption prices
   independently on `FixedPriceStrategy`. With an oracle strategy, quotes follow the feed; while
   it is stale or invalid, new purchases and redemption requests revert and `price_feed_stale`
-  fires (§5). With `maxAge` below a scheduled feed's update interval, expect stale-price alerts
-  between expiry and the next update; treat those as incidents only if the update is late.
-  Requests already made keep their quotes.
+  fires (§5). When `maxAge` is shorter than a scheduled feed's update interval, these reverts
+  are expected between expiry and the next update. Set `alerts.price_feed_sla` (§5) to delay
+  stale-price alerts until an update is late. Existing requests keep their quotes.
 - Income: pay holders through income distributions (§4e).
 - Pause: `PAUSER_ROLE` pauses the project. See §4a for the affected operations and exceptions.
 
@@ -525,6 +525,13 @@ The platform has no dedicated metrics for indexer lag, RPC errors or stuck nonce
 Security screen's stale-data warning (`securityStale` on `GET /api/v1/project`) and the
 Transactions screen for `needs_intervention`. Treat indexed data as unconfirmed until it
 reaches the configured finality depth.
+
+`alerts.price_feed_sla` is unset by default. When `maxAge` is shorter than the update interval,
+set it to the longest normal gap between updates plus a tolerance: `26h` for a daily feed or
+`74h` for one that skips weekends. A stale price then raises `price_feed_stale` on an evaluation
+once the feed reaches that age. With `74h`, a missed weekday update can go unalerted for about
+two days. Other price failures and an unreadable feed age bypass this delay. The setting changes
+alert timing only; new purchases and redemption requests still revert when the feed is stale.
 
 ## 6. Backup and recovery
 

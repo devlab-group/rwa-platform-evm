@@ -117,6 +117,7 @@ tx:
   lease_ttl: "45s"
 alerts:
   pending_redemption_sla: "72h"
+  price_feed_sla: "26h"
 `
 	cfg, err := LoadFile(writeConfig(t, yaml))
 	if err != nil {
@@ -156,6 +157,7 @@ alerts:
 		{"ComplianceKeyHex", cfg.ComplianceKeyHex, "0xdeadbeef"},
 		{"TxLeaseTTL", cfg.TxLeaseTTL, 45 * time.Second},
 		{"PendingRedemptionSLA", cfg.PendingRedemptionSLA, 72 * time.Hour},
+		{"PriceFeedSLA", cfg.PriceFeedSLA, 26 * time.Hour},
 	}
 	for _, c := range checks {
 		if c.got != c.want {

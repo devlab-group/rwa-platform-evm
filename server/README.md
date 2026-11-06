@@ -313,7 +313,7 @@ validation.
 | `kyc:`                  | `provider` (`none`), `monitoring_action` (`alert`), `sumsub.*`, `onfido.*`                                                                                                                                                                                                                                         | `none` uses generic HMAC webhooks; `sumsub`/`onfido` require their credentials. See `config.example.yaml`.                                                                                                                                                                                    |
 | `compliance:`           | `max_allowed_wallets` (`0`, no cap), `sanctions_list_file` (empty, off) | Holder cap and sanctions screening on new allows; see below. |
 | `tx:`                   | `coordination_mode` (`in-process`), `lease_ttl` (`30s`)                                                                                                                                                                                                                             | Nonce coordination described under [KeyProvider](#keyprovider-hot-key-backends).                                                                                                                                                                                                              |
-| `alerts:`               | `pending_redemption_sla` (`48h`), `funded_claim_failure_sla` (`24h`)                                                                                                                                                                                                                | See [Observability](#observability).                                                                                                                                                                                                                                                          |
+| `alerts:`               | `pending_redemption_sla` (`48h`), `funded_claim_failure_sla` (`24h`), `price_feed_sla` (unset)                                                                                                                                                                                      | See [Observability](#observability).                                                                                                                                                                                                                                                          |
 | `production_overrides:` | `allow_unbounded_request_body`, `allow_disabled_rate_limit`, `allow_unbounded_fees` (all `false`)                                                                                                                                                                                   | Emergency overrides for those controls only.                                                                                                                                                                                                                                                  |
 
 ## Holder cap and sanctions screening
@@ -400,8 +400,10 @@ The same 5-minute tick raises `price_feed_stale` when the Vault's Oracle strateg
 a price read because the feed is stale or invalid, the sequencer is down or in its grace
 period, feed decimals changed, or the contract returned an unknown revert. RPC transport
 failures are logged and skipped. The alert uses the strategy address as its audit target and
-includes the error name in its detail. These price failures block quotes for new purchases
-and redemption requests.
+includes the error name in its detail. These failures block latest-price quotes.
+Set `alerts.price_feed_sla` when `maxAge` is shorter than the update interval: stale-price alerts
+then wait until the feed reaches that age. Other price failures and an unreadable feed age bypass
+the delay. The setting changes alert timing only.
 
 Every 5 minutes, `project.CheckConfigDrift` checks post-adoption wiring without changing Active
 status. Differences raise `config_drift` through logs, metrics and audit attempts. Treasury,
