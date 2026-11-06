@@ -41,6 +41,10 @@ contract FixedPriceStrategy is IFixedPriceStrategy, AccessControlEnumerableAdmin
         return Math.mulDiv(tokenAmount, _redemptionPricePerWholeToken, 10 ** _tokenDecimals, Math.Rounding.Floor);
     }
 
+    function forwardPriced() external pure returns (bool) {
+        return false;
+    }
+
     function previewBuy(uint256 tokenAmount) external view returns (uint256 quoteAmount) {
         return quotePurchase(tokenAmount);
     }

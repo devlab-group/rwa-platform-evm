@@ -6,11 +6,12 @@ import {DeployBase} from "./Deploy.s.sol";
 import {RWAFactory} from "../src/RWAFactory.sol";
 import {ComplianceTokenDeployer} from "../src/factory/ComplianceTokenDeployer.sol";
 import {MarketDeployer} from "../src/factory/MarketDeployer.sol";
+import {StrategyDeployer} from "../src/factory/StrategyDeployer.sol";
 import {SupplyControllerDeployer} from "../src/factory/SupplyControllerDeployer.sol";
 import {IncomeDistributorDeployer} from "../src/factory/IncomeDistributorDeployer.sol";
 import {RedemptionEscrowDeployer} from "../src/factory/RedemptionEscrowDeployer.sol";
 
-/// @notice Deploys RWAFactory and five stateless helpers; logs contract.factory_address and
+/// @notice Deploys RWAFactory and its stateless helpers; logs contract.factory_address and
 ///         contract.start_block for server config. Reuse the factory for factory.deploy(config);
 ///         Deploy.s.sol instead creates a factory and project together.
 ///
@@ -21,8 +22,8 @@ import {RedemptionEscrowDeployer} from "../src/factory/RedemptionEscrowDeployer.
 ///   DEPLOYER_PK  Broadcast key; defaults to public Anvil account 0 on chain 31337.
 ///                Required elsewhere or RefusingAnvilKeyFallbackOnNonAnvilChain reverts.
 ///
-/// DEPLOYER_PK is the only input; fund it for six creations. No project or quote token is
-/// created, and the factory has no admin, owner or roles.
+/// DEPLOYER_PK is the only input; fund its account to deploy the helpers and factory. This script
+/// creates no project or quote token, and the factory has no admin, owner or roles.
 /// @dev Shares DeployBase._deployerPrivateKey() and its key guard with Deploy
 contract DeployFactory is DeployBase {
     function run() external returns (RWAFactory factory) {
@@ -37,7 +38,8 @@ contract DeployFactory is DeployBase {
             address(new MarketDeployer()),
             address(new SupplyControllerDeployer()),
             address(new RedemptionEscrowDeployer()),
-            address(new IncomeDistributorDeployer())
+            address(new IncomeDistributorDeployer()),
+            address(new StrategyDeployer())
         );
 
         vm.stopBroadcast();

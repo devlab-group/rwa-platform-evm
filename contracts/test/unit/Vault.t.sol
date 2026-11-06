@@ -109,6 +109,21 @@ contract VaultTest is TestBase {
         Vault(freshVault).buy(1 ether, type(uint256).max, investor, uint64(block.timestamp + 1));
     }
 
+    // Forward orders with a fixed-price strategy
+
+    function test_requestPurchase_revertsOnAnInstantStrategy() public {
+        uint256 before = quoteToken.balanceOf(investor);
+
+        vm.prank(investor);
+        vm.expectRevert(IVault.NotForwardPriced.selector);
+        vault.requestPurchase(1 ether, 100e6, investor, uint64(block.timestamp + 1));
+
+        assertEq(vault.nextPurchaseId(), 0);
+        assertEq(vault.pendingPurchaseQuote(), 0);
+        assertEq(quoteToken.balanceOf(investor), before);
+        assertFalse(strategy.forwardPriced());
+    }
+
     // ---- withdrawProceeds ----
 
     function test_withdrawProceeds_revertsWhenPaused() public {
@@ -222,13 +237,13 @@ contract VaultTest is TestBase {
         address st = address(strategy);
         address t = address(token);
         vm.expectRevert(IVault.ZeroAddress.selector);
-        new Vault(address(0), q, st, treasury, 0, admin, treasurer, 0);
+        new Vault(address(0), q, st, treasury, 0, 0, admin, treasurer, 0);
         vm.expectRevert(IVault.ZeroAddress.selector);
-        new Vault(t, address(0), st, treasury, 0, admin, treasurer, 0);
+        new Vault(t, address(0), st, treasury, 0, 0, admin, treasurer, 0);
         vm.expectRevert(IVault.ZeroAddress.selector);
-        new Vault(t, q, address(0), treasury, 0, admin, treasurer, 0);
+        new Vault(t, q, address(0), treasury, 0, 0, admin, treasurer, 0);
         vm.expectRevert(IVault.ZeroAddress.selector);
-        new Vault(t, q, st, address(0), 0, admin, treasurer, 0);
+        new Vault(t, q, st, address(0), 0, 0, admin, treasurer, 0);
     }
 
     function test_setStrategy_updatesAndEmits() public {

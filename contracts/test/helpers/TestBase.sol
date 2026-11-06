@@ -8,6 +8,7 @@ import {ISupplyController} from "../../src/interfaces/ISupplyController.sol";
 import {RWAFactory} from "../../src/RWAFactory.sol";
 import {ComplianceTokenDeployer} from "../../src/factory/ComplianceTokenDeployer.sol";
 import {MarketDeployer} from "../../src/factory/MarketDeployer.sol";
+import {StrategyDeployer} from "../../src/factory/StrategyDeployer.sol";
 import {SupplyControllerDeployer} from "../../src/factory/SupplyControllerDeployer.sol";
 import {IncomeDistributorDeployer} from "../../src/factory/IncomeDistributorDeployer.sol";
 import {RedemptionEscrowDeployer} from "../../src/factory/RedemptionEscrowDeployer.sol";
@@ -63,6 +64,8 @@ abstract contract TestBase is Test {
     uint256 internal constant PURCHASE_PRICE = 2_000_000; // 2.000000 quote units / whole token
     uint256 internal constant REDEMPTION_PRICE = 1_950_000;
     uint64 internal constant REDEMPTION_TIMEOUT = 14 days;
+    uint64 internal constant PURCHASE_TIMEOUT = 7 days;
+    uint64 internal constant DEALING_CUTOFF = 2 hours;
 
     function setUp() public virtual {
         admin = vm.addr(ADMIN_PK);
@@ -103,7 +106,8 @@ abstract contract TestBase is Test {
             address(new MarketDeployer()),
             address(new SupplyControllerDeployer()),
             address(new RedemptionEscrowDeployer()),
-            address(new IncomeDistributorDeployer())
+            address(new IncomeDistributorDeployer()),
+            address(new StrategyDeployer())
         );
     }
 
@@ -129,7 +133,9 @@ abstract contract TestBase is Test {
             redemptionSpreadBps: 0,
             sequencerUptimeFeed: address(0),
             sequencerGracePeriod: 0,
+            dealingCutoff: 0,
             redemptionTimeout: REDEMPTION_TIMEOUT,
+            purchaseTimeout: PURCHASE_TIMEOUT,
             admin: admin,
             auditor: auditor,
             complianceOperator: complianceOperator,
@@ -143,6 +149,24 @@ abstract contract TestBase is Test {
     }
 
     // EIP-712 signing helpers (mirror shared/eip712/types.md)
+
+    /// @dev Oracle project: one-hour maxAge, 1% purchase spread, 2% redemption spread
+    function _oracleConfig(address quoteToken_, address feed)
+        internal
+        view
+        returns (IRWAFactory.ProjectConfig memory cfg)
+    {
+        cfg = _defaultConfig(quoteToken_);
+        cfg.strategyKind = IRWAFactory.StrategyKind.Oracle;
+        cfg.pricer = address(0);
+        cfg.purchasePricePerWholeToken = 0;
+        cfg.redemptionPricePerWholeToken = 0;
+        cfg.priceFeed = feed;
+        cfg.priceMaxAge = 1 hours;
+        cfg.dealingCutoff = DEALING_CUTOFF;
+        cfg.purchaseSpreadBps = 100;
+        cfg.redemptionSpreadBps = 200;
+    }
 
     function _mintAttestation(address signerAuditor, uint256 amount, string memory recordId, uint256 nonce)
         internal

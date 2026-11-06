@@ -30,8 +30,12 @@ interface IRWAFactory {
         uint16 redemptionSpreadBps;
         address sequencerUptimeFeed;
         uint64 sequencerGracePeriod;
+        // Oracle only: maximum delay from valuation to publication; must be below both timeouts
+        uint64 dealingCutoff;
         // Redemption
         uint64 redemptionTimeout;
+        // Purchase cancellation timeout, also required for Fixed projects that may switch strategies
+        uint64 purchaseTimeout;
         // Roles
         address admin;
         address auditor;

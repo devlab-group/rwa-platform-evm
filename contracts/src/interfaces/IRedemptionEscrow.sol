@@ -14,17 +14,25 @@ interface IRedemptionEscrow {
         Cancelled
     }
 
+    /// @dev Forward requests store a strategy and baseRound; quoteAmount stays zero until funding
+    ///      uses the first eligible round at or after the dealing cutoff. Instant requests leave
+    ///      strategy, baseRound and minQuoteOut zero.
     struct RedemptionRequest {
         address beneficiary;
         uint256 rwaAmount;
         uint256 quoteAmount;
         uint64 createdAt;
         RedemptionStatus status;
+        address strategy;
+        uint80 baseRound;
+        uint256 minQuoteOut;
     }
 
     event RedemptionRequested(
         uint256 indexed id, address indexed beneficiary, uint256 rwaAmount, uint256 quoteAmount, uint64 createdAt
     );
+    event RedemptionForwardPriced(uint256 indexed id, address indexed strategy, uint80 baseRound, uint256 minQuoteOut);
+    event RedemptionPriced(uint256 indexed id, uint80 roundId, uint256 quoteAmount);
     event RedemptionFunded(uint256 indexed id, address indexed funder, uint256 quoteAmount);
     event RedemptionCompleted(uint256 indexed id, address indexed beneficiary, uint256 rwaAmount, uint256 quoteAmount);
     event RedemptionRejected(uint256 indexed id, bytes32 indexed reasonCode, address indexed caller);
@@ -41,6 +49,7 @@ interface IRedemptionEscrow {
     error NotFunded(uint256 id);
     error NotBeneficiary(address caller, address beneficiary);
     error TimeoutNotReached(uint64 availableAt, uint256 nowTs);
+    error FundingClosed(uint64 closedAt, uint256 nowTs);
     error ZeroReasonCode();
     error RwaDeltaMismatch(uint256 expected, uint256 actual);
     error QuoteDeltaMismatch(uint256 expected, uint256 actual);
@@ -58,6 +67,11 @@ interface IRedemptionEscrow {
     function getRedemption(uint256 id) external view returns (RedemptionRequest memory);
 
     function previewRedeem(uint256 rwaAmount) external view returns (uint256 quoteAmount);
+
+    /// @notice Checks the round, timeout and quote bounds for a Pending forward request and returns
+    ///         its funding quote. Other requests return the stored quoteAmount; this view does not
+    ///         check pause, roles or compliance.
+    function previewFunding(uint256 id) external view returns (uint256 quoteAmount);
 
     function redemptionTimeout() external view returns (uint64);
 
