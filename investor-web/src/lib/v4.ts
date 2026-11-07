@@ -11,7 +11,10 @@ type Redemption = components["schemas"]["Redemption"];
 
 const UINT80_MAX = (1n << 80n) - 1n;
 
-/** Forward flow only when the server says so; absent or false keeps the instant buy flow */
+/**
+ * Use the server's forward-pricing flag for explanatory text. wallet.readForwardPriced selects
+ * the purchase flow from chain state; a failed read blocks purchases.
+ */
 export function isForwardPriced(project: Project | undefined): boolean {
   return project?.forwardPriced === true;
 }
@@ -67,6 +70,17 @@ export function forwardDeposit(
     refusal,
     estimateBelowMinimum: minimum > 0n && estimate < minimum,
   };
+}
+
+/**
+ * Why a redemption with this previewed quote cannot be requested, or null. A zero estimate pays
+ * nothing: the instant flow reverts ZeroQuote, and a forward request is escrowed but then cannot
+ * be funded.
+ */
+export function redemptionRefusal(estimate: bigint): string | null {
+  return estimate === 0n
+    ? "The estimated quote is zero, so nothing could be paid out. Increase the amount."
+    : null;
 }
 
 /** What reading the order's own strategy says about its pricing round */

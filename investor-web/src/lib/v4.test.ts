@@ -7,6 +7,7 @@ import {
   orderReadArgs,
   parseUint,
   redemptionQuoteCell,
+  redemptionRefusal,
   roundFromRevert,
   settlementOutlook,
   type OrderContext,
@@ -24,6 +25,16 @@ describe("isForwardPriced", () => {
 
   it("keeps the instant flow before the project loads", () => {
     expect(isForwardPriced(undefined)).toBe(false);
+  });
+});
+
+describe("redemptionRefusal", () => {
+  it("refuses a zero estimate, which could never be paid or funded", () => {
+    expect(redemptionRefusal(0n)).toMatch(/estimated quote is zero/);
+  });
+
+  it("accepts the smallest non-zero estimate", () => {
+    expect(redemptionRefusal(1n)).toBeNull();
   });
 });
 

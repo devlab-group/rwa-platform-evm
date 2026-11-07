@@ -41,7 +41,8 @@ vi.mock("../../lib/wallet", async (importOriginal) => {
     readPreviewBuy: vi.fn().mockResolvedValue(2000000n),
     readPreviewRedeem: vi.fn().mockResolvedValue(5000000n),
     sendIncomeClaim: vi.fn().mockResolvedValue("0xclaimhash"),
-    waitForTxReceipt: vi.fn().mockResolvedValue(undefined),
+    readForwardPriced: vi.fn().mockResolvedValue(false),
+    waitForTxReceipt: vi.fn().mockResolvedValue({ status: "success" }),
     readErc20Balance: vi.fn().mockResolvedValue("100000000"),
   };
 });
@@ -120,7 +121,9 @@ describe("Investor rwa-v3 surfaces", () => {
       .mockResolvedValue(CLAIMS as never);
     vi.mocked(readPreviewBuy).mockReset().mockResolvedValue(2000000n);
     vi.mocked(sendIncomeClaim).mockClear().mockResolvedValue("0xclaimhash");
-    vi.mocked(waitForTxReceipt).mockClear().mockResolvedValue(undefined);
+    vi.mocked(waitForTxReceipt)
+      .mockClear()
+      .mockResolvedValue({ status: "success" } as never);
     window.localStorage.clear();
   });
 

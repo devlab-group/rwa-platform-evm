@@ -10,6 +10,7 @@ import {
   type ConfirmationState,
 } from "../../components/TransactionPreview";
 import { useAsync } from "../../hooks/useAsync";
+import { useNowSeconds } from "../../hooks/useNowSeconds";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { useQuoteDecimals } from "../../hooks/useQuoteDecimals";
 import { useWallet } from "../../hooks/useWallet";
@@ -43,6 +44,7 @@ import {
   describeTxError,
   readErc20Balance,
   readErc20Decimals,
+  readForwardPriced,
   readPreviewBuy,
   readPreviewRedeem,
   sendBuy,
@@ -66,6 +68,7 @@ import {
   formatDuration,
   isForwardPriced,
   redemptionQuoteCell,
+  redemptionRefusal,
 } from "../../lib/v4";
 import {
   clearWalletSession,
@@ -120,6 +123,8 @@ export function Investor() {
   // Read own KYC status through the challenge-issued X-Wallet-Session
   const ownWalletStatus = useOwnWalletStatus(wallet.address);
   const submitted = useSubmittedTransactions();
+  // Bumped when an order is mined so the purchase order list reloads
+  const [ordersRefresh, setOrdersRefresh] = useState(0);
 
   // Fetch inventory for Oracle projects to check live price availability
   const projectData = project.status === "success" ? project.data : undefined;
@@ -212,12 +217,14 @@ export function Investor() {
         walletAddress={wallet.address}
         chainMismatch={wallet.chainMismatch}
         onSubmitted={submitted.record}
+        onOrderPlaced={() => setOrdersRefresh((n) => n + 1)}
       />
 
       <PurchaseOrdersSection
         project={project.status === "success" ? project.data : undefined}
         walletAddress={wallet.address}
         chainMismatch={wallet.chainMismatch}
+        refreshKey={ordersRefresh}
         onSubmitted={submitted.record}
       />
 
@@ -681,6 +688,7 @@ function BuySection({
   walletAddress,
   chainMismatch,
   onSubmitted,
+  onOrderPlaced,
 }: {
   availability: PriceAvailability;
   chainId: number;
@@ -688,6 +696,7 @@ function BuySection({
   walletAddress: string | null | undefined;
   chainMismatch: boolean;
   onSubmitted: (txHash: string, kind: string) => void;
+  onOrderPlaced: () => void;
 }) {
   const [previewOracleError, setPreviewOracleError] = useState<string>();
   // availability follows the parent's polled project and inventory; the project prop is the
@@ -695,8 +704,10 @@ function BuySection({
   const unavailable =
     previewOracleError !== undefined || availability.unavailable;
   const minimum = minPurchaseQuote(project);
-  // Forward-priced projects take an order with a deposit; Vault.buy reverts there
-  const forward = isForwardPriced(project);
+  // Choose the purchase flow from chain state before previewing; Vault.buy rejects forward pricing.
+  // The server flag supplies preliminary hints. A failed mode read blocks purchases.
+  const [chainForward, setChainForward] = useState<boolean>();
+  const forward = chainForward ?? isForwardPriced(project);
   const [tokenAmount, setTokenAmount] = useState("");
   const [slippageBps, setSlippageBps] = useState(50);
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -708,6 +719,8 @@ function BuySection({
   const [approveTx, setApproveTx] = useState<string | null>(null);
   const [allowance, setAllowance] = useState<bigint | null>(null);
   const [buyTx, setBuyTx] = useState<string | null>(null);
+  // From the order or buy wallet prompt until its receipt
+  const [placing, setPlacing] = useState(false);
 
   const maxQuoteAmount = quote?.quoteAmount
     ? applySlippageCeil(quote.quoteAmount, slippageBps)
@@ -739,6 +752,11 @@ function BuySection({
     setPreviewOracleError(undefined);
     try {
       if (!vault || !chainId) throw new Error("Project addresses not loaded.");
+      // Decide order versus instant buy from the chain before quoting or approving anything
+      const forwardMode = await readForwardPriced(
+        chainId,
+        vault as `0x${string}`,
+      );
       // Convert whole units; AmountFormatError rejects invalid or over-precise input
       const rwaDecimals = await resolveRwaDecimals(project, chainId);
       const minimalTokenAmount = toMinimalUnits(tokenAmount, rwaDecimals);
@@ -759,7 +777,7 @@ function BuySection({
       setQuoteDecimals(resolvedQuoteDecimals);
       // Refuse before the wallet opens; the Vault would revert QuoteBelowMinimum. A forward
       // order is checked against its deposit instead (depositPlan).
-      const refusal = forward
+      const refusal = forwardMode
         ? null
         : minPurchaseRefusal(
             quoteAmount,
@@ -771,6 +789,7 @@ function BuySection({
         setError(refusal);
         return;
       }
+      setChainForward(forwardMode);
       setQuote({
         tokenAmount: minimalTokenAmount,
         quoteAmount: quoteAmount.toString(),
@@ -778,6 +797,7 @@ function BuySection({
       });
     } catch (err) {
       setQuote(null);
+      setChainForward(undefined);
       setPreviewOracleError(oracleErrorName(err));
       setError(describeTxError(err, "Quote request failed."));
     }
@@ -824,6 +844,7 @@ function BuySection({
     )
       return;
     setTxState("awaiting-signature");
+    setPlacing(true);
     setError(null);
     try {
       // Send to the project Vault with the buyer as recipient and the slippage spend ceiling;
@@ -843,9 +864,23 @@ function BuySection({
       setBuyTx(tx);
       onSubmitted(tx, forward ? "purchase request" : "buy");
       setTxState("submitted");
+      await waitForTxReceipt(tx as `0x${string}`);
+      setTxState("confirmed");
+      // Refresh the remaining allowance after the spend; a failed read keeps Place order disabled
+      setAllowance(
+        await readErc20Allowance(
+          chainId,
+          quoteToken as `0x${string}`,
+          walletAddress as `0x${string}`,
+          vault as `0x${string}`,
+        ).catch(() => null),
+      );
+      if (forward) onOrderPlaced();
     } catch (err) {
       setTxState("draft");
       setError(describeTxError(err, forward ? "Order failed." : "Buy failed."));
+    } finally {
+      setPlacing(false);
     }
   }
 
@@ -960,6 +995,7 @@ function BuySection({
               !addressesReady ||
               chainMismatch ||
               unavailable ||
+              placing ||
               txState === "awaiting-signature"
             }
           >
@@ -975,6 +1011,7 @@ function BuySection({
               !allowanceSufficient ||
               chainMismatch ||
               unavailable ||
+              placing ||
               txState === "awaiting-signature"
             }
           >
@@ -1034,6 +1071,8 @@ function RedemptionSection({
   const [requestTx, setRequestTx] = useState<string | null>(null);
   const [claimTx, setClaimTx] = useState<string | null>(null);
   const [cancelTx, setCancelTx] = useState<string | null>(null);
+  // From a request, claim or cancel wallet prompt until its receipt
+  const [sending, setSending] = useState(false);
   // Request, claim and cancel target RedemptionEscrow
   const escrow = project?.addresses?.redemptionEscrow;
 
@@ -1053,6 +1092,15 @@ function RedemptionSection({
   // Forward requests are priced at funding, so the preview is only an estimate
   const forward = isForwardPriced(project);
   const cutoff = formatDuration(project?.oracle?.dealingCutoff ?? 0);
+
+  // Cancel opens when a Pending request's timeout passes, with no other event needed
+  const nowSeconds = useNowSeconds(
+    myRedemptions.status === "success"
+      ? myRedemptions.data
+          .filter((r) => r.status === "Pending" && r.timeoutAt)
+          .map((r) => r.timeoutAt as number)
+      : [],
+  );
 
   const minQuoteOut = quote?.quoteAmount
     ? applySlippageFloor(quote.quoteAmount, slippageBps)
@@ -1086,6 +1134,12 @@ function RedemptionSection({
         setQuoteDecimals(await resolveQuoteDecimals(project, chainId));
       } catch {
         setQuoteDecimals(null);
+      }
+      const refusal = redemptionRefusal(quoteAmount);
+      if (refusal) {
+        setQuote(null);
+        setError(refusal);
+        return;
       }
       setQuote({
         tokenAmount: minimal,
@@ -1145,6 +1199,7 @@ function RedemptionSection({
     )
       return;
     setTxState("awaiting-signature");
+    setSending(true);
     setError(null);
     try {
       const tx = await sendRequestRedemption(
@@ -1160,15 +1215,30 @@ function RedemptionSection({
       setRequestTx(tx);
       onSubmitted(tx, "redemption request");
       setTxState("submitted");
+      await waitForTxReceipt(tx as `0x${string}`);
+      setTxState("confirmed");
+      // Refresh the RWA allowance after escrow transfer; a failed read keeps Request disabled
+      setAllowance(
+        await readErc20Allowance(
+          chainId,
+          project?.addresses?.token as `0x${string}`,
+          walletAddress as `0x${string}`,
+          escrow as `0x${string}`,
+        ).catch(() => null),
+      );
+      myRedemptions.reload();
     } catch (err) {
       setTxState("draft");
       setError(describeTxError(err, "Redemption request failed."));
+    } finally {
+      setSending(false);
     }
   }
 
   async function handleClaim(id: string) {
     if (!walletAddress || !escrow || !chainId) return;
     setError(null);
+    setSending(true);
     try {
       const tx = await sendClaimRedemption(
         chainId,
@@ -1178,14 +1248,19 @@ function RedemptionSection({
       );
       setClaimTx(tx);
       onSubmitted(tx, "redemption claim");
+      await waitForTxReceipt(tx as `0x${string}`);
+      myRedemptions.reload();
     } catch (err) {
       setError(describeTxError(err, "Claim failed."));
+    } finally {
+      setSending(false);
     }
   }
 
   async function handleCancel(id: string) {
     if (!walletAddress || !escrow || !chainId) return;
     setError(null);
+    setSending(true);
     try {
       const tx = await sendCancelRedemption(
         chainId,
@@ -1195,8 +1270,12 @@ function RedemptionSection({
       );
       setCancelTx(tx);
       onSubmitted(tx, "redemption cancel");
+      await waitForTxReceipt(tx as `0x${string}`);
+      myRedemptions.reload();
     } catch (err) {
       setError(describeTxError(err, "Cancel failed."));
+    } finally {
+      setSending(false);
     }
   }
 
@@ -1299,6 +1378,7 @@ function RedemptionSection({
               !walletAddress ||
               chainMismatch ||
               unavailable ||
+              sending ||
               txState === "awaiting-signature"
             }
           >
@@ -1314,6 +1394,7 @@ function RedemptionSection({
               !allowanceSufficient ||
               chainMismatch ||
               unavailable ||
+              sending ||
               txState === "awaiting-signature"
             }
           >
@@ -1359,10 +1440,18 @@ function RedemptionSection({
                     <tr>
                       <th>ID</th>
                       <th>Status</th>
-                      <th>RWA amount</th>
-                      <th>Quote amount</th>
+                      <th>
+                        RWA amount
+                        {rwaDisplayDecimals === undefined && " (minimal units)"}
+                      </th>
+                      <th>
+                        Quote amount
+                        {listQuoteDecimals === undefined && " (minimal units)"}
+                      </th>
                       <th>Timeout</th>
-                      <th></th>
+                      <th>
+                        <span className="visually-hidden">Actions</span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1374,7 +1463,7 @@ function RedemptionSection({
                       const cancellable =
                         r.status === "Pending" &&
                         !!r.timeoutAt &&
-                        r.timeoutAt <= Math.floor(Date.now() / 1000);
+                        r.timeoutAt <= nowSeconds;
                       return (
                         <tr key={r.id}>
                           <td className="mono">{r.id}</td>
@@ -1406,7 +1495,10 @@ function RedemptionSection({
                                   type="button"
                                   className="button button--primary"
                                   onClick={() => handleClaim(r.id!)}
-                                  disabled={!walletAddress || chainMismatch}
+                                  disabled={
+                                    !walletAddress || chainMismatch || sending
+                                  }
+                                  aria-label={`Claim (permissionless) redemption ${r.id}`}
                                 >
                                   Claim (permissionless)
                                 </button>
@@ -1416,7 +1508,10 @@ function RedemptionSection({
                                   type="button"
                                   className="button button--danger"
                                   onClick={() => handleCancel(r.id!)}
-                                  disabled={!walletAddress || chainMismatch}
+                                  disabled={
+                                    !walletAddress || chainMismatch || sending
+                                  }
+                                  aria-label={`Cancel (timeout elapsed) redemption ${r.id}`}
                                 >
                                   Cancel (timeout elapsed)
                                 </button>
@@ -1534,6 +1629,7 @@ function TransferSection({
       );
       setTx(hash);
       onSubmitted(hash, "transfer");
+      await waitForTxReceipt(hash);
     } catch (err) {
       setError(describeTxError(err, "Transfer failed."));
     } finally {

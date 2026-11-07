@@ -85,7 +85,7 @@ test.describe("connected states", () => {
     page,
     api,
   }) => {
-    makeForward(api);
+    await makeForward(api, page);
     allowTheWallet(api);
     const now = Math.floor(Date.now() / 1000);
     api.orders.push({

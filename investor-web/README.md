@@ -32,8 +32,10 @@ For one deployed project, investors can:
     when `addresses.incomeDistributor` is set: amount, deadline, status and snapshot URI
     (linked only for `https:`). Claimable entries use
     `IncomeDistributor.claim(id, amount, proof)`; Claimed and Expired entries remain as history.
-- rwa-v4 forward pricing, when `GET /api/v1/project` reports `forwardPriced: true` (otherwise the
-  instant flows above are unchanged):
+- rwa-v4 forward pricing, when the Vault's strategy answers `forwardPriced()` with true
+  (otherwise the instant flows above are unchanged). The page reads this from the chain at
+  preview time (`Vault.strategy()`, then `forwardPriced()`); the project's `forwardPriced` flag
+  supplies preliminary hints. If the read fails, no purchase is offered:
   - Buy: `Vault.buy` reverts, so the page approves a deposit and calls
     `Vault.requestPurchase(...)`. The preview is an estimate; its slippage ceiling becomes the
     deposit and must meet the project minimum. Before confirmation, the page explains that the
@@ -45,16 +47,26 @@ For one deployed project, investors can:
     Pending order the page reads `quotePurchaseAfter(tokenAmount, baseRound, createdAt)` on the
     order's stored strategy. The UI treats `RoundNotAvailable` as waiting, a successful read as
     priced with a quote and refund, and other strategy reverts as unusable. Settle
-    (`settlePurchase`) is offered for a priced order while the project is not paused. Cancel
-    (`cancelPurchase`) is offered only to the buyer, from `timeoutAt` on, and only while no usable
-    round exists; a usable round blocks cancellation. A buyer who is not Allowed can do neither
-    and is told why. Closed orders show their status, refund and, when
+    (`settlePurchase`) is offered for a priced order while the project is not paused. The refund
+    or fill preview uses the minimum the Vault recorded on the order (`getPurchase`), which is
+    what settlement checks; if that read fails the project's current minimum stands in and the
+    text identifies that fallback. Cancel (`cancelPurchase`) is offered only to the buyer from
+    `timeoutAt` on, while no usable round exists; a usable round blocks cancellation. A buyer who
+    is not Allowed can do neither and is told why. Closed orders show their status, refund and, when
     Settled, the amount paid. Malformed server values (a bad `baseRound`, id or amount) show a
-    notice and offer no action.
+    notice and offer no action. Orders are listed for any connected wallet, so a server that
+    omits `forwardPriced` still allows the list to load. Settle and Cancel stay
+    disabled from the wallet prompt until the receipt. Cancel appears when `timeoutAt` passes
+    without a reload; the same holds for Cancel on a Pending redemption request.
   - Redemption: a Pending forward request stores a quote of 0 until funding. The list shows
     "Priced at funding" with the holder's `minQuoteOut`. The preview labels its quote an estimate;
     `minQuoteOut` is the slippage floor calculated from `previewRedeem`. Funding closes at the
-    request timeout, when the holder can cancel.
+    request timeout, when the holder can cancel. A preview that estimates zero is refused.
+- Order, request, settle, cancel, claim and transfer buttons stay disabled from the wallet prompt
+  until the receipt. Mined reverts are reported as errors. Successful actions refresh the affected
+  allowance or list.
+- Wallet refusals read as "Request cancelled in wallet." and viem errors show their one-line
+  summary. Amounts are labelled as minimal units whenever the quote-token decimals are unknown.
 - Transfer after recipient-eligibility preflight; both parties must be Allowed on-chain.
 - Read indexed wallet transactions with distinct unconfirmed, confirmed and reorged states.
 
@@ -147,8 +159,9 @@ src/
   context/                  WalletProvider: connected account and chain
   hooks/                    useAsync, usePaginatedList, useWallet
   lib/
-    abis.ts                 pinned ABI fragments (buy, forward order request/settle/cancel, redemption
-                            request/claim/cancel, vault and oracle errors, income claim)
+    abis.ts                 pinned ABI fragments (buy, forward order request/settle/cancel, vault
+                            strategy and forwardPriced, redemption request/claim/cancel, vault,
+                            escrow and oracle errors, income claim)
     wallet.ts               viem senders and reads over window.ethereum
     client.ts               typed fetch wrapper for the endpoints above
     api-types.ts            generated from api/openapi.yaml, do not edit

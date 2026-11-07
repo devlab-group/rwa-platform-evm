@@ -1,6 +1,6 @@
 import type { Locator, Page } from "@playwright/test";
 import type { MockState } from "./mock-api";
-import { MOCK_WALLET_ADDRESS } from "./mock-wallet";
+import { MOCK_WALLET_ADDRESS, setMockForwardPriced } from "./mock-wallet";
 
 /**
  * Scope page-object queries to each card section's <h2>. Button labels repeat across
@@ -11,8 +11,12 @@ export function sectionByHeading(page: Page, heading: string): Locator {
   return page.locator("section.card", { has: page.getByRole("heading", { name: heading, exact: true }) });
 }
 
-/** Turns the mocked project into an rwa-v4 oracle project whose orders are priced at a later round */
-export function makeForward(api: MockState): void {
+/**
+ * Turns the mocked project into an rwa-v4 oracle project whose orders are priced at a later
+ * round, on the server and on the mock chain. Call before goto.
+ */
+export async function makeForward(api: MockState, page: Page): Promise<void> {
+  await setMockForwardPriced(page, true);
   api.project.strategyKind = "Oracle";
   api.project.forwardPriced = true;
   api.project.quoteDecimals = 6;

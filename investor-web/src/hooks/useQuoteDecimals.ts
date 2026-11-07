@@ -5,13 +5,14 @@ import { resolveQuoteDecimals } from "../lib/decimals";
 type Project = components["schemas"]["Project"];
 
 /**
- * Read quote-token decimals for list rows. While loading or unavailable, return undefined so
- * rows display grouped raw units without guessing their scale.
+ * Return the project's quote-token decimals immediately, or resolve them on-chain.
+ * Return undefined while loading or after a failed read so rows label amounts in minimal units.
  */
 export function useQuoteDecimals(
   project: Project | undefined,
   chainId: number,
 ): number | undefined {
+  const known = project?.quoteDecimals;
   const state = useAsync<number | null>(async () => {
     if (!project || !chainId) return null;
     try {
@@ -19,6 +20,7 @@ export function useQuoteDecimals(
     } catch {
       return null;
     }
-  }, [project?.addresses?.quoteToken, chainId]);
+  }, [project?.addresses?.quoteToken, chainId, known]);
+  if (known !== undefined) return known;
   return state.status === "success" ? (state.data ?? undefined) : undefined;
 }

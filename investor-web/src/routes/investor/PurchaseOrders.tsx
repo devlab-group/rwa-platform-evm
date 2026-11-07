@@ -3,6 +3,7 @@ import type { Address } from "viem";
 import { AsyncSection } from "../../components/AsyncSection";
 import { PaginationFooter } from "../../components/PaginationFooter";
 import { useAsync } from "../../hooks/useAsync";
+import { useNowSeconds } from "../../hooks/useNowSeconds";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { useQuoteDecimals } from "../../hooks/useQuoteDecimals";
 import { api } from "../../lib/client";
@@ -21,15 +22,20 @@ import {
 } from "../../lib/v4";
 import {
   describeTxError,
+  readOrderMinQuote,
   readOrderRound,
   sendCancelPurchase,
   sendSettlePurchase,
+  waitForTxReceipt,
 } from "../../lib/wallet";
 
 type Project = components["schemas"]["Project"];
 type PurchaseOrder = components["schemas"]["PurchaseOrder"];
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+
+// Appended to a column header whose decimals are unknown, so raw digits are never read as tokens
+const unitNote = " (minimal units)";
 
 const STATUS_TONE: Record<PurchaseOrder["status"], string> = {
   Pending: "badge--neutral",
@@ -58,51 +64,55 @@ function noteText(note: OrderNote, timeoutAt: number): string {
  * Forward-priced purchase orders of the connected wallet. A Pending order's pricing round is
  * read on the order's own strategy; Settle and Cancel follow what that read and the order's
  * timeout allow (see lib/v4.ts). Hidden on instant projects unless the wallet still has orders.
+ * Query orders whenever a wallet is connected, independently of the server's forward-pricing
+ * flag. refreshKey reloads the list after an order is placed elsewhere on the page.
  */
 export function PurchaseOrdersSection({
   project,
   walletAddress,
   chainMismatch,
+  refreshKey,
   onSubmitted,
 }: {
   project: Project | undefined;
   walletAddress: string | null | undefined;
   chainMismatch: boolean;
+  refreshKey: number;
   onSubmitted: (txHash: string, kind: string) => void;
 }) {
   const chainId = project?.chainId ?? 0;
   const vault = project?.addresses?.vault;
-  // Only rwa-v4 servers report forwardPriced, so older deployments never request orders
-  const tracked =
-    project?.forwardPriced !== undefined && Boolean(walletAddress);
   const orders = usePaginatedList<PurchaseOrder>(
     (cursor, signal) =>
-      tracked && walletAddress
+      walletAddress
         ? api.listPurchaseOrders({ address: walletAddress, cursor, signal })
         : Promise.resolve({ items: [] }),
-    [walletAddress, tracked],
+    [walletAddress, refreshKey],
   );
+  const hasOrders = orders.status === "success" && orders.data.length > 0;
   // Settle and cancel need an Allowed buyer; one lookup serves the whole list
   const buyer = useAsync<boolean | undefined>(
     async (signal) =>
-      tracked && walletAddress
+      walletAddress && hasOrders
         ? (await api.isAddressAllowed(walletAddress, { signal })).allowed
         : undefined,
-    [walletAddress, tracked],
+    [walletAddress, hasOrders],
   );
   const buyerAllowed = buyer.status === "success" ? buyer.data : undefined;
   const quoteDecimals = useQuoteDecimals(project, chainId);
   const minimum = minPurchaseQuote(project);
   const [sent, setSent] = useState<{ kind: string; hash: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // One settle or cancel at a time, from wallet prompt until the receipt
+  const [busy, setBusy] = useState(false);
 
-  const hasOrders = orders.status === "success" && orders.data.length > 0;
   if (!isForwardPriced(project) && !hasOrders) return null;
 
   async function act(kind: "settle" | "cancel", id: string) {
     const orderId = parseUint(id);
     if (!walletAddress || !vault || !chainId || orderId === null) return;
     setError(null);
+    setBusy(true);
     try {
       const send = kind === "settle" ? sendSettlePurchase : sendCancelPurchase;
       const hash = await send(
@@ -113,6 +123,8 @@ export function PurchaseOrdersSection({
       );
       setSent({ kind, hash });
       onSubmitted(hash, `purchase ${kind}`);
+      await waitForTxReceipt(hash);
+      orders.reload();
     } catch (err) {
       setError(
         describeTxError(
@@ -120,6 +132,8 @@ export function PurchaseOrdersSection({
           kind === "settle" ? "Settle failed." : "Cancel failed.",
         ),
       );
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -162,11 +176,18 @@ export function PurchaseOrdersSection({
                       <tr>
                         <th>ID</th>
                         <th>Status</th>
-                        <th>RWA amount</th>
-                        <th>Deposit</th>
+                        <th>
+                          RWA amount
+                          {project?.decimals === undefined && unitNote}
+                        </th>
+                        <th>
+                          Deposit{quoteDecimals === undefined && unitNote}
+                        </th>
                         <th>Price</th>
                         <th>Timeout</th>
-                        <th></th>
+                        <th>
+                          <span className="visually-hidden">Actions</span>
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -178,6 +199,7 @@ export function PurchaseOrdersSection({
                           chainId={chainId}
                           walletAddress={walletAddress}
                           chainMismatch={chainMismatch}
+                          busy={busy}
                           buyerAllowed={buyerAllowed}
                           quoteDecimals={quoteDecimals}
                           minimum={minimum}
@@ -221,6 +243,7 @@ function OrderRow({
   chainId,
   walletAddress,
   chainMismatch,
+  busy,
   buyerAllowed,
   quoteDecimals,
   minimum,
@@ -231,6 +254,7 @@ function OrderRow({
   chainId: number;
   walletAddress: string;
   chainMismatch: boolean;
+  busy: boolean;
   buyerAllowed: boolean | undefined;
   quoteDecimals: number | undefined;
   minimum: bigint;
@@ -251,17 +275,41 @@ function OrderRow({
     }
   }, [order.id, order.status, chainId, chainMismatch]);
 
+  // Re-evaluates when the timeout passes
+  const nowSeconds = useNowSeconds(pending ? [order.timeoutAt] : []);
+
   const loading = pending && round.status === "loading";
   const current: OrderRound =
     round.status === "success" ? round.data : { state: "unknown" };
+  // Read the order's recorded minimum for the settlement preview; null falls back to the project minimum
+  const vault = project?.addresses?.vault;
+  const priced = current.state === "priced";
+  const recorded = useAsync<bigint | null>(async () => {
+    const id = parseUint(order.id);
+    if (!priced || !vault || !ADDRESS.test(vault) || id === null) return null;
+    try {
+      return await readOrderMinQuote(chainId, vault as Address, id);
+    } catch {
+      return null;
+    }
+  }, [priced, order.id, vault, chainId, chainMismatch]);
+  const orderMinimum: OrderMinimum =
+    recorded.status !== "success"
+      ? { kind: "loading" }
+      : recorded.data === null
+        ? { kind: "project", value: minimum }
+        : { kind: "order", value: recorded.data };
   const actions = orderActions(order, current, {
-    nowSeconds: Math.floor(Date.now() / 1000),
+    nowSeconds,
     paused: project?.paused,
     buyerAllowed,
     isBuyer: order.buyer?.toLowerCase() === walletAddress.toLowerCase(),
   });
   const money = (raw: string | undefined) =>
     formatTokenAmount(raw ?? "", quoteDecimals);
+  // Raw amounts are named as minimal units, never as whole quote tokens
+  const unit =
+    quoteDecimals === undefined ? "quote-token minimal units" : "quote tokens";
 
   return (
     <tr>
@@ -287,7 +335,7 @@ function OrderRow({
               </p>
             )}
             {current.state === "priced" &&
-              pricedText(current.quote, order, minimum, money)}
+              pricedText(current.quote, order, orderMinimum, money, unit)}
             {!loading && actions.note && (
               <p className="field__hint">
                 {noteText(actions.note, order.timeoutAt)}
@@ -295,7 +343,7 @@ function OrderRow({
             )}
           </>
         ) : (
-          closedText(order, money)
+          closedText(order, money, unit)
         )}
       </td>
       <td>{formatUnixSeconds(order.timeoutAt)}</td>
@@ -306,7 +354,8 @@ function OrderRow({
               type="button"
               className="button button--primary"
               onClick={() => onAct("settle", order.id)}
-              disabled={chainMismatch}
+              disabled={chainMismatch || busy}
+              aria-label={`Settle order ${order.id}`}
             >
               Settle
             </button>
@@ -316,7 +365,8 @@ function OrderRow({
               type="button"
               className="button button--danger"
               onClick={() => onAct("cancel", order.id)}
-              disabled={chainMismatch}
+              disabled={chainMismatch || busy}
+              aria-label={`Cancel order ${order.id}`}
             >
               Cancel order
             </button>
@@ -327,32 +377,55 @@ function OrderRow({
   );
 }
 
+// Preview minimum: the order's recorded value, the project fallback after a failed read, or still loading
+type OrderMinimum =
+  | { kind: "loading" }
+  | { kind: "order"; value: bigint }
+  | { kind: "project"; value: bigint };
+
 function pricedText(
   quote: bigint,
   order: PurchaseOrder,
-  minimum: bigint,
+  orderMinimum: OrderMinimum,
   money: (raw: string | undefined) => string,
+  unit: string,
 ) {
   const deposit = parseUint(order.maxQuoteAmount);
   const quoted = money(quote.toString());
-  if (deposit === null) return <p>Priced at {quoted} quote tokens.</p>;
+  if (deposit === null || orderMinimum.kind === "loading")
+    return (
+      <p>
+        Priced at {quoted} {unit}.
+      </p>
+    );
+  const minimum = orderMinimum.value;
   const outlook = settlementOutlook(quote, deposit, minimum);
+  const fallbackNote = orderMinimum.kind === "project" && (
+    <>
+      {" "}
+      The minimum recorded on the order could not be read, so the project&apos;s
+      current minimum is used for this preview.
+    </>
+  );
   if (outlook.outcome === "fill") {
     return (
       <p>
-        Priced at {quoted} quote tokens. Settling pays that and returns{" "}
+        Priced at {quoted} {unit}. Settling pays that and returns{" "}
         {money(outlook.refund.toString())} of your deposit.
+        {fallbackNote}
       </p>
     );
   }
+  const owner = orderMinimum.kind === "order" ? "the order's" : "the project";
   return (
     <p>
-      Priced at {quoted} quote tokens,{" "}
+      Priced at {quoted} {unit},{" "}
       {outlook.reason === "above-deposit"
         ? "above your deposit"
-        : `below the project minimum of ${money(minimum.toString())}`}
+        : `below ${owner} minimum of ${money(minimum.toString())}`}
       . Settling refunds the whole deposit ({money(outlook.refund.toString())})
       and delivers no tokens.
+      {fallbackNote}
     </p>
   );
 }
@@ -360,20 +433,27 @@ function pricedText(
 function closedText(
   order: PurchaseOrder,
   money: (raw: string | undefined) => string,
+  unit: string,
 ) {
   switch (order.status) {
     case "Settled":
       return (
         <p>
-          Paid {money(order.quoteAmount)} quote tokens, refunded{" "}
-          {money(order.refund)}.
+          Paid {money(order.quoteAmount)} {unit}, refunded {money(order.refund)}
+          .
         </p>
       );
     case "Refunded":
       return (
-        <p>Refunded {money(order.refund)} quote tokens; no tokens delivered.</p>
+        <p>
+          Refunded {money(order.refund)} {unit}; no tokens delivered.
+        </p>
       );
     default:
-      return <p>Refunded {money(order.refund)} quote tokens.</p>;
+      return (
+        <p>
+          Refunded {money(order.refund)} {unit}.
+        </p>
+      );
   }
 }

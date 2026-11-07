@@ -1,9 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  escrowErrorsAbi,
   incomeDistributorAbi,
   oracleErrorsAbi,
   oracleForwardAbi,
+  priceStrategyAbi,
   redemptionEscrowAbi,
   tokenErrorsAbi,
   vaultAbi,
@@ -64,6 +66,8 @@ describe.skipIf(!FORGE_BUILT && !process.env.CI)(
       ["Vault", vaultAbi],
       ["Vault", vaultErrorsAbi],
       ["RedemptionEscrow", redemptionEscrowAbi],
+      ["RedemptionEscrow", escrowErrorsAbi],
+      ["IPriceStrategy", priceStrategyAbi],
       ["RWAToken", tokenErrorsAbi],
       ["OraclePriceStrategy", oracleErrorsAbi],
       ["OraclePriceStrategy", oracleForwardAbi],

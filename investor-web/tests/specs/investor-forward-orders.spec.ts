@@ -5,6 +5,8 @@ import { ADDRESSES } from "../fixtures/mock-api";
 import {
   getMockSentTransactions,
   MOCK_WALLET_ADDRESS,
+  setMockModeUnreadable,
+  setMockOrderMinQuote,
   setMockRound,
 } from "../fixtures/mock-wallet";
 import { vaultAbi } from "../../src/lib/abis";
@@ -19,7 +21,7 @@ test.describe("Investor - forward-priced orders", () => {
     page,
     api,
   }) => {
-    makeForward(api);
+    await makeForward(api, page);
     allowTheWallet(api);
     const investor = new InvestorPage(page);
     await investor.goto();
@@ -101,11 +103,43 @@ test.describe("Investor - forward-priced orders", () => {
     expect(settled.args).toEqual([7n]);
   });
 
+  test("previews a refund against the minimum recorded on the order, not the project's", async ({
+    page,
+    api,
+  }) => {
+    await makeForward(api, page);
+    allowTheWallet(api);
+    // The project has no minimum now, but the order was placed under one above the 0.99 price
+    await setMockOrderMinQuote(page, 1_000_000n);
+    api.orders.push({
+      id: "5",
+      buyer: MOCK_WALLET_ADDRESS,
+      recipient: MOCK_WALLET_ADDRESS,
+      tokenAmount: (10n ** 18n).toString(),
+      maxQuoteAmount: "1005000",
+      strategy: ADDRESSES.strategy,
+      baseRound: "100",
+      status: "Pending",
+      createdAt: nowSeconds(),
+      timeoutAt: nowSeconds() + 14 * 86_400,
+      requestTxHash: `0x${"04".repeat(32)}`,
+    });
+    const investor = new InvestorPage(page);
+    await investor.goto();
+    await investor.connectWallet();
+    await setMockRound(page, true);
+    await investor.refreshOrders();
+
+    await expect(investor.ordersSection).toContainText(
+      "Priced at 0.99 quote tokens, below the order's minimum of 1. Settling refunds the whole deposit (1.005) and delivers no tokens.",
+    );
+  });
+
   test("offers Cancel, not Settle, once the timeout passed with no price", async ({
     page,
     api,
   }) => {
-    makeForward(api);
+    await makeForward(api, page);
     allowTheWallet(api);
     api.orders.push({
       id: "3",
@@ -146,7 +180,7 @@ test.describe("Investor - forward-priced orders", () => {
     page,
     api,
   }) => {
-    makeForward(api);
+    await makeForward(api, page);
     // The default mock registry does not list the wallet, so the server reports it ineligible
     api.orders.push({
       id: "4",
@@ -173,6 +207,28 @@ test.describe("Investor - forward-priced orders", () => {
         name: /Settle|Cancel order/,
       }),
     ).toHaveCount(0);
+  });
+
+  test("offers no purchase when the pricing mode cannot be read from the chain", async ({
+    page,
+  }) => {
+    // The server says nothing about forward pricing, so only the chain could say
+    await setMockModeUnreadable(page);
+    const investor = new InvestorPage(page);
+    await investor.goto();
+    await investor.connectWallet();
+
+    await investor.previewBuy("1");
+    await expect(investor.buySection.getByRole("alert")).toBeVisible();
+    await expect(
+      page.getByRole("region", { name: "Purchase preview" }),
+    ).toHaveCount(0);
+    await expect(
+      investor.buySection.getByRole("button", {
+        name: /1\. Approve|2\. Buy|2\. Place order/,
+      }),
+    ).toHaveCount(0);
+    expect(await getMockSentTransactions(page)).toEqual([]);
   });
 
   test("an instant project shows no order section and keeps the plain Buy button", async ({

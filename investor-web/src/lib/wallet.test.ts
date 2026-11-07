@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  BaseError,
+  UserRejectedRequestError,
   decodeFunctionData,
   encodeErrorResult,
   encodeFunctionResult,
@@ -10,6 +12,8 @@ import {
 import { installFakeWallet } from "../test/walletHarness";
 import {
   describeTxError,
+  readForwardPriced,
+  readOrderMinQuote,
   readOrderRound,
   sendBuy,
   sendCancelPurchase,
@@ -21,6 +25,7 @@ import {
   sendRequestPurchase,
   sendRequestRedemption,
   sendSettlePurchase,
+  waitForTxReceipt,
 } from "./wallet";
 
 // Independent of src/lib/abis.ts: signatures spelled out here
@@ -390,10 +395,10 @@ describe("forward order revert wording", () => {
     expect(text("NotPending", [3n])).toMatch(/no longer pending/);
   });
 
-  it("says settlement waits for an unpause, without claim wording", () => {
+  it("says a paused project has to be unpaused, without claim or settlement wording", () => {
     const message = text("ProjectPaused");
-    expect(message).toMatch(/settlement resumes/);
-    expect(message).not.toMatch(/claims/);
+    expect(message).toMatch(/Try again after it is unpaused/);
+    expect(message).not.toMatch(/claims|settlement/);
   });
 
   it("keeps the claim wording for ProjectPaused on an income claim", () => {
@@ -512,5 +517,320 @@ describe("readOrderRound", () => {
       name: "ChainMismatchError",
     });
     expect(wallet.simulatedCalls).toEqual([]);
+  });
+});
+
+// Replaces the fake wallet with one whose requests this test answers itself
+function installProvider(
+  handler: (method: string, params?: unknown[]) => unknown,
+) {
+  wallet.uninstall();
+  window.ethereum = {
+    request: async ({ method, params }) => handler(method, params),
+  };
+}
+
+describe("waitForTxReceipt", () => {
+  const HASH = `0x${"ab".repeat(32)}` as Hex;
+  const receipt = (status: "0x1" | "0x0") => ({
+    transactionHash: HASH,
+    status,
+    blockNumber: "0x10",
+    blockHash: `0x${"aa".repeat(32)}`,
+    transactionIndex: "0x0",
+    from: OWNER,
+    to: VAULT,
+    contractAddress: null,
+    cumulativeGasUsed: "0x5208",
+    gasUsed: "0x5208",
+    effectiveGasPrice: "0x1",
+    logsBloom: `0x${"0".repeat(512)}`,
+    logs: [],
+    type: "0x2",
+  });
+  const mined = (status: "0x1" | "0x0") =>
+    installProvider((method) =>
+      method === "eth_getTransactionReceipt" ? receipt(status) : null,
+    );
+
+  it("returns the receipt of a successful transaction", async () => {
+    mined("0x1");
+    const result = await waitForTxReceipt(HASH);
+    expect(result.status).toBe("success");
+    expect(result.transactionHash).toBe(HASH);
+  });
+
+  it("rejects a transaction that was mined but reverted", async () => {
+    mined("0x0");
+    await expect(waitForTxReceipt(HASH)).rejects.toThrow(
+      /mined but reverted on-chain/,
+    );
+  });
+});
+
+describe("readForwardPriced", () => {
+  const STRATEGY = "0x7777777777777777777777777777777777777777" as Address;
+  const modeAbi = parseAbi([
+    "function strategy() view returns (address)",
+    "function forwardPriced() view returns (bool)",
+  ]);
+  const calls: { to: string; name: string }[] = [];
+  const chain = (forward: boolean, fail?: "strategy" | "mode") =>
+    installProvider((method, params) => {
+      if (method === "eth_chainId") return `0x${CHAIN.toString(16)}`;
+      if (method !== "eth_call") throw new Error(`unexpected ${method}`);
+      const call = params?.[0] as { to: string; data: Hex };
+      const { functionName } = decodeFunctionData({
+        abi: modeAbi,
+        data: call.data,
+      });
+      calls.push({ to: call.to.toLowerCase(), name: functionName });
+      if (functionName === "strategy") {
+        if (fail === "strategy") return "0x";
+        return encodeFunctionResult({
+          abi: modeAbi,
+          functionName: "strategy",
+          result: STRATEGY,
+        });
+      }
+      if (fail === "mode") throw new Error("rpc down");
+      return encodeFunctionResult({
+        abi: modeAbi,
+        functionName: "forwardPriced",
+        result: forward,
+      });
+    });
+
+  beforeEach(() => {
+    calls.length = 0;
+  });
+
+  it.each([true, false])(
+    "reads forwardPriced=%s from the strategy the vault names",
+    async (forward) => {
+      chain(forward);
+      await expect(readForwardPriced(CHAIN, VAULT)).resolves.toBe(forward);
+      expect(calls).toEqual([
+        { to: VAULT, name: "strategy" },
+        { to: STRATEGY, name: "forwardPriced" },
+      ]);
+    },
+  );
+
+  it("rejects instead of guessing when the vault returns no strategy", async () => {
+    chain(true, "strategy");
+    await expect(readForwardPriced(CHAIN, VAULT)).rejects.toThrow();
+  });
+
+  it("rejects instead of guessing when the strategy read fails", async () => {
+    chain(true, "mode");
+    await expect(readForwardPriced(CHAIN, VAULT)).rejects.toThrow();
+  });
+});
+
+describe("describeTxError for wallet refusals and viem errors", () => {
+  const CANCELLED = "Request cancelled in wallet.";
+
+  it.each([
+    ["a bare EIP-1193 4001", { code: 4001, message: "User denied" }],
+    [
+      "a 4001 behind a wrapper",
+      new Error("wrapper", { cause: { code: 4001 } }),
+    ],
+    [
+      "viem's UserRejectedRequestError",
+      new UserRejectedRequestError(new Error("denied")),
+    ],
+  ])("reads %s as a cancelled prompt", (_name, err) => {
+    expect(describeTxError(err, "fallback")).toBe(CANCELLED);
+  });
+
+  it("reads a dismissed approval prompt as cancelled, not as viem's multi-line dump", async () => {
+    installProvider((method) => {
+      if (method === "eth_chainId") return `0x${CHAIN.toString(16)}`;
+      if (method === "eth_call") return "0x";
+      if (method === "eth_sendTransaction")
+        throw Object.assign(new Error("User denied transaction signature."), {
+          code: 4001,
+        });
+      throw new Error(`unexpected ${method}`);
+    });
+    const err = await sendErc20Approve(CHAIN, OWNER, TOKEN, VAULT, 1n).catch(
+      (e: unknown) => e,
+    );
+    expect(describeTxError(err, "fallback")).toBe(CANCELLED);
+  });
+
+  it("shows a viem error's one-line summary and RPC detail, not its footer", () => {
+    const err = new BaseError("The call could not be completed.", {
+      details: "nonce too low",
+      metaMessages: ["from: 0x1"],
+    });
+    expect(err.message).toMatch(/Version: viem/);
+    expect(describeTxError(err, "fallback")).toBe(
+      "The call could not be completed. nonce too low",
+    );
+  });
+});
+
+// Independent of src/lib/abis.ts: the Vault and escrow errors a purchase or redemption can raise
+const callErrors = parseAbi([
+  "error CallerNotAllowed(address account)",
+  "error DeadlineExpired(uint64 deadline, uint256 nowTs)",
+  "error ZeroAmount()",
+  "error InsufficientInventory(uint256 requested, uint256 available)",
+  "error QuoteAboveMax(uint256 quoted, uint256 maxQuote)",
+  "error QuoteDeltaMismatch(uint256 expected, uint256 actual)",
+  "error BeneficiaryNotAllowed(address account)",
+  "error QuoteBelowMin(uint256 quoted, uint256 minQuoteOut)",
+  "error ZeroQuote()",
+  "error NotFunded(uint256 id)",
+  "error NotBeneficiary(address caller, address beneficiary)",
+  "error RwaDeltaMismatch(uint256 expected, uint256 actual)",
+  "error InvalidDealingCutoff(uint64 dealingCutoff, uint64 timeout)",
+  "error SequencerDown()",
+  "error GracePeriodNotOver(uint256 startedAt, uint256 gracePeriod)",
+]);
+
+describe("purchase and redemption revert wording", () => {
+  const text = (name: string, args: unknown[] = [], context?: "income") =>
+    describeTxError(
+      {
+        data: encodeErrorResult({
+          abi: callErrors,
+          errorName: name,
+          args,
+        } as never),
+      },
+      "fallback",
+      context,
+    );
+
+  it.each([
+    ["CallerNotAllowed", [OWNER], /Your wallet is not Allowed/],
+    ["DeadlineExpired", [1_900_000_000n, 1_900_000_100n], /deadline passed/],
+    ["ZeroAmount", [], /amount is zero/],
+    [
+      "InsufficientInventory",
+      [9n, 4n],
+      /holds 4 RWA minimal units but this purchase needs 9/,
+    ],
+    ["QuoteAboveMax", [11n, 10n], /quotes 11 and your maximum is 10/],
+    ["QuoteDeltaMismatch", [5n, 4n], /expected 5, got 4/],
+    ["BeneficiaryNotAllowed", [OWNER], /beneficiary wallet is not Allowed/],
+    ["QuoteBelowMin", [4n, 5n], /quotes 4, below your minimum of 5/],
+    ["ZeroQuote", [], /quotes zero/],
+    ["NotFunded", [3n], /not been funded/],
+    [
+      "NotBeneficiary",
+      [OWNER, OTHER],
+      /Only the wallet that made this request/,
+    ],
+    ["RwaDeltaMismatch", [5n, 4n], /expected 5, got 4/],
+    [
+      "InvalidDealingCutoff",
+      [7200n, 3600n],
+      /cut-off of 7200 seconds is not shorter than the 3600 second timeout/,
+    ],
+  ])("explains %s instead of showing a selector", (name, args, pattern) => {
+    expect(text(name, args)).toMatch(pattern);
+  });
+
+  it("keeps the claim wording for the errors an income claim shares with the Vault", () => {
+    expect(text("CallerNotAllowed", [OWNER], "income")).toMatch(/cannot claim/);
+    expect(text("ZeroAmount", [], "income")).toMatch(/claim amount is zero/);
+  });
+
+  it("names the sequencer outage when placing an order", async () => {
+    wallet.uninstall();
+    wallet = installFakeWallet({
+      account: OWNER,
+      chainId: CHAIN,
+      callRevert: {
+        code: 3,
+        message: "execution reverted",
+        data: encodeErrorResult({
+          abi: callErrors,
+          errorName: "SequencerDown",
+        }),
+      },
+    });
+    const err = await sendRequestPurchase(CHAIN, OWNER, VAULT, {
+      tokenAmount: 1n,
+      maxQuoteAmount: 2n,
+      recipient: OWNER,
+      deadline: 1_900_000_000n,
+    }).catch((e: unknown) => e);
+    expect(describeTxError(err, "fallback")).toBe(
+      "Prices unavailable: the L2 sequencer is down.",
+    );
+  });
+
+  it("names the grace period when requesting a forward redemption", async () => {
+    wallet.uninstall();
+    wallet = installFakeWallet({
+      account: OWNER,
+      chainId: CHAIN,
+      callRevert: {
+        code: 3,
+        message: "execution reverted",
+        data: encodeErrorResult({
+          abi: callErrors,
+          errorName: "GracePeriodNotOver",
+          args: [100n, 3600n],
+        }),
+      },
+    });
+    const err = await sendRequestRedemption(CHAIN, OWNER, ESCROW, {
+      rwaAmount: 1n,
+      minQuoteOut: 1n,
+      deadline: 1_900_000_000n,
+    }).catch((e: unknown) => e);
+    expect(describeTxError(err, "fallback")).toMatch(
+      /grace period has not passed/,
+    );
+  });
+});
+
+describe("readOrderMinQuote", () => {
+  // Independent of src/lib/abis.ts: the order struct as the Vault returns it
+  const purchaseAbi = parseAbi([
+    "struct PurchaseOrder { address buyer; uint64 createdAt; uint8 status; address recipient; address strategy; uint80 baseRound; uint256 tokenAmount; uint256 maxQuoteAmount; uint256 minPurchaseQuote; }",
+    "function getPurchase(uint256 id) view returns (PurchaseOrder)",
+  ]);
+  const calls: { to: string; id: bigint }[] = [];
+
+  it("returns the minimum recorded on the order and asks the vault for that order id", async () => {
+    installProvider((method, params) => {
+      if (method === "eth_chainId") return `0x${CHAIN.toString(16)}`;
+      if (method !== "eth_call") throw new Error(`unexpected ${method}`);
+      const call = params?.[0] as { to: string; data: Hex };
+      const decoded = decodeFunctionData({ abi: purchaseAbi, data: call.data });
+      calls.push({ to: call.to.toLowerCase(), id: decoded.args[0] as bigint });
+      return encodeFunctionResult({
+        abi: purchaseAbi,
+        functionName: "getPurchase",
+        result: {
+          buyer: OWNER,
+          createdAt: 1_900_000_000n,
+          status: 0,
+          recipient: OWNER,
+          strategy: OTHER,
+          baseRound: 100n,
+          tokenAmount: 5n,
+          maxQuoteAmount: 9n,
+          minPurchaseQuote: 1_950_000n,
+        },
+      });
+    });
+    await expect(readOrderMinQuote(CHAIN, VAULT, 7n)).resolves.toBe(1_950_000n);
+    expect(calls).toEqual([{ to: VAULT, id: 7n }]);
+  });
+
+  it("rejects when the vault returns nothing, so the caller can say it fell back", async () => {
+    installProvider((method) =>
+      method === "eth_chainId" ? `0x${CHAIN.toString(16)}` : "0x",
+    );
+    await expect(readOrderMinQuote(CHAIN, VAULT, 7n)).rejects.toThrow();
   });
 });

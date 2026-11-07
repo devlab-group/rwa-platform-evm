@@ -35,7 +35,7 @@ vi.mock("../../lib/wallet", async (importOriginal) => {
     sendIncomeClaim: vi.fn().mockResolvedValue("0xclaimhash"),
     sendClaimRedemption: vi.fn().mockResolvedValue("0xhash"),
     sendCancelRedemption: vi.fn().mockResolvedValue("0xhash"),
-    waitForTxReceipt: vi.fn().mockResolvedValue(undefined),
+    waitForTxReceipt: vi.fn().mockResolvedValue({ status: "success" }),
   };
 });
 
@@ -157,7 +157,7 @@ describe("Investor with malformed server values", () => {
     renderWithWallet(<Investor />, { connected: true });
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Claim (permissionless)" }),
+      await screen.findByRole("button", { name: /^Claim \(permissionless\)/ }),
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent("abc");
@@ -171,7 +171,9 @@ describe("Investor with malformed server values", () => {
     renderWithWallet(<Investor />, { connected: true });
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Cancel (timeout elapsed)" }),
+      await screen.findByRole("button", {
+        name: /^Cancel \(timeout elapsed\)/,
+      }),
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent("1.5");
