@@ -676,16 +676,17 @@ configuration setting.
 
 ### New addresses
 
-The indexer watches the configured factory and active project contracts. After activation or a
-strategy swap adds an address, the next poll backfills its logs from `contract.start_block` through
-the checkpoint, then scans forward. This needs no reindex and preserves the checkpoint height for
-reorg recovery.
+The indexer watches the configured factory and active project contracts. Addresses added at
+activation or after a strategy swap are backfilled from `contract.start_block` without a reindex.
+The checkpoint continues tracking forward progress for reorg recovery.
 
-Each backfill attempt runs before live scanning, using `eth_getLogs` ranges of up to 2000 blocks.
-If a chunk fails, the indexer still attempts the forward scan and the platform logs
-`indexer poll error`. The next poll resumes at the failed chunk; a restart repeats the unfinished
-backfill from the start block. Repeated backfill errors leave that address's history incomplete.
-Check the reported range and whether the RPC can serve history from `contract.start_block`.
+Each poll scans forward first, then backfills with `eth_getLogs` ranges of up to 2000 blocks.
+After five seconds it stops starting new backfill chunks and leaves the rest for the next poll;
+an active chunk finishes, so this is not a hard time limit. If a chunk fails, the platform logs
+`indexer poll error`; the next poll resumes at the failed chunk. A restart repeats the unfinished
+backfill from the start block.
+Repeated backfill errors leave that address's history incomplete. Check the reported range and
+whether the RPC can serve history from `contract.start_block`.
 
 Checkpoints saved without address coverage trigger a one-time backfill of the watch set. This
 repairs historical gaps and skips stored events. If decoding fails again for a dismissed dead

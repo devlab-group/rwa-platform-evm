@@ -68,6 +68,11 @@ const DefaultMaxLogRange = 2000
 // the immediate exhaustion check while still incrementing the loop's attempt counter.
 const DefaultMaxRangeRetries = 5
 
+// defaultBackfillBudget is how long a poll keeps starting backfill chunks, so a long catch-up
+// takes several polls instead of holding up the next live scan. A chunk already under way
+// finishes, and every poll covers at least one.
+const defaultBackfillBudget = 5 * time.Second
+
 // initialRangeBackoff and maxRangeBackoff bound the exponential backoff between
 // retries of a failing chunk
 const (
@@ -92,6 +97,7 @@ type Indexer struct {
 	maxAutoReorgDepth uint64
 	maxLogRange       uint64
 	maxRangeRetries   int
+	backfillBudget    time.Duration
 	// sleep waits out the retry backoff; tests replace it (see withSleepFunc) so
 	// retries run instantly
 	sleep func(time.Duration)
@@ -99,6 +105,9 @@ type Indexer struct {
 	// on the next poll; a restart rescans from the start block and skips stored events.
 	backfillAddrs []common.Address
 	backfillNext  uint64
+	// backfillTo is the checkpoint height when this backfill began. Blocks above it are
+	// covered by the forward scan, which includes the added addresses.
+	backfillTo uint64
 }
 
 // Option configures optional Indexer behavior.
@@ -152,6 +161,11 @@ func WithDeadLetterQueue(repo repository.DeadLetterRepository) Option {
 	return func(idx *Indexer) { idx.dlq = repo }
 }
 
+// withBackfillBudget overrides defaultBackfillBudget, for tests
+func withBackfillBudget(d time.Duration) Option {
+	return func(idx *Indexer) { idx.backfillBudget = d }
+}
+
 // withSleepFunc overrides the backoff wait function, for tests
 func withSleepFunc(sleep func(time.Duration)) Option {
 	return func(idx *Indexer) { idx.sleep = sleep }
@@ -177,6 +191,7 @@ func New(source ChainSource, checkpoints repository.IndexerCheckpointRepository,
 		maxAutoReorgDepth: DefaultMaxAutoReorgDepth,
 		maxLogRange:       DefaultMaxLogRange,
 		maxRangeRetries:   DefaultMaxRangeRetries,
+		backfillBudget:    defaultBackfillBudget,
 		sleep:             time.Sleep,
 	}
 	for _, opt := range opts {
@@ -193,10 +208,10 @@ func defaultDecode(log types.Log) (string, map[string]any, error) {
 	return name, map[string]any{"data": "0x" + common.Bytes2Hex(log.Data)}, nil
 }
 
-// Poll checks the checkpoint hash and head regression for reorgs, backfills newly watched
-// addresses, then scans toward the observed head in bounded chunks. After a backfill error,
-// it attempts the forward scan and returns any failures; checkpoint-version conflicts
-// instead stop the poll cleanly. Stored events are skipped, allowing repeated timer calls.
+// Poll checks the checkpoint hash and head regression for reorgs, scans forward in bounded
+// chunks, then starts backfill chunks within a time budget. An active backfill chunk may
+// outlast that budget. A failed forward scan skips backfill; checkpoint-version conflicts
+// stop the poll cleanly. Stored events are skipped, allowing repeated timer calls.
 // A checkpoint flagged ReconciliationRequired returns ErrReconciliationRequired before
 // chain reads; ResetToTrustedCheckpoint clears the pause.
 func (idx *Indexer) Poll(ctx context.Context) error {
@@ -247,18 +262,39 @@ func (idx *Indexer) Poll(ctx context.Context) error {
 		}
 	}
 
-	var backfillErr error
-	if existed {
-		backfillErr = idx.backfill(ctx, cp)
-		if errors.Is(backfillErr, errCheckpointVersionConflict) {
+	// Scan forward before spending time on backfill. The backfill target is the previous
+	// checkpoint height; the forward scan covers newer blocks for the whole watch set.
+	backfillTo := cp.LastBlock
+	if err := idx.scanForward(ctx, cp, existed, currentBlock); err != nil {
+		// Stop after a checkpoint-version conflict; the next Poll reads the winning
+		// replica's progress
+		if errors.Is(err, errCheckpointVersionConflict) {
 			return nil
 		}
+		return err
 	}
+	if !existed {
+		return nil
+	}
+	if err := idx.backfill(ctx, cp, backfillTo); err != nil {
+		if errors.Is(err, errCheckpointVersionConflict) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
 
+// scanForward validates and commits bounded chunks from the checkpoint to currentBlock, to
+// catch reorgs racing the scan beyond Poll's initial checkpoint check. scanAndCommitChunk
+// compares boundary headers and per-log canonical hashes, retrying mismatches before
+// ingestion. Chunking bounds memory and lets a long scan resume after the last committed
+// chunk.
+func (idx *Indexer) scanForward(ctx context.Context, cp *models.IndexerCheckpoint, existed bool, currentBlock uint64) error {
 	// Persist a fresh baseline even without new scan work, giving later polls a checkpoint
 	// hash to compare
 	if existed && currentBlock <= cp.LastBlock {
-		return backfillErr
+		return nil
 	}
 
 	fromBlock := cp.LastBlock + 1
@@ -269,23 +305,14 @@ func (idx *Indexer) Poll(ctx context.Context) error {
 		fromBlock = currentBlock
 	}
 
-	// Validate and commit bounded chunks to catch reorgs racing the scan, beyond Poll's
-	// initial checkpoint check. scanAndCommitChunk compares boundary headers and per-log
-	// canonical hashes, retrying mismatches before ingestion. Chunking bounds memory and
-	// lets backfills resume after the last committed chunk.
 	for fromBlock <= currentBlock {
 		nextFrom, err := idx.scanAndCommitChunk(ctx, fromBlock, idx.chunkEnd(fromBlock, currentBlock), currentBlock, cp)
 		if err != nil {
-			// Stop after a checkpoint-version conflict; the next Poll reads the winning
-			// replica's progress
-			if errors.Is(err, errCheckpointVersionConflict) {
-				return nil
-			}
-			return errors.Join(backfillErr, err)
+			return err
 		}
 		fromBlock = nextFrom
 	}
-	return backfillErr
+	return nil
 }
 
 // chunkEnd caps the scan at maxLogRange blocks, or uses head when the limit is zero
@@ -296,11 +323,13 @@ func (idx *Indexer) chunkEnd(from, head uint64) uint64 {
 	return head
 }
 
-// backfill indexes addresses missing from cp.Watched from the start block through
-// cp.LastBlock, then records the current watch set. It preserves the checkpoint height
-// for reorg checks. A rollback deletes backfilled events above the common ancestor;
-// the forward scan replays that range for the full watch set.
-func (idx *Indexer) backfill(ctx context.Context, cp *models.IndexerCheckpoint) error {
+// backfill indexes addresses missing from cp.Watched from the start block through to (the
+// checkpoint height when the backfill began, or lower after a rollback), then records the
+// current watch set. After backfillBudget it stops starting chunks and resumes on the
+// next poll; Watched is recorded only once every range is covered. It
+// preserves the checkpoint height for reorg checks. A rollback deletes backfilled events
+// above the common ancestor; the forward scan replays that range for the full watch set.
+func (idx *Indexer) backfill(ctx context.Context, cp *models.IndexerCheckpoint, to uint64) error {
 	if slices.Equal(cp.Watched, idx.addressStrings()) {
 		return nil
 	}
@@ -311,15 +340,21 @@ func (idx *Indexer) backfill(ctx context.Context, cp *models.IndexerCheckpoint) 
 		}
 	}
 	if !slices.Equal(added, idx.backfillAddrs) {
-		log.Printf("indexer: backfilling %d address(es) from block %d to %d", len(added), idx.startBlock, cp.LastBlock)
-		idx.backfillAddrs, idx.backfillNext = added, idx.startBlock
+		log.Printf("indexer: backfilling %d address(es) from block %d to %d", len(added), idx.startBlock, to)
+		idx.backfillAddrs, idx.backfillNext, idx.backfillTo = added, idx.startBlock, to
 	}
-	for len(added) > 0 && idx.backfillNext <= cp.LastBlock {
-		next, err := idx.backfillChunk(ctx, added, idx.backfillNext, idx.chunkEnd(idx.backfillNext, cp.LastBlock))
+	// a rollback can lower the target below where the backfill began; it never raises it
+	to = min(to, idx.backfillTo)
+	started := time.Now()
+	for len(added) > 0 && idx.backfillNext <= to {
+		next, err := idx.backfillChunk(ctx, added, idx.backfillNext, idx.chunkEnd(idx.backfillNext, to))
 		if err != nil {
 			return err
 		}
 		idx.backfillNext = next
+		if idx.backfillNext <= to && time.Since(started) >= idx.backfillBudget {
+			return nil // the rest waits for the next poll, after its forward scan
+		}
 	}
 	return idx.commitWatched(ctx, cp)
 }

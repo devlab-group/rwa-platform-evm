@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -190,9 +191,10 @@ func TestPoll_Backfill_ScansOnlyTheAddedAddressFromStartBlockThroughCheckpoint(t
 		source.SetHead(20)
 		poll(t, s.indexer(source, bothAddrs, 3))
 
+		// the forward scan comes first, then the backfill of the added address
 		wantScans(t, source,
-			scan{3, 10, addedAddr.Hex()},
 			scan{11, 20, watchedAddr.Hex() + "," + addedAddr.Hex()},
+			scan{3, 10, addedAddr.Hex()},
 		)
 		s.wantBlocks(t, addedAddr, 3, 10) // block 2 lies before the start block
 	})
@@ -294,7 +296,9 @@ func TestPoll_BackfillFails_LiveIndexingContinuesAndTheNextPollResumes(t *testin
 		source.queries = nil
 
 		source.SetHead(20)
-		source.FilterLogsErrors = []error{nil, ErrTransient}
+		// two forward chunks (13-16, 17-20) and the first backfill chunk (1-4) succeed, the
+		// second backfill chunk (5-8) fails
+		source.FilterLogsErrors = []error{nil, nil, nil, ErrTransient}
 		idx := s.indexer(source, bothAddrs, 1, WithMaxLogRange(4))
 		err := idx.Poll(context.Background())
 
@@ -597,4 +601,53 @@ func TestResetToTrustedCheckpoint_NoCheckpoint_BackfillsBelowTheTrustedBlock(t *
 
 	s.wantBlocks(t, addedAddr, 5)
 	s.wantWatched(t, bothAddrs...)
+}
+
+// A long backfill is split across polls, and each poll scans forward before it spends any time
+// on the backfill, so the live head never waits for a catch-up
+func TestPoll_LongBackfill_SplitsAcrossPollsAndEachPollScansForwardFirst(t *testing.T) {
+	forEachWritePath(t, func(t *testing.T, s *stores) {
+		source := chain(24, 12)
+		for _, block := range []uint64{2, 7, 11} {
+			source.AddLog(logAt(addedAddr, block))
+		}
+		poll(t, s.indexer(source, onlyWatched, 1))
+		source.queries = nil
+
+		both := watchedAddr.Hex() + "," + addedAddr.Hex()
+		// a budget this small allows one backfill chunk per poll
+		idx := s.indexer(source, bothAddrs, 1, WithMaxLogRange(4), withBackfillBudget(time.Nanosecond))
+
+		poll(t, idx) // no new blocks: one backfill chunk
+		wantScans(t, source, scan{1, 4, addedAddr.Hex()})
+		s.wantWatched(t, watchedAddr)
+
+		source.SetHead(14)
+		poll(t, idx) // the new blocks first, then the next chunk
+		wantScans(t, source, scan{13, 14, both}, scan{5, 8, addedAddr.Hex()})
+		s.wantWatched(t, watchedAddr)
+
+		poll(t, idx) // the last chunk, which completes the backfill
+		wantScans(t, source, scan{9, 12, addedAddr.Hex()})
+		s.wantBlocks(t, addedAddr, 2, 7, 11)
+		s.wantWatched(t, bothAddrs...)
+	})
+}
+
+// A forward scan that fails leaves the backfill alone for that poll
+func TestPoll_ForwardScanFails_BackfillWaits(t *testing.T) {
+	s := newStores(false)
+	source := chain(24, 12)
+	poll(t, s.indexer(source, onlyWatched, 1))
+	source.queries = nil
+
+	source.SetHead(20)
+	source.FilterLogsErrors = []error{ErrTransient}
+	err := s.indexer(source, bothAddrs, 1).Poll(context.Background())
+
+	if !errors.Is(err, ErrTransient) {
+		t.Fatalf("Poll = %v, want the forward scan failure", err)
+	}
+	wantScans(t, source, scan{13, 20, watchedAddr.Hex() + "," + addedAddr.Hex()})
+	s.wantWatched(t, watchedAddr)
 }
