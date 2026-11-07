@@ -206,6 +206,14 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
   instant requests keep their quotes; rwa-v4 forward orders retain their pricing round.
 - Income: pay holders through income distributions (§4e).
 - Pause: `PAUSER_ROLE` pauses the project. See §4a for the affected operations and exceptions.
+- Upgrading the server: before switching a deployment to a new release, run that release's
+  `opsctl --config <path> profile check` against the deployment's MongoDB. This read-only check
+  validates the stored profile and compares its recomputed digest with the stored digest. Record
+  creation revalidates the profile, and the deployment pins its digest on-chain. A rejected profile
+  blocks record creation; a changed digest no longer matches the pin. On failure, the command
+  exits non-zero and reports the errors.
+  Keep the deployment on its current release and report them. `OK` confirms that the profile
+  validates and its digest is unchanged.
 
 ## 4a. Privileged roles and administration
 

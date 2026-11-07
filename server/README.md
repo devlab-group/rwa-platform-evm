@@ -43,8 +43,9 @@ The commands are:
 - `cmd/platform`: connects storage/RPC, wires services and starts indexing, reconciliation,
   metrics and alerts. It serves API/SPA traffic separately from unauthenticated `/metrics`.
   Development can fall back to memory on Mongo connect/ping failure; production exits.
-- `cmd/opsctl`: replaces transactions, resets checkpoints, handles DLQ list/inspect/retry/dismiss
-  and recovers IPFS pins through the same config and MongoDB. Host/config-file access controls
+- `cmd/opsctl`: replaces transactions, resets checkpoints, handles DLQ list/inspect/retry/dismiss,
+  recovers IPFS pins and checks the stored asset profile (`profile check`) through the same config
+  and MongoDB. Host/config-file access controls
   use; `--actor` labels audits without authorizing actions. Mutating command functions require
   an audit intent before acting and attempt a linked result write afterward; failed result
   writes warn. Preflight errors can occur before auditing. Explicit memory mode is throwaway.
