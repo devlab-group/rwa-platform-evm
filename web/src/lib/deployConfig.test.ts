@@ -375,9 +375,25 @@ describe("buildProjectConfigV4 timeouts", () => {
     ["one second under 1 day", DAY - 1, false],
     ["365 days", YEAR, true],
     ["one second over 365 days", YEAR + 1, false],
+    ["fractional seconds", 90_000.5, false],
+    ["not a number", Number.NaN, false],
   ])("redemption timeout %s", (_name, seconds, ok) => {
     const r = buildV4({ redemptionTimeout: seconds, dealingCutoff: "3600" });
     expect("config" in r).toBe(ok);
+  });
+
+  it("names a fractional redemption timeout instead of throwing from BigInt", () => {
+    expect(
+      buildV4({ redemptionTimeout: 90_000.5, dealingCutoff: "3600" }),
+    ).toEqual({
+      error: "Redemption timeout must be a whole number of seconds.",
+    });
+  });
+
+  it("names a fractional redemption timeout on the rwa-v3 builder too", () => {
+    expect(build({ ...ORACLE, redemptionTimeout: 604_800.25 })).toEqual({
+      error: "Redemption timeout must be a whole number of seconds.",
+    });
   });
 
   it("applies the purchase timeout bound to a Fixed project too", () => {

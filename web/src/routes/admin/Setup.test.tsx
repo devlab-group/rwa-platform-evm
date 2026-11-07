@@ -867,5 +867,108 @@ describe("Setup by factory version", () => {
         within(confirmCard).getByText("Purchase timeout"),
       ).toBeInTheDocument();
     });
+
+    it.each([
+      [
+        "rwa-v3",
+        "Redemption timeout (seconds)",
+        /Redemption timeout must be a whole number/,
+      ],
+      [
+        "rwa-v4",
+        "Redemption timeout (seconds)",
+        /Redemption timeout must be a whole number/,
+      ],
+      [
+        "rwa-v4",
+        "Purchase timeout (seconds)",
+        /Purchase timeout must be a whole number/,
+      ],
+    ])(
+      "blocks review and names a fractional timeout on %s (%s)",
+      async (version, label, message) => {
+        await reachForm(version);
+        fill("Purchase price per whole token (whole quote-token units)", "2");
+        fill(
+          "Redemption price per whole token (whole quote-token units)",
+          "1.5",
+        );
+        fill("Pricer address", ADDR(6));
+        expect(review()).toBeEnabled();
+
+        fill(label, "86400.5");
+        expect(review()).toBeDisabled();
+        const alert = screen.getByText(message);
+        expect(alert).toHaveAttribute("role", "alert");
+        const input = screen.getByLabelText(label);
+        expect(input).toHaveAttribute("aria-invalid", "true");
+        expect(input.getAttribute("aria-describedby")).toContain(alert.id);
+
+        fill(label, "86400");
+        expect(review()).toBeEnabled();
+        expect(screen.queryByText(message)).toBeNull();
+        expect(input).not.toHaveAttribute("aria-invalid");
+      },
+    );
+
+    it("links an invalid cut-off to its input for assistive technology", async () => {
+      await reachForm();
+      const hintOnly = "dealingCutoff-hint";
+      fill("Price strategy", "Oracle");
+      const input = screen.getByLabelText("Dealing cut-off (seconds)");
+      expect(input).toHaveAttribute("aria-describedby", hintOnly);
+      expect(input).not.toHaveAttribute("aria-invalid");
+
+      fillOracle("604800");
+      const alert = await screen.findByText(
+        /Dealing cut-off must be below both/,
+      );
+      expect(alert).toHaveAttribute("id", "dealingCutoff-error");
+      expect(input).toHaveAttribute("aria-invalid", "true");
+      expect(input).toHaveAttribute(
+        "aria-describedby",
+        "dealingCutoff-hint dealingCutoff-error",
+      );
+    });
+
+    it("explains a cut-off that is not a whole number", async () => {
+      await reachForm();
+      fillOracle("12.5");
+      expect(review()).toBeDisabled();
+      expect(
+        await screen.findByText(
+          "Dealing cut-off must be a whole number of seconds.",
+        ),
+      ).toHaveAttribute("role", "alert");
+      expect(
+        screen.getByLabelText("Dealing cut-off (seconds)"),
+      ).toHaveAttribute("aria-invalid", "true");
+    });
+
+    it("shows the wallet or simulation message when the deploy fails, not a generic one", async () => {
+      await reachForm();
+      fillOracle("7200");
+      const reason =
+        "Transaction simulation failed: The price feed does not keep round history, so forward pricing cannot work with it. Nothing was sent.";
+      vi.mocked(sendDeployProject).mockRejectedValue(new Error(reason));
+      fireEvent.click(review());
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Confirm deploy" }),
+      );
+
+      expect(await screen.findByText(reason)).toHaveAttribute("role", "alert");
+      expect(screen.queryByText("Deployment failed.")).toBeNull();
+    });
+
+    it("keeps the generic message for a failure that is not an Error", async () => {
+      await reachForm();
+      fillOracle("7200");
+      vi.mocked(sendDeployProject).mockRejectedValue("nope");
+      fireEvent.click(review());
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Confirm deploy" }),
+      );
+      expect(await screen.findByText("Deployment failed.")).toBeInTheDocument();
+    });
   });
 });

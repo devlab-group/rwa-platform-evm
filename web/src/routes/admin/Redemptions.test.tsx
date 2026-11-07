@@ -418,7 +418,7 @@ describe("Redemptions forward-priced requests", () => {
     expect(sendFundRedemption).toHaveBeenCalledWith(31337, ADMIN, ESCROW, 8n);
   });
 
-  it("reads the price again at click time instead of trusting the figure on screen", async () => {
+  it("sends nothing when the price moved since the figure on screen, shows the new amount, and funds on the next click", async () => {
     vi.mocked(readFundingPreview).mockResolvedValue(priced(100_000n));
     vi.mocked(readErc20Allowance).mockResolvedValue(0n);
     vi.mocked(sendErc20Approve).mockResolvedValue("0xaaa1");
@@ -429,8 +429,131 @@ describe("Redemptions forward-priced requests", () => {
     vi.mocked(readFundingPreview).mockResolvedValue(priced(250_000n));
     fireEvent.click(screen.getByRole("button", { name: "Fund redemption" }));
 
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/now 0.25 \(the figure on screen was 0.1\)/);
+    expect(alert).toHaveTextContent(/approve exactly 0.25/);
+    expect(sendErc20Approve).not.toHaveBeenCalled();
+    expect(sendFundRedemption).not.toHaveBeenCalled();
+    // The price row follows to the new figure
+    expect(await screen.findByText(/Funding will pull 0.25/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Fund redemption" }));
+    await screen.findByText("Redemption funded.");
+    expect(sendErc20Approve).toHaveBeenCalledTimes(1);
+    expect(sendErc20Approve).toHaveBeenCalledWith(31337, ADMIN, QUOTE, ESCROW, 250_000n);
+  });
+
+  it("asks again when the price moves again before the confirming click", async () => {
+    vi.mocked(readFundingPreview).mockResolvedValue(priced(100_000n));
+    vi.mocked(readErc20Allowance).mockResolvedValue(0n);
+    vi.mocked(sendErc20Approve).mockResolvedValue("0xaaa1");
+    vi.mocked(sendFundRedemption).mockResolvedValue("0xbbb2");
+    await openDetail(PROJECT, FORWARD as typeof REDEMPTION);
+    await screen.findByText(/Funding will pull 0.1/);
+
+    vi.mocked(readFundingPreview).mockResolvedValue(priced(250_000n));
+    fireEvent.click(screen.getByRole("button", { name: "Fund redemption" }));
+    await screen.findByText(/approve exactly 0.25/);
+    await screen.findByText(/Funding will pull 0.25/);
+
+    vi.mocked(readFundingPreview).mockResolvedValue(priced(300_000n));
+    fireEvent.click(screen.getByRole("button", { name: "Fund redemption" }));
+    await screen.findByText(/approve exactly 0.3/);
+    expect(sendErc20Approve).not.toHaveBeenCalled();
+
+    await screen.findByText(/Funding will pull 0.3/);
+    fireEvent.click(screen.getByRole("button", { name: "Fund redemption" }));
+    await screen.findByText("Redemption funded.");
+    expect(sendErc20Approve).toHaveBeenCalledTimes(1);
+    expect(sendErc20Approve).toHaveBeenCalledWith(31337, ADMIN, QUOTE, ESCROW, 300_000n);
+  });
+
+  it("funds on the next click at the amount the message named, even if the price row cannot reload", async () => {
+    vi.mocked(readFundingPreview)
+      .mockResolvedValueOnce(priced(100_000n))
+      .mockResolvedValueOnce(priced(250_000n))
+      .mockRejectedValueOnce(new Error("rpc unavailable"))
+      .mockResolvedValue(priced(250_000n));
+    vi.mocked(readErc20Allowance).mockResolvedValue(0n);
+    vi.mocked(sendErc20Approve).mockResolvedValue("0xaaa1");
+    vi.mocked(sendFundRedemption).mockResolvedValue("0xbbb2");
+    await openDetail(PROJECT, FORWARD as typeof REDEMPTION);
+    await screen.findByText(/Funding will pull 0.1/);
+
+    fireEvent.click(screen.getByRole("button", { name: "Fund redemption" }));
+    await screen.findByText(/approve exactly 0.25/);
+    await screen.findByText(/Could not read the funding price: rpc unavailable/);
+    expect(sendErc20Approve).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Fund redemption" }));
     await screen.findByText("Redemption funded.");
     expect(sendErc20Approve).toHaveBeenCalledWith(31337, ADMIN, QUOTE, ESCROW, 250_000n);
+  });
+
+  it("does not approve on the first click while the price row is still loading", async () => {
+    vi.mocked(readFundingPreview)
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValue(priced(250_000n));
+    vi.mocked(readErc20Allowance).mockResolvedValue(0n);
+    vi.mocked(sendErc20Approve).mockResolvedValue("0xaaa1");
+    vi.mocked(sendFundRedemption).mockResolvedValue("0xbbb2");
+    await openDetail(PROJECT, FORWARD as typeof REDEMPTION);
+    await screen.findByText("Reading…");
+
+    fireEvent.click(screen.getByRole("button", { name: "Fund redemption" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/approve exactly 0.25/);
+    expect(sendErc20Approve).not.toHaveBeenCalled();
+
+    await screen.findByText(/Funding will pull 0.25/);
+    fireEvent.click(screen.getByRole("button", { name: "Fund redemption" }));
+    await screen.findByText("Redemption funded.");
+    expect(sendErc20Approve).toHaveBeenCalledWith(31337, ADMIN, QUOTE, ESCROW, 250_000n);
+  });
+
+  it("does not export a Safe batch for a price the operator has not seen", async () => {
+    vi.mocked(readFundingPreview).mockResolvedValue(priced(100_000n));
+    await openDetail(
+      { ...PROJECT, roles: { TREASURER_ROLE: [SAFE], REDEMPTION_MANAGER_ROLE: [SAFE] } } as typeof PROJECT,
+      FORWARD as typeof REDEMPTION,
+    );
+    await screen.findByText(/Funding will pull 0.1/);
+    fireEvent.change(screen.getAllByLabelText(/Save a Safe/)[0], { target: { value: SAFE } });
+
+    vi.mocked(readFundingPreview).mockResolvedValue(priced(250_000n));
+    fireEvent.click(await screen.findByRole("button", { name: "Save funding batch" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/approve exactly 0.25/);
+    expect(exportSafeBatch).not.toHaveBeenCalled();
+
+    await screen.findByText(/Funding will pull 0.25/);
+    fireEvent.click(screen.getByRole("button", { name: "Save funding batch" }));
+    await screen.findByText("Saved batch.");
+    const [, , , calls] = vi.mocked(exportSafeBatch).mock.calls[0];
+    expect(decodeFunctionData({ abi: erc20Abi, data: calls[0].data })).toEqual({
+      functionName: "approve",
+      args: [ESCROW, 250_000n],
+    });
+  });
+
+  it("does not carry a funding message over to another request", async () => {
+    vi.mocked(readFundingPreview).mockResolvedValue(priced(100_000n));
+    vi.mocked(api.listRedemptions).mockResolvedValue({
+      items: [FORWARD, { ...FORWARD, id: "9" }],
+    });
+    vi.mocked(api.getRedemption).mockImplementation(async (id: string) =>
+      ({ ...FORWARD, id }) as typeof REDEMPTION,
+    );
+    vi.mocked(api.getProject).mockResolvedValue(PROJECT as never);
+    renderWithWallet(<Redemptions />, { connected: true });
+    const manage = await screen.findAllByRole("button", { name: "Manage" });
+    fireEvent.click(manage[0]);
+    await screen.findByText(/Funding will pull 0.1/);
+    vi.mocked(readFundingPreview).mockResolvedValue(priced(250_000n));
+    fireEvent.click(screen.getByRole("button", { name: "Fund redemption" }));
+    await screen.findByText(/approve exactly 0.25/);
+
+    fireEvent.click(manage[1]);
+    await screen.findByRole("heading", { name: "Redemption 9" });
+    expect(screen.queryByText(/approve exactly/)).toBeNull();
   });
 
   it("sends nothing when the price round turns out to be unavailable at click time", async () => {

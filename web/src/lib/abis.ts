@@ -225,9 +225,36 @@ export const vaultAbi = [
     outputs: [{ name: "", type: "uint256" }],
     stateMutability: "view",
   },
+  // rwa-v4 only; minPurchaseQuote is the Vault minimum recorded when the order was requested
+  {
+    type: "function",
+    name: "getPurchase",
+    inputs: [{ name: "id", type: "uint256" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        components: [
+          { name: "buyer", type: "address" },
+          { name: "createdAt", type: "uint64" },
+          { name: "status", type: "uint8" },
+          { name: "recipient", type: "address" },
+          { name: "strategy", type: "address" },
+          { name: "baseRound", type: "uint80" },
+          { name: "tokenAmount", type: "uint256" },
+          { name: "maxQuoteAmount", type: "uint256" },
+          { name: "minPurchaseQuote", type: "uint256" },
+        ],
+      },
+    ],
+    stateMutability: "view",
+  },
 ] as const satisfies Abi;
 
-/** Vault reverts shown by describeWalletError: the rwa-v3 minimum and the rwa-v4 order lifecycle */
+/**
+ * Vault reverts shown by describeWalletError: the rwa-v3 minimum, the rwa-v4 order lifecycle and
+ * the strategy checks of setStrategy
+ */
 export const vaultErrorsAbi = [
   {
     type: "error",
@@ -266,6 +293,19 @@ export const vaultErrorsAbi = [
       { name: "available", type: "uint256" },
     ],
   },
+  {
+    type: "error",
+    name: "InvalidStrategy",
+    inputs: [{ name: "strategy", type: "address" }],
+  },
+  {
+    type: "error",
+    name: "InvalidDealingCutoff",
+    inputs: [
+      { name: "dealingCutoff", type: "uint64" },
+      { name: "timeout", type: "uint64" },
+    ],
+  },
 ] as const satisfies Abi;
 
 /** OraclePriceStrategy read failures; the strategy has no roles and no setters */
@@ -291,7 +331,7 @@ export const oracleStrategyErrorsAbi = [
     type: "error",
     name: "GracePeriodNotOver",
     inputs: [
-      { name: "sinceRestart", type: "uint256" },
+      { name: "startedAt", type: "uint256" },
       { name: "gracePeriod", type: "uint256" },
     ],
   },
@@ -826,5 +866,13 @@ export const redemptionEscrowErrorsAbi = [
     type: "error",
     name: "BeneficiaryNotAllowed",
     inputs: [{ name: "account", type: "address" }],
+  },
+  {
+    type: "error",
+    name: "InvalidDealingCutoff",
+    inputs: [
+      { name: "dealingCutoff", type: "uint64" },
+      { name: "timeout", type: "uint64" },
+    ],
   },
 ] as const satisfies Abi;

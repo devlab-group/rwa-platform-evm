@@ -120,7 +120,8 @@ export function PurchaseOrderStatusBadge({
 }: {
   status: string | undefined;
 }) {
-  const known = status !== undefined && status in PURCHASE_ORDER_TONE;
+  const known =
+    status !== undefined && Object.hasOwn(PURCHASE_ORDER_TONE, status);
   return (
     <span
       className={`badge ${known ? PURCHASE_ORDER_TONE[status] : "badge--warning"}`}

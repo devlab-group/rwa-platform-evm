@@ -28,11 +28,40 @@ const ORDER = {
 test.describe("Purchase orders - rejecting while paused", () => {
   mockOnly();
 
-  async function openOrder(page: import("@playwright/test").Page) {
+  async function openOrder(
+    page: import("@playwright/test").Page,
+    quote = 2_500_000n,
+  ) {
     const sales = new AdminInventorySalesPage(page);
     await sales.goto();
     await sales.connectWallet();
-    // The round that prices the order: 2.5 quote tokens at round 42
+    // The order as the Vault stores it, with the minimum recorded when it was requested (1 quote token)
+    await setMockCall(
+      page,
+      encodeFunctionData({
+        abi: vaultAbi,
+        functionName: "getPurchase",
+        args: [5n],
+      }),
+      {
+        result: encodeFunctionResult({
+          abi: vaultAbi,
+          functionName: "getPurchase",
+          result: {
+            buyer: ORDER.buyer as `0x${string}`,
+            createdAt: BigInt(CREATED_AT),
+            status: 0,
+            recipient: ORDER.recipient as `0x${string}`,
+            strategy: ORDER.strategy as `0x${string}`,
+            baseRound: 40n,
+            tokenAmount: 3_000_000_000_000_000_000n,
+            maxQuoteAmount: 4_000_000n,
+            minPurchaseQuote: 1_000_000n,
+          },
+        }),
+      },
+    );
+    // The round that prices the order, by default 2.5 quote tokens at round 42
     await setMockCall(
       page,
       encodeFunctionData({
@@ -44,7 +73,7 @@ test.describe("Purchase orders - rejecting while paused", () => {
         result: encodeFunctionResult({
           abi: oracleStrategyAbi,
           functionName: "quotePurchaseAfter",
-          result: [2_500_000n, 42n],
+          result: [quote, 42n],
         }),
       },
     );
@@ -91,6 +120,26 @@ test.describe("Purchase orders - rejecting while paused", () => {
       functionName: "rejectPurchase",
       args: [5n],
     });
+  });
+
+  test("a round above the deposit warns that settling refunds it", async ({
+    page,
+    api,
+  }) => {
+    api.project.version = "rwa-v4";
+    api.project.forwardPriced = true;
+    api.project.paused = false;
+    api.project.quoteDecimals = 6;
+    api.purchaseOrders.push(ORDER);
+
+    const sales = await openOrder(page, 5_000_000n);
+    const detail = sales.orderDetail("5");
+    await expect(
+      detail.getByText(
+        /Priced at round 42: 5, above the buyer's deposit of 4\. Settling will refund the whole deposit/,
+      ),
+    ).toBeVisible();
+    await expect(detail.getByText(/Anyone can settle it/)).toHaveCount(0);
   });
 
   test("an unpaused project offers settle but no reject", async ({

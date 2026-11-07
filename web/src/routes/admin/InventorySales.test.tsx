@@ -1,11 +1,12 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { decodeFunctionData } from "viem";
+import { decodeFunctionData, encodeErrorResult } from "viem";
 import { InventorySales } from "./InventorySales";
-import { vaultAbi } from "../../lib/abis";
+import { oracleStrategyErrorsAbi, vaultAbi } from "../../lib/abis";
 import { api } from "../../lib/client";
 import { exportSafeBatch } from "../../lib/safeBatch";
 import {
+  readOrderMinQuote,
   readOrderPricing,
   readPreviewBuy,
   sendRejectPurchase,
@@ -50,6 +51,7 @@ vi.mock("../../lib/wallet", async (importOriginal) => {
     readErc20Decimals: vi.fn().mockResolvedValue(18),
     readPreviewBuy: vi.fn().mockResolvedValue(2000000n),
     readOrderPricing: vi.fn(),
+    readOrderMinQuote: vi.fn(),
     sendSettlePurchase: vi.fn(),
     sendRejectPurchase: vi.fn(),
     sendWithdrawProceeds: vi.fn().mockResolvedValue("0xhash"),
@@ -162,6 +164,28 @@ describe("InventorySales amount conversion", () => {
     expect(sendWithdrawProceeds).not.toHaveBeenCalled();
   });
 
+  it("explains a sequencer outage in the quote preview instead of a raw revert", async () => {
+    vi.mocked(readPreviewBuy).mockRejectedValue(
+      Object.assign(new Error("execution reverted"), {
+        data: encodeErrorResult({
+          abi: oracleStrategyErrorsAbi,
+          errorName: "SequencerDown",
+        }),
+      }),
+    );
+    renderWithWallet(<InventorySales />, { connected: true });
+    await waitFor(() => expect(api.getProject).toHaveBeenCalled());
+    fireEvent.change(await screen.findByLabelText(/RWA token amount/), {
+      target: { value: "1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Preview quote" }));
+    expect(
+      await screen.findByText(
+        /sequencer uptime feed reports the sequencer is down/,
+      ),
+    ).toBeInTheDocument();
+  });
+
   // A stale oracle leaves the prices out of the inventory; the operator needs the reason, not "-"
   it("shows why prices are missing when the oracle strategy reports a price error", async () => {
     vi.mocked(api.getInventory).mockResolvedValue({
@@ -235,6 +259,10 @@ describe("InventorySales on a forward-priced project", () => {
       .mockResolvedValue({ items: [ORDER] });
     vi.mocked(api.getPurchaseOrder).mockReset().mockResolvedValue(ORDER);
     vi.mocked(readOrderPricing).mockReset().mockResolvedValue(priced);
+    // The order minimum recorded at request time: 1 whole quote token
+    vi.mocked(readOrderMinQuote)
+      .mockReset()
+      .mockResolvedValue(1_000_000_000_000_000_000n);
     vi.mocked(sendSettlePurchase).mockReset().mockResolvedValue("0xsettle");
     vi.mocked(sendRejectPurchase).mockReset().mockResolvedValue("0xreject");
     vi.mocked(sendWithdrawProceeds).mockReset().mockResolvedValue("0xhash");
@@ -470,26 +498,19 @@ describe("InventorySales on a forward-priced project", () => {
       expect(screen.getByText("5")).toBeInTheDocument();
     });
 
-    it("prices a Pending order on the order's own strategy from its base round and creation time", async () => {
+    it("reads no price for the table rows, so the table needs no wallet", async () => {
       renderWithWallet(<InventorySales />, { connected: true });
       const row = (await screen.findByText("5")).closest("tr") as HTMLElement;
-
-      expect(await within(row).findByText("2.5")).toBeInTheDocument();
-      expect(readOrderPricing).toHaveBeenCalledWith(
-        31337,
-        STRATEGY,
-        3_000_000n,
-        40n,
-        1_800_000_000n,
-      );
+      expect(row).toHaveTextContent("Read in Manage");
+      expect(readOrderPricing).not.toHaveBeenCalled();
+      expect(readOrderMinQuote).not.toHaveBeenCalled();
     });
 
-    it("shows a Pending order as waiting while no round has landed", async () => {
-      vi.mocked(readOrderPricing).mockResolvedValue({ state: "waiting" });
-      renderWithWallet(<InventorySales />, { connected: true });
-      expect(
-        await screen.findByText("Waiting for a round"),
-      ).toBeInTheDocument();
+    it("lists orders on a page with no injected wallet", async () => {
+      wallet.uninstall();
+      renderWithWallet(<InventorySales />);
+      expect(await screen.findByText("5")).toBeInTheDocument();
+      expect(screen.queryByText("Price not read")).toBeNull();
     });
 
     it("shows the priced round and the refund of a closed order", async () => {
@@ -600,6 +621,273 @@ describe("InventorySales on a forward-priced project", () => {
       expect(
         within(detail).getByText("Refunded to buyer").nextSibling,
       ).toHaveTextContent("1.5");
+    });
+  });
+
+  describe("order pricing", () => {
+    it("prices a Pending order on its own strategy from its base round and creation time", async () => {
+      await openOrder();
+      expect(
+        await screen.findByText(/Priced at round 42: 2.5/),
+      ).toBeInTheDocument();
+      expect(readOrderPricing).toHaveBeenCalledWith(
+        31337,
+        STRATEGY,
+        3_000_000n,
+        40n,
+        1_800_000_000n,
+      );
+      expect(readOrderMinQuote).toHaveBeenCalledWith(31337, VAULT, 5n);
+    });
+
+    it("shows the minimum recorded with the order", async () => {
+      await openOrder();
+      const detail = screen
+        .getByRole("heading", { name: "Order 5" })
+        .closest("section") as HTMLElement;
+      expect(
+        (await within(detail).findByText("Minimum quote (fixed when ordered)"))
+          .nextSibling,
+      ).toHaveTextContent("1");
+    });
+
+    it("says a waiting order has no round yet", async () => {
+      vi.mocked(readOrderPricing).mockResolvedValue({ state: "waiting" });
+      await openOrder();
+      expect(
+        await screen.findByText(/Waiting for a price round/),
+      ).toBeInTheDocument();
+    });
+
+    it("lets a refresh pick up a round that landed after the panel opened, and then settle", async () => {
+      vi.mocked(readOrderPricing).mockResolvedValue({ state: "waiting" });
+      await openOrder();
+      await screen.findByText(/Waiting for a price round/);
+      expect(
+        screen.getByRole("button", { name: "Settle order" }),
+      ).toBeDisabled();
+
+      vi.mocked(readOrderPricing).mockResolvedValue(priced);
+      fireEvent.click(screen.getByRole("button", { name: "Refresh price" }));
+
+      expect(
+        await screen.findByText(/Priced at round 42: 2.5/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Settle order" }),
+      ).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: "Settle order" }));
+      expect(
+        await screen.findByText(/Settlement confirmed/),
+      ).toBeInTheDocument();
+      expect(sendSettlePurchase).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-reads the project when the price is refreshed", async () => {
+      await openOrder();
+      await screen.findByText(/Priced at round 42/);
+      expect(api.getProject).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole("button", { name: "Refresh price" }));
+      await waitFor(() => expect(api.getProject).toHaveBeenCalledTimes(2));
+    });
+
+    it("warns that settling refunds the deposit when the round prices above it", async () => {
+      vi.mocked(readOrderPricing).mockResolvedValue({
+        state: "priced",
+        quoteAmount: 5_000_000_000_000_000_000n,
+        roundId: 42n,
+      });
+      await openOrder();
+      expect(
+        await screen.findByText(
+          /Priced at round 42: 5, above the buyer's deposit of 4\. Settling will refund the whole deposit/,
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/Anyone can settle it/)).toBeNull();
+    });
+
+    it("warns that settling refunds the deposit when the round prices below the order's minimum", async () => {
+      vi.mocked(readOrderPricing).mockResolvedValue({
+        state: "priced",
+        quoteAmount: 500_000_000_000_000_000n,
+        roundId: 42n,
+      });
+      await openOrder();
+      expect(
+        await screen.findByText(
+          /Priced at round 42: 0\.5, below this order's minimum of 1\. Settling will refund the whole deposit/,
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("compares against the minimum recorded with the order, not a live Vault minimum", async () => {
+      vi.mocked(readOrderMinQuote).mockResolvedValue(0n);
+      vi.mocked(readOrderPricing).mockResolvedValue({
+        state: "priced",
+        quoteAmount: 500_000_000_000_000_000n,
+        roundId: 42n,
+      });
+      await openOrder();
+      expect(
+        await screen.findByText(
+          /Priced at round 42: 0\.5\. Anyone can settle it/,
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("still lets the operator settle when the price could not be read", async () => {
+      vi.mocked(readOrderPricing).mockRejectedValue(
+        new Error("No injected wallet found."),
+      );
+      await openOrder();
+      expect(
+        await screen.findByText(/Could not read the price: No injected wallet/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Settle order" }),
+      ).toBeEnabled();
+    });
+  });
+
+  describe("indexed pause state", () => {
+    const stale = (paused: boolean) =>
+      ({ ...FORWARD_PROJECT, paused, securityStale: true }) as never;
+
+    it("does not block settlement on a paused flag the projection marks stale", async () => {
+      vi.mocked(api.getProject).mockResolvedValue(stale(true));
+      await openOrder();
+      await screen.findByText(/Priced at round 42/);
+      expect(
+        screen.getByRole("button", { name: "Settle order" }),
+      ).toBeEnabled();
+      expect(screen.getByText(/may be out of date/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Settle order" }));
+      expect(
+        await screen.findByText(/Settlement confirmed/),
+      ).toBeInTheDocument();
+      expect(sendSettlePurchase).toHaveBeenCalledTimes(1);
+    });
+
+    it("still offers rejection when the projection says unpaused but is marked stale", async () => {
+      vi.mocked(api.getProject).mockResolvedValue(stale(false));
+      await openOrder();
+      expect(
+        await screen.findByRole("button", { name: "Reject order" }),
+      ).toBeEnabled();
+      expect(screen.getByText(/may be out of date/)).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          /accepts a rejection only while the project is paused/,
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("lets the chain refuse a rejection the stale flag allowed", async () => {
+      vi.mocked(api.getProject).mockResolvedValue(stale(false));
+      vi.mocked(sendRejectPurchase).mockRejectedValue(
+        new Error(
+          "Transaction simulation failed: A purchase order can be rejected only while the project is paused. Nothing was sent.",
+        ),
+      );
+      await openOrder();
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Reject order" }),
+      );
+      expect(
+        await screen.findByText(
+          /rejected only while the project is paused\. Nothing was sent/,
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("keeps trusting a current projection: paused blocks settlement, unpaused hides rejection", async () => {
+      vi.mocked(api.getProject).mockResolvedValue({
+        ...FORWARD_PROJECT,
+        paused: true,
+        securityStale: false,
+      } as never);
+      await openOrder();
+      await screen.findByText(/Priced at round 42/);
+      expect(
+        screen.getByRole("button", { name: "Settle order" }),
+      ).toBeDisabled();
+      expect(screen.queryByText(/may be out of date/)).toBeNull();
+    });
+
+    it("re-reads the project after an action so the pause state can follow", async () => {
+      vi.mocked(api.getProject)
+        .mockResolvedValueOnce(FORWARD_PROJECT as never)
+        .mockResolvedValue({ ...FORWARD_PROJECT, paused: true } as never);
+      await openOrder();
+      await screen.findByText(/Priced at round 42/);
+      expect(screen.queryByRole("button", { name: "Reject order" })).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Settle order" }));
+      await screen.findByText(/Settlement confirmed/);
+
+      expect(api.getProject).toHaveBeenCalledTimes(2);
+      expect(
+        await screen.findByRole("button", { name: "Reject order" }),
+      ).toBeInTheDocument();
+      // The page and the open panel stay put while the project reloads
+      expect(
+        screen.getByRole("heading", { name: "Order 5" }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  describe("switching orders", () => {
+    const SECOND = { ...ORDER, id: "6" };
+
+    async function openFirstThenSecond() {
+      vi.mocked(api.listPurchaseOrders).mockResolvedValue({
+        items: [ORDER, SECOND],
+      });
+      vi.mocked(api.getPurchaseOrder).mockImplementation(async (id: string) =>
+        id === "6" ? SECOND : ORDER,
+      );
+      renderWithWallet(<InventorySales />, { connected: true });
+      const manage = await screen.findAllByRole("button", { name: "Manage" });
+      fireEvent.click(manage[0]);
+      await screen.findByRole("heading", { name: "Order 5" });
+      await screen.findByText(/Priced at round 42/);
+      return manage;
+    }
+
+    it("does not carry an in-flight settlement over to the next order", async () => {
+      vi.mocked(sendSettlePurchase).mockReturnValue(new Promise(() => {}));
+      const manage = await openFirstThenSecond();
+      fireEvent.click(screen.getByRole("button", { name: "Settle order" }));
+      await screen.findByText("Settling order…");
+
+      fireEvent.click(manage[1]);
+      await screen.findByRole("heading", { name: "Order 6" });
+      await screen.findByText(/Priced at round 42/);
+
+      expect(screen.queryByText("Settling order…")).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Settle order" }),
+      ).toBeEnabled();
+    });
+
+    it("does not show one order's failure or success under another", async () => {
+      vi.mocked(sendSettlePurchase).mockRejectedValueOnce(
+        new Error("Transaction simulation failed: InvalidPrice."),
+      );
+      const manage = await openFirstThenSecond();
+      fireEvent.click(screen.getByRole("button", { name: "Settle order" }));
+      await screen.findByText(/InvalidPrice/);
+
+      fireEvent.click(manage[1]);
+      await screen.findByRole("heading", { name: "Order 6" });
+      expect(screen.queryByText(/InvalidPrice/)).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Settle order" }));
+      await screen.findByText(/Settlement confirmed/);
+      fireEvent.click(manage[0]);
+      await screen.findByRole("heading", { name: "Order 5" });
+      expect(screen.queryByText(/Settlement confirmed/)).toBeNull();
     });
   });
 

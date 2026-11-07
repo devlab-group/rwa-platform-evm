@@ -203,6 +203,7 @@ export function Redemptions() {
 
       {selectedId && (
         <RedemptionDetail
+          key={selectedId}
           id={selectedId}
           chainId={chainId}
           finalityConfirmations={finalityConfirmations}
@@ -248,6 +249,8 @@ function RedemptionDetail({
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  // The funding amount the operator was last shown in a message, when it differed from the price row
+  const [reviewedAmount, setReviewedAmount] = useState<bigint | null>(null);
   const blocked =
     detail.status === "success" &&
     redemptionBlockedByCompliance(
@@ -313,6 +316,25 @@ function RedemptionDetail({
         return;
       }
       const amount = resolved.amount;
+      // Approve only an amount the operator has seen: the price row, or the message below
+      if (isForwardRedemption(request) && request.status === "Pending") {
+        const onScreen =
+          preview.status === "success" && preview.data?.state === "priced"
+            ? preview.data.amount
+            : undefined;
+        if (amount !== onScreen && amount !== reviewedAmount) {
+          setReviewedAmount(amount);
+          preview.reload();
+          setError(
+            `The funding price is now ${fmtQuote(amount)}${
+              onScreen === undefined
+                ? ""
+                : ` (the figure on screen was ${fmtQuote(onScreen)})`
+            }. Check it, then click Fund again to approve exactly ${fmtQuote(amount)}.`,
+          );
+          return;
+        }
+      }
       if (route.kind === "safe") {
         setDone(
           exportSafeBatch(

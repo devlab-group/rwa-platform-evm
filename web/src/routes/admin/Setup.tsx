@@ -952,12 +952,18 @@ function DeployFormBody({
           form.purchaseTimeout,
         )
       : null;
+  // Shown inline beside the field, since a bad value only disables Review
+  const cutoffError =
+    v4 && oracle && cutoffText !== "" && !/^\d+$/.test(cutoffText)
+      ? "Dealing cut-off must be a whole number of seconds."
+      : cutoffProblem;
+  const redemptionTimeoutFraction = !Number.isInteger(form.redemptionTimeout);
+  const purchaseTimeoutFraction = !Number.isInteger(form.purchaseTimeout);
   const readyToReview =
     Boolean(form.name) &&
     Boolean(form.symbol) &&
     strategyReady &&
-    form.redemptionTimeout >= MIN_TIMEOUT_SECONDS &&
-    form.redemptionTimeout <= MAX_TIMEOUT_SECONDS &&
+    timeoutInBounds(form.redemptionTimeout) &&
     REQUIRED_ADDRESS_FIELDS.every(
       (key) => (oracle && key === "pricer") || Boolean(form[key]),
     ) &&
@@ -1110,7 +1116,7 @@ function DeployFormBody({
       // deployment
       onDeployed();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Deployment failed.");
+      setError(err instanceof Error ? err.message : "Deployment failed.");
     } finally {
       setSubmitting(false);
     }
@@ -1329,7 +1335,12 @@ function DeployFormBody({
                 inputMode="numeric"
                 value={form.dealingCutoff}
                 onChange={(e) => set("dealingCutoff", e.target.value)}
-                aria-describedby="dealingCutoff-hint"
+                aria-describedby={
+                  cutoffError
+                    ? "dealingCutoff-hint dealingCutoff-error"
+                    : "dealingCutoff-hint"
+                }
+                aria-invalid={cutoffError ? true : undefined}
               />
               <span className="field__hint" id="dealingCutoff-hint">
                 The longest gap from a price&apos;s strike to its publication
@@ -1339,9 +1350,13 @@ function DeployFormBody({
                 timeouts must exceed the gap between price updates plus this
                 cut-off.
               </span>
-              {cutoffProblem && (
-                <span className="async-state--error" role="alert">
-                  {cutoffProblem}
+              {cutoffError && (
+                <span
+                  className="async-state--error"
+                  id="dealingCutoff-error"
+                  role="alert"
+                >
+                  {cutoffError}
                 </span>
               )}
             </div>
@@ -1357,7 +1372,12 @@ function DeployFormBody({
           max={MAX_TIMEOUT_SECONDS}
           value={form.redemptionTimeout}
           onChange={(e) => set("redemptionTimeout", Number(e.target.value))}
-          aria-describedby="redemptionTimeout-hint"
+          aria-describedby={
+            redemptionTimeoutFraction
+              ? "redemptionTimeout-hint redemptionTimeout-error"
+              : "redemptionTimeout-hint"
+          }
+          aria-invalid={redemptionTimeoutFraction ? true : undefined}
         />
         <span className="field__hint" id="redemptionTimeout-hint">
           Between 1 day (86,400s) and 365 days (31,536,000s).
@@ -1365,6 +1385,15 @@ function DeployFormBody({
             ? " It must exceed the longest gap between price updates plus the dealing cut-off."
             : ""}
         </span>
+        {redemptionTimeoutFraction && (
+          <span
+            className="async-state--error"
+            id="redemptionTimeout-error"
+            role="alert"
+          >
+            Redemption timeout must be a whole number of seconds.
+          </span>
+        )}
       </div>
       {v4 && (
         <div className="field">
@@ -1376,7 +1405,12 @@ function DeployFormBody({
             max={MAX_TIMEOUT_SECONDS}
             value={form.purchaseTimeout}
             onChange={(e) => set("purchaseTimeout", Number(e.target.value))}
-            aria-describedby="purchaseTimeout-hint"
+            aria-describedby={
+              purchaseTimeoutFraction
+                ? "purchaseTimeout-hint purchaseTimeout-error"
+                : "purchaseTimeout-hint"
+            }
+            aria-invalid={purchaseTimeoutFraction ? true : undefined}
           />
           <span className="field__hint" id="purchaseTimeout-hint">
             How long a buyer waits before cancelling an order that has no usable
@@ -1387,6 +1421,15 @@ function DeployFormBody({
               ? " It must exceed the longest gap between price updates plus the dealing cut-off."
               : ""}
           </span>
+          {purchaseTimeoutFraction && (
+            <span
+              className="async-state--error"
+              id="purchaseTimeout-error"
+              role="alert"
+            >
+              Purchase timeout must be a whole number of seconds.
+            </span>
+          )}
         </div>
       )}
       <div className="field">

@@ -58,24 +58,63 @@ describe("withdrawableQuote", () => {
 });
 
 describe("orderPricingMessage", () => {
-  it("names the round and the quote of a priced order", () => {
+  // Deposit 4, order minimum 1, all in minimal units
+  const bounds = { deposit: 4_000_000n, minQuote: 1_000_000n };
+  const priced = (quoteAmount: bigint) =>
+    ({ state: "priced", quoteAmount, roundId: 1042n }) as const;
+
+  it("names the round and the quote of an order that will fill", () => {
+    expect(orderPricingMessage(priced(2_500_000n), fmt, bounds)).toBe(
+      "Priced at round 1042: <2500000>. Anyone can settle it.",
+    );
+  });
+
+  it("still fills at exactly the deposit and exactly the minimum", () => {
+    for (const quote of [4_000_000n, 1_000_000n]) {
+      expect(orderPricingMessage(priced(quote), fmt, bounds)).toMatch(
+        /Anyone can settle it/,
+      );
+    }
+  });
+
+  it("warns that settling refunds when the quote is above the deposit", () => {
+    const msg = orderPricingMessage(priced(5_000_000n), fmt, bounds);
+    expect(msg).toMatch(
+      /round 1042: <5000000>, above the buyer's deposit of <4000000>/,
+    );
+    expect(msg).toMatch(/refund the whole deposit.*receives no RWA/);
+    expect(msg).not.toMatch(/Anyone can settle it/);
+  });
+
+  it("warns that settling refunds when the quote is below the order's own minimum", () => {
+    const msg = orderPricingMessage(priced(999_999n), fmt, bounds);
+    expect(msg).toMatch(/<999999>, below this order's minimum of <1000000>/);
+    expect(msg).toMatch(/refund the whole deposit.*receives no RWA/);
+    expect(msg).not.toMatch(/Anyone can settle it/);
+  });
+
+  it("checks the minimum recorded with the order, so a zero minimum never refunds a small quote", () => {
     expect(
-      orderPricingMessage(
-        { state: "priced", quoteAmount: 2_500_000n, roundId: 1042n },
-        fmt,
-      ),
-    ).toMatch(/round 1042: <2500000>.*Anyone can settle/);
+      orderPricingMessage(priced(1n), fmt, {
+        deposit: 4_000_000n,
+        minQuote: 0n,
+      }),
+    ).toMatch(/Anyone can settle it/);
   });
 
   it("says a waiting order has no round yet", () => {
-    expect(orderPricingMessage({ state: "waiting" }, fmt)).toMatch(
+    expect(orderPricingMessage({ state: "waiting" }, fmt, bounds)).toMatch(
       /Waiting for a price round/,
     );
   });
 
   it("carries the reason an unusable round gives", () => {
     expect(
-      orderPricingMessage({ state: "blocked", message: "feed is stale" }, fmt),
+      orderPricingMessage(
+        { state: "blocked", message: "feed is stale" },
+        fmt,
+        bounds,
+      ),
     ).toMatch(/cannot be used: feed is stale/);
   });
 });

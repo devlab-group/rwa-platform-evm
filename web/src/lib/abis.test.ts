@@ -200,6 +200,21 @@ describe("rwa-v4 pinned fragments", () => {
     );
   });
 
+  it("ends the getPurchase order tuple with the minimum recorded at request time", () => {
+    const getPurchase = vaultAbi.find((e) => e.name === "getPurchase")!;
+    expect(getPurchase.outputs[0].components.map((c) => c.name)).toEqual([
+      "buyer",
+      "createdAt",
+      "status",
+      "recipient",
+      "strategy",
+      "baseRound",
+      "tokenAmount",
+      "maxQuoteAmount",
+      "minPurchaseQuote",
+    ]);
+  });
+
   it.each([
     ["rwa-v3 deploy", rwaFactoryV3Abi[0], "0xc91ac6b4"],
     ["rwa-v4 deploy", rwaFactoryV4Abi[0], "0x29a5a742"],
@@ -217,6 +232,11 @@ describe("rwa-v4 pinned fragments", () => {
       "Vault.pendingPurchaseQuote",
       vaultAbi.find((e) => e.name === "pendingPurchaseQuote")!,
       "0xa29f0b97",
+    ],
+    [
+      "Vault.getPurchase",
+      vaultAbi.find((e) => e.name === "getPurchase")!,
+      "0x3742a9f7",
     ],
     [
       "RedemptionEscrow.previewFunding",
@@ -244,6 +264,9 @@ describe("rwa-v4 pinned fragments", () => {
     ["ForwardPriced", vaultErrorsAbi, "0xf21ff320"],
     ["RoundAvailable", vaultErrorsAbi, "0x665ceca4"],
     ["InsufficientProceeds", vaultErrorsAbi, "0x7b268179"],
+    ["InvalidStrategy", vaultErrorsAbi, "0xeb894b34"],
+    ["InvalidDealingCutoff", vaultErrorsAbi, "0x627bd7ff"],
+    ["InvalidDealingCutoff", redemptionEscrowErrorsAbi, "0x627bd7ff"],
   ])("error %s has the pinned selector", (name, abi, selector) => {
     const fragment = (
       abi as readonly {

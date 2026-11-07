@@ -226,6 +226,17 @@ describe("PurchaseOrderStatusBadge", () => {
     expect(screen.queryByText("Expired")).toBeNull();
   });
 
+  it.each(["constructor", "toString", "__proto__"])(
+    "does not treat the inherited key %s as a known status",
+    (status) => {
+      render(<PurchaseOrderStatusBadge status={status} />);
+      expect(screen.getByText("Unknown")).toHaveAttribute(
+        "data-status",
+        "unknown",
+      );
+    },
+  );
+
   it("shows a missing status as Unknown", () => {
     render(<PurchaseOrderStatusBadge status={undefined} />);
     expect(screen.getByText("Unknown")).toBeInTheDocument();

@@ -98,6 +98,11 @@ export function buildProjectConfigV3(
   v: DeployValuesV3,
   ctx: DeployContext,
 ): BuildResult {
+  // BigInt throws a RangeError on a fractional or NaN number, so check before any conversion
+  if (!Number.isInteger(v.redemptionTimeout)) {
+    return { error: "Redemption timeout must be a whole number of seconds." };
+  }
+
   const required: [string, string][] = [
     ["Quote token", v.quoteToken],
     ["Admin", v.admin],

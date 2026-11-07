@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { Address } from "viem";
 import { AsyncSection } from "../../components/AsyncSection";
 import { PaginationFooter } from "../../components/PaginationFooter";
@@ -21,6 +21,8 @@ import {
   toMinimalUnits,
 } from "../../lib/format";
 import {
+  describeWalletError,
+  readOrderMinQuote,
   readOrderPricing,
   readPreviewBuy,
   rejectPurchaseCall,
@@ -63,13 +65,28 @@ export function InventorySales() {
     (signal) => api.getInventory({ signal }),
     [],
   );
-  const project = useAsync<Project>((signal) => api.getProject({ signal }), []);
+  const projectState = useAsync<Project>(
+    (signal) => api.getProject({ signal }),
+    [],
+  );
+  // A re-read after an action replaces the first one without blanking the page meanwhile
+  const [refreshed, setRefreshed] = useState<Project>();
+  const refreshProject = useCallback(() => {
+    api
+      .getProject()
+      .then(setRefreshed)
+      .catch(() => {
+        // The earlier projection stays and is advisory anyway
+      });
+  }, []);
   const purchases = usePaginatedList<Purchase>(
     (cursor, signal) => api.listPurchases({ signal, cursor }),
     [],
   );
 
-  const proj = project.status === "success" ? project.data : undefined;
+  const proj =
+    refreshed ??
+    (projectState.status === "success" ? projectState.data : undefined);
   const chainId = proj?.chainId ?? 0;
   // Oracle projects on rwa-v4 fill orders at a later round and never offer Vault.buy
   const forwardPriced = proj?.forwardPriced === true;
@@ -165,15 +182,14 @@ export function InventorySales() {
                   </dd>
                 </div>
               )}
-              {project.status === "success" &&
-                project.data.addresses?.strategy && (
-                  <div className="tx-preview__row">
-                    <dt>Strategy address</dt>
-                    <dd title={project.data.addresses.strategy}>
-                      {shortenAddress(project.data.addresses.strategy)}
-                    </dd>
-                  </div>
-                )}
+              {proj?.addresses?.strategy && (
+                <div className="tx-preview__row">
+                  <dt>Strategy address</dt>
+                  <dd title={proj.addresses.strategy}>
+                    {shortenAddress(proj.addresses.strategy)}
+                  </dd>
+                </div>
+              )}
             </dl>
           )}
         </AsyncSection>
@@ -235,6 +251,7 @@ export function InventorySales() {
           rwaDecimals={rwaDecimals}
           quoteDecimals={quoteDecimals}
           onChanged={inventory.reload}
+          onProjectRefresh={refreshProject}
         />
       )}
 
@@ -342,7 +359,12 @@ function BuyQuotePreview({
       );
       setQuote({ tokenAmount: minimal, quoteAmount: quoteAmount.toString() });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Quote request failed.");
+      // Decodes SequencerDown, StalePrice and the other oracle reverts into plain text
+      setError(
+        err instanceof Error
+          ? describeWalletError(err)
+          : "Quote request failed.",
+      );
     } finally {
       setLoading(false);
     }
@@ -569,32 +591,20 @@ function WithdrawForm({
   );
 }
 
-// Reads what a Pending order would settle at, on the order's own strategy; other orders need no read
-function useOrderPricing(order: PurchaseOrder | undefined, chainId: number) {
-  return useAsync<OrderPricing | null>(async () => {
-    if (!order || order.status !== "Pending" || !chainId) return null;
-    return readOrderPricing(
-      chainId,
-      order.strategy as Address,
-      BigInt(order.tokenAmount),
-      BigInt(order.baseRound),
-      BigInt(order.createdAt),
-    );
-  }, [order?.id, order?.status, chainId]);
-}
-
 function PurchaseOrders({
   project,
   chainId,
   rwaDecimals,
   quoteDecimals,
   onChanged,
+  onProjectRefresh,
 }: {
   project: Project | undefined;
   chainId: number;
   rwaDecimals: number | undefined;
   quoteDecimals: number | undefined;
   onChanged: () => void;
+  onProjectRefresh: () => void;
 }) {
   const [statusFilter, setStatusFilter] =
     useState<(typeof ORDER_STATUS_FILTERS)[number]>("");
@@ -675,7 +685,6 @@ function PurchaseOrders({
                         <td>
                           <OrderPriceCell
                             order={o}
-                            chainId={chainId}
                             quoteDecimals={quoteDecimals}
                           />
                         </td>
@@ -709,6 +718,7 @@ function PurchaseOrders({
 
       {selectedId && (
         <OrderDetail
+          key={selectedId}
           id={selectedId}
           project={project}
           chainId={chainId}
@@ -718,6 +728,7 @@ function PurchaseOrders({
             orders.reload();
             onChanged();
           }}
+          onProjectRefresh={onProjectRefresh}
           onClose={() => setSelectedId(null)}
         />
       )}
@@ -725,48 +736,23 @@ function PurchaseOrders({
   );
 }
 
-// Short price text for a table row: what a Pending order would settle at, or what closed it
+// Short price text for a table row; the live price is read in the order panel, one order at a time
 function OrderPriceCell({
   order,
-  chainId,
   quoteDecimals,
 }: {
   order: PurchaseOrder;
-  chainId: number;
   quoteDecimals: number | undefined;
 }) {
-  const pricing = useOrderPricing(order, chainId);
-  if (order.status !== "Pending") {
-    return (
-      <>
-        {order.pricedRound ? `Round ${order.pricedRound}` : "No round"}
-        {order.refund
-          ? `, refund ${formatTokenAmount(order.refund, quoteDecimals)}`
-          : ""}
-      </>
-    );
-  }
-  if (pricing.status === "loading") return <>Reading…</>;
-  if (pricing.status === "error") {
-    return <span title={pricing.error}>Price not read</span>;
-  }
-  switch (pricing.data?.state) {
-    case "priced":
-      return (
-        <>
-          {formatTokenAmount(
-            pricing.data.quoteAmount.toString(),
-            quoteDecimals,
-          )}
-        </>
-      );
-    case "waiting":
-      return <>Waiting for a round</>;
-    case "blocked":
-      return <span title={pricing.data.message}>Round unusable</span>;
-    default:
-      return <>-</>;
-  }
+  if (order.status === "Pending") return <>Read in Manage</>;
+  return (
+    <>
+      {order.pricedRound ? `Round ${order.pricedRound}` : "No round"}
+      {order.refund
+        ? `, refund ${formatTokenAmount(order.refund, quoteDecimals)}`
+        : ""}
+    </>
+  );
 }
 
 function OrderDetail({
@@ -776,6 +762,7 @@ function OrderDetail({
   rwaDecimals,
   quoteDecimals,
   onChanged,
+  onProjectRefresh,
   onClose,
 }: {
   id: string;
@@ -784,29 +771,59 @@ function OrderDetail({
   rwaDecimals: number | undefined;
   quoteDecimals: number | undefined;
   onChanged: () => void;
+  onProjectRefresh: () => void;
   onClose: () => void;
 }) {
   const from = useWalletContext().address;
+  const vault = project?.addresses?.vault;
   const detail = useAsync<PurchaseOrder>(() => api.getPurchaseOrder(id), [id]);
   const order = detail.status === "success" ? detail.data : undefined;
-  const pricing = useOrderPricing(order, chainId);
+  // What a Pending order would settle at, on its own strategy, and the minimum recorded with it
+  const settlement = useAsync<{
+    pricing: OrderPricing;
+    minQuote: bigint;
+  } | null>(async () => {
+    if (!order || order.status !== "Pending" || !chainId || !vault) return null;
+    const [pricing, minQuote] = await Promise.all([
+      readOrderPricing(
+        chainId,
+        order.strategy as Address,
+        BigInt(order.tokenAmount),
+        BigInt(order.baseRound),
+        BigInt(order.createdAt),
+      ),
+      readOrderMinQuote(chainId, vault as Address, BigInt(order.id)),
+    ]);
+    return { pricing, minQuote };
+  }, [order?.id, order?.status, chainId, vault]);
   const [busy, setBusy] = useState<"settle" | "reject" | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const paused = project?.paused === true;
+  // A lagging projection says nothing certain about the pause state: only the chain does
+  const stale = project?.securityStale === true;
   const fmtQuote = (raw: string | bigint) =>
     formatTokenAmount(String(raw), quoteDecimals);
   const pricingState =
-    pricing.status === "success" ? pricing.data?.state : undefined;
-  // Settlement reverts without a usable round, so the button waits for one
-  const settleBlockReason = paused
-    ? "Settlement is refused while the project is paused."
-    : pricingState === "waiting"
-      ? "No price round has landed yet."
-      : pricingState === "blocked"
-        ? "The pricing round cannot be used."
-        : undefined;
+    settlement.status === "success"
+      ? settlement.data?.pricing.state
+      : undefined;
+  // Settlement reverts without a usable round, so the button waits for one; Refresh price
+  // reads again. A stale pause flag never blocks, the preflight before sending decides.
+  const settleBlockReason =
+    paused && !stale
+      ? "Settlement is refused while the project is paused."
+      : pricingState === "waiting"
+        ? "No price round has landed yet."
+        : pricingState === "blocked"
+          ? "The pricing round cannot be used."
+          : undefined;
+
+  function refreshPrice() {
+    settlement.reload();
+    onProjectRefresh();
+  }
 
   function begin() {
     setError(null);
@@ -817,7 +834,6 @@ function OrderDetail({
   // Anyone can settle: no role, only a connected wallet
   async function handleSettle() {
     begin();
-    const vault = project?.addresses?.vault;
     if (!from) {
       setError("Wallet not connected.");
       return;
@@ -846,12 +862,12 @@ function OrderDetail({
     } finally {
       setBusy(null);
       setProgress(null);
+      onProjectRefresh();
     }
   }
 
   async function handleReject(route: TxRoute) {
     begin();
-    const vault = project?.addresses?.vault;
     if (route.kind === "wallet" && !from) {
       setError("Wallet not connected.");
       return;
@@ -887,6 +903,7 @@ function OrderDetail({
     } finally {
       setBusy(null);
       setProgress(null);
+      onProjectRefresh();
     }
   }
 
@@ -935,17 +952,35 @@ function OrderDetail({
               <dd>{formatUnixSeconds(o.timeoutAt)}</dd>
             </div>
             {o.status === "Pending" ? (
-              <div className="tx-preview__row">
-                <dt>Price</dt>
-                <dd>
-                  {pricing.status === "loading" && "Reading…"}
-                  {pricing.status === "error" &&
-                    `Could not read the price: ${pricing.error}`}
-                  {pricing.status === "success" && pricing.data
-                    ? orderPricingMessage(pricing.data, fmtQuote)
-                    : null}
-                </dd>
-              </div>
+              <>
+                {settlement.status === "success" && settlement.data && (
+                  <div className="tx-preview__row">
+                    <dt>Minimum quote (fixed when ordered)</dt>
+                    <dd>{fmtQuote(settlement.data.minQuote)}</dd>
+                  </div>
+                )}
+                <div className="tx-preview__row">
+                  <dt>Price</dt>
+                  <dd>
+                    {settlement.status === "loading" && "Reading…"}
+                    {settlement.status === "error" &&
+                      `Could not read the price: ${settlement.error}`}
+                    {settlement.status === "success" && settlement.data
+                      ? orderPricingMessage(settlement.data.pricing, fmtQuote, {
+                          deposit: BigInt(o.maxQuoteAmount),
+                          minQuote: settlement.data.minQuote,
+                        })
+                      : null}{" "}
+                    <button
+                      type="button"
+                      className="button button--secondary"
+                      onClick={refreshPrice}
+                    >
+                      Refresh price
+                    </button>
+                  </dd>
+                </div>
+              </>
             ) : (
               <>
                 <div className="tx-preview__row">
@@ -977,7 +1012,7 @@ function OrderDetail({
           >
             {busy === "settle" ? "Submitting…" : "Settle order"}
           </button>
-          {paused ? (
+          {paused || stale ? (
             <RoleGate
               roles={project?.roles}
               rolesByContract={project?.rolesByContract}
@@ -991,6 +1026,8 @@ function OrderDetail({
                     Rejecting returns the buyer&apos;s whole deposit of{" "}
                     {fmtQuote(order.maxQuoteAmount)} and closes the order as
                     Rejected. The buyer receives no RWA.
+                    {!paused &&
+                      " The Vault accepts a rejection only while the project is paused."}
                   </p>
                   <button
                     type="button"
@@ -1012,6 +1049,13 @@ function OrderDetail({
               Orders can be rejected only while the project is paused. Pausing
               also stops settlement, so a bad round can be caught before anyone
               settles at it.
+            </p>
+          )}
+          {stale && (
+            <p className="field__hint" role="status">
+              The pause state here ({paused ? "paused" : "not paused"}) comes
+              from an indexer projection that may be out of date. Settlement and
+              rejection are checked on-chain before anything is sent.
             </p>
           )}
         </div>

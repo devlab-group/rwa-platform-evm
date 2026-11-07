@@ -36,6 +36,7 @@ import {
   forcedTransferCall,
   pauseCall,
   readFundingPreview,
+  readOrderMinQuote,
   readOrderPricing,
   reclaimUnclaimedCall,
   rejectPurchaseCall,
@@ -927,6 +928,24 @@ describe("rwa-v4 revert messages", () => {
     ],
     ["ZeroQuote", redemptionEscrowErrorsAbi, [], /priced quote is zero/],
     [
+      "InvalidStrategy",
+      vaultErrorsAbi,
+      ["0x0000000000000000000000000000000000000042"],
+      /0x0000000000000000000000000000000000000042 is not a usable price strategy.*forwardPriced/,
+    ],
+    [
+      "InvalidDealingCutoff",
+      vaultErrorsAbi,
+      [7200n, 3600n],
+      /cut-off of 7200 s does not fit the timeout of 3600 s.*above 0 and below/,
+    ],
+    [
+      "InvalidDealingCutoff",
+      redemptionEscrowErrorsAbi,
+      [90_000n, 86_400n],
+      /cut-off of 90000 s does not fit the timeout of 86400 s/,
+    ],
+    [
       "BeneficiaryNotAllowed",
       redemptionEscrowErrorsAbi,
       ["0x0000000000000000000000000000000000000041"],
@@ -1160,6 +1179,44 @@ describe("forward-pricing reads", () => {
       await expect(
         readOrderPricing(31337, STRATEGY, 1n, 1040n, 1_800_000_000n),
       ).rejects.toThrow(/chain/i);
+    });
+  });
+
+  describe("readOrderMinQuote", () => {
+    const VAULT = "0x0000000000000000000000000000000000000040" as const;
+
+    it("reads the minimum recorded on the order from getPurchase", async () => {
+      const { calls } = installReadProvider({
+        result: encodeFunctionResult({
+          abi: vaultAbi,
+          functionName: "getPurchase",
+          result: {
+            buyer: "0x00000000000000000000000000000000000000b1",
+            createdAt: 1_800_000_000n,
+            status: 0,
+            recipient: "0x00000000000000000000000000000000000000b2",
+            strategy: STRATEGY,
+            baseRound: 40n,
+            tokenAmount: 3_000_000n,
+            maxQuoteAmount: 4_000_000n,
+            minPurchaseQuote: 1_500_000n,
+          },
+        }),
+      });
+      await expect(readOrderMinQuote(31337, VAULT, 5n)).resolves.toBe(
+        1_500_000n,
+      );
+      expect(calls[0].to.toLowerCase()).toBe(VAULT);
+      expect(
+        decodeFunctionData({ abi: vaultAbi, data: calls[0].data }),
+      ).toEqual({ functionName: "getPurchase", args: [5n] });
+    });
+
+    it("throws when the wallet is on another chain", async () => {
+      installReadProvider({ result: "0x" }, 1);
+      await expect(readOrderMinQuote(31337, VAULT, 5n)).rejects.toThrow(
+        /chain/i,
+      );
     });
   });
 });

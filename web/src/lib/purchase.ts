@@ -25,14 +25,28 @@ export function withdrawableQuote(
   return balance > pending ? balance - pending : 0n;
 }
 
-/** Operator-facing line for what a Pending order would settle at */
+/**
+ * Operator-facing line for what a Pending order would settle at. Settlement refunds the whole
+ * deposit when the quote is above the deposit or below the minimum recorded with the order.
+ */
 export function orderPricingMessage(
   p: OrderPricing,
   fmt: (minimalUnits: bigint) => string,
+  bounds: { deposit: bigint; minQuote: bigint },
 ): string {
   switch (p.state) {
-    case "priced":
-      return `Priced at round ${p.roundId}: ${fmt(p.quoteAmount)}. Anyone can settle it.`;
+    case "priced": {
+      const priced = `Priced at round ${p.roundId}: ${fmt(p.quoteAmount)}`;
+      const refund =
+        "Settling will refund the whole deposit and the buyer receives no RWA.";
+      if (p.quoteAmount > bounds.deposit) {
+        return `${priced}, above the buyer's deposit of ${fmt(bounds.deposit)}. ${refund}`;
+      }
+      if (p.quoteAmount < bounds.minQuote) {
+        return `${priced}, below this order's minimum of ${fmt(bounds.minQuote)}. ${refund}`;
+      }
+      return `${priced}. Anyone can settle it.`;
+    }
     case "waiting":
       return "Waiting for a price round: none has landed past the dealing cut-off yet.";
     case "blocked":

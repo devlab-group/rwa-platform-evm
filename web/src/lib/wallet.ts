@@ -316,6 +316,28 @@ export async function readOrderPricing(
 }
 
 /**
+ * Read the Vault minimum recorded on an rwa-v4 order when it was requested. Settlement checks the
+ * quote against this figure, not the Vault's current minimum.
+ */
+export async function readOrderMinQuote(
+  expectedChainId: number,
+  vault: Address,
+  id: bigint,
+): Promise<bigint> {
+  const provider = getInjectedProvider();
+  if (!provider) throw new Error("No injected wallet found.");
+  await assertChain(provider, expectedChainId);
+  const client = createPublicClient({ transport: custom(provider) });
+  const order = await client.readContract({
+    address: vault,
+    abi: vaultAbi,
+    functionName: "getPurchase",
+    args: [id],
+  });
+  return order.minPurchaseQuote;
+}
+
+/**
  * Id of an on-chain distribution that already uses this snapshot, or null. The contract accepts
  * the same root again and each creation pays it in full, so the console checks before sending.
  */
@@ -533,6 +555,10 @@ function explainTokenError(
       return "The priced quote is zero, so the request cannot be funded.";
     case "BeneficiaryNotAllowed":
       return `${first} is not Allowed in the compliance registry; restore their status before funding.`;
+    case "InvalidStrategy":
+      return `${first} is not a usable price strategy: it did not answer forwardPriced().`;
+    case "InvalidDealingCutoff":
+      return `The strategy's dealing cut-off of ${String(first)} s does not fit the timeout of ${String(args?.[1])} s: it must be above 0 and below the timeout, so a price round can land before cancellation opens.`;
     default:
       return undefined;
   }
