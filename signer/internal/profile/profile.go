@@ -88,8 +88,15 @@ func Validate(raw []byte) (*Profile, error) {
 		}
 	}
 	allowed := map[string]bool{
-		"profileVersion": true, "projectId": true, "assetType": true, "tokenUnit": true,
-		"tokenDecimals": true, "recordIdLabel": true, "displayFields": true, "legal": true, "assetSchema": true,
+		"profileVersion": true,
+		"projectId":      true,
+		"assetType":      true,
+		"tokenUnit":      true,
+		"tokenDecimals":  true,
+		"recordIdLabel":  true,
+		"displayFields":  true,
+		"legal":          true,
+		"assetSchema":    true,
 	}
 	for _, k := range obj.Keys() {
 		if !allowed[k] {

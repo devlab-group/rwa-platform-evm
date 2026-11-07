@@ -240,8 +240,8 @@ dependency scanning, Slither and end-to-end flows. Mythril runs weekly and on de
 `RWAFactory.deploy(ProjectConfig)` atomically deploys the stack through helpers that keep
 runtime code below EIP-170's limit. The console reads the factory address and version from
 `GET /api/v1/config`, encodes the matching `ProjectConfig` and submits the admin wallet's
-transaction. The server supports rwa-v3 and existing rwa-v2 deployments, checking bytecode
-presence, roles and allowlisting before accepting `ProjectDeployed`.
+transaction. The server supports rwa-v4, rwa-v3 and rwa-v2 deployments. Before accepting
+`ProjectDeployed`, it checks bytecode presence, roles and allowlisting.
 Qualify each chain with [`docs/operator/testnet-qualification.md`](docs/operator/testnet-qualification.md).
 
 ## Documentation

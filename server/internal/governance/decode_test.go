@@ -21,10 +21,14 @@ func pausedLog(t *testing.T, name string, account common.Address) types.Log {
 
 func roleLog(name string, role common.Hash, account, sender common.Address) types.Log {
 	g := bindings.NewGovernance()
-	return types.Log{Topics: []common.Hash{
-		g.EventID(name), role,
-		common.BytesToHash(account.Bytes()), common.BytesToHash(sender.Bytes()),
-	}}
+	return types.Log{
+		Topics: []common.Hash{
+			g.EventID(name),
+			role,
+			common.BytesToHash(account.Bytes()),
+			common.BytesToHash(sender.Bytes()),
+		},
+	}
 }
 
 func TestDecodePausedUnpaused(t *testing.T) {
@@ -64,10 +68,12 @@ func TestDecodeRoleGrantedRevoked(t *testing.T) {
 func TestDecodeDefaultAdminTransferScheduled(t *testing.T) {
 	g := bindings.NewGovernance()
 	newAdmin := common.HexToAddress("0x00000000000000000000000000000000000000D4")
-	log := types.Log{Topics: []common.Hash{
-		g.EventID("DefaultAdminTransferScheduled"),
-		common.BytesToHash(newAdmin.Bytes()), // newAdmin is indexed in topic1
-	}}
+	log := types.Log{
+		Topics: []common.Hash{
+			g.EventID("DefaultAdminTransferScheduled"),
+			common.BytesToHash(newAdmin.Bytes()), // newAdmin is indexed in topic1
+		},
+	}
 	name, data, err := DecodeLog(log)
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +98,43 @@ func TestDecodeDefaultAdminTransferCanceled(t *testing.T) {
 	}
 	if len(data) != 0 {
 		t.Fatalf("data = %v, want empty", data)
+	}
+}
+
+func TestDecodeDefaultAdminDelayChangeScheduled(t *testing.T) {
+	g := bindings.NewGovernance()
+	// 86400 and 1800000000 as two 32-byte words, the layout OpenZeppelin emits
+	data := common.FromHex("0x" +
+		"0000000000000000000000000000000000000000000000000000000000015180" +
+		"000000000000000000000000000000000000000000000000000000006b49d200")
+	name, got, err := DecodeLog(types.Log{Topics: []common.Hash{g.EventID("DefaultAdminDelayChangeScheduled")}, Data: data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "DefaultAdminDelayChangeScheduled" {
+		t.Fatalf("name = %q, want DefaultAdminDelayChangeScheduled", name)
+	}
+	if got["newDelay"] != "86400" || got["effectSchedule"] != "1800000000" {
+		t.Fatalf("data = %v, want newDelay 86400 and effectSchedule 1800000000", got)
+	}
+}
+
+func TestDecodeDefaultAdminDelayChangeScheduled_TruncatedData_IsAnError(t *testing.T) {
+	g := bindings.NewGovernance()
+	log := types.Log{Topics: []common.Hash{g.EventID("DefaultAdminDelayChangeScheduled")}, Data: make([]byte, 31)}
+	if name, _, err := DecodeLog(log); err == nil {
+		t.Fatalf("decoded %q from truncated data", name)
+	}
+}
+
+func TestDecodeDefaultAdminDelayChangeCanceled(t *testing.T) {
+	g := bindings.NewGovernance()
+	name, data, err := DecodeLog(types.Log{Topics: []common.Hash{g.EventID("DefaultAdminDelayChangeCanceled")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "DefaultAdminDelayChangeCanceled" || len(data) != 0 {
+		t.Fatalf("name = %q, data = %v, want DefaultAdminDelayChangeCanceled and no fields", name, data)
 	}
 }
 

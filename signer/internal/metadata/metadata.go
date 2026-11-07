@@ -66,8 +66,13 @@ func Validate(raw []byte) (*Metadata, error) {
 		}
 	}
 	allowed := map[string]bool{
-		"platformVersion": true, "projectId": true, "recordId": true, "asset": true,
-		"issuance": true, "proofs": true, "createdAt": true,
+		"platformVersion": true,
+		"projectId":       true,
+		"recordId":        true,
+		"asset":           true,
+		"issuance":        true,
+		"proofs":          true,
+		"createdAt":       true,
 	}
 	for _, k := range obj.Keys() {
 		if !allowed[k] {

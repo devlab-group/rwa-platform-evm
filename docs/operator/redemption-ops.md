@@ -14,13 +14,18 @@ a timed-out Pending request while paused, provided they remain Allowed.
    `requestRedemption(rwaAmount, minQuoteOut, deadline)`. The contract fixes
    `quoteAmount = strategy.quoteRedemption(rwaAmount)`, checks the minimum quote and deadline,
    and escrows the exact RWA amount. The request becomes Pending. Show this as a request,
-   without promising payment.
+   without promising payment. An rwa-v4 forward-priced request stores no quote. Funding uses
+   the first round published at least the dealing cutoff after the request, then checks
+   `minQuoteOut`.
 2. Fund: a holder of `TREASURER_ROLE` approves the escrow to spend the quote token, then calls
    `fundRedemption(id)` from their wallet or multisig. The admin console provides this flow and
    shows the request's fixed quote and beneficiary compliance status. Funding requires Pending
    status, re-checks that the beneficiary is Allowed and pulls the exact quote amount from the
    treasurer. The request becomes Funded. Funding is irreversible: the escrow has no funded
    cash withdrawal or refund path. Check quote-token eligibility before funding (next section).
+   For a forward-priced request, read `previewFunding(id)` for the amount to approve. Funding
+   reverts if no usable round exists, the quote is below `minQuoteOut`, or the request has
+   reached its timeout (`FundingClosed`). Reject a request below its minimum, or let the holder cancel.
 3. Claim: anyone can call `claimRedemption(id)` for a Funded request. It pays the exact quote
    amount to the recorded beneficiary and returns the RWA to the Vault as sellable inventory.
    The request becomes Completed. Claim does not re-check beneficiary compliance; the quote
@@ -97,7 +102,9 @@ Anyone can submit the claim, and the beneficiary receives the payment regardless
   after a temporary problem, such as a quote-token pause or upgrade, has been resolved. A
   beneficiary blacklist requires the quote-token issuer to accept that wallet before payment
   can succeed. Apply the checks above before funding.
-- Price changes while Pending: the quote stays fixed at request time. Slippage bounds
+- Price changes while Pending: on an instant strategy the quote stays fixed at request time; on
+  a forward-priced strategy the stored strategy selects its pricing round, independently of
+  when funding is attempted. Slippage bounds
   (`maxQuoteAmount` for purchases and `minQuoteOut` for redemption requests) and deadlines limit
   exposure to price changes before a transaction is included.
 - Timeout: if the issuer neither funds nor rejects, an Allowed beneficiary can cancel after

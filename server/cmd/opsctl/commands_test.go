@@ -24,8 +24,11 @@ import (
 
 func testOpsCtx(repos *repository.Repositories) opsCtx {
 	return opsCtx{
-		ctx: context.Background(), repos: repos, audit: auditlog.New(repos.AuditLogs),
-		actor: "opsctl:test", out: &bytes.Buffer{},
+		ctx:   context.Background(),
+		repos: repos,
+		audit: auditlog.New(repos.AuditLogs),
+		actor: "opsctl:test",
+		out:   &bytes.Buffer{},
 	}
 }
 
@@ -45,8 +48,12 @@ func TestRunTxReplace(t *testing.T) {
 
 	ctx := context.Background()
 	original, err := txs.Submit(ctx, blockchain.SubmitRequest{
-		IdempotencyKey: "opsctl-test-1", Kind: "test", Signer: signer,
-		To: common.HexToAddress("0x00000000000000000000000000000000000AAA"), Data: nil, Value: big.NewInt(0),
+		IdempotencyKey: "opsctl-test-1",
+		Kind:           "test",
+		Signer:         signer,
+		To:             common.HexToAddress("0x00000000000000000000000000000000000AAA"),
+		Data:           nil,
+		Value:          big.NewInt(0),
 	})
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
@@ -110,7 +117,12 @@ func TestRunIndexerResetCheckpoint(t *testing.T) {
 	trustedHash := canonicalHeader.Hash().Hex()
 
 	if err := repos.ChainEvents.Create(ctx, &models.ChainEvent{
-		ChainID: 31337, Address: addr.Hex(), Name: "X", TxHash: "0xaa", LogIndex: 0, BlockNumber: 20,
+		ChainID:     31337,
+		Address:     addr.Hex(),
+		Name:        "X",
+		TxHash:      "0xaa",
+		LogIndex:    0,
+		BlockNumber: 20,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -157,8 +169,13 @@ func TestRunDLQListAndInspect(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	if err := repos.IndexerDeadLetters.Record(ctx, &models.DeadLetterEntry{
-		ID: "dlq-1", ChainID: 31337, BlockNumber: 5, ErrorCategory: models.DLQErrorDecode,
-		ErrorMessage: "boom", FirstFailedAt: now, LastFailedAt: now,
+		ID:            "dlq-1",
+		ChainID:       31337,
+		BlockNumber:   5,
+		ErrorCategory: models.DLQErrorDecode,
+		ErrorMessage:  "boom",
+		FirstFailedAt: now,
+		LastFailedAt:  now,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -195,8 +212,12 @@ func TestRunDLQRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	logEntry := types.Log{
-		Address: addr, BlockNumber: 5, BlockHash: header.Hash(),
-		TxHash: common.HexToHash("0xaaaa"), Index: 0, Topics: []common.Hash{common.HexToHash("0x01")},
+		Address:     addr,
+		BlockNumber: 5,
+		BlockHash:   header.Hash(),
+		TxHash:      common.HexToHash("0xaaaa"),
+		Index:       0,
+		Topics:      []common.Hash{common.HexToHash("0x01")},
 	}
 	raw, err := json.Marshal(logEntry)
 	if err != nil {
@@ -204,9 +225,17 @@ func TestRunDLQRetry(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	if err := repos.IndexerDeadLetters.Record(ctx, &models.DeadLetterEntry{
-		ID: "dlq-retry-1", ChainID: 31337, BlockNumber: 5, BlockHash: header.Hash().Hex(),
-		TxHash: logEntry.TxHash.Hex(), LogIndex: 0, ErrorCategory: models.DLQErrorDecode,
-		ErrorMessage: "boom", FirstFailedAt: now, LastFailedAt: now, SourceData: raw,
+		ID:            "dlq-retry-1",
+		ChainID:       31337,
+		BlockNumber:   5,
+		BlockHash:     header.Hash().Hex(),
+		TxHash:        logEntry.TxHash.Hex(),
+		LogIndex:      0,
+		ErrorCategory: models.DLQErrorDecode,
+		ErrorMessage:  "boom",
+		FirstFailedAt: now,
+		LastFailedAt:  now,
+		SourceData:    raw,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -237,8 +266,12 @@ func TestRunDLQDismiss(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	if err := repos.IndexerDeadLetters.Record(ctx, &models.DeadLetterEntry{
-		ID: "dlq-dismiss-1", ChainID: 31337, ErrorCategory: models.DLQErrorDecode,
-		ErrorMessage: "boom", FirstFailedAt: now, LastFailedAt: now,
+		ID:            "dlq-dismiss-1",
+		ChainID:       31337,
+		ErrorCategory: models.DLQErrorDecode,
+		ErrorMessage:  "boom",
+		FirstFailedAt: now,
+		LastFailedAt:  now,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +296,10 @@ func TestRunIPFSRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := repos.Publications.Upsert(ctx, &models.PublicationRecord{
-		ID: "pub-1", CID: cid, State: models.PublicationReplicationPending, ReplicationThreshold: 1,
+		ID:                   "pub-1",
+		CID:                  cid,
+		State:                models.PublicationReplicationPending,
+		ReplicationThreshold: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +333,10 @@ func TestRunIPFSRestoreLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := repos.Publications.Upsert(ctx, &models.PublicationRecord{
-		ID: "pub-2", CID: cid, State: models.PublicationReplicationFailed, ReplicationThreshold: 1,
+		ID:                   "pub-2",
+		CID:                  cid,
+		State:                models.PublicationReplicationFailed,
+		ReplicationThreshold: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}

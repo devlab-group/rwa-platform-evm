@@ -20,9 +20,9 @@ the server, MongoDB and an IPFS node.
   strategy (`FixedPriceStrategy` or `OraclePriceStrategy`), `RedemptionEscrow` and
   `IncomeDistributor`. `RWAFactory` deploys and connects them through five delegatecall helpers
   to keep its runtime code within the EIP-170 size limit.
-- Contract versions: this guide covers rwa-v3. The server also serves rwa-v2 deployments,
-  without minimum purchase, oracle pricing or income distribution. Their escrow retains its
-  deploy-time strategy (§4a).
+- Contract versions: this guide covers rwa-v4. The server also supports rwa-v3, whose oracle
+  pricing uses the latest feed answer, and rwa-v2, which has no minimum purchase, oracle pricing
+  or income distribution. An rwa-v2 escrow retains its deploy-time strategy (§4a).
 - Server (Go/Gin): API, indexer, transaction manager and embedded admin console.
 - Signer (Go CLI): the auditor's EIP-712 signing tool. Run it on an offline machine.
 - Admin console (React, `web/`): embedded in the server binary and served at `/`.
@@ -57,11 +57,11 @@ respective transfers:
 
 | Address                           | Quote-token movement                                                                  | Effect of refusal                                                                                                       |
 | --------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `Vault`                           | receives payment in `buy`; sends proceeds in `withdrawProceeds`                       | the affected purchase or withdrawal reverts                                                                             |
+| `Vault`                           | takes `buy` payments and order deposits; pays refunds and `withdrawProceeds`          | the affected purchase or withdrawal reverts                                                                             |
 | `RedemptionEscrow`                | receives funding in `fundRedemption`; pays out in `claimRedemption`                   | funding or the claim reverts                                                                                            |
 | Treasury (`Vault.treasury`)       | receives `withdrawProceeds`                                                           | withdrawal reverts; proceeds remain in the Vault until the issuer accepts the treasury or the admin calls `setTreasury` |
 | Each `TREASURER_ROLE` wallet      | pays in `fundRedemption`                                                              | funding reverts                                                                                                         |
-| Each investor wallet              | pays in `buy`; receives in `claimRedemption` and income `claim`                       | the purchase or claim reverts                                                                                           |
+| Each investor wallet              | pays in `buy` and `requestPurchase`; receives refunds, `claimRedemption`, `claim`     | the purchase or claim reverts                                                                                           |
 | `IncomeDistributor`               | receives `createDistribution` funding; pays income claims and the reclaimed remainder | creating the distribution, a claim or the reclaim reverts                                                               |
 | Each `INCOME_MANAGER_ROLE` wallet | pays in `createDistribution`                                                          | creating the distribution reverts                                                                                       |
 
@@ -96,14 +96,38 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
    - Fixed prices: choose a pricer and purchase/redemption prices; `PRICER_ROLE` can update them.
    - Oracle prices: an `AggregatorV3Interface` feed that reports the value of one whole RWA
      token in the quote token's currency, such as a fund's published USD NAV for a USD
-     stablecoin; a market price of another asset is not valid. Set `maxAge` above the feed's
-     heartbeat, or every quote reverts between updates. Purchase and redemption spreads are in
-     basis points. On an L2, add the sequencer uptime feed and a grace period. The settings are
-     immutable; the strategy does not detect a quote-token depeg.
-   - Minimum purchase: the smallest quote per `buy`, in quote-token units; 0 disables it.
+     stablecoin; a market price of another asset is not valid. Purchase and redemption spreads
+     are in basis points. On an L2, add the sequencer uptime feed and a grace period. The settings
+     are immutable; the strategy does not detect a quote-token depeg.
+   - Dealing cut-off (rwa-v4 oracle only): use the first round published at least
+     `dealingCutoff` after the order. Set the cutoff to cover the maximum delay between
+     valuation and publication. With a NAV valued at 16:00, published at 18:00 and a 2-hour
+     cutoff, an order at 15:30 uses that day's NAV; an order at 16:30 waits for the next eligible
+     round. A longer publication delay can let an order use a valuation that predates it (§8).
+     Set each timeout above the feed's longest normal update interval plus the cutoff. The
+     contracts cannot read or enforce that interval. For a daily NAV published 30 minutes after
+     its strike, a 6-hour cutoff and 24-hour purchase timeout open cancellation before the next
+     eligible round is published. A buyer who orders just before the strike can wait for an
+     unfavourable valuation and cancel before publication. While orders are open, do not migrate
+     the feed's aggregator (a Chainlink phase change), and keep each eligible pricing round
+     within 16 rounds after its order's base round. Otherwise pricing can remain blocked (§8).
+   - `maxAge` on rwa-v4: it limits previews and displayed prices, but does not gate orders.
+     The investor app blocks new orders when a preview fails, so set it above the update interval.
+   - `maxAge` on rwa-v3: for a scheduled feed, such as a daily NAV, set `maxAge` so each answer
+     expires before the next price can be known. For example, if the next NAV can be known 23
+     hours after the feed's `updatedAt`, use less than 23 hours. Once the answer expires, new
+     purchases and redemption requests revert until the feed updates. If the new price is known
+     before the old answer expires, holders can trade at the old price (§8). For a continuously
+     updated feed, set `maxAge` above its heartbeat to avoid quotes reverting between updates. Set
+     spreads to cover the largest price move you expect while trading is open.
+   - Minimum purchase: the smallest quote per purchase, in quote-token units; 0 disables it.
+   - Purchase timeout (rwa-v4): the wait before a buyer can cancel an order with no usable
+     pricing round, from 1 to 365 days. It must exceed the dealing cutoff plus the feed's longest
+     normal update interval (see the cutoff above).
 
-   The Setup screen reads the factory's version from `GET /api/v1/config` and offers these
-   fields only for an rwa-v3 factory.
+   Setup reads the factory version from `GET /api/v1/config`. Minimum purchase and oracle fields
+   are available for rwa-v3 and rwa-v4; dealing cutoff and purchase timeout are available only
+   for rwa-v4.
 
 3. Deploy through either path:
 
@@ -131,8 +155,9 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
    - a successful transaction receipt and a supported event version matching `factory.version()`;
    - deploy calldata whose `projectId`, `profileDigest` and decimals match the stored profile;
    - bytecode at each project-contract address and the expected contract wiring;
-   - for rwa-v3, the minimum purchase, the oracle strategy's settings and the income
+   - for rwa-v3 and later, the minimum purchase, the oracle strategy's settings and the income
      distributor's token, quote token and Vault matching the deploy calldata;
+   - for rwa-v4, the purchase timeout and dealing cut-off matching the deploy calldata;
    - role holders matching the deploy calldata, with no unexpected holders;
    - the Vault and escrow registered as system addresses, Allowed with no expiry;
    - no platform roles retained by the factory, including `DEFAULT_ADMIN_ROLE`.
@@ -162,15 +187,33 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
   must hold the full amount. Expired Pending burns release their reservations; reissue changes
   nonce and expiry but retains metadata, so the signer's metadata-age limit still applies.
   The server marks the burn Burned after observing the event.
-- Sales: investors call `Vault.buy` from their wallets; each purchase must meet the minimum
-  purchase. A holder of `TREASURER_ROLE` withdraws proceeds to the treasury.
+- Sales: instant strategies use `Vault.buy`. Forward-priced strategies use `requestPurchase`
+  to hold `maxQuoteAmount` as a deposit. Anyone can call `settlePurchase` once a usable round is
+  available. Settlement delivers the RWA and returns the unused deposit, or refunds the whole
+  deposit if the quote exceeds it, falls below the minimum, inventory is insufficient, or the
+  recipient is no longer Allowed. Purchases must meet the minimum. `TREASURER_ROLE` can withdraw
+  proceeds to the treasury, excluding open deposits.
+- Settling orders: the platform does not submit settlements. The buyer, an operator's console
+  wallet or anyone else can settle. Run the [keeper](#4f-order-keeper) in production to reduce
+  delivery delays and the opportunity to obtain a refund by delaying settlement (§8).
 - Redemptions: follow the [redemption operations guide](redemption-ops.md).
 - Pricing: with a fixed strategy, `PRICER_ROLE` sets purchase and redemption prices
-  independently on `FixedPriceStrategy`. With an oracle strategy, quotes follow the feed; while
-  it is stale or invalid, new purchases and redemption requests revert and `price_feed_stale`
-  fires (§5). Requests already made keep their quotes.
+  independently on `FixedPriceStrategy`. With an oracle strategy, prices follow the feed. While it
+  is stale or invalid, previews revert and `price_feed_stale` fires (§5). On rwa-v3 new purchases
+  and redemption requests revert too. When `maxAge` is shorter than a scheduled feed's update
+  interval, these reverts are expected between expiry and the next update. Set
+  `alerts.price_feed_sla` (§5) to delay stale-price alerts until an update is late. Existing
+  instant requests keep their quotes; rwa-v4 forward orders retain their pricing round.
 - Income: pay holders through income distributions (§4e).
 - Pause: `PAUSER_ROLE` pauses the project. See §4a for the affected operations and exceptions.
+- Upgrading the server: before switching a deployment to a new release, run that release's
+  `opsctl --config <path> profile check` against the deployment's MongoDB. This read-only check
+  validates the stored profile and compares its recomputed digest with the stored digest. Record
+  creation revalidates the profile, and the deployment pins its digest on-chain. A rejected profile
+  blocks record creation; a changed digest no longer matches the pin. On failure, the command
+  exits non-zero and reports the errors.
+  Keep the deployment on its current release and report them. `OK` confirms that the profile
+  validates and its digest is unchanged.
 
 ## 4a. Privileged roles and administration
 
@@ -235,13 +278,19 @@ Outside Anvil, `Deploy.s.sol` defaults to 24 hours and refuses zero unless
   ([auditor guide, §7](../auditor/auditor-guide.md)).
 - Change the treasury or price strategy with `Vault.setTreasury` or `Vault.setStrategy`.
   Both require the admin role and revert while paused. Check the Security screen afterwards.
-  In rwa-v3 the escrow quotes through the Vault's current strategy, so one call changes
-  purchase and redemption pricing; requests already made keep their quotes. To change an oracle
-  feed or spread, deploy a new `OraclePriceStrategy` and point the Vault at it. In rwa-v2 the
+  On rwa-v3 and rwa-v4, the escrow quotes new requests through the Vault's current strategy.
+  Existing instant requests keep their quotes; rwa-v4 forward orders keep their stored strategy.
+  To change an oracle feed or spread, deploy a replacement `OraclePriceStrategy` and point the
+  Vault at it. On rwa-v4, `setStrategy` rejects a candidate that does not answer
+  `forwardPriced()` (`InvalidStrategy`) and a forward-priced one whose `dealingCutoff` is zero or
+  not below the Vault's purchase timeout (`InvalidDealingCutoff`). It cannot see the escrow's
+  timeout, so also check that the cutoff is below the redemption timeout: otherwise every new
+  forward redemption request reverts `InvalidDealingCutoff`. In rwa-v2 the
   escrow retains its original strategy, so continue setting redemption prices there after a
   Vault strategy change; the split keeps `config_drift` raised (§7a).
 - Change the minimum purchase with `Vault.setMinPurchaseQuote` on the Security screen. It
-  requires the admin role and reverts while paused.
+  requires the admin role and reverts while paused. Each rwa-v4 forward order keeps the minimum
+  in force when it was placed, so existing orders are unaffected.
 - Replace the redemption manager by granting `REDEMPTION_MANAGER_ROLE` on `RedemptionEscrow`
   to the new holder and revoking it from the old holder on the Security screen.
 - Update prices with `FixedPriceStrategy.setPurchasePrice` and `setRedemptionPrice`
@@ -251,10 +300,10 @@ Outside Anvil, `Deploy.s.sol` defaults to 24 hours and refuses zero unless
 
 Call `RWAToken.pause()` or `unpause()` with `PAUSER_ROLE`.
 
-| While paused     | Operations                                                                                                                                                                                                                                                                   |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Revert           | ordinary transfers, `buy`, `withdrawProceeds`, `mint`, `burn`, `requestRedemption`, `fundRedemption`, `rejectRedemption`, `claimRedemption`, `Vault.setTreasury`, `Vault.setStrategy`, `Vault.setMinPurchaseQuote`, `createDistribution`, income `claim`, `reclaimUnclaimed` |
-| Remain available | timed-out `cancelRedemption`, price updates, `setAuditor`, compliance and role changes, `setFrozenTokens`, `forcedTransfer`, `extendClaimDeadline`                                                                                                                           |
+| While paused     | Operations                                                                                                                                                                                                                                                                                                        |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Revert           | ordinary transfers, `buy`, `requestPurchase`, `settlePurchase`, `withdrawProceeds`, `mint`, `burn`, `requestRedemption`, `fundRedemption`, `rejectRedemption`, `claimRedemption`, `Vault.setTreasury`, `Vault.setStrategy`, `Vault.setMinPurchaseQuote`, `createDistribution`, income `claim`, `reclaimUnclaimed` |
+| Remain available | timed-out `cancelRedemption`, `cancelPurchase`, `rejectPurchase` (paused only), price updates, `setAuditor`, compliance and role changes, `setFrozenTokens`, `forcedTransfer`, `extendClaimDeadline`                                                                                                              |
 
 Cancellation uses an escrow-only RWA return path that bypasses pause but still requires an
 Allowed beneficiary. See the [redemption state machine](../spec/redemption-state-machine.md).
@@ -468,7 +517,10 @@ quote token. Each holder claims a share based on a published snapshot.
 4. Holders claim in the investor app before the deadline. A claim needs an unpaused project and
    an Allowed wallet; the server serves each holder's amount and proof publicly.
 5. The income manager can extend a deadline, including while paused, until the distribution
-   is reclaimed. The new deadline must be later and in the future.
+   is reclaimed. The new deadline must be later and in the future. Before the deadline, compare
+   the snapshot with the compliance list. Blocked holders and holders with expired approval
+   cannot claim; their unclaimed income goes to the treasury when the remainder is reclaimed.
+   Restore approval for holders who qualify, and extend the deadline while reviews are pending.
 6. After the deadline, anyone can use "Reclaim unclaimed" to send the remainder to the Vault's
    current treasury. Unpause first; reclaim reverts while paused.
 
@@ -481,6 +533,56 @@ with `snapshot_too_large`.
 exceed a sender's balance or supply differs from indexed mints minus burns. Deployments indexed
 before the server stored `Transfer` events need one reindex (§6) before their first distribution.
 
+## 4f. Order keeper
+
+`keeper` polls the chain and settles rwa-v4 purchase orders when simulation succeeds. It runs
+with its own config and wallet, without a database or platform API connection. Settlement is
+permissionless: use a wallet with no roles and fund it only for gas. A stolen key exposes the
+funds in that wallet. The caller does not select the order's pricing round.
+
+1. Create a new wallet with a small gas balance. Never reuse the compliance key.
+2. Build it with `make keeper` and copy `server/keeper.example.yaml`. Set `rpc_url`, `chain_id`,
+   `vault_address` and `keys`. Production accepts `local-keystore` (reads
+   `<keystore_dir>/keeper.json`) or `vault` (key `<vault_key_prefix>keeper`), and needs
+   `max_fee_per_gas_wei` or `max_tx_total_cost_wei`.
+3. Run `./bin/keeper --config /etc/rwa/keeper.yaml` under a supervisor that restarts it. Run one
+   process per wallet. `--once` runs a single pass, for cron.
+
+Every `poll_interval` (default 30s), the keeper checks open orders. For a Pending order without
+an in-flight transaction, it simulates `settlePurchase` and submits the call if it succeeds.
+A simulation that reverts, including for an unavailable round, pause or buyer who is not Allowed,
+sends no transaction and spends no gas. The order is retried on the next pass. After a pending
+transaction waits over 5 minutes, the keeper attempts a replacement with 20% higher fees, subject
+to the configured fee caps. If a send times out and its outcome is unknown, the keeper keeps
+track of that transaction and rebroadcasts the same bytes instead of sending a second settlement.
+
+Use an rwa-v4 Vault address. Startup checks the RPC chain ID and runs an initial pass. A reverted
+or undecodable `nextPurchaseId` response aborts startup, as does any error in a `--once` run.
+Other first-pass errors in a long-running keeper, such as a dropped RPC connection, are logged
+and retried on the next poll, just as later pass errors are. The keeper exposes no
+metrics, so monitor the process, logs and wallet balance; a keeper that stops settling shows up
+as growing `rwa_purchase_orders_pending_oldest_age_seconds` and as the `pending_purchase_sla`
+alert (§5). An unfunded wallet cannot pay settlement gas.
+
+Its limits:
+
+- Transaction records live in memory. A restart can submit another settlement for an order
+  whose transaction is still pending. If both are mined, one reverts and spends gas. Each
+  `--once` run starts with fresh transaction records.
+- Exhausting a transaction's replacement limit blocks further submissions from that wallet.
+  The keeper cannot clear that record from memory, so it logs the stuck transaction and exits
+  with an error. Resolve the stuck nonce from the wallet, then restart it. A replacement that is
+  reorged out or loses its nonce is retried like the original and does not block the keeper.
+- Startup discovers and reads historical order IDs, so its first pass grows with the order count.
+  An order that fails to read is retried on the next pass.
+- If a reorg removes the newest requests, the keeper forgets those order IDs and picks up the
+  orders that reuse them. If a reorg undoes a settlement the keeper already saw and puts an order
+  back to Pending, it does not look at that order again until it restarts. The buyer or anyone
+  else can still settle it.
+- Every settlement costs gas, including refunds, so an Allowed investor placing many small orders
+  spends the wallet. `minPurchaseQuote` raises the cost of that and the wallet balance caps the
+  loss. Keep the balance small.
+
 ## 5. Monitoring and alerts
 
 Scrape `/metrics` on `http.metrics_addr` (§7a). The platform exports:
@@ -489,6 +591,8 @@ Scrape `/metrics` on `http.metrics_addr` (§7a). The platform exports:
 - `rwa_sales_inventory_tokens` and `rwa_allowed_wallets`;
 - `rwa_redemptions_pending_count`, `rwa_redemptions_pending_oldest_age_seconds` and
   `rwa_redemptions_funded_unclaimed_count`;
+- `rwa_purchase_orders_pending_count` and `rwa_purchase_orders_pending_oldest_age_seconds`:
+  forward-priced purchase orders waiting to be settled;
 - `rwa_alerts_fired_total{kind}`, `rwa_storage_up` and `rwa_config_drift`;
 - `rwa_idempotency_outbox_errors_total` and `rwa_read_model_reconcile_errors_total`.
 
@@ -502,6 +606,7 @@ audit-log write. Repeated findings are counted on each check rather than dedupli
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | `pending_redemption_sla` | Pending age reaches `alerts.pending_redemption_sla` (default 48h)                                                                                  | 5 minutes                                              |
 | `funded_claim_failure`   | Funded, unclaimed age reaches `alerts.funded_claim_failure_sla` (default 24h), measured from when the server indexed the funding event             | 5 minutes                                              |
+| `pending_purchase_sla`   | A purchase order's Pending age reaches `alerts.pending_purchase_sla` (default 24h): no round has priced it or no keeper has settled it (§4f)       | 5 minutes                                              |
 | `config_drift`           | contract wiring differs from the expected project state (§7a)                                                                                      | 5 minutes                                              |
 | `storage_degraded`       | MongoDB ping fails                                                                                                                                 | 30 seconds, when using MongoDB                         |
 | `kyc_monitoring_hit`     | an accepted Sumsub monitoring decision concerns a projected Allowed wallet, or an Onfido monitor reports changed matches (§4c)                     | accepted Sumsub decisions; each Onfido signal delivery |
@@ -514,6 +619,19 @@ The platform has no dedicated metrics for indexer lag, RPC errors or stuck nonce
 Security screen's stale-data warning (`securityStale` on `GET /api/v1/project`) and the
 Transactions screen for `needs_intervention`. Treat indexed data as unconfirmed until it
 reaches the configured finality depth.
+
+`alerts.price_feed_sla` is unset by default. When `maxAge` is shorter than the update interval,
+set it to the longest normal gap between updates plus a tolerance: `26h` for a daily feed or
+`74h` for one that skips weekends. A stale price then raises `price_feed_stale` on an evaluation
+once the feed reaches that age. With `74h`, a missed weekday update can go unalerted for about
+two days. Other price failures and an unreadable feed age bypass this delay. The setting changes
+alert timing only. Instant-price purchases and redemption requests still reject stale feeds;
+forward requests skip `maxAge`.
+
+With `alerts.price_feed_sla` set, the platform compares each nonzero `purchaseTimeout` and
+`redemptionTimeout` with the oracle's `dealingCutoff` plus that SLA, logging each distinct warning
+once per process. This uses the SLA as the expected update gap: a shorter timeout can open
+cancellation before a pricing round is published. Raise the timeout or lower the cutoff.
 
 ## 6. Backup and recovery
 
@@ -572,6 +690,25 @@ advancement and dependent reconciliation. Verify a block out of band, then run
 `opsctl --config <path> indexer reset-checkpoint --trusted-block=<n> --trusted-hash=0x...`.
 The command rejects a hash that disagrees with the RPC. The recovery depth is not a server
 configuration setting.
+
+### New addresses
+
+The indexer watches the configured factory and active project contracts. Addresses added at
+activation or after a strategy swap are backfilled from `contract.start_block` without a reindex.
+The checkpoint continues tracking forward progress for reorg recovery.
+
+Each poll scans forward first, then backfills with `eth_getLogs` ranges of up to 2000 blocks.
+After five seconds it stops starting new backfill chunks and leaves the rest for the next poll;
+an active chunk finishes, so this is not a hard time limit. If a chunk fails, the platform logs
+`indexer poll error`; the next poll resumes at the failed chunk. A restart repeats the unfinished
+backfill from the start block.
+Repeated backfill errors leave that address's history incomplete. Check the reported range and
+whether the RPC can serve history from `contract.start_block`.
+
+Checkpoints saved without address coverage trigger a one-time backfill of the watch set. This
+repairs historical gaps and skips stored events. If decoding fails again for a dismissed dead
+letter, it reopens; dismiss it again. Admin delay events already stored as `unknown` need a
+[chain reindex](#chain-reindex).
 
 ### Log scanning and the dead-letter queue
 
@@ -682,8 +819,35 @@ drift there.
   be retried after the restriction is resolved; §2a covers permanent refusals.
 - Keep PII out of metadata and public IPFS objects, including income snapshots, which list holder
   addresses and balances.
-- An oracle feed is a trusted pricing source. A wrong price can sell inventory too cheaply or fix
+- An oracle feed is a trusted pricing source. A wrong price can sell inventory too cheaply or set
   inflated redemption quotes; `maxAge`, the sequencer check and investors' slippage bounds limit
-  but do not remove that risk.
+  but do not remove that risk. On rwa-v4, `maxAge` does not cover orders, and the sequencer check
+  only stops new orders during an outage or its grace window; it does not cover settlement.
+  Pause and reject open orders before they settle
+  ([incident response](../security/incident-response.md)).
+- On rwa-v4, the selected valuation cannot predate the order if publication stays within
+  `dealingCutoff` of valuation. A longer delay breaks this condition; the contract cannot verify
+  the delay between valuation and publication.
+- On rwa-v4, a buyer who delays settling can be refunded instead of filled if inventory runs out
+  or the recipient's approval lapses first, so a rise can be taken and a drop dodged. A keeper
+  narrows this, but cannot act while the buyer is not Allowed or the project is paused.
+- If all 16 searched rounds precede the cutoff, the order has no pricing round and can be
+  cancelled after its timeout. A feed phase change can leave a missing round after an order's
+  base round and block pricing. To clear Pending purchases sooner, pause the project and call
+  `rejectPurchase` for Allowed buyers. While unpaused, the redemption manager can call
+  `rejectRedemption` for Pending requests with Allowed beneficiaries.
+- On rwa-v4 the treasurer funds each redemption after its round is public, so it can fund the
+  requests whose price it accepts and leave the rest. The holder is bounded by `minQuoteOut`,
+  can recover the RWA at the redemption timeout while Allowed and cannot cancel sooner.
+  `previewBuy` and `previewRedeem` use the latest price to estimate quotes, not final order quotes.
+  They revert on a stale feed even though forward requests still work.
+- On rwa-v3, oracle quotes use the feed's latest answer when a purchase or redemption request is
+  made. While that answer is within `maxAge`, a
+  holder who knows the next price before the feed updates can buy at the old price or lock a
+  redemption quote before a drop. A `maxAge` below the update interval (§3) removes this window
+  only if the old answer expires before the next price can be known. Spreads limit this
+  advantage: a purchase followed by a redemption must overcome both spreads to profit, while
+  a redemption locked before a drop must overcome the redemption spread. Rejecting a Pending
+  redemption blocks that payout but does not reverse a purchase.
 - The income manager and the server's snapshot are trusted to compute entitlements; the
   contract pays whatever a valid proof for the root states, up to the funded total.

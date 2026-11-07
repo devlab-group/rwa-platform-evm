@@ -53,7 +53,8 @@ vi.mock("../../lib/wallet", async (importOriginal) => {
     sendClaimRedemption: vi.fn().mockResolvedValue("0xhash"),
     sendCancelRedemption: vi.fn().mockResolvedValue("0xhash"),
     sendErc20Approve: vi.fn().mockResolvedValue("0xapprove"),
-    waitForTxReceipt: vi.fn().mockResolvedValue(undefined),
+    readForwardPriced: vi.fn().mockResolvedValue(false),
+    waitForTxReceipt: vi.fn().mockResolvedValue({ status: "success" }),
     readErc20Allowance: vi.fn().mockResolvedValue(10n ** 30n),
     readErc20Balance: vi.fn().mockResolvedValue("100000000"),
   };
@@ -205,23 +206,25 @@ describe("Investor redemptions list (connected wallet)", () => {
 
     const claimable = rowById("10");
     expect(
-      within(claimable).getByRole("button", { name: "Claim (permissionless)" }),
+      within(claimable).getByRole("button", {
+        name: /^Claim \(permissionless\)/,
+      }),
     ).toBeInTheDocument();
     expect(
       within(claimable).queryByRole("button", {
-        name: "Cancel (timeout elapsed)",
+        name: /^Cancel \(timeout elapsed\)/,
       }),
     ).toBeNull();
 
     const timedOut = rowById("11");
     expect(
       within(timedOut).getByRole("button", {
-        name: "Cancel (timeout elapsed)",
+        name: /^Cancel \(timeout elapsed\)/,
       }),
     ).toBeInTheDocument();
     expect(
       within(timedOut).queryByRole("button", {
-        name: "Claim (permissionless)",
+        name: /^Claim \(permissionless\)/,
       }),
     ).toBeNull();
   });
@@ -240,10 +243,12 @@ describe("Investor redemptions list (connected wallet)", () => {
 
     const row = rowById("12");
     expect(
-      within(row).queryByRole("button", { name: "Claim (permissionless)" }),
+      within(row).queryByRole("button", { name: /^Claim \(permissionless\)/ }),
     ).toBeNull();
     expect(
-      within(row).queryByRole("button", { name: "Cancel (timeout elapsed)" }),
+      within(row).queryByRole("button", {
+        name: /^Cancel \(timeout elapsed\)/,
+      }),
     ).toBeNull();
   });
 
@@ -276,11 +281,13 @@ describe("Investor redemptions list (connected wallet)", () => {
 
       const row = rowById("20");
       expect(
-        within(row).queryByRole("button", { name: "Cancel (timeout elapsed)" }),
+        within(row).queryByRole("button", {
+          name: /^Cancel \(timeout elapsed\)/,
+        }),
       ).toBeNull();
       expect(
         within(row).queryByRole("button", {
-          name: "Claim (permissionless)",
+          name: /^Claim \(permissionless\)/,
         }) !== null,
       ).toBe(claimShown);
     },
@@ -300,7 +307,7 @@ describe("Investor redemptions list (connected wallet)", () => {
 
     expect(
       within(rowById("21")).queryByRole("button", {
-        name: "Cancel (timeout elapsed)",
+        name: /^Cancel \(timeout elapsed\)/,
       }),
     ).toBeNull();
   });
@@ -319,7 +326,7 @@ describe("Investor redemptions list (connected wallet)", () => {
 
     fireEvent.click(
       within(rowById("10")).getByRole("button", {
-        name: "Claim (permissionless)",
+        name: /^Claim \(permissionless\)/,
       }),
     );
 
@@ -362,7 +369,7 @@ describe("Investor redemptions list (connected wallet)", () => {
         await screen.findByText("12");
 
         const cancel = within(rowById("12")).queryByRole("button", {
-          name: "Cancel (timeout elapsed)",
+          name: /^Cancel \(timeout elapsed\)/,
         });
         expect(cancel !== null).toBe(offered);
       },
@@ -388,7 +395,7 @@ describe("Investor redemptions list (connected wallet)", () => {
 
     fireEvent.click(
       within(rowById("11")).getByRole("button", {
-        name: "Cancel (timeout elapsed)",
+        name: /^Cancel \(timeout elapsed\)/,
       }),
     );
 
@@ -421,7 +428,9 @@ describe("Investor buy and redemption request (client-encoded)", () => {
     vi.mocked(sendBuy).mockClear().mockResolvedValue("0xhash");
     vi.mocked(sendRequestRedemption).mockClear().mockResolvedValue("0xhash");
     vi.mocked(sendErc20Approve).mockClear().mockResolvedValue("0xapprove");
-    vi.mocked(waitForTxReceipt).mockClear().mockResolvedValue(undefined);
+    vi.mocked(waitForTxReceipt)
+      .mockClear()
+      .mockResolvedValue({ status: "success" } as never);
     vi.mocked(readErc20Allowance)
       .mockClear()
       .mockResolvedValue(10n ** 30n);
@@ -536,10 +545,10 @@ describe("Investor buy and redemption request (client-encoded)", () => {
     renderWithWallet(<Investor />, { connected: true });
     await screen.findByText("20");
     const claim = within(rowById("20")).getByRole("button", {
-      name: "Claim (permissionless)",
+      name: /^Claim \(permissionless\)/,
     });
     const cancel = within(rowById("21")).getByRole("button", {
-      name: "Cancel (timeout elapsed)",
+      name: /^Cancel \(timeout elapsed\)/,
     });
     await waitFor(() => expect(claim).toBeEnabled());
     expect(cancel).toBeEnabled();

@@ -151,9 +151,13 @@ type Config struct {
 	HTTPIdleTimeout       time.Duration
 	HTTPMaxHeaderBytes    int
 
-	// Alert thresholds for pending-redemption and funded-claim evaluators
+	// Alert thresholds for pending-redemption, funded-claim and pending-purchase-order evaluators
 	PendingRedemptionSLA  time.Duration
 	FundedClaimFailureSLA time.Duration
+	PendingPurchaseSLA    time.Duration
+	// PriceFeedSLA delays StalePrice alerts while a readable feed age is below this threshold;
+	// 0 disables the delay
+	PriceFeedSLA time.Duration
 
 	// MaxFeePerGasWei, MaxTipPerGasWei and MaxTxTotalCostWei cap signing costs
 	// as base-10 wei strings; empty means no cap for that dimension
@@ -303,6 +307,8 @@ type fileSchema struct {
 	Alerts struct {
 		PendingRedemptionSLA  string `yaml:"pending_redemption_sla"`
 		FundedClaimFailureSLA string `yaml:"funded_claim_failure_sla"`
+		PendingPurchaseSLA    string `yaml:"pending_purchase_sla"`
+		PriceFeedSLA          string `yaml:"price_feed_sla"`
 	} `yaml:"alerts"`
 
 	// ProductionOverrides require explicit true to relax the named production checks
@@ -421,6 +427,8 @@ func (f fileSchema) toEnvMap() map[string]string {
 
 	setStr("PENDING_REDEMPTION_SLA", f.Alerts.PendingRedemptionSLA)
 	setStr("FUNDED_CLAIM_FAILURE_SLA", f.Alerts.FundedClaimFailureSLA)
+	setStr("PENDING_PURCHASE_SLA", f.Alerts.PendingPurchaseSLA)
+	setStr("PRICE_FEED_SLA", f.Alerts.PriceFeedSLA)
 
 	setBool("PRODUCTION_ALLOW_UNBOUNDED_REQUEST_BODY", f.ProductionOverrides.AllowUnboundedRequestBody)
 	setBool("PRODUCTION_ALLOW_DISABLED_RATE_LIMIT", f.ProductionOverrides.AllowDisabledRateLimit)
@@ -590,6 +598,19 @@ func load(lookup envLookup) (Config, error) {
 	}
 	cfg.FundedClaimFailureSLA = fundedSLA
 
+	purchaseSLA, err := getDuration(lookup, "PENDING_PURCHASE_SLA", 24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.PendingPurchaseSLA = purchaseSLA
+
+	if cfg.PriceFeedSLA, err = getDuration(lookup, "PRICE_FEED_SLA", 0); err != nil {
+		return Config{}, err
+	}
+	if cfg.PriceFeedSLA < 0 {
+		return Config{}, fmt.Errorf("config: PRICE_FEED_SLA must not be negative, got %s", cfg.PriceFeedSLA)
+	}
+
 	if cfg.HTTPReadHeaderTimeout, err = getDuration(lookup, "HTTP_READ_HEADER_TIMEOUT", 5*time.Second); err != nil {
 		return Config{}, err
 	}
@@ -687,7 +708,9 @@ func load(lookup envLookup) (Config, error) {
 		return Config{}, fmt.Errorf("config: KYC_PROVIDER must be %q, %q, or %q, got %q", "none", "sumsub", "onfido", cfg.KYCProvider)
 	}
 	for name, v := range map[string]string{
-		"TX_MAX_FEE_PER_GAS_WEI": cfg.MaxFeePerGasWei, "TX_MAX_TIP_PER_GAS_WEI": cfg.MaxTipPerGasWei, "TX_MAX_TOTAL_COST_WEI": cfg.MaxTxTotalCostWei,
+		"TX_MAX_FEE_PER_GAS_WEI": cfg.MaxFeePerGasWei,
+		"TX_MAX_TIP_PER_GAS_WEI": cfg.MaxTipPerGasWei,
+		"TX_MAX_TOTAL_COST_WEI":  cfg.MaxTxTotalCostWei,
 	} {
 		if v == "" {
 			continue
@@ -804,9 +827,19 @@ const MinProductionSecretBytes = 32
 
 // weakProductionSecrets lists placeholders checked case-insensitively, regardless of length
 var weakProductionSecrets = map[string]bool{
-	"a": true, "b": true, "admin": true, "operator": true, "password": true,
-	"changeme": true, "change-me": true, "change_me": true, "secret": true,
-	"test": true, "default": true, "placeholder": true, "example": true,
+	"a":                                true,
+	"b":                                true,
+	"admin":                            true,
+	"operator":                         true,
+	"password":                         true,
+	"changeme":                         true,
+	"change-me":                        true,
+	"change_me":                        true,
+	"secret":                           true,
+	"test":                             true,
+	"default":                          true,
+	"placeholder":                      true,
+	"example":                          true,
 	"00000000000000000000000000000000": true,
 }
 
@@ -881,6 +914,7 @@ func validateProductionBounds(lookup envLookup, cfg Config) error {
 		"HTTP_IDLE_TIMEOUT":        cfg.HTTPIdleTimeout,
 		"PENDING_REDEMPTION_SLA":   cfg.PendingRedemptionSLA,
 		"FUNDED_CLAIM_FAILURE_SLA": cfg.FundedClaimFailureSLA,
+		"PENDING_PURCHASE_SLA":     cfg.PendingPurchaseSLA,
 		"TX_LEASE_TTL":             cfg.TxLeaseTTL,
 	}
 	for name, d := range positiveDurations {

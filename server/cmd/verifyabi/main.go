@@ -1,8 +1,8 @@
 // Command verifyabi compares internal/bindings selectors and event topic0 hashes with
-// contracts/out artifacts, and the rwa-v2 factory binding with the pinned ABI in
-// internal/bindings/testdata/rwa-v2. A missing contracts/out prints a notice and exits 0 so Go
-// needs no Foundry build. Once present, missing or unreadable checked artifacts fail
-// verification.
+// contracts/out artifacts, and the rwa-v3 and rwa-v2 factory bindings with the pinned ABIs in
+// internal/bindings/testdata/rwa-v3 and rwa-v2. A missing contracts/out prints a notice and
+// exits 0 so Go needs no Foundry build. Once present, missing or unreadable checked artifacts
+// fail verification.
 package main
 
 import (
@@ -61,9 +61,13 @@ func main() {
 		// plus the compliance(), supplyController(), redemptionEscrow() and paused() getters) is declared
 		// by RWAToken, so the RWAToken artifact is the one to check it against
 		{"RWAToken (ERC-20 views)", filepath.Join(root, "RWAToken.sol", "RWAToken.json"), func() abi.ABI { return bindings.NewERC20().ABI }},
-		// rwa-v2 deployments keep their own deploy selector and ProjectDeployed topic, which
-		// the compiled rwa-v3 factory no longer carries, so a fixture pins them
-		{"RWAFactory (rwa-v2)", findPinnedV2(), func() abi.ABI { return bindings.NewFactory().ABIV2 }},
+		// Only RWAToken emits every shared governance event: the others have no Paused
+		{"RWAToken (governance events)", filepath.Join(root, "RWAToken.sol", "RWAToken.json"), func() abi.ABI { return bindings.NewGovernance().ABI }},
+		// rwa-v3 and rwa-v2 deployments keep their own deploy selectors, and rwa-v2 its own
+		// ProjectDeployed topic, which the compiled rwa-v4 factory no longer carries, so
+		// fixtures pin them
+		{"RWAFactory (rwa-v3)", findPinned("rwa-v3"), func() abi.ABI { return bindings.NewFactory().ABIV3 }},
+		{"RWAFactory (rwa-v2)", findPinned("rwa-v2"), func() abi.ABI { return bindings.NewFactory().ABIV2 }},
 	}
 
 	// An artifact that cannot be loaded counts as a mismatch, so a renamed or
@@ -93,10 +97,10 @@ func main() {
 	fmt.Printf("verifyabi: OK, no drift between internal/bindings and the %d contract ABIs checked\n", compared)
 }
 
-// findPinnedV2 returns the path of the pinned rwa-v2 RWAFactory ABI, found relative to
-// the working directory (server/ or the repository root)
-func findPinnedV2() string {
-	rel := filepath.Join("internal", "bindings", "testdata", "rwa-v2", "RWAFactory.json")
+// findPinned returns the path of the pinned RWAFactory ABI for a factory version such as
+// "rwa-v2", found relative to the working directory (server/ or the repository root)
+func findPinned(version string) string {
+	rel := filepath.Join("internal", "bindings", "testdata", version, "RWAFactory.json")
 	for _, candidate := range []string{rel, filepath.Join("server", rel)} {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
@@ -134,6 +138,18 @@ func compare(name string, real, mine abi.ABI) int {
 		if fmt.Sprintf("%x", m.ID) != fmt.Sprintf("%x", rm.ID) {
 			fmt.Printf("  %s: method %s selector mismatch: mine=%x real=%x\n", name, methodName, m.ID, rm.ID)
 			mismatches++
+			continue
+		}
+		// The selector hashes parameter types only, so swapped tuple fields of one type (a
+		// ProjectConfig with two uint64 fields exchanged) keep it, as does a wrong return type
+		// or tuple field; both would encode or decode wrongly
+		if got, want := argTypes(m.Inputs, false, false), argTypes(rm.Inputs, false, false); got != want {
+			fmt.Printf("  %s: method %s inputs mismatch: mine=%s real=%s\n", name, methodName, got, want)
+			mismatches++
+		}
+		if got, want := argTypes(m.Outputs, false, false), argTypes(rm.Outputs, false, false); got != want {
+			fmt.Printf("  %s: method %s outputs mismatch: mine=%s real=%s\n", name, methodName, got, want)
+			mismatches++
 		}
 	}
 	for evName, e := range mine.Events {
@@ -145,6 +161,12 @@ func compare(name string, real, mine abi.ABI) int {
 		}
 		if e.ID != re.ID {
 			fmt.Printf("  %s: event %s topic0 mismatch: mine=%s real=%s\n", name, evName, e.ID.Hex(), re.ID.Hex())
+			mismatches++
+			continue
+		}
+		// topic0 hashes the types only; the indexed flags decide which fields are in topics
+		if got, want := argTypes(e.Inputs, true, true), argTypes(re.Inputs, true, true); got != want {
+			fmt.Printf("  %s: event %s fields mismatch: mine=%s real=%s\n", name, evName, got, want)
 			mismatches++
 		}
 	}
@@ -161,4 +183,40 @@ func compare(name string, real, mine abi.ABI) int {
 		}
 	}
 	return mismatches
+}
+
+// argTypes renders args as types, with the argument names when withNames is set and an
+// "indexed" marker when withIndexed is set. A tuple type always carries its component names.
+func argTypes(args abi.Arguments, withNames, withIndexed bool) string {
+	parts := make([]string, len(args))
+	for i, a := range args {
+		parts[i] = typeWithNames(a.Type)
+		if withNames {
+			parts[i] += " " + a.Name
+		}
+		if withIndexed && a.Indexed {
+			parts[i] += " indexed"
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
+// typeWithNames is abi.Type.String() with tuple component names, which that method omits: two
+// tuples whose same-typed fields are swapped have the same selector and the same String()
+// but encode differently
+func typeWithNames(t abi.Type) string {
+	switch t.T {
+	case abi.TupleTy:
+		parts := make([]string, len(t.TupleElems))
+		for i, e := range t.TupleElems {
+			parts[i] = typeWithNames(*e) + " " + t.TupleRawNames[i]
+		}
+		return "(" + strings.Join(parts, ",") + ")"
+	case abi.SliceTy:
+		return typeWithNames(*t.Elem) + "[]"
+	case abi.ArrayTy:
+		return fmt.Sprintf("%s[%d]", typeWithNames(*t.Elem), t.Size)
+	default:
+		return t.String()
+	}
 }

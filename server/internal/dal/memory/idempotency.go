@@ -59,8 +59,13 @@ func (r *IdempotencyRepository) Reserve(ctx context.Context, key, method, path, 
 		return nil, false, "", err
 	}
 	r.m[key] = &models.IdempotencyRecord{
-		Key: key, Method: method, Path: path, RequestHash: requestHash, Token: token,
-		CreatedAt: now, ExpiresAt: now.Add(ttl),
+		Key:         key,
+		Method:      method,
+		Path:        path,
+		RequestHash: requestHash,
+		Token:       token,
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(ttl),
 	}
 	return nil, true, token, nil
 }

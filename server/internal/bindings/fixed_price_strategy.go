@@ -17,6 +17,7 @@ const fixedPriceStrategyABIJSON = `[
   {"type":"function","name":"purchasePricePerWholeToken","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint256"}]},
   {"type":"function","name":"redemptionPricePerWholeToken","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint256"}]},
   {"type":"function","name":"tokenDecimals","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint8"}]},
+  {"type":"function","name":"forwardPriced","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"bool"}]},
   {"type":"event","name":"PurchasePriceUpdated","anonymous":false,"inputs":[
     {"name":"previousPrice","type":"uint256","indexed":false},{"name":"newPrice","type":"uint256","indexed":false},
     {"name":"caller","type":"address","indexed":true}]},

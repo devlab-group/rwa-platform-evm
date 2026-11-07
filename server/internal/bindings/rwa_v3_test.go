@@ -12,8 +12,11 @@ import (
 
 func v3Config() ProjectConfig {
 	return ProjectConfig{
-		Name: "Gold Token", Symbol: "GLD", Decimals: 18,
-		ProfileDigest: [32]byte{1}, ProjectID: [32]byte{2},
+		Name:                         "Gold Token",
+		Symbol:                       "GLD",
+		Decimals:                     18,
+		ProfileDigest:                [32]byte{1},
+		ProjectID:                    [32]byte{2},
 		QuoteToken:                   common.HexToAddress("0x0000000000000000000000000000000000000F"),
 		PurchasePricePerWholeToken:   big.NewInt(2000000),
 		RedemptionPricePerWholeToken: big.NewInt(1950000),
@@ -42,7 +45,7 @@ func TestUnpackDeployInputSelectsLayoutBySelector(t *testing.T) {
 	f := NewFactory()
 	cfg := v3Config()
 
-	v3Data, err := f.PackDeploy(cfg)
+	v3Data, err := f.PackDeployV3(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,6 +71,9 @@ func TestUnpackDeployInputSelectsLayoutBySelector(t *testing.T) {
 	}
 	if got3.Admin != cfg.Admin || got3.Treasury != cfg.Treasury || got3.RedemptionTimeout != cfg.RedemptionTimeout {
 		t.Errorf("shared fields mismatch: %+v", got3)
+	}
+	if got3.DealingCutoff != 0 || got3.PurchaseTimeout != 0 {
+		t.Errorf("v3 call carries v4 fields: %+v", got3)
 	}
 
 	got2, err := f.UnpackDeployInput(v2Data)

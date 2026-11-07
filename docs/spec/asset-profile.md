@@ -10,10 +10,11 @@ including TypeScript clients, MUST reproduce the shared vectors.
 
 Profile fields: `profileVersion` (`"1.0"`), UUID `projectId` (the server requires its configured
 `contract.project_id`), `assetType` (1 to 128 characters), `tokenUnit` (1 to 64), integer
-`tokenDecimals` (0 to 36), `recordIdLabel` (1 to 128), optional `displayFields[]` (`label` and
-`pointer` starting with `/`), optional `legal` (see "Legal descriptor"), and `assetSchema`. The
-`assetType`, `tokenUnit` and `recordIdLabel` lengths count Unicode code points, as JSON Schema
-`maxLength` does; the byte-based string bound under "Structural limits" also applies.
+`tokenDecimals` (0 to 36, a plain integer literal: `6`, not `6.0` or `1e1`), `recordIdLabel`
+(1 to 128), optional `displayFields[]` (`label` and `pointer` starting with `/`), optional `legal`
+(see "Legal descriptor"), and `assetSchema`. The `assetType`, `tokenUnit` and `recordIdLabel`
+lengths count Unicode code points, as JSON Schema `maxLength` does; the byte-based string bound
+under "Structural limits" also applies.
 
 Metadata fields: `platformVersion` (`"1.0"`), UUID `projectId`, `recordId`
 (`^[A-Za-z0-9._:-]{1,128}$`), `asset` validated against `assetSchema`, `issuance` (`amount`, a
@@ -21,8 +22,15 @@ positive base-unit decimal string at most 2^256-1; non-empty `unit`), optional `
 64-character lowercase hex `sha256`, optional `uri`), and RFC 3339 `createdAt`.
 
 Unknown envelope fields reject the document, including inside `displayFields[]`, `legal`,
-`issuance` and `proofs[]`. The operator's `assetSchema` follows the closed dialect in
-`profile-schema-dialect.md`, rather than full Draft 2020-12.
+`issuance` and `proofs[]`. Envelope field names are case-sensitive at every nesting level:
+`Amount`, for example, is not accepted in place of `amount`. The operator's
+`assetSchema` follows the closed dialect in `profile-schema-dialect.md`, rather than full Draft
+2020-12.
+
+The signer displays `assetType`, `tokenUnit`, `recordIdLabel`, `displayFields[].label`,
+`issuance.unit` and `proofs[].type` beside the amount. These fields and the `legal` text fields
+below must pass Go `unicode.IsPrint` and contain no C0, DEL or C1 controls. Tabs, newlines,
+non-ASCII spaces and bidi formatting characters are rejected.
 
 ## Legal descriptor
 
@@ -64,7 +72,14 @@ when the asset schema specifies no limits. `shared/schemas/structural-limits.jso
 | Max array length                | `maxArrayItems`        | 4,096                   |
 | Max object keys                 | `maxObjectProperties`  | 4,096                   |
 | Encoding                        |                        | valid UTF-8 only        |
+| Unpaired surrogate escape       |                        | forbidden (parse error) |
 | Duplicate JSON object keys      |                        | forbidden (parse error) |
+
+A high-surrogate escape (`\uD800` to `\uDBFF`) must be followed immediately by a low-surrogate
+escape (`\uDC00` to `\uDFFF`); a low surrogate cannot stand alone (RFC 7493 section 2.1). This
+applies to values and object keys. Decoding an unpaired surrogate as U+FFFD would erase
+distinctions between inputs, so both validators reject it before canonicalization.
+`shared/vectors/jcs-cid.json` holds the cases.
 
 Each binary hardcodes the limits and tests them against the `limits` copy in
 `shared/vectors/schema-dialect-conformance.json`. Differences can make a package pass one
@@ -85,6 +100,10 @@ exceeds 32,768 bytes. The byte bound limits parsing resources. Its implementatio
 The server and the signer both reject an out-of-range plain integer literal anywhere in a
 profile or metadata document. Neither checks a literal written with a fraction or exponent (such
 as `1e20`), so package producers must follow the rule for those themselves.
+
+Canonicalization rounds numbers to float64 before printing them. Schema validation uses the
+same rounded instance values; see "Numbers in instances" in
+`profile-schema-dialect.md`.
 
 ## Derivation conventions
 

@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppLayout } from "./AppLayout";
@@ -23,6 +23,34 @@ function Nav() {
 
 describe("AppLayout nav", () => {
   beforeEach(() => vi.mocked(api.getProject).mockReset());
+
+  it.each([
+    ["rwa-v2", false],
+    ["rwa-v3", true],
+    ["rwa-v4", true],
+  ])("Income link for a %s project: %s", async (version, shown) => {
+    vi.mocked(api.getProject).mockResolvedValue({ version } as never);
+    render(
+      <MemoryRouter initialEntries={["/admin/setup"]}>
+        <Routes>
+          <Route path="/admin" element={<AppLayout />}>
+            <Route path="setup" element={<p>setup</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByText("setup");
+    await waitFor(() => expect(api.getProject).toHaveBeenCalled());
+    // The version is set when the project request resolves; flush it before asserting absence
+    await act(async () => {});
+    if (shown) {
+      expect(
+        await screen.findByRole("link", { name: "Income" }),
+      ).toBeInTheDocument();
+    } else {
+      expect(screen.queryByRole("link", { name: "Income" })).toBeNull();
+    }
+  });
 
   it("shows the Income link after an in-session deploy without a reload", async () => {
     vi.mocked(api.getProject)

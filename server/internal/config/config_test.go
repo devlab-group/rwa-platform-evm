@@ -32,6 +32,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.WalletChallengeTTL != 15*time.Minute {
 		t.Errorf("WalletChallengeTTL = %v, want 15m", cfg.WalletChallengeTTL)
 	}
+	if cfg.PriceFeedSLA != 0 {
+		t.Errorf("PriceFeedSLA = %v, want 0 so the alert fires at maxAge", cfg.PriceFeedSLA)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -143,25 +146,38 @@ func TestLoadRejectsBadCORSOrigins(t *testing.T) {
 
 func TestLoadInvalid(t *testing.T) {
 	tests := map[string]map[string]string{
-		"bad chain id":          {"CHAIN_ID": "not-a-number"},
-		"zero chain id":         {"CHAIN_ID": "0"},
-		"bad confirmations":     {"CHAIN_CONFIRMATIONS": "-1"},
-		"bad fee mode":          {"CHAIN_FEE_MODE": "bogus"},
-		"explorer url script":   {"CHAIN_EXPLORER_URL": "javascript:alert(1)"},
-		"explorer url relative": {"CHAIN_EXPLORER_URL": "etherscan.io"},
-		"explorer url query":    {"CHAIN_EXPLORER_URL": "https://etherscan.io/?network=x"},
-		"bad idempotency ttl":   {"IDEMPOTENCY_TTL": "not-a-duration"},
-		"bad environment":       {"ENVIRONMENT": "staging"},
-		"bad persistence mode":  {"PERSISTENCE_MODE": "redis"},
-		"bad tx coordination":   {"TX_COORDINATION_MODE": "raft"},
-		"bad tx lease ttl":      {"TX_LEASE_TTL": "not-a-duration"},
-		"bad kyc provider":      {"KYC_PROVIDER": "jumio"},
-		"sumsub missing app token": {"KYC_PROVIDER": "sumsub",
-			"KYC_SUMSUB_SECRET_KEY": "s", "KYC_SUMSUB_WEBHOOK_SECRET": "w"},
-		"onfido missing workflow": {"KYC_PROVIDER": "onfido",
-			"KYC_ONFIDO_API_TOKEN": "t", "KYC_ONFIDO_WEBHOOK_TOKEN": "w"},
-		"onfido bad region": {"KYC_PROVIDER": "onfido", "KYC_ONFIDO_API_TOKEN": "t",
-			"KYC_ONFIDO_WEBHOOK_TOKEN": "w", "KYC_ONFIDO_WORKFLOW_ID": "wf", "KYC_ONFIDO_REGION": "antarctica"},
+		"bad chain id":            {"CHAIN_ID": "not-a-number"},
+		"zero chain id":           {"CHAIN_ID": "0"},
+		"bad confirmations":       {"CHAIN_CONFIRMATIONS": "-1"},
+		"bad fee mode":            {"CHAIN_FEE_MODE": "bogus"},
+		"explorer url script":     {"CHAIN_EXPLORER_URL": "javascript:alert(1)"},
+		"explorer url relative":   {"CHAIN_EXPLORER_URL": "etherscan.io"},
+		"explorer url query":      {"CHAIN_EXPLORER_URL": "https://etherscan.io/?network=x"},
+		"bad idempotency ttl":     {"IDEMPOTENCY_TTL": "not-a-duration"},
+		"bad environment":         {"ENVIRONMENT": "staging"},
+		"bad persistence mode":    {"PERSISTENCE_MODE": "redis"},
+		"bad tx coordination":     {"TX_COORDINATION_MODE": "raft"},
+		"bad tx lease ttl":        {"TX_LEASE_TTL": "not-a-duration"},
+		"bad price feed sla":      {"PRICE_FEED_SLA": "not-a-duration"},
+		"negative price feed sla": {"PRICE_FEED_SLA": "-1h"},
+		"bad kyc provider":        {"KYC_PROVIDER": "jumio"},
+		"sumsub missing app token": {
+			"KYC_PROVIDER":              "sumsub",
+			"KYC_SUMSUB_SECRET_KEY":     "s",
+			"KYC_SUMSUB_WEBHOOK_SECRET": "w",
+		},
+		"onfido missing workflow": {
+			"KYC_PROVIDER":             "onfido",
+			"KYC_ONFIDO_API_TOKEN":     "t",
+			"KYC_ONFIDO_WEBHOOK_TOKEN": "w",
+		},
+		"onfido bad region": {
+			"KYC_PROVIDER":             "onfido",
+			"KYC_ONFIDO_API_TOKEN":     "t",
+			"KYC_ONFIDO_WEBHOOK_TOKEN": "w",
+			"KYC_ONFIDO_WORKFLOW_ID":   "wf",
+			"KYC_ONFIDO_REGION":        "antarctica",
+		},
 	}
 	for name, env := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -460,6 +476,7 @@ func TestLoadProductionRejectsNonPositiveDurationsAndLimits(t *testing.T) {
 		"HTTP_IDLE_TIMEOUT":        "0",
 		"PENDING_REDEMPTION_SLA":   "0",
 		"FUNDED_CLAIM_FAILURE_SLA": "0",
+		"PENDING_PURCHASE_SLA":     "0",
 		"TX_LEASE_TTL":             "0",
 		"HTTP_MAX_HEADER_BYTES":    "0",
 		"CHAIN_CONFIRMATIONS":      "0",

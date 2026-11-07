@@ -27,6 +27,7 @@ func New() *repository.Repositories {
 		Transactions:         NewTransactionRepository(),
 		ChainEvents:          chainEvents,
 		Purchases:            NewPurchaseRepository(),
+		PurchaseOrders:       NewPurchaseOrderRepository(),
 		RedemptionRequests:   NewRedemptionRequestRepository(),
 		IncomePreparations:   NewIncomePreparationRepository(),
 		IncomeDistributions:  NewIncomeDistributionRepository(),

@@ -32,6 +32,10 @@ func TestGetInventory(t *testing.T) {
 	balReturn, _ := erc20ABI.ABI.Methods["balanceOf"].Outputs.Pack(big.NewInt(1000000))
 	client.CallResponses[hexKey(balData)] = balReturn
 
+	pendingData, _ := vaultABI.PackPendingPurchaseQuote()
+	pendingReturn, _ := vaultABI.ABI.Methods["pendingPurchaseQuote"].Outputs.Pack(big.NewInt(250000))
+	client.CallResponses[hexKey(pendingData)] = pendingReturn
+
 	purchaseData, _ := strategyABI.PackPurchasePricePerWholeToken()
 	purchaseReturn, _ := strategyABI.ABI.Methods["purchasePricePerWholeToken"].Outputs.Pack(big.NewInt(2000000))
 	client.CallResponses[hexKey(purchaseData)] = purchaseReturn
@@ -54,6 +58,9 @@ func TestGetInventory(t *testing.T) {
 	}
 	if inv.QuoteBalance != "1000000" {
 		t.Errorf("QuoteBalance = %s", inv.QuoteBalance)
+	}
+	if inv.PendingPurchaseQuote != "250000" {
+		t.Errorf("PendingPurchaseQuote = %q, want the Vault's open deposits", inv.PendingPurchaseQuote)
 	}
 	if inv.PurchasePrice != "2000000" {
 		t.Errorf("PurchasePrice = %s", inv.PurchasePrice)
@@ -83,6 +90,9 @@ func TestGetInventoryPricesFromTheVaultsCurrentStrategy(t *testing.T) {
 	balData, _ := erc20ABI.PackBalanceOf(vaultAddr)
 	balReturn, _ := erc20ABI.ABI.Methods["balanceOf"].Outputs.Pack(big.NewInt(1))
 	client.CallResponses[hexKey(balData)] = balReturn
+	pendingData, _ := vaultABI.PackPendingPurchaseQuote()
+	pendingReturn, _ := vaultABI.ABI.Methods["pendingPurchaseQuote"].Outputs.Pack(big.NewInt(0))
+	client.CallResponses[hexKey(pendingData)] = pendingReturn
 	purchaseData, _ := strategyABI.PackPurchasePricePerWholeToken()
 	purchaseReturn, _ := strategyABI.ABI.Methods["purchasePricePerWholeToken"].Outputs.Pack(big.NewInt(3))
 	client.CallResponses[hexKey(purchaseData)] = purchaseReturn

@@ -24,12 +24,17 @@ func (r *nonceLeaseRepo) Acquire(ctx context.Context, key, holderID string, ttl 
 	now := time.Now().UTC()
 	filter := bson.M{"_id": key, "expiresAt": bson.M{"$lt": now}}
 	pipeline := mongo.Pipeline{
-		{{Key: "$set", Value: bson.M{
-			"holderId":  holderID,
-			"token":     bson.M{"$add": bson.A{bson.M{"$ifNull": bson.A{"$token", 0}}, 1}},
-			"expiresAt": now.Add(ttl),
-			"updatedAt": now,
-		}}},
+		{
+			{
+				Key: "$set",
+				Value: bson.M{
+					"holderId":  holderID,
+					"token":     bson.M{"$add": bson.A{bson.M{"$ifNull": bson.A{"$token", 0}}, 1}},
+					"expiresAt": now.Add(ttl),
+					"updatedAt": now,
+				},
+			},
+		},
 	}
 	opts := options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After)
 	var out models.NonceLease

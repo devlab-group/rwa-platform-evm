@@ -94,9 +94,16 @@ func TestReissueRecordFailsClosedWhenAuditIntentUndurable(t *testing.T) {
 
 	ctx := context.Background()
 	rec := &models.AssetRecord{
-		RecordID: "M08-REC", Status: models.RecordStatusPending, Amount: "1", Nonce: "12345",
-		ValidUntil: 9999999999, RecordKey: "0x" + repeatHex("11", 32), MetadataDigest: "0x" + repeatHex("22", 32),
-		CID: "bafk-m08", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		RecordID:       "M08-REC",
+		Status:         models.RecordStatusPending,
+		Amount:         "1",
+		Nonce:          "12345",
+		ValidUntil:     9999999999,
+		RecordKey:      "0x" + repeatHex("11", 32),
+		MetadataDigest: "0x" + repeatHex("22", 32),
+		CID:            "bafk-m08",
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 	if err := env.app.Repos.AssetRecords.Create(ctx, rec); err != nil {
 		t.Fatal(err)

@@ -38,7 +38,10 @@ func newReconcilerFixture(t *testing.T) *reconcilerFixture {
 	status := NewStatusService(txs, common.HexToAddress("0x00000000000000000000000000000000C0A1"), blockchain.NewStaticKeySigner(priv))
 	return &reconcilerFixture{
 		r:      NewWebhookReconciler(events, txRepo, status),
-		events: events, txRepo: txRepo, client: client, txs: txs,
+		events: events,
+		txRepo: txRepo,
+		client: client,
+		txs:    txs,
 	}
 }
 
@@ -55,8 +58,16 @@ func (f *reconcilerFixture) seedAccepted(t *testing.T, id, address, provider, ev
 		t.Fatalf("seedAccepted: claim for %s/%s did not win", provider, eventID)
 	}
 	e := &models.KYCEvent{
-		ID: id, Address: address, Provider: provider, EventID: eventID, Status: outcome, Outcome: outcome,
-		ApplyStatus: models.KYCApplyAccepted, OccurredAt: occurredAt, ReceivedAt: occurredAt, PayloadHash: id,
+		ID:          id,
+		Address:     address,
+		Provider:    provider,
+		EventID:     eventID,
+		Status:      outcome,
+		Outcome:     outcome,
+		ApplyStatus: models.KYCApplyAccepted,
+		OccurredAt:  occurredAt,
+		ReceivedAt:  occurredAt,
+		PayloadHash: id,
 	}
 	if err := f.events.Create(ctx, e); err != nil {
 		t.Fatal(err)
@@ -332,8 +343,15 @@ func TestWebhookReconcilerLeavesAcceptedEventWithoutStatusService(t *testing.T) 
 		t.Fatal(err)
 	}
 	if err := events.Create(ctx, &models.KYCEvent{
-		ID: "evt-d5", Address: addr, Provider: "test-provider", EventID: "evt-d5", Outcome: "Allowed",
-		ApplyStatus: models.KYCApplyAccepted, OccurredAt: occurredAt, ReceivedAt: occurredAt, PayloadHash: "evt-d5",
+		ID:          "evt-d5",
+		Address:     addr,
+		Provider:    "test-provider",
+		EventID:     "evt-d5",
+		Outcome:     "Allowed",
+		ApplyStatus: models.KYCApplyAccepted,
+		OccurredAt:  occurredAt,
+		ReceivedAt:  occurredAt,
+		PayloadHash: "evt-d5",
 	}); err != nil {
 		t.Fatal(err)
 	}

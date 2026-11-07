@@ -5,6 +5,7 @@ import {Script, console2} from "forge-std/Script.sol";
 import {RWAFactory} from "../src/RWAFactory.sol";
 import {ComplianceTokenDeployer} from "../src/factory/ComplianceTokenDeployer.sol";
 import {MarketDeployer} from "../src/factory/MarketDeployer.sol";
+import {StrategyDeployer} from "../src/factory/StrategyDeployer.sol";
 import {SupplyControllerDeployer} from "../src/factory/SupplyControllerDeployer.sol";
 import {IncomeDistributorDeployer} from "../src/factory/IncomeDistributorDeployer.sol";
 import {RedemptionEscrowDeployer} from "../src/factory/RedemptionEscrowDeployer.sol";
@@ -81,7 +82,8 @@ abstract contract DeployBase is Script {
             address(new MarketDeployer()),
             address(new SupplyControllerDeployer()),
             address(new RedemptionEscrowDeployer()),
-            address(new IncomeDistributorDeployer())
+            address(new IncomeDistributorDeployer()),
+            address(new StrategyDeployer())
         );
         dep = factory.deploy(config);
 
@@ -108,8 +110,12 @@ abstract contract DeployBase is Script {
         config.redemptionSpreadBps = uint16(_envBounded("REDEMPTION_SPREAD_BPS", 0, type(uint16).max));
         config.sequencerUptimeFeed = vm.envOr("SEQUENCER_UPTIME_FEED", address(0));
         config.sequencerGracePeriod = uint64(_envBounded("SEQUENCER_GRACE_PERIOD", 0, type(uint64).max));
+        // Oracle projects must set DEALING_CUTOFF to cover the maximum delay from valuation to publication
+        config.dealingCutoff = uint64(_envBounded("DEALING_CUTOFF", 0, type(uint64).max));
         config.minPurchaseQuote = vm.envOr("MIN_PURCHASE_QUOTE", uint256(0));
         config.redemptionTimeout = uint64(_envBounded("REDEMPTION_TIMEOUT", 14 days, type(uint64).max));
+        // Set PURCHASE_TIMEOUT above DEALING_CUTOFF plus the feed's longest normal update interval
+        config.purchaseTimeout = uint64(_envBounded("PURCHASE_TIMEOUT", 7 days, type(uint64).max));
         config.admin = vm.envOr("ADMIN", deployer);
         config.auditor = vm.envOr("AUDITOR", deployer);
         config.complianceOperator = vm.envOr("COMPLIANCE_OPERATOR", deployer);

@@ -30,18 +30,27 @@ func seedEvent(t *testing.T, repos *repository.Repositories, addr, txHash, name 
 	t.Helper()
 	evSeq++
 	e := &models.ChainEvent{
-		ChainID: txChainID, Address: addr, TxHash: txHash, LogIndex: logIndex, BlockNumber: block,
-		BlockHash: fmt.Sprintf("0xblock%d", block), Name: name, Data: data, Removed: removed,
-		IndexedAt: time.Unix(1_700_000_000, 0).UTC().Add(time.Duration(evSeq) * time.Second),
+		ChainID:     txChainID,
+		Address:     addr,
+		TxHash:      txHash,
+		LogIndex:    logIndex,
+		BlockNumber: block,
+		BlockHash:   fmt.Sprintf("0xblock%d", block),
+		Name:        name,
+		Data:        data,
+		Removed:     removed,
+		IndexedAt:   time.Unix(1_700_000_000, 0).UTC().Add(time.Duration(evSeq) * time.Second),
 	}
 	if err := repos.ChainEvents.Create(context.Background(), e); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func run(t *testing.T, repos *repository.Repositories) {
+func run(t *testing.T, repos *repository.Repositories) { runWith(t, repos, nil) }
+
+func runWith(t *testing.T, repos *repository.Repositories, sender SenderFunc) {
 	t.Helper()
-	if err := ReconcileStackTransactions(context.Background(), repos.Transactions, repos.ChainEvents, repos.IndexerCheckpoints, txChainID); err != nil {
+	if err := ReconcileStackTransactions(context.Background(), repos.Transactions, repos.ChainEvents, repos.IndexerCheckpoints, txChainID, sender); err != nil {
 		t.Fatalf("ReconcileStackTransactions: %v", err)
 	}
 }
@@ -137,8 +146,12 @@ func TestDedupSkipsManagerTx(t *testing.T) {
 	ctx := context.Background()
 	txHash := "0xmint"
 	if err := repos.Transactions.Create(ctx, &models.Transaction{
-		ID: "mgr-mint-1", ChainID: txChainID, TxHash: txHash, Kind: "assets.relaySignedResult",
-		Status: models.TxConfirmed, SignedRawTx: "0xsigned",
+		ID:          "mgr-mint-1",
+		ChainID:     txChainID,
+		TxHash:      txHash,
+		Kind:        "assets.relaySignedResult",
+		Status:      models.TxConfirmed,
+		SignedRawTx: "0xsigned",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +231,9 @@ func TestFreezesWhileReconciliationRequired(t *testing.T) {
 	repos := memory.New()
 	ctx := context.Background()
 	if err := repos.IndexerCheckpoints.Set(ctx, &models.IndexerCheckpoint{
-		ChainID: txChainID, Address: indexer.CheckpointAddress, ReconciliationRequired: true,
+		ChainID:                txChainID,
+		Address:                indexer.CheckpointAddress,
+		ReconciliationRequired: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -272,5 +287,33 @@ func TestIncomeEventsAreMapped(t *testing.T) {
 	}
 	if tx := getEvtTx(t, repos, "0xc2"); tx.Value != "100" {
 		t.Errorf("distribution tx value = %q, want its total", tx.Value)
+	}
+}
+
+// Backfilling the new contracts adds their role and status logs to the deploy transaction,
+// which must stay a deployment
+func TestDeployTransactionStaysADeployment(t *testing.T) {
+	repos := memory.New()
+	seedEvent(t, repos, tokenAddr, "0xdeploy", "RoleGranted", 5, 0, false, map[string]any{"sender": senderAddr})
+	seedEvent(t, repos, vaultAddr, "0xdeploy", "StatusChanged", 5, 1, false, map[string]any{"caller": callerAddr})
+	seedEvent(t, repos, vaultAddr, "0xdeploy", "ProjectDeployed", 5, 2, false, map[string]any{"projectId": "0x01"})
+	run(t, repos)
+
+	if got := getEvtTx(t, repos, "0xdeploy").Kind; got != "project_deployed" {
+		t.Fatalf("Kind = %q, want project_deployed", got)
+	}
+}
+
+func TestAdminDelayEventsAreMapped(t *testing.T) {
+	repos := memory.New()
+	seedEvent(t, repos, vaultAddr, "0xschedule", "DefaultAdminDelayChangeScheduled", 5, 0, false, map[string]any{"newDelay": "86400", "effectSchedule": "1800000000"})
+	seedEvent(t, repos, vaultAddr, "0xcancel", "DefaultAdminDelayChangeCanceled", 6, 0, false, map[string]any{})
+	run(t, repos)
+
+	if got := getEvtTx(t, repos, "0xschedule").Kind; got != "admin_delay_change_scheduled" {
+		t.Errorf("schedule Kind = %q", got)
+	}
+	if got := getEvtTx(t, repos, "0xcancel").Kind; got != "admin_delay_change_canceled" {
+		t.Errorf("cancel Kind = %q", got)
 	}
 }

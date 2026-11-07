@@ -26,16 +26,34 @@ func (r *deadLetterRepo) Record(ctx context.Context, e *models.DeadLetterEntry) 
 // "$" from field-path interpretation.
 func deadLetterRecordUpdate(e *models.DeadLetterEntry) mongo.Pipeline {
 	lit := func(v any) bson.M { return bson.M{"$literal": v} }
-	return mongo.Pipeline{{{Key: "$set", Value: bson.M{
-		"chainId": lit(e.ChainID), "blockNumber": lit(e.BlockNumber), "blockHash": lit(e.BlockHash),
-		"txHash": lit(e.TxHash), "logIndex": lit(e.LogIndex), "eventSignature": lit(e.EventSignature),
-		"errorCategory": lit(e.ErrorCategory), "errorMessage": lit(e.ErrorMessage),
-		"lastFailedAt": lit(e.LastFailedAt), "sourceData": lit(e.SourceData),
-		"firstFailedAt": bson.M{"$ifNull": bson.A{"$firstFailedAt", lit(e.FirstFailedAt)}},
-		"resolved": bson.M{"$cond": bson.A{
-			bson.M{"$eq": bson.A{bson.M{"$type": "$retryCount"}, "missing"}}, lit(e.Resolved), false}},
-		"retryCount": bson.M{"$ifNull": bson.A{bson.M{"$add": bson.A{"$retryCount", 1}}, lit(e.RetryCount)}},
-	}}}}
+	return mongo.Pipeline{
+		{
+			{
+				Key: "$set",
+				Value: bson.M{
+					"chainId":        lit(e.ChainID),
+					"blockNumber":    lit(e.BlockNumber),
+					"blockHash":      lit(e.BlockHash),
+					"txHash":         lit(e.TxHash),
+					"logIndex":       lit(e.LogIndex),
+					"eventSignature": lit(e.EventSignature),
+					"errorCategory":  lit(e.ErrorCategory),
+					"errorMessage":   lit(e.ErrorMessage),
+					"lastFailedAt":   lit(e.LastFailedAt),
+					"sourceData":     lit(e.SourceData),
+					"firstFailedAt":  bson.M{"$ifNull": bson.A{"$firstFailedAt", lit(e.FirstFailedAt)}},
+					"resolved": bson.M{
+						"$cond": bson.A{
+							bson.M{"$eq": bson.A{bson.M{"$type": "$retryCount"}, "missing"}},
+							lit(e.Resolved),
+							false,
+						},
+					},
+					"retryCount": bson.M{"$ifNull": bson.A{bson.M{"$add": bson.A{"$retryCount", 1}}, lit(e.RetryCount)}},
+				},
+			},
+		},
+	}
 }
 
 func (r *deadLetterRepo) Get(ctx context.Context, id string) (*models.DeadLetterEntry, error) {

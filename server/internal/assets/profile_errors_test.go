@@ -62,8 +62,12 @@ func TestValidateProfileRejectsEachViolationForItsOwnReason(t *testing.T) {
 		{"wrong profileVersion", mutate(func(m map[string]any) { m["profileVersion"] = "2.0" }), "profileVersion must be"},
 		{"unknown top-level field", mutate(func(m map[string]any) { m["unexpectedField"] = "nope" }), "unknown top-level field"},
 		{"token decimals above 36", mutate(func(m map[string]any) { m["tokenDecimals"] = 37 }), "tokenDecimals must be an integer in [0,36]"},
-		{"remote $ref", []byte(`{"profileVersion":"1.0","projectId":"4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61","assetType":"x","tokenUnit":"u","tokenDecimals":0,"recordIdLabel":"id",
-			"assetSchema":{"type":"object","properties":{"a":{"$ref":"https://evil.example/schema.json"}}}}`), "$ref at $.properties.a must be a local JSON pointer"},
+		{
+			"remote $ref",
+			[]byte(`{"profileVersion":"1.0","projectId":"4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61","assetType":"x","tokenUnit":"u","tokenDecimals":0,"recordIdLabel":"id",
+			"assetSchema":{"type":"object","properties":{"a":{"$ref":"https://evil.example/schema.json"}}}}`),
+			"$ref at $.properties.a must be a local JSON pointer",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

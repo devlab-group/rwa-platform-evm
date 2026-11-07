@@ -3,13 +3,13 @@
 Status flow: `None → Pending`, then from Pending either `→ Funded → Completed`, `→ Rejected` or
 `→ Cancelled`.
 
-| From    | Function            | Caller                    | Guards, in order                                                                               | To        | Asset effect                                                       |
-| ------- | ------------------- | ------------------------- | ---------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------ |
-| None    | `requestRedemption` | an Allowed wallet         | not paused, caller Allowed, amount > 0, deadline not passed, quote > 0, quote >= `minQuoteOut` | Pending   | pulls exactly `rwaAmount` from the caller                          |
-| Pending | `fundRedemption`    | `TREASURER_ROLE`          | status, not paused, beneficiary Allowed                                                        | Funded    | pulls exactly `quoteAmount` from the funder                        |
-| Pending | `rejectRedemption`  | `REDEMPTION_MANAGER_ROLE` | status, not paused, `reasonCode != 0`, beneficiary Allowed                                     | Rejected  | returns `rwaAmount` to the beneficiary                             |
-| Pending | `cancelRedemption`  | the beneficiary           | status, caller is beneficiary, timeout reached, beneficiary Allowed                            | Cancelled | returns `rwaAmount` to the beneficiary                             |
-| Funded  | `claimRedemption`   | anyone                    | status, not paused                                                                             | Completed | `rwaAmount` to the Vault, exactly `quoteAmount` to the beneficiary |
+| From    | Function            | Caller                    | Guards, in order                                                                                                                | To        | Asset effect                                                       |
+| ------- | ------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------ |
+| None    | `requestRedemption` | an Allowed wallet         | not paused, caller Allowed, amount > 0, deadline not passed, quote > 0, quote >= `minQuoteOut`                                  | Pending   | pulls exactly `rwaAmount` from the caller                          |
+| Pending | `fundRedemption`    | `TREASURER_ROLE`          | status, not paused, beneficiary Allowed; forward requests: timeout not reached, round usable, quote > 0, quote >= `minQuoteOut` | Funded    | pulls exactly `quoteAmount` from the funder                        |
+| Pending | `rejectRedemption`  | `REDEMPTION_MANAGER_ROLE` | status, not paused, `reasonCode != 0`, beneficiary Allowed                                                                      | Rejected  | returns `rwaAmount` to the beneficiary                             |
+| Pending | `cancelRedemption`  | the beneficiary           | status, caller is beneficiary, timeout reached, beneficiary Allowed                                                             | Cancelled | returns `rwaAmount` to the beneficiary                             |
+| Funded  | `claimRedemption`   | anyone                    | status, not paused                                                                                                              | Completed | `rwaAmount` to the Vault, exactly `quoteAmount` to the beneficiary |
 
 The table lists body guards after role and reentrancy modifiers. Fund, reject and claim check
 status (`NotPending` / `NotFunded`) before pause (`ProjectPaused`); cancel has no pause guard.
@@ -17,10 +17,30 @@ Request errors follow the listed order: `ProjectPaused`, `CallerNotAllowed`, `Ze
 `DeadlineExpired`, `ZeroQuote`, `QuoteBelowMin`. Other guards use `ZeroReasonCode`,
 `NotBeneficiary`, `TimeoutNotReached` and `BeneficiaryNotAllowed`.
 
+Forward-priced requests use the same states but are priced at funding. Request skips the two
+quote guards and stores `quoteAmount = 0`, the strategy, the base round and `minQuoteOut`. It
+first requires the strategy's `dealingCutoff` to be below `redemptionTimeout`
+(`InvalidDealingCutoff`) and reads the base round through `latestRound()`. With a sequencer feed
+configured, this reverts with `SequencerDown` or `GracePeriodNotOver` during an L2 outage or grace
+window. Funding, rejection, cancellation and claim of existing requests are not gated on the sequencer.
+Funding uses the stored strategy to find the first round after the base round published at least
+`dealingCutoff` after the request. It applies the quote guards, stores `quoteAmount` and emits
+`RedemptionPriced`. An unusable round makes funding revert with the strategy's error. A quote
+below `minQuoteOut` also reverts; the redemption manager can reject the request, or the holder can
+cancel after the timeout. Once the round is public, the treasurer still chooses which requests to
+fund. `minQuoteOut` bounds the holder's price and timeout cancellation returns the RWA; neither
+guarantees a fill.
+
+Funding a forward request closes at `createdAt + redemptionTimeout` (`FundingClosed`), when
+cancellation becomes available. This prevents a holder from choosing cancellation or a late
+payout after observing later price moves. Cancellation does not require a missing round, so the
+holder can recover RWA from a request that was never funded even when its round is usable.
+
 Invariants:
 
-- Request fixes `quoteAmount = strategy.quoteRedemption(rwaAmount)` and `msg.sender` as the
-  beneficiary; neither changes later.
+- Request fixes `msg.sender` as the beneficiary. An instant request also fixes
+  `quoteAmount = strategy.quoteRedemption(rwaAmount)`; a forward request fixes the strategy and
+  round used to set `quoteAmount` at funding. Those request-time terms do not change later.
 - Each request's RWA leaves escrow once. Funded quote can be paid once, to that beneficiary;
   no role can withdraw it and no defunding function exists.
 - Completed returns RWA to Vault inventory and pays the quote without changing total supply.

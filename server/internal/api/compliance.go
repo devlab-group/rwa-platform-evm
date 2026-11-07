@@ -97,8 +97,10 @@ func (app *App) verifyChallenge(c *gin.Context) {
 
 	// Issue a wallet-scoped session when configured; reduced deployments return status only
 	result := dto.VerifyChallengeResult{
-		Address: inv.Address, Status: string(inv.Status),
-		ValidUntil: inv.ValidUntil, OwnershipVerified: inv.OwnershipVerified,
+		Address:           inv.Address,
+		Status:            string(inv.Status),
+		ValidUntil:        inv.ValidUntil,
+		OwnershipVerified: inv.OwnershipVerified,
 	}
 	if app.Sessions != nil {
 		token, expiresAt, err := app.Sessions.Issue(c.Request.Context(), inv.Address)
@@ -229,8 +231,13 @@ func (app *App) setComplianceStatus(c *gin.Context) {
 	// The transaction is already persisted; log a convenience read-model write failure
 	// without changing its submission result
 	if err := app.Repos.ComplianceOperations.Create(c.Request.Context(), &models.ComplianceOperation{
-		ID: tx.ID, Address: body.Address, Status: models.ComplianceStatus(body.Status), ValidUntil: int64(body.ValidUntil),
-		TxHash: tx.TxHash, Caller: actor, CreatedAt: tx.SubmittedAt,
+		ID:         tx.ID,
+		Address:    body.Address,
+		Status:     models.ComplianceStatus(body.Status),
+		ValidUntil: int64(body.ValidUntil),
+		TxHash:     tx.TxHash,
+		Caller:     actor,
+		CreatedAt:  tx.SubmittedAt,
 	}); err != nil {
 		log.Printf("api: persist compliance operation record failed (txId=%s address=%s): %v", tx.ID, body.Address, err)
 	}
@@ -266,7 +273,10 @@ func (app *App) startKYC(c *gin.Context) {
 	// Sumsub includes the wallet directly, while Onfido requires this binding
 	if sess.Ref != "" {
 		if err := app.Repos.KYCVerifications.Upsert(c.Request.Context(), &models.KYCVerification{
-			Provider: app.KYC.Name(), Ref: sess.Ref, Address: address, CreatedAt: time.Now().UTC(),
+			Provider:  app.KYC.Name(),
+			Ref:       sess.Ref,
+			Address:   address,
+			CreatedAt: time.Now().UTC(),
 		}); err != nil {
 			failInternal(c, err)
 			return
@@ -274,7 +284,10 @@ func (app *App) startKYC(c *gin.Context) {
 	}
 	app.recordAudit(c.Request.Context(), "compliance", address, "compliance.kycStart", address, map[string]any{"provider": sess.Provider})
 	c.JSON(http.StatusOK, dto.KYCSession{
-		Provider: sess.Provider, Token: sess.Token, URL: sess.URL, Ref: sess.Ref,
+		Provider:  sess.Provider,
+		Token:     sess.Token,
+		URL:       sess.URL,
+		Ref:       sess.Ref,
 		ExpiresAt: kycExpiresAt(sess.ExpiresAt),
 	})
 }
@@ -341,8 +354,12 @@ func (app *App) kycWebhook(c *gin.Context) {
 	}
 
 	wp := compliance.WebhookPayload{
-		EventID: dec.EventID, Address: address, Provider: dec.Provider,
-		Status: dec.Status, OccurredAt: dec.OccurredAt, ValidUntil: dec.ValidUntil,
+		EventID:    dec.EventID,
+		Address:    address,
+		Provider:   dec.Provider,
+		Status:     dec.Status,
+		OccurredAt: dec.OccurredAt,
+		ValidUntil: dec.ValidUntil,
 	}
 	// Persist the inbox/outbox decision before acknowledging it; the reconciler
 	// relays actionable statuses asynchronously, so 202 does not mean applied on-chain

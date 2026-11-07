@@ -8,6 +8,7 @@ import {AccessControlEnumerableAdminRules} from "./access/AccessControlEnumerabl
 import {IRedemptionEscrow} from "./interfaces/IRedemptionEscrow.sol";
 import {IVault} from "./interfaces/IVault.sol";
 import {IPriceStrategy} from "./interfaces/IPriceStrategy.sol";
+import {IOraclePriceStrategy} from "./interfaces/IOraclePriceStrategy.sol";
 import {IRWAToken} from "./interfaces/IRWAToken.sol";
 import {IComplianceRegistry} from "./interfaces/IComplianceRegistry.sol";
 import {RWAToken} from "./RWAToken.sol";
@@ -67,9 +68,20 @@ contract RedemptionEscrow is IRedemptionEscrow, AccessControlEnumerableAdminRule
         if (rwaAmount == 0) revert ZeroAmount();
         if (deadline < block.timestamp) revert DeadlineExpired(deadline, block.timestamp);
 
-        uint256 quoteAmount = IPriceStrategy(strategy()).quoteRedemption(rwaAmount);
-        if (quoteAmount == 0) revert ZeroQuote();
-        if (quoteAmount < minQuoteOut) revert QuoteBelowMin(quoteAmount, minQuoteOut);
+        address strategy_ = strategy();
+        bool forward = IPriceStrategy(strategy_).forwardPriced();
+        uint256 quoteAmount;
+        uint80 baseRound;
+        if (forward) {
+            // Funding closes at redemptionTimeout, so the cutoff must leave a pricing window before it
+            uint64 cutoff = IOraclePriceStrategy(strategy_).dealingCutoff();
+            if (cutoff >= redemptionTimeout) revert InvalidDealingCutoff(cutoff, redemptionTimeout);
+            baseRound = IOraclePriceStrategy(strategy_).latestRound();
+        } else {
+            quoteAmount = IPriceStrategy(strategy_).quoteRedemption(rwaAmount);
+            if (quoteAmount == 0) revert ZeroQuote();
+            if (quoteAmount < minQuoteOut) revert QuoteBelowMin(quoteAmount, minQuoteOut);
+        }
 
         uint256 before = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransferFrom(msg.sender, address(this), rwaAmount);
@@ -82,9 +94,13 @@ contract RedemptionEscrow is IRedemptionEscrow, AccessControlEnumerableAdminRule
             rwaAmount: rwaAmount,
             quoteAmount: quoteAmount,
             createdAt: uint64(block.timestamp),
-            status: RedemptionStatus.Pending
+            status: RedemptionStatus.Pending,
+            strategy: forward ? strategy_ : address(0),
+            baseRound: baseRound,
+            minQuoteOut: forward ? minQuoteOut : 0
         });
         emit RedemptionRequested(id, msg.sender, rwaAmount, quoteAmount, uint64(block.timestamp));
+        if (forward) emit RedemptionForwardPriced(id, strategy_, baseRound, minQuoteOut);
     }
 
     function fundRedemption(uint256 id) external nonReentrant onlyRole(TREASURER_ROLE) {
@@ -95,13 +111,21 @@ contract RedemptionEscrow is IRedemptionEscrow, AccessControlEnumerableAdminRule
             revert BeneficiaryNotAllowed(request.beneficiary);
         }
 
+        uint256 quoteAmount = request.quoteAmount;
+        if (request.strategy != address(0)) {
+            uint80 roundId;
+            (quoteAmount, roundId) = _forwardQuote(request);
+            request.quoteAmount = quoteAmount;
+            emit RedemptionPriced(id, roundId, quoteAmount);
+        }
+
         uint256 before = IERC20(quoteToken).balanceOf(address(this));
-        IERC20(quoteToken).safeTransferFrom(msg.sender, address(this), request.quoteAmount);
+        IERC20(quoteToken).safeTransferFrom(msg.sender, address(this), quoteAmount);
         uint256 received = IERC20(quoteToken).balanceOf(address(this)) - before;
-        if (received != request.quoteAmount) revert QuoteDeltaMismatch(request.quoteAmount, received);
+        if (received != quoteAmount) revert QuoteDeltaMismatch(quoteAmount, received);
 
         request.status = RedemptionStatus.Funded;
-        emit RedemptionFunded(id, msg.sender, request.quoteAmount);
+        emit RedemptionFunded(id, msg.sender, quoteAmount);
     }
 
     function rejectRedemption(uint256 id, bytes32 reasonCode) external nonReentrant onlyRole(REDEMPTION_MANAGER_ROLE) {
@@ -165,5 +189,26 @@ contract RedemptionEscrow is IRedemptionEscrow, AccessControlEnumerableAdminRule
 
     function previewRedeem(uint256 rwaAmount) external view returns (uint256 quoteAmount) {
         return IPriceStrategy(strategy()).quoteRedemption(rwaAmount);
+    }
+
+    function previewFunding(uint256 id) external view returns (uint256 quoteAmount) {
+        RedemptionRequest storage request = _requests[id];
+        if (request.status != RedemptionStatus.Pending || request.strategy == address(0)) return request.quoteAmount;
+        (quoteAmount,) = _forwardQuote(request);
+    }
+
+    // Keep the strategy captured at request time. Close funding when cancellation opens so a holder
+    // cannot wait for later prices and choose between recovering the RWA and receiving the round's payout.
+    function _forwardQuote(RedemptionRequest storage request)
+        private
+        view
+        returns (uint256 quoteAmount, uint80 roundId)
+    {
+        uint64 closedAt = request.createdAt + redemptionTimeout;
+        if (block.timestamp >= closedAt) revert FundingClosed(closedAt, block.timestamp);
+        (quoteAmount, roundId) = IOraclePriceStrategy(request.strategy)
+            .quoteRedemptionAfter(request.rwaAmount, request.baseRound, request.createdAt);
+        if (quoteAmount == 0) revert ZeroQuote();
+        if (quoteAmount < request.minQuoteOut) revert QuoteBelowMin(quoteAmount, request.minQuoteOut);
     }
 }

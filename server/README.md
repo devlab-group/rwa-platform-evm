@@ -20,15 +20,15 @@ Shared implementation lives in `internal/`; `cmd/` contains executable entry poi
 | `internal/auth`                                                | Admin wallet login and JWTs, investor `X-Wallet-Session`, idempotency, IP/body limits and shared security headers. See [Security posture](#security-posture).                                                                                                                                                                        |
 | `internal/config`                                              | YAML parsing, defaults and validation; `LoadFromMap` exposes the I/O-free loader for tests. See [Configuration](#configuration-the---config-yaml-file).                                                                                                                                                                              |
 | `internal/dal`                                                 | Storage models with BSON/JSON tags, repository interfaces and the `Repositories` aggregate. `memory` supplies test stores; `mongodb` implements persistence, indexes and atomic operations; `db.go` opens Mongo connections.                                                                                                         |
-| `internal/bindings` | Hand-written ABI encoders/decoders for rwa-v3 and the pinned rwa-v2 `deploy`/`ProjectDeployed` formats. `cmd/verifyabi` checks them against `contracts/out/` and `internal/bindings/testdata/rwa-v2`. See [Build, test, and verify](#build-test-and-verify). |
+| `internal/bindings` | Hand-written ABI encoders/decoders for rwa-v4 and the pinned rwa-v3 and rwa-v2 `deploy` formats (the `ProjectDeployed` event is shared by rwa-v3 and rwa-v4). `cmd/verifyabi` checks them against `contracts/out/` and `internal/bindings/testdata/rwa-v3` and `rwa-v2`. See [Build, test, and verify](#build-test-and-verify). |
 | `internal/blockchain`                                          | RPC wrapper, `Signer` interface and `TxManager`: nonce coordination, EIP-1559/legacy fees, submission/replacement and pending, mined, confirmed, reverted and reorged states.                                                                                                                                                        |
-| `internal/indexer`                                             | Stores logs by `(chainId, address, txHash, logIndex)`, checkpoints progress and rolls back to a common ancestor within its recovery window. Deeper reorgs require operator reconciliation.                                                                                                                                           |
+| `internal/indexer`                                             | Stores logs by `(chainId, address, txHash, logIndex)`, checkpoints progress, backfills addresses that join the watch set (after each forward scan, for a bounded time per poll) and rolls back to a common ancestor within its recovery window. Deeper reorgs require operator reconciliation.                                                                                                                                           |
 | `internal/project`                                             | Adopts profile-matching, admin-authorized deployments; checks code presence, enumerated roles, wiring and system allowlisting against signed calldata; projects governance and prices.                                                                                                                                               |
 | `internal/assets`, `internal/auditpkg`                         | Validate profiles, including the optional [legal descriptor](../docs/spec/asset-profile.md#legal-descriptor), canonicalize JSON (RFC 8785/JCS), compute digests/CIDs and assemble `.rwa` packages. The admin console checks `signed-result.json`. `GET /api/v1/project` exposes legal terms; indexed `Minted` events advance wallet-submitted records. |
 | `internal/compliance`                                          | EIP-191 wallet-ownership challenges, authenticated KYC decisions, replay/ownership checks and `ComplianceRegistry.setStatus` submission.                                                                                                                                                                                             |
-| `internal/sales`, `internal/redemption`                        | Live inventory and indexed purchases/redemptions. Clients quote through `Vault.previewBuy`/`RedemptionEscrow.previewRedeem` and submit wallet transactions, including treasurer funding/withdrawals and manager rejection.                                                                                                           |
+| `internal/sales`, `internal/redemption`                        | Live inventory, indexed purchases/redemptions and the rwa-v4 forward-priced purchase orders. Clients quote through `Vault.previewBuy`/`RedemptionEscrow.previewRedeem` (or `quotePurchaseAfter` for an order) and submit wallet transactions, including treasurer funding/withdrawals and manager rejection.                                                                                                           |
 | `internal/income` | Computes holder entitlements, builds OpenZeppelin-compatible Merkle trees and snapshots, and maintains distribution and claim read models for rwa-v3. See [Income distribution](#income-distribution). |
-| `internal/governance`, `internal/strategy`, `internal/txindex` | Decode role/admin-transfer/pause and strategy-price events. `txindex` adds transaction records for indexed wallet activity absent from the server manager, visible in `GET /transactions`.                                                                                                                                           |
+| `internal/governance`, `internal/strategy`, `internal/txindex` | Decode role/admin-transfer/pause and strategy-price events. `txindex` adds transaction records for indexed wallet activity absent from the server manager, visible in `GET /transactions`. A transaction whose events do not name its signer (a keeper's settlement, a treasurer's rejection, anyone's redemption claim, an admin's freeze or seizure) takes its sender from the node, not from the buyer, beneficiary or holder in the event.                                                                                                                                           |
 | `internal/serverwiring`                                        | Shared chain-ID checks, transaction-manager settings and typed event dispatch for platform and opsctl.                                                                                                                                                                                                                               |
 | `internal/shadow`                                              | Runs scripted indexer replay in isolated memory stores, sampling resources and comparing final event/DLQ counts. It constructs no transaction manager or key provider. See `docs/operator/soak-runbook.md`.                                                                                                                          |
 | `internal/ipfs`                                                | Kubo pinning and replication; backups count toward publication after stored content is fetched and rehashed.                                                                                                                                                                                                                         |
@@ -43,8 +43,9 @@ The commands are:
 - `cmd/platform`: connects storage/RPC, wires services and starts indexing, reconciliation,
   metrics and alerts. It serves API/SPA traffic separately from unauthenticated `/metrics`.
   Development can fall back to memory on Mongo connect/ping failure; production exits.
-- `cmd/opsctl`: replaces transactions, resets checkpoints, handles DLQ list/inspect/retry/dismiss
-  and recovers IPFS pins through the same config and MongoDB. Host/config-file access controls
+- `cmd/opsctl`: replaces transactions, resets checkpoints, handles DLQ list/inspect/retry/dismiss,
+  recovers IPFS pins and checks the stored asset profile (`profile check`) through the same config
+  and MongoDB. Host/config-file access controls
   use; `--actor` labels audits without authorizing actions. Mutating command functions require
   an audit intent before acting and attempt a linked result write afterward; failed result
   writes warn. Preflight errors can occur before auditing. Explicit memory mode is throwaway.
@@ -52,6 +53,8 @@ The commands are:
   without checks if the directory is absent.
 - `cmd/reindex`: deletes indexed rows for a running platform to rebuild; see
   [Backup, restore, and reindex](#backup-restore-and-reindex).
+- `cmd/keeper`: settles rwa-v4 purchase orders from its own config and gas-only wallet, apart
+  from the platform; see [rwa-v4 forward pricing](#rwa-v4-forward-pricing).
 - `cmd/canonicalize`: prints a JSON file's JCS SHA-256 digest and CIDv1 through
   `internal/auditpkg`. `contracts/script/Deploy.s.sol` reads that digest as `PROFILE_DIGEST`;
   deployed `profileDigest` is immutable.
@@ -132,15 +135,17 @@ for request validation and errors.
 
 ## rwa-v3 support
 
-The server verifies and indexes `rwa-v2` and `rwa-v3` deployments using the matching
-factory format. Minimum purchase limits, oracle pricing and income distribution require rwa-v3.
+The server verifies and indexes `rwa-v2`, `rwa-v3` and `rwa-v4` deployments using the matching
+factory format. Minimum purchase limits, oracle pricing and income distribution require rwa-v3
+or later; rwa-v4 adds forward pricing, described below.
 
 `bindings.Factory` decodes `deploy` calldata by selector and `ProjectDeployed` logs by topic0.
 `VerifyDeployment` requires the calldata generation, log layout, log `version` and live
-`factory.version()` to agree. `cmd/verifyabi` checks rwa-v3 bindings against
-`contracts/out` and the rwa-v2 factory binding against the pinned ABI at
-`internal/bindings/testdata/rwa-v2/RWAFactory.json`. It skips both checks if `contracts/out` is
-absent.
+`factory.version()` to agree. `cmd/verifyabi` checks the current bindings against
+`contracts/out` and the older factory bindings against the pinned ABIs at
+`internal/bindings/testdata/rwa-v3/RWAFactory.json` and `rwa-v2/RWAFactory.json`. It compares
+selectors, topics, view return types and event field order and indexing, and skips every check
+if `contracts/out` is absent.
 
 `GET /api/v1/config` returns `factoryVersion` from the service's cached first nonempty
 `version()` result for the configured factory. Failed or empty reads return an empty string
@@ -181,6 +186,44 @@ The rwa-v3 escrow reads `Vault.strategy()`, so `escrow.strategy()` must match th
 current strategy. A strategy swap therefore does not produce a purchase/redemption pricing
 split. `CheckConfigDrift` reuses the wiring and parameter checks, accepting minimum-purchase
 changes recorded in `Security`.
+
+## rwa-v4 forward pricing
+
+An rwa-v4 `OraclePriceStrategy` selects the first feed round published at least its dealing
+cutoff after the order. Anyone can settle a purchase once a usable round exists; a redemption
+is priced when the treasurer funds it. The platform verifies deployments, indexes events and
+serves read models. Wallets encode and submit the contract writes.
+
+- **Deployment.** `bindings.Factory` decodes rwa-v4 `deploy` calldata by selector next to the
+  rwa-v3 and rwa-v2 forms, which stay supported for projects already deployed. Verification
+  checks `Vault.purchaseTimeout()` and the strategy's `forwardPriced()` against the calldata
+  (true for an Oracle strategy, false for Fixed) and an Oracle strategy's `dealingCutoff()`.
+  rwa-v3 strategies have none of these views and are not asked for them.
+- **Orders.** `PurchaseRequested`, `PurchaseSettled`, `PurchaseRefunded`, `PurchaseCancelled`
+  and `PurchaseRejected` are replayed into the `purchase_orders` collection by
+  `sales.BuildOrders`, with the same ordering and status guards as the redemption projector.
+  `timeoutAt` is `createdAt` plus the project's purchase timeout. Both
+  `GET /api/v1/sales/orders` and `GET /api/v1/sales/orders/{id}` are public; the list supports
+  `status` and buyer `address` filters. Round IDs use decimal strings to preserve `uint80` precision.
+- **Redemptions.** An oracle request is stored with `quoteAmount` "0", the strategy, the base
+  round and `minQuoteOut` from `RedemptionForwardPriced`; funding emits `RedemptionPriced`,
+  which sets `quoteAmount` and `pricedRound`.
+- **Project and inventory.** `Project.forwardPriced` is read from the live strategy for rwa-v4
+  projects only and omitted when the read fails; `Project.oracle.dealingCutoff` is immutable and
+  cached with the other oracle parameters. `Inventory.pendingPurchaseQuote` reads
+  `Vault.pendingPurchaseQuote()`: a reverted read omits the field; other read errors fail the
+  request, so a transport failure does not hide reserved deposits.
+- **Transaction history.** The order transactions are classified `purchase_requested`,
+  `purchase_refunded`, `purchase_cancelled` and `purchase_rejected`; a settle that fills emits
+  `Purchased` and stays `purchase`.
+- **Keeper.** `cmd/keeper` reads `nextPurchaseId` and `getPurchase`, simulates `settlePurchase`
+  and submits successful simulations through `blockchain.TxManager`. The Vault enforces round,
+  pause and compliance rules during simulation and execution. Run it with its separate config
+  and a dedicated key. Its transaction records live in memory, and it can run while the
+  platform is down. It exits with an error when a stuck transaction blocks its wallet, since
+  only a restart clears that record, and it tracks a send whose outcome is unknown instead of
+  settling the order twice. `keeper.example.yaml` lists its settings and the
+  [operator guide](../docs/operator/operator-guide.md#4f-order-keeper) covers running it.
 
 ## Income distribution
 
@@ -313,7 +356,7 @@ validation.
 | `kyc:`                  | `provider` (`none`), `monitoring_action` (`alert`), `sumsub.*`, `onfido.*`                                                                                                                                                                                                                                         | `none` uses generic HMAC webhooks; `sumsub`/`onfido` require their credentials. See `config.example.yaml`.                                                                                                                                                                                    |
 | `compliance:`           | `max_allowed_wallets` (`0`, no cap), `sanctions_list_file` (empty, off) | Holder cap and sanctions screening on new allows; see below. |
 | `tx:`                   | `coordination_mode` (`in-process`), `lease_ttl` (`30s`)                                                                                                                                                                                                                             | Nonce coordination described under [KeyProvider](#keyprovider-hot-key-backends).                                                                                                                                                                                                              |
-| `alerts:`               | `pending_redemption_sla` (`48h`), `funded_claim_failure_sla` (`24h`)                                                                                                                                                                                                                | See [Observability](#observability).                                                                                                                                                                                                                                                          |
+| `alerts:`               | `pending_redemption_sla` (`48h`), `funded_claim_failure_sla` (`24h`), `pending_purchase_sla` (`24h`), `price_feed_sla` (unset)                                                                                                                                                                                      | See [Observability](#observability).                                                                                                                                                                                                                                                          |
 | `production_overrides:` | `allow_unbounded_request_body`, `allow_disabled_rate_limit`, `allow_unbounded_fees` (all `false`)                                                                                                                                                                                   | Emergency overrides for those controls only.                                                                                                                                                                                                                                                  |
 
 ## Holder cap and sanctions screening
@@ -377,9 +420,12 @@ API. It exposes standard Go metrics and:
 - `rwa_sales_inventory_tokens`: raw Vault inventory divided by 1e18, stored as a float for dashboards.
 - `rwa_redemptions_pending_count`, `rwa_redemptions_pending_oldest_age_seconds` and
   `rwa_redemptions_funded_unclaimed_count`.
+- `rwa_purchase_orders_pending_count` and `rwa_purchase_orders_pending_oldest_age_seconds`:
+  Pending purchase orders. A growing oldest age warrants checking the feed, keeper, pause state
+  and buyer compliance.
 - `rwa_allowed_wallets`: wallets Allowed and unexpired in the investor read model, excluding
   the vault and redemption escrow.
-- `rwa_alerts_fired_total{kind}`: redemption findings and `storage_degraded`, `config_drift`,
+- `rwa_alerts_fired_total{kind}`: redemption and purchase-order findings and `storage_degraded`, `config_drift`,
   `kyc_monitoring_hit`, `holder_cap_reached`, `holder_cap_exceeded`, `sanctions_list_match`,
   `price_feed_stale`;
   persistent conditions count again on later checks.
@@ -389,10 +435,12 @@ API. It exposes standard Go metrics and:
 - `rwa_idempotency_outbox_errors_total{phase}` and
   `rwa_read_model_reconcile_errors_total{reconciler}`: failed reservation writes and reconciler ticks.
 
-`refreshBusinessGauges` reads sales inventory and redemption models every 30 seconds.
-`internal/alerts` evaluates redemption slices every 5 minutes: `EvaluatePendingRedemptionSLA`
-uses on-chain `CreatedAt` against `alerts.pending_redemption_sla`; `EvaluateFundedClaimFailure`
-uses funding-index time `FundedAt` against `alerts.funded_claim_failure_sla`. Findings are logged,
+`refreshBusinessGauges` reads sales inventory, purchase-order and redemption models every 30
+seconds. `internal/alerts` evaluates redemption and purchase-order slices every 5 minutes:
+`EvaluatePendingRedemptionSLA` uses on-chain `CreatedAt` against `alerts.pending_redemption_sla`;
+`EvaluateFundedClaimFailure` uses funding-index time `FundedAt` against
+`alerts.funded_claim_failure_sla`; `EvaluatePendingPurchaseSLA` uses a Pending order's on-chain
+`CreatedAt` against `alerts.pending_purchase_sla`. Findings are logged,
 counted and submitted to the audit log (`category: "alerts"`, `GET /api/v1/audit-logs`); audit
 persistence is best effort.
 
@@ -400,8 +448,12 @@ The same 5-minute tick raises `price_feed_stale` when the Vault's Oracle strateg
 a price read because the feed is stale or invalid, the sequencer is down or in its grace
 period, feed decimals changed, or the contract returned an unknown revert. RPC transport
 failures are logged and skipped. The alert uses the strategy address as its audit target and
-includes the error name in its detail. These price failures block quotes for new purchases
-and redemption requests.
+includes the error name in its detail. These failures block latest-price quotes.
+Set `alerts.price_feed_sla` when `maxAge` is shorter than the update interval: stale-price alerts
+then wait until the feed reaches that age. Other price failures and an unreadable feed age bypass
+the delay. The setting changes alert timing only. With it set, the platform also compares each
+nonzero `purchaseTimeout` and `redemptionTimeout` with the oracle's `dealingCutoff` plus the SLA,
+logging each distinct warning once per process.
 
 Every 5 minutes, `project.CheckConfigDrift` checks post-adoption wiring without changing Active
 status. Differences raise `config_drift` through logs, metrics and audit attempts. Treasury,
@@ -418,8 +470,12 @@ into timestamped `.car` archives. Stop writers for a consistent dump: it does no
 `server/ops/restore.sh` runs `mongorestore --drop` for backed-up collections, leaving other
 collections intact, then imports and pins CAR roots with `ipfs dag import`.
 
+Addresses added at activation or after a strategy swap are backfilled from `contract.start_block`
+without a reindex. Each poll scans forward first, then starts backfill chunks within a time
+budget; an active chunk may outlast it. See `Indexer.Poll`.
+
 `cmd/reindex` deletes events for child addresses in `Project.Addresses` (retaining factory events),
-the chain's shared checkpoint/hash history, purchases, redemption requests and the income read
+the chain's shared checkpoint/hash history, purchases, purchase orders, redemption requests and the income read
 models (`income_distributions`, `income_claims`). It preserves profiles, prepared income
 snapshots (`income_preparations`), investor ownership flags, audit logs and idempotency records.
 The command uses stored addresses, including the deploy-time strategy. It deletes data;
@@ -476,7 +532,7 @@ go build ./...
 go vet ./...
 go test ./...              # needs no live Mongo or chain
 go test ./... -race
-go run ./cmd/verifyabi      # ABI drift: rwa-v3 bindings vs contracts/out/ (skips if absent), rwa-v2 factory vs the pinned testdata ABI
+go run ./cmd/verifyabi      # ABI drift: rwa-v4 bindings vs contracts/out/ (skips if absent), rwa-v3 and rwa-v2 factories vs the pinned testdata ABIs
 bash e2e/run_e2e.sh          # end-to-end proof; needs anvil, forge, cast and docker
 ```
 

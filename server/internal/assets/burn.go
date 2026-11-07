@@ -151,11 +151,20 @@ func (s *BurnService) CreateBurn(ctx context.Context, profile *Profile, projectI
 	}
 	burnID := uuid.NewString()
 	burn := &models.Burn{
-		BurnID: burnID, RecordID: record.RecordID, ProjectID: projectID, Status: models.BurnStatusPending,
-		OperationID: crypto.Keccak256Hash([]byte(burnID)).Hex(), Amount: amountStr, Unit: record.Unit,
-		MetadataRaw: meta.Canonical, MetadataDigest: meta.DigestHex(), CID: meta.CID,
-		Nonce: nonce.String(), ValidUntil: now.Add(attestationValidUntilWindow).Unix(),
-		CreatedAt: now, UpdatedAt: now,
+		BurnID:         burnID,
+		RecordID:       record.RecordID,
+		ProjectID:      projectID,
+		Status:         models.BurnStatusPending,
+		OperationID:    crypto.Keccak256Hash([]byte(burnID)).Hex(),
+		Amount:         amountStr,
+		Unit:           record.Unit,
+		MetadataRaw:    meta.Canonical,
+		MetadataDigest: meta.DigestHex(),
+		CID:            meta.CID,
+		Nonce:          nonce.String(),
+		ValidUntil:     now.Add(attestationValidUntilWindow).Unix(),
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	// Publish before persistence; a failed Create may leave an orphaned publication
 	if err := s.records.publish(ctx, burnID, meta.Canonical); err != nil {
@@ -237,9 +246,14 @@ func (s *BurnService) BuildPackage(burn *models.Burn, profileDigest [32]byte, pr
 		return nil, fmt.Errorf("assets: invalid stored nonce %q", burn.Nonce)
 	}
 	attestation := eip712.BurnAttestation{
-		Auditor: s.records.currentAuditor(), ProfileDigest: profileDigest, OperationID: operationID,
-		MetadataDigest: metadataDigest, Amount: amount, Nonce: nonce, ValidUntil: uint64(burn.ValidUntil),
-		Vault: s.records.vaultAddr,
+		Auditor:        s.records.currentAuditor(),
+		ProfileDigest:  profileDigest,
+		OperationID:    operationID,
+		MetadataDigest: metadataDigest,
+		Amount:         amount,
+		Nonce:          nonce,
+		ValidUntil:     uint64(burn.ValidUntil),
+		Vault:          s.records.vaultAddr,
 	}
 	typedData := auditpkg.NewBurnTypedDataDoc(s.records.eip712Domain, attestation)
 	zipBytes, _, err := auditpkg.BuildPackage("BurnAttestation", profileDigest, metadataDigest, profileRaw, burn.MetadataRaw, typedData, nil)

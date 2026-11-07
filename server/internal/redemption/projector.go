@@ -18,6 +18,10 @@ import (
 // - Pending -> Funded -> Completed
 // - Pending -> Rejected or Cancelled
 //
+// An rwa-v4 oracle request also carries RedemptionForwardPriced (strategy, base round and
+// minimum quote) and, once funded, RedemptionPriced (priced round and the fixed quote);
+// both apply to a Pending request only, so QuoteAmount stays "0" until then.
+//
 // Events without an id are ignored; events other than Requested must match the current
 // status.
 func BuildStates(events []*models.ChainEvent, redemptionTimeout int64) map[string]*models.RedemptionRequest {
@@ -51,6 +55,19 @@ func BuildStates(events []*models.ChainEvent, redemptionTimeout int64) map[strin
 				TimeoutAt:     createdAt + redemptionTimeout,
 				RequestTxHash: e.TxHash,
 				UpdatedAt:     now,
+			}
+		case "RedemptionForwardPriced":
+			if r, ok := states[id]; ok && r.Status == models.RedemptionPending {
+				r.Strategy = toString(e.Data["strategy"])
+				r.BaseRound = toString(e.Data["baseRound"])
+				r.MinQuoteOut = toString(e.Data["minQuoteOut"])
+				r.UpdatedAt = now
+			}
+		case "RedemptionPriced":
+			if r, ok := states[id]; ok && r.Status == models.RedemptionPending {
+				r.PricedRound = toString(e.Data["roundId"])
+				r.QuoteAmount = toString(e.Data["quoteAmount"])
+				r.UpdatedAt = now
 			}
 		case "RedemptionFunded":
 			if r, ok := states[id]; ok && r.Status == models.RedemptionPending {

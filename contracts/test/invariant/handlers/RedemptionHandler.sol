@@ -163,14 +163,17 @@ contract RedemptionHandler is Test {
         } catch {}
     }
 
-    /// @dev Advance by 0..timeout to test premature cancels while retaining Pending requests for other flows
+    /// @dev Even warp seeds advance by a full timeout so cancellation is reachable. Odd seeds advance
+    ///      by 0..timeout to test early cancellation and leave Pending requests for other flows;
+    ///      bounded advances alone can produce too few successful cancellations.
     function cancelRedemption(uint256 idSeed, uint32 warpSeed) external {
         totalCalls++;
         if (_pendingIds.length == 0) return;
         uint256 index = idSeed % _pendingIds.length;
         IRedemptionEscrow.RedemptionRequest memory r = escrow.getRedemption(_pendingIds[index]);
 
-        vm.warp(block.timestamp + bound(warpSeed, 0, escrow.redemptionTimeout()));
+        uint256 timeout = escrow.redemptionTimeout();
+        vm.warp(block.timestamp + (warpSeed % 2 == 0 ? timeout : bound(warpSeed, 0, timeout)));
         _cancel(index, r.beneficiary);
     }
 

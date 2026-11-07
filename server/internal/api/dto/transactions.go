@@ -22,8 +22,14 @@ type TransactionResponse struct {
 // when both explorerURL and the transaction hash are set
 func ToTransactionResponse(tx *models.Transaction, explorerURL string) TransactionResponse {
 	r := TransactionResponse{
-		TxHash: tx.TxHash, Kind: tx.Kind, Status: string(tx.Status), BlockNumber: tx.BlockNumber,
-		Sender: tx.From, Nonce: tx.Nonce, ReplacedBy: tx.ReplacedBy, ReplacementCount: tx.ReplacementCount,
+		TxHash:           tx.TxHash,
+		Kind:             tx.Kind,
+		Status:           string(tx.Status),
+		BlockNumber:      tx.BlockNumber,
+		Sender:           tx.From,
+		Nonce:            tx.Nonce,
+		ReplacedBy:       tx.ReplacedBy,
+		ReplacementCount: tx.ReplacementCount,
 	}
 	if explorerURL != "" && tx.TxHash != "" {
 		r.ExplorerURL = explorerURL + "/tx/" + tx.TxHash

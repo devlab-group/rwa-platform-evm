@@ -120,6 +120,15 @@ A wrong or manipulated oracle feed can misprice like a compromised pricer. Pause
 containment. To replace it, deploy a trusted fixed strategy and call `Vault.setStrategy` while
 unpaused; rwa-v3 redemption pricing follows the switch. Reject inflated Pending requests as above.
 
+In rwa-v4, open orders retain their stored strategy; switching strategies does not reprice them.
+While paused, use `Vault.rejectPurchase` (`TREASURER_ROLE`) to reject each Pending purchase that
+would use the bad round. The call refunds the whole deposit and requires an Allowed buyer.
+
+A buyer who is not Allowed also blocks settlement. Do not restore Allowed after unpausing while
+the order would still use the bad round. If returning funds to that buyer is permitted, restore
+Allowed during the pause, reject the order, then restore the buyer's previous status. Do not fund
+redemptions affected by the bad round; reject them after unpausing (`REDEMPTION_MANAGER_ROLE`).
+
 ## 5. Compromised server or server secrets
 
 The server relays compliance writes with its compliance key (section 2). Admin, pricer and

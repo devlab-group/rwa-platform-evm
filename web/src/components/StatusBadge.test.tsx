@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import {
+  PurchaseOrderStatusBadge,
   RedemptionComplianceBadge,
   RedemptionStatusBadge,
   TransactionStatusBadge,
@@ -206,5 +207,38 @@ describe("needsAttention", () => {
 
   it("flags an unrecognized forward-compat status (fails closed)", () => {
     expect(needsAttention("brand_new_status")).toBe(true);
+  });
+});
+
+describe("PurchaseOrderStatusBadge", () => {
+  it.each(["Pending", "Settled", "Refunded", "Cancelled", "Rejected"])(
+    "shows %s as-is and exposes it as data-status",
+    (status) => {
+      render(<PurchaseOrderStatusBadge status={status} />);
+      expect(screen.getByText(status)).toHaveAttribute("data-status", status);
+    },
+  );
+
+  it("shows a status this client does not know as Unknown rather than echoing it", () => {
+    render(<PurchaseOrderStatusBadge status="Expired" />);
+    const badge = screen.getByText("Unknown");
+    expect(badge).toHaveAttribute("data-status", "unknown");
+    expect(screen.queryByText("Expired")).toBeNull();
+  });
+
+  it.each(["constructor", "toString", "__proto__"])(
+    "does not treat the inherited key %s as a known status",
+    (status) => {
+      render(<PurchaseOrderStatusBadge status={status} />);
+      expect(screen.getByText("Unknown")).toHaveAttribute(
+        "data-status",
+        "unknown",
+      );
+    },
+  );
+
+  it("shows a missing status as Unknown", () => {
+    render(<PurchaseOrderStatusBadge status={undefined} />);
+    expect(screen.getByText("Unknown")).toBeInTheDocument();
   });
 });

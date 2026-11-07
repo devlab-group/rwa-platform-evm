@@ -1,33 +1,53 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { Address } from "viem";
 import { AsyncSection } from "../../components/AsyncSection";
 import { PaginationFooter } from "../../components/PaginationFooter";
 import { RoleGate } from "../../components/RoleGate";
+import { PurchaseOrderStatusBadge } from "../../components/StatusBadge";
 import { useWalletContext } from "../../context/walletContextValue";
 import { useAsync } from "../../hooks/useAsync";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { api } from "../../lib/client";
 import type { components } from "../../lib/api-types";
 import { resolveQuoteDecimals } from "../../lib/decimals";
+import { orderPricingMessage, withdrawableQuote } from "../../lib/purchase";
 import { ROLES } from "../../lib/roles";
 import { exportSafeBatch } from "../../lib/safeBatch";
-import { useTxRoute } from "../../lib/txRoute";
+import { useTxRoute, type TxRoute } from "../../lib/txRoute";
 import {
   formatTokenAmount,
+  formatUnixSeconds,
   shortenAddress,
   toMinimalUnits,
 } from "../../lib/format";
 import {
+  describeWalletError,
+  readOrderMinQuote,
+  readOrderPricing,
   readPreviewBuy,
+  rejectPurchaseCall,
+  sendRejectPurchase,
+  sendSettlePurchase,
   sendWithdrawProceeds,
   withdrawProceedsCall,
   waitForTxReceipt,
+  type OrderPricing,
 } from "../../lib/wallet";
 import { TableWrap } from "../../components/TableWrap";
 
 type Inventory = components["schemas"]["Inventory"];
 type Project = components["schemas"]["Project"];
 type Purchase = components["schemas"]["Purchase"];
+type PurchaseOrder = components["schemas"]["PurchaseOrder"];
+
+const ORDER_STATUS_FILTERS = [
+  "",
+  "Pending",
+  "Settled",
+  "Refunded",
+  "Cancelled",
+  "Rejected",
+] as const;
 
 // Vault purchase preview in RWA and quote-token minimal units
 interface BuyQuote {
@@ -36,22 +56,41 @@ interface BuyQuote {
 }
 
 /**
- * Shows inventory, quotes and purchases; withdraw through a role-holding wallet or Safe, sell
- * through Vault.buy
+ * Shows inventory, quotes and purchases; withdraw through a role-holding wallet or Safe. Instant
+ * strategies sell through Vault.buy; forward-priced ones fill orders at a later feed round, which
+ * anyone can settle and the treasurer can reject while the project is paused.
  */
 export function InventorySales() {
   const inventory = useAsync<Inventory>(
     (signal) => api.getInventory({ signal }),
     [],
   );
-  const project = useAsync<Project>((signal) => api.getProject({ signal }), []);
+  const projectState = useAsync<Project>(
+    (signal) => api.getProject({ signal }),
+    [],
+  );
+  // A re-read after an action replaces the first one without blanking the page meanwhile
+  const [refreshed, setRefreshed] = useState<Project>();
+  const refreshProject = useCallback(() => {
+    api
+      .getProject()
+      .then(setRefreshed)
+      .catch(() => {
+        // The earlier projection stays and is advisory anyway
+      });
+  }, []);
   const purchases = usePaginatedList<Purchase>(
     (cursor, signal) => api.listPurchases({ signal, cursor }),
     [],
   );
 
-  const proj = project.status === "success" ? project.data : undefined;
+  const proj =
+    refreshed ??
+    (projectState.status === "success" ? projectState.data : undefined);
   const chainId = proj?.chainId ?? 0;
+  // Oracle projects on rwa-v4 fill orders at a later round and never offer Vault.buy
+  const forwardPriced = proj?.forwardPriced === true;
+  const showOrders = forwardPriced || proj?.version === "rwa-v4";
   // Resolve RWA/quote decimals separately; display may use raw units, submission requires a known
   // scale
   const rwaDecimals = proj?.decimals;
@@ -90,14 +129,44 @@ export function InventorySales() {
                   {formatTokenAmount(data.quoteBalance ?? "", quoteDecimals)}
                 </dd>
               </div>
+              {data.pendingPurchaseQuote !== undefined && (
+                <>
+                  <div className="tx-preview__row">
+                    <dt>Held for open purchase orders</dt>
+                    <dd>
+                      {formatTokenAmount(
+                        data.pendingPurchaseQuote,
+                        quoteDecimals,
+                      )}
+                    </dd>
+                  </div>
+                  <div className="tx-preview__row">
+                    <dt>Withdrawable</dt>
+                    <dd>
+                      {formatTokenAmount(
+                        withdrawableQuote(data)?.toString() ?? "",
+                        quoteDecimals,
+                      )}
+                    </dd>
+                  </div>
+                </>
+              )}
               <div className="tx-preview__row">
-                <dt>Purchase price</dt>
+                <dt>
+                  {forwardPriced
+                    ? "Latest purchase price (indicative)"
+                    : "Purchase price"}
+                </dt>
                 <dd>
                   {formatTokenAmount(data.purchasePrice ?? "", quoteDecimals)}
                 </dd>
               </div>
               <div className="tx-preview__row">
-                <dt>Redemption price</dt>
+                <dt>
+                  {forwardPriced
+                    ? "Latest redemption price (indicative)"
+                    : "Redemption price"}
+                </dt>
                 <dd>
                   {formatTokenAmount(data.redemptionPrice ?? "", quoteDecimals)}
                 </dd>
@@ -106,33 +175,39 @@ export function InventorySales() {
                 <div className="tx-preview__row">
                   <dt>Price status</dt>
                   <dd className="async-state--error" role="alert">
-                    Unavailable: the oracle strategy reports {data.priceError}.
-                    Purchases and redemption requests revert until the feed
-                    recovers.
+                    Unavailable: the oracle strategy reports {data.priceError}.{" "}
+                    {forwardPriced
+                      ? "Quote previews revert until the feed recovers; orders and redemption requests are still accepted and price at a later round."
+                      : "Purchases and redemption requests revert until the feed recovers."}
                   </dd>
                 </div>
               )}
-              {project.status === "success" &&
-                project.data.addresses?.strategy && (
-                  <div className="tx-preview__row">
-                    <dt>Strategy address</dt>
-                    <dd title={project.data.addresses.strategy}>
-                      {shortenAddress(project.data.addresses.strategy)}
-                    </dd>
-                  </div>
-                )}
+              {proj?.addresses?.strategy && (
+                <div className="tx-preview__row">
+                  <dt>Strategy address</dt>
+                  <dd title={proj.addresses.strategy}>
+                    {shortenAddress(proj.addresses.strategy)}
+                  </dd>
+                </div>
+              )}
             </dl>
           )}
         </AsyncSection>
       </section>
 
       <section className="card">
-        <h2>Purchase quote preview</h2>
+        <h2>
+          {forwardPriced
+            ? "Indicative purchase quote"
+            : "Purchase quote preview"}
+        </h2>
         <BuyQuotePreview
           vault={proj?.addresses?.vault}
           chainId={chainId}
           rwaDecimals={rwaDecimals}
           quoteDecimals={quoteDecimals}
+          forwardPriced={forwardPriced}
+          dealingCutoff={proj?.oracle?.dealingCutoff}
         />
       </section>
 
@@ -150,7 +225,17 @@ export function InventorySales() {
             chainId={chainId}
             availableQuote={
               inventory.status === "success"
+                ? withdrawableQuote(inventory.data)?.toString()
+                : undefined
+            }
+            quoteBalance={
+              inventory.status === "success"
                 ? inventory.data.quoteBalance
+                : undefined
+            }
+            pendingQuote={
+              inventory.status === "success"
+                ? inventory.data.pendingPurchaseQuote
                 : undefined
             }
             quoteDecimals={quoteDecimals}
@@ -158,6 +243,17 @@ export function InventorySales() {
           />
         </RoleGate>
       </section>
+
+      {showOrders && (
+        <PurchaseOrders
+          project={proj}
+          chainId={chainId}
+          rwaDecimals={rwaDecimals}
+          quoteDecimals={quoteDecimals}
+          onChanged={inventory.reload}
+          onProjectRefresh={refreshProject}
+        />
+      )}
 
       <section className="card">
         <h2>Purchase history</h2>
@@ -227,11 +323,15 @@ function BuyQuotePreview({
   chainId,
   rwaDecimals,
   quoteDecimals,
+  forwardPriced,
+  dealingCutoff,
 }: {
   vault: string | undefined;
   chainId: number;
   rwaDecimals: number | undefined;
   quoteDecimals: number | undefined;
+  forwardPriced: boolean;
+  dealingCutoff: number | undefined;
 }) {
   const [tokenAmount, setTokenAmount] = useState("");
   const [quote, setQuote] = useState<BuyQuote | null>(null);
@@ -259,7 +359,12 @@ function BuyQuotePreview({
       );
       setQuote({ tokenAmount: minimal, quoteAmount: quoteAmount.toString() });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Quote request failed.");
+      // Decodes SequencerDown, StalePrice and the other oracle reverts into plain text
+      setError(
+        err instanceof Error
+          ? describeWalletError(err)
+          : "Quote request failed.",
+      );
     } finally {
       setLoading(false);
     }
@@ -267,6 +372,17 @@ function BuyQuotePreview({
 
   return (
     <div>
+      {forwardPriced && (
+        <p className="field__hint">
+          This project prices orders at a later feed round
+          {dealingCutoff
+            ? `, published at least ${dealingCutoff} s after the order`
+            : ""}
+          , so Vault.buy is disabled and this figure is the feed&apos;s latest
+          answer, not what an order will pay. A buyer requests an order with a
+          maximum deposit; anyone can then settle it once that round lands.
+        </p>
+      )}
       <div className="field">
         <label htmlFor="buy-amount">RWA token amount (whole units)</label>
         <input
@@ -301,7 +417,11 @@ function BuyQuotePreview({
           <div className="tx-preview__row">
             {/* Vault.previewBuy quotes purchases */}
             <dt>Side</dt>
-            <dd>purchase</dd>
+            <dd>
+              {forwardPriced
+                ? "purchase (indicative, not binding)"
+                : "purchase"}
+            </dd>
           </div>
         </dl>
       )}
@@ -313,13 +433,18 @@ function WithdrawForm({
   project,
   chainId,
   availableQuote,
+  quoteBalance,
+  pendingQuote,
   quoteDecimals,
   onWithdrawn,
 }: {
   project: Project | undefined;
   chainId: number;
-  // Vault quote balance in minimal units from the inventory response
+  // Quote balance minus open order deposits, in minimal units; the bound for the amount
   availableQuote: string | undefined;
+  // The two figures behind availableQuote, shown when open order deposits are ring-fenced
+  quoteBalance: string | undefined;
+  pendingQuote: string | undefined;
   // Quote decimals for display and early balance validation, when available
   quoteDecimals: number | undefined;
   onWithdrawn: () => void;
@@ -428,6 +553,9 @@ function WithdrawForm({
           {availableQuote !== undefined
             ? formatTokenAmount(availableQuote, quoteDecimals)
             : "-"}
+          {pendingQuote !== undefined && quoteBalance !== undefined
+            ? ` (balance ${formatTokenAmount(quoteBalance, quoteDecimals)} minus ${formatTokenAmount(pendingQuote, quoteDecimals)} held for open purchase orders)`
+            : ""}
           . Cannot exceed this.
         </span>
         {overBalance && (
@@ -460,5 +588,504 @@ function WithdrawForm({
         </p>
       )}
     </div>
+  );
+}
+
+function PurchaseOrders({
+  project,
+  chainId,
+  rwaDecimals,
+  quoteDecimals,
+  onChanged,
+  onProjectRefresh,
+}: {
+  project: Project | undefined;
+  chainId: number;
+  rwaDecimals: number | undefined;
+  quoteDecimals: number | undefined;
+  onChanged: () => void;
+  onProjectRefresh: () => void;
+}) {
+  const [statusFilter, setStatusFilter] =
+    useState<(typeof ORDER_STATUS_FILTERS)[number]>("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const orders = usePaginatedList<PurchaseOrder>(
+    (cursor, signal) =>
+      api.listPurchaseOrders({
+        signal,
+        cursor,
+        status: statusFilter || undefined,
+      }),
+    [statusFilter],
+  );
+
+  return (
+    <>
+      <section className="card">
+        <h2>Purchase orders</h2>
+        <p className="field__hint">
+          Each order holds the buyer&apos;s deposit in the Vault until it
+          settles at the first feed round published after its dealing cut-off,
+          is refunded, or is cancelled or rejected.
+        </p>
+        <div className="field field--narrow">
+          <label htmlFor="order-status-filter">Filter orders by status</label>
+          <select
+            id="order-status-filter"
+            value={statusFilter}
+            onChange={(e) =>
+              setStatusFilter(
+                e.target.value as (typeof ORDER_STATUS_FILTERS)[number],
+              )
+            }
+          >
+            {ORDER_STATUS_FILTERS.map((s) => (
+              <option key={s} value={s}>
+                {s || "All"}
+              </option>
+            ))}
+          </select>
+        </div>
+        <AsyncSection
+          state={orders}
+          onRetry={orders.reload}
+          empty={(d) => d.length === 0}
+          emptyLabel="No purchase orders match this filter."
+        >
+          {(data) => (
+            <>
+              <TableWrap label="Purchase orders">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Buyer</th>
+                      <th>RWA amount</th>
+                      <th>Deposit</th>
+                      <th>Status</th>
+                      <th>Price</th>
+                      <th>Timeout</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.map((o) => (
+                      <tr key={o.id}>
+                        <td className="mono">{o.id}</td>
+                        <td className="mono" title={o.buyer}>
+                          {shortenAddress(o.buyer)}
+                        </td>
+                        <td>{formatTokenAmount(o.tokenAmount, rwaDecimals)}</td>
+                        <td>
+                          {formatTokenAmount(o.maxQuoteAmount, quoteDecimals)}
+                        </td>
+                        <td>
+                          <PurchaseOrderStatusBadge status={o.status} />
+                        </td>
+                        <td>
+                          <OrderPriceCell
+                            order={o}
+                            quoteDecimals={quoteDecimals}
+                          />
+                        </td>
+                        <td>{formatUnixSeconds(o.timeoutAt)}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="button button--secondary"
+                            onClick={() => setSelectedId(o.id)}
+                          >
+                            Manage
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableWrap>
+              <PaginationFooter
+                loadedCount={data.length}
+                totalCount={orders.totalCount}
+                hasMore={orders.hasMore}
+                loadingMore={orders.loadingMore}
+                loadMoreError={orders.loadMoreError}
+                onLoadMore={orders.loadMore}
+              />
+            </>
+          )}
+        </AsyncSection>
+      </section>
+
+      {selectedId && (
+        <OrderDetail
+          key={selectedId}
+          id={selectedId}
+          project={project}
+          chainId={chainId}
+          rwaDecimals={rwaDecimals}
+          quoteDecimals={quoteDecimals}
+          onChanged={() => {
+            orders.reload();
+            onChanged();
+          }}
+          onProjectRefresh={onProjectRefresh}
+          onClose={() => setSelectedId(null)}
+        />
+      )}
+    </>
+  );
+}
+
+// Short price text for a table row; the live price is read in the order panel, one order at a time
+function OrderPriceCell({
+  order,
+  quoteDecimals,
+}: {
+  order: PurchaseOrder;
+  quoteDecimals: number | undefined;
+}) {
+  if (order.status === "Pending") return <>Read in Manage</>;
+  return (
+    <>
+      {order.pricedRound ? `Round ${order.pricedRound}` : "No round"}
+      {order.refund
+        ? `, refund ${formatTokenAmount(order.refund, quoteDecimals)}`
+        : ""}
+    </>
+  );
+}
+
+function OrderDetail({
+  id,
+  project,
+  chainId,
+  rwaDecimals,
+  quoteDecimals,
+  onChanged,
+  onProjectRefresh,
+  onClose,
+}: {
+  id: string;
+  project: Project | undefined;
+  chainId: number;
+  rwaDecimals: number | undefined;
+  quoteDecimals: number | undefined;
+  onChanged: () => void;
+  onProjectRefresh: () => void;
+  onClose: () => void;
+}) {
+  const from = useWalletContext().address;
+  const vault = project?.addresses?.vault;
+  const detail = useAsync<PurchaseOrder>(() => api.getPurchaseOrder(id), [id]);
+  const order = detail.status === "success" ? detail.data : undefined;
+  // What a Pending order would settle at, on its own strategy, and the minimum recorded with it
+  const settlement = useAsync<{
+    pricing: OrderPricing;
+    minQuote: bigint;
+  } | null>(async () => {
+    if (!order || order.status !== "Pending" || !chainId || !vault) return null;
+    const [pricing, minQuote] = await Promise.all([
+      readOrderPricing(
+        chainId,
+        order.strategy as Address,
+        BigInt(order.tokenAmount),
+        BigInt(order.baseRound),
+        BigInt(order.createdAt),
+      ),
+      readOrderMinQuote(chainId, vault as Address, BigInt(order.id)),
+    ]);
+    return { pricing, minQuote };
+  }, [order?.id, order?.status, chainId, vault]);
+  const [busy, setBusy] = useState<"settle" | "reject" | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const paused = project?.paused === true;
+  // A lagging projection says nothing certain about the pause state: only the chain does
+  const stale = project?.securityStale === true;
+  const fmtQuote = (raw: string | bigint) =>
+    formatTokenAmount(String(raw), quoteDecimals);
+  const pricingState =
+    settlement.status === "success"
+      ? settlement.data?.pricing.state
+      : undefined;
+  // Settlement reverts without a usable round, so the button waits for one; Refresh price
+  // reads again. A stale pause flag never blocks, the preflight before sending decides.
+  const settleBlockReason =
+    paused && !stale
+      ? "Settlement is refused while the project is paused."
+      : pricingState === "waiting"
+        ? "No price round has landed yet."
+        : pricingState === "blocked"
+          ? "The pricing round cannot be used."
+          : undefined;
+
+  function refreshPrice() {
+    settlement.reload();
+    onProjectRefresh();
+  }
+
+  function begin() {
+    setError(null);
+    setDone(null);
+    setProgress(null);
+  }
+
+  // Anyone can settle: no role, only a connected wallet
+  async function handleSettle() {
+    begin();
+    if (!from) {
+      setError("Wallet not connected.");
+      return;
+    }
+    if (!vault) {
+      setError("Missing vault address - project not deployed?");
+      return;
+    }
+    setBusy("settle");
+    try {
+      setProgress("Settling order…");
+      const hash = await sendSettlePurchase(
+        chainId,
+        from,
+        vault as Address,
+        BigInt(id),
+      );
+      await waitForTxReceipt(hash);
+      setDone(
+        "Settlement confirmed. The order shows Settled, or Refunded if its price is outside the buyer's bounds, once indexed.",
+      );
+      detail.reload();
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Settlement failed.");
+    } finally {
+      setBusy(null);
+      setProgress(null);
+      onProjectRefresh();
+    }
+  }
+
+  async function handleReject(route: TxRoute) {
+    begin();
+    if (route.kind === "wallet" && !from) {
+      setError("Wallet not connected.");
+      return;
+    }
+    if (!vault) {
+      setError("Missing vault address - project not deployed?");
+      return;
+    }
+    if (route.kind === "safe") {
+      setDone(
+        exportSafeBatch(chainId, route.safe, "Reject purchase order", [
+          rejectPurchaseCall(vault as Address, BigInt(id)),
+        ]),
+      );
+      return;
+    }
+    if (!from) return;
+    setBusy("reject");
+    try {
+      setProgress("Rejecting order…");
+      const hash = await sendRejectPurchase(
+        chainId,
+        from,
+        vault as Address,
+        BigInt(id),
+      );
+      await waitForTxReceipt(hash);
+      setDone("Order rejected. The whole deposit was returned to the buyer.");
+      detail.reload();
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Rejection failed.");
+    } finally {
+      setBusy(null);
+      setProgress(null);
+      onProjectRefresh();
+    }
+  }
+
+  return (
+    <section className="card">
+      <h2>Order {id}</h2>
+      <AsyncSection state={detail} onRetry={detail.reload}>
+        {(o) => (
+          <dl className="tx-preview__grid">
+            <div className="tx-preview__row">
+              <dt>Status</dt>
+              <dd>
+                <PurchaseOrderStatusBadge status={o.status} />
+              </dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Buyer</dt>
+              <dd className="mono">{o.buyer}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Recipient</dt>
+              <dd className="mono">{o.recipient}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>RWA amount</dt>
+              <dd>{formatTokenAmount(o.tokenAmount, rwaDecimals)}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Deposit (buyer&apos;s maximum)</dt>
+              <dd>{fmtQuote(o.maxQuoteAmount)}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Pricing strategy</dt>
+              <dd className="mono">{o.strategy}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Base round</dt>
+              <dd className="mono">{o.baseRound}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Created</dt>
+              <dd>{formatUnixSeconds(o.createdAt)}</dd>
+            </div>
+            <div className="tx-preview__row">
+              <dt>Buyer can cancel from</dt>
+              <dd>{formatUnixSeconds(o.timeoutAt)}</dd>
+            </div>
+            {o.status === "Pending" ? (
+              <>
+                {settlement.status === "success" && settlement.data && (
+                  <div className="tx-preview__row">
+                    <dt>Minimum quote (fixed when ordered)</dt>
+                    <dd>{fmtQuote(settlement.data.minQuote)}</dd>
+                  </div>
+                )}
+                <div className="tx-preview__row">
+                  <dt>Price</dt>
+                  <dd>
+                    {settlement.status === "loading" && "Reading…"}
+                    {settlement.status === "error" &&
+                      `Could not read the price: ${settlement.error}`}
+                    {settlement.status === "success" && settlement.data
+                      ? orderPricingMessage(settlement.data.pricing, fmtQuote, {
+                          deposit: BigInt(o.maxQuoteAmount),
+                          minQuote: settlement.data.minQuote,
+                        })
+                      : null}{" "}
+                    <button
+                      type="button"
+                      className="button button--secondary"
+                      onClick={refreshPrice}
+                    >
+                      Refresh price
+                    </button>
+                  </dd>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="tx-preview__row">
+                  <dt>Priced at round</dt>
+                  <dd className="mono">{o.pricedRound ?? "-"}</dd>
+                </div>
+                <div className="tx-preview__row">
+                  <dt>Quote at that round</dt>
+                  <dd>{o.quoteAmount ? fmtQuote(o.quoteAmount) : "-"}</dd>
+                </div>
+                <div className="tx-preview__row">
+                  <dt>Refunded to buyer</dt>
+                  <dd>{o.refund ? fmtQuote(o.refund) : "-"}</dd>
+                </div>
+              </>
+            )}
+          </dl>
+        )}
+      </AsyncSection>
+
+      {order?.status === "Pending" && (
+        <div className="tx-preview__actions u-mt-4">
+          <button
+            type="button"
+            className="button button--primary"
+            onClick={handleSettle}
+            disabled={busy !== null || settleBlockReason !== undefined}
+            title={settleBlockReason}
+          >
+            {busy === "settle" ? "Submitting…" : "Settle order"}
+          </button>
+          {paused || stale ? (
+            <RoleGate
+              roles={project?.roles}
+              rolesByContract={project?.rolesByContract}
+              contracts={["vault"]}
+              role={ROLES.treasurer}
+              action="reject purchase orders"
+            >
+              {(route) => (
+                <>
+                  <p className="field__hint">
+                    Rejecting returns the buyer&apos;s whole deposit of{" "}
+                    {fmtQuote(order.maxQuoteAmount)} and closes the order as
+                    Rejected. The buyer receives no RWA.
+                    {!paused &&
+                      " The Vault accepts a rejection only while the project is paused."}
+                  </p>
+                  <button
+                    type="button"
+                    className="button button--danger"
+                    onClick={() => handleReject(route)}
+                    disabled={busy !== null}
+                  >
+                    {busy === "reject"
+                      ? "Submitting…"
+                      : route.kind === "safe"
+                        ? "Save rejection batch"
+                        : "Reject order"}
+                  </button>
+                </>
+              )}
+            </RoleGate>
+          ) : (
+            <p className="field__hint">
+              Orders can be rejected only while the project is paused. Pausing
+              also stops settlement, so a bad round can be caught before anyone
+              settles at it.
+            </p>
+          )}
+          {stale && (
+            <p className="field__hint" role="status">
+              The pause state here ({paused ? "paused" : "not paused"}) comes
+              from an indexer projection that may be out of date. Settlement and
+              rejection are checked on-chain before anything is sent.
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="tx-preview__actions u-mt-4">
+        <button
+          type="button"
+          className="button button--secondary"
+          onClick={onClose}
+        >
+          Close
+        </button>
+      </div>
+
+      {progress && (
+        <p role="status" className="u-mt-4">
+          {progress}
+        </p>
+      )}
+      {error && (
+        <p className="async-state--error" role="alert">
+          {error}
+        </p>
+      )}
+      {done && (
+        <p role="status" className="u-mt-4">
+          {done}
+        </p>
+      )}
+    </section>
   );
 }

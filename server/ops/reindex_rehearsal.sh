@@ -33,7 +33,7 @@ mongo_eval() {
 
 collection_counts() {
     mongo_eval '
-      const names = ["chain_events","purchases","redemption_requests"];
+      const names = ["chain_events","purchases","purchase_orders","redemption_requests"];
       const out = {};
       for (const n of names) { out[n] = db.getCollection(n).countDocuments({}); }
       print(JSON.stringify(out));
@@ -44,7 +44,7 @@ echo "=== [1/3] snapshotting read-model collection counts (before) ==="
 BEFORE="$(collection_counts)"
 echo "before: ${BEFORE}"
 
-echo "=== [2/3] running cmd/reindex (drops chain_events/checkpoints/purchases/redemption_requests) ==="
+echo "=== [2/3] running cmd/reindex (drops chain_events/checkpoints/purchases/purchase_orders/redemption_requests) ==="
 # cmd/reindex reads a YAML config file (--config, internal/config.LoadFile), so
 # write a minimal one from this script's environment. The environment stays
 # "development" (the default), so the production checks do not apply.

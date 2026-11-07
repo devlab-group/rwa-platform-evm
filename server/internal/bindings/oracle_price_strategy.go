@@ -17,6 +17,15 @@ const oraclePriceStrategyABIJSON = `[
   {"type":"function","name":"sequencerUptimeFeed","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"address"}]},
   {"type":"function","name":"maxAge","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint64"}]},
   {"type":"function","name":"gracePeriod","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint64"}]},
+  {"type":"function","name":"dealingCutoff","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint64"}]},
+  {"type":"function","name":"forwardPriced","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"bool"}]},
+  {"type":"function","name":"latestRound","stateMutability":"view","inputs":[],"outputs":[{"name":"roundId","type":"uint80"}]},
+  {"type":"function","name":"quotePurchaseAfter","stateMutability":"view","inputs":[
+    {"name":"tokenAmount","type":"uint256"},{"name":"baseRound","type":"uint80"},{"name":"orderTime","type":"uint64"}],
+    "outputs":[{"name":"quoteAmount","type":"uint256"},{"name":"roundId","type":"uint80"}]},
+  {"type":"function","name":"quoteRedemptionAfter","stateMutability":"view","inputs":[
+    {"name":"tokenAmount","type":"uint256"},{"name":"baseRound","type":"uint80"},{"name":"orderTime","type":"uint64"}],
+    "outputs":[{"name":"quoteAmount","type":"uint256"},{"name":"roundId","type":"uint80"}]},
   {"type":"function","name":"purchaseSpreadBps","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint16"}]},
   {"type":"function","name":"redemptionSpreadBps","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint16"}]},
   {"type":"function","name":"tokenDecimals","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint8"}]},
@@ -40,8 +49,8 @@ const aggregatorV3ABIJSON = `[
     {"name":"updatedAt","type":"uint256"},{"name":"answeredInRound","type":"uint80"}]}
 ]`
 
-// OraclePriceStrategy encodes calls for, and decodes reverts of, the rwa-v3
-// OraclePriceStrategy
+// OraclePriceStrategy encodes calls for, and decodes reverts of, the OraclePriceStrategy of
+// rwa-v3 and rwa-v4; the forward-pricing views exist from rwa-v4 only
 type OraclePriceStrategy struct{ ABI abi.ABI }
 
 // NewOraclePriceStrategy parses the OraclePriceStrategy ABI
@@ -96,6 +105,30 @@ func RevertData(err error) []byte {
 		return nil
 	}
 	return b
+}
+
+// PackQuoteAfter builds calldata for quotePurchaseAfter or quoteRedemptionAfter; method selects it
+func (s OraclePriceStrategy) PackQuoteAfter(method string, tokenAmount, baseRound *big.Int, orderTime uint64) ([]byte, error) {
+	return s.ABI.Pack(method, tokenAmount, baseRound, orderTime)
+}
+
+// ForwardQuote is the decoded return of quotePurchaseAfter or quoteRedemptionAfter: the quote
+// and the round that priced it
+type ForwardQuote struct {
+	QuoteAmount *big.Int
+	RoundID     *big.Int
+}
+
+// UnpackQuoteAfter decodes quotePurchaseAfter or quoteRedemptionAfter; method selects it
+func (s OraclePriceStrategy) UnpackQuoteAfter(method string, data []byte) (ForwardQuote, error) {
+	out, err := s.ABI.Unpack(method, data)
+	if err != nil {
+		return ForwardQuote{}, err
+	}
+	return ForwardQuote{
+		QuoteAmount: abi.ConvertType(out[0], new(big.Int)).(*big.Int),
+		RoundID:     abi.ConvertType(out[1], new(big.Int)).(*big.Int),
+	}, nil
 }
 
 // LatestPrice is the decoded return of latestPrice()

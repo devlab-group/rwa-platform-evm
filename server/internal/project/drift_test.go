@@ -36,13 +36,18 @@ func stubView(t *testing.T, c *perContractClient, contract common.Address, contr
 
 func driftProject() *models.Project {
 	return &models.Project{
-		ProjectID: "p1", Status: models.ProjectStatusActive, Addresses: sampleAddresses(),
-		QuoteToken:    "0x0000000000000000000000000000000000C001",
-		Treasury:      "0x0000000000000000000000000000000000C002",
-		Auditor:       "0x0000000000000000000000000000000000C003",
-		ProfileDigest: "0x" + strings.Repeat("11", 32), TokenDecimals: 6, RedemptionTimeout: 1209600,
+		ProjectID:         "p1",
+		Status:            models.ProjectStatusActive,
+		Addresses:         sampleAddresses(),
+		QuoteToken:        "0x0000000000000000000000000000000000C001",
+		Treasury:          "0x0000000000000000000000000000000000C002",
+		Auditor:           "0x0000000000000000000000000000000000C003",
+		ProfileDigest:     "0x" + strings.Repeat("11", 32),
+		TokenDecimals:     6,
+		RedemptionTimeout: 1209600,
 		// Deploy-time prices must not flag legitimate pricer updates as drift
-		PurchasePricePerWholeToken: "1000", RedemptionPricePerWholeToken: "900",
+		PurchasePricePerWholeToken:   "1000",
+		RedemptionPricePerWholeToken: "900",
 	}
 }
 

@@ -14,7 +14,9 @@ import {
   pausableAbi,
   redemptionEscrowAbi,
   incomeDistributorErrorsAbi,
+  oracleStrategyAbi,
   oracleStrategyErrorsAbi,
+  redemptionEscrowErrorsAbi,
   rwaTokenErrorsAbi,
   supplyControllerAbi,
   supplyControllerErrorsAbi,
@@ -33,7 +35,11 @@ import {
   findOnChainDistribution,
   forcedTransferCall,
   pauseCall,
+  readFundingPreview,
+  readOrderMinQuote,
+  readOrderPricing,
   reclaimUnclaimedCall,
+  rejectPurchaseCall,
   rejectRedemptionCall,
   roleChangeCall,
   sendAcceptAdminTransfer,
@@ -47,15 +53,18 @@ import {
   sendFundRedemption,
   sendMint,
   sendReclaimUnclaimed,
+  sendRejectPurchase,
   sendRejectRedemption,
   sendRoleChange,
   sendSetFrozenTokens,
   sendSetMinPurchaseQuote,
   sendSetPaused,
   sendSetStrategyPrice,
+  sendSettlePurchase,
   sendWithdrawProceeds,
   setFrozenTokensCall,
   setMinPurchaseQuoteCall,
+  settlePurchaseCall,
   strategyPriceCall,
   waitForTxReceipt,
   withdrawProceedsCall,
@@ -847,4 +856,367 @@ describe("writes on the wrong chain", () => {
       expect(sent).toEqual([]);
     },
   );
+});
+
+describe("rwa-v4 revert messages", () => {
+  const explain = (
+    abi: readonly unknown[],
+    errorName: string,
+    args?: unknown[],
+  ) =>
+    describeWalletError(
+      Object.assign(new Error("x"), {
+        data: encodeErrorResult({
+          abi,
+          errorName,
+          args,
+        } as Parameters<typeof encodeErrorResult>[0]),
+      }),
+    );
+
+  it.each([
+    ["ForwardPriced", vaultErrorsAbi, [], /Vault\.buy is disabled/],
+    ["NotForwardPriced", vaultErrorsAbi, [], /prices instantly/],
+    [
+      "ProjectNotPaused",
+      vaultErrorsAbi,
+      [],
+      /only while the project is paused/,
+    ],
+    ["NotPending", vaultErrorsAbi, [12n], /Request 12 is no longer Pending/],
+    [
+      "BuyerNotAllowed",
+      vaultErrorsAbi,
+      ["0x0000000000000000000000000000000000000040"],
+      /0x0000000000000000000000000000000000000040 is not Allowed/,
+    ],
+    [
+      "RoundAvailable",
+      vaultErrorsAbi,
+      [3n, 7n],
+      /Order 3 already has a usable price round/,
+    ],
+    [
+      "InsufficientProceeds",
+      vaultErrorsAbi,
+      [900n, 400n],
+      /Only 400 .* can be withdrawn.*Requested 900/,
+    ],
+    [
+      "RoundNotAvailable",
+      oracleStrategyErrorsAbi,
+      [7n],
+      /No feed round has landed yet/,
+    ],
+    [
+      "NoRoundHistory",
+      oracleStrategyErrorsAbi,
+      [],
+      /does not keep round history/,
+    ],
+    [
+      "QuoteBelowMin",
+      redemptionEscrowErrorsAbi,
+      [5n, 25n],
+      /quote 5 is below the holder's minimum of 25/,
+    ],
+    [
+      "FundingClosed",
+      redemptionEscrowErrorsAbi,
+      [100n, 200n],
+      /Funding closed.*holder can cancel/,
+    ],
+    ["ZeroQuote", redemptionEscrowErrorsAbi, [], /priced quote is zero/],
+    [
+      "InvalidStrategy",
+      vaultErrorsAbi,
+      ["0x0000000000000000000000000000000000000042"],
+      /0x0000000000000000000000000000000000000042 is not a usable price strategy.*forwardPriced/,
+    ],
+    [
+      "InvalidDealingCutoff",
+      vaultErrorsAbi,
+      [7200n, 3600n],
+      /cut-off of 7200 s does not fit the timeout of 3600 s.*above 0 and below/,
+    ],
+    [
+      "InvalidDealingCutoff",
+      redemptionEscrowErrorsAbi,
+      [90_000n, 86_400n],
+      /cut-off of 90000 s does not fit the timeout of 86400 s/,
+    ],
+    [
+      "BeneficiaryNotAllowed",
+      redemptionEscrowErrorsAbi,
+      ["0x0000000000000000000000000000000000000041"],
+      /0x0000000000000000000000000000000000000041 is not Allowed/,
+    ],
+  ])("explains %s", (name, abi, args, expected) => {
+    expect(explain(abi, name, args)).toMatch(expected);
+  });
+});
+
+describe("rwa-v4 purchase call encoders", () => {
+  const FROM = "0x0000000000000000000000000000000000000001";
+  const VAULT = "0x0000000000000000000000000000000000000040";
+
+  it("encodes settlePurchase and rejectPurchase with the order id on the vault", () => {
+    const settle = settlePurchaseCall(VAULT, 11n);
+    const reject = rejectPurchaseCall(VAULT, 12n);
+    expect([settle.to, reject.to]).toEqual([VAULT, VAULT]);
+    expect(decodeFunctionData({ abi: vaultAbi, data: settle.data })).toEqual({
+      functionName: "settlePurchase",
+      args: [11n],
+    });
+    expect(decodeFunctionData({ abi: vaultAbi, data: reject.data })).toEqual({
+      functionName: "rejectPurchase",
+      args: [12n],
+    });
+  });
+
+  it("broadcasts settlePurchase and rejectPurchase from the sender to the vault", async () => {
+    const sent: { from: string; to: string; data: Hex }[] = [];
+    (window as unknown as { ethereum: unknown }).ethereum = {
+      request: vi.fn(
+        async ({ method, params }: { method: string; params?: unknown[] }) => {
+          if (method === "eth_chainId") return "0x7a69";
+          if (method === "eth_call") return "0x";
+          if (method === "eth_sendTransaction") {
+            sent.push(params![0] as (typeof sent)[number]);
+            return `0x${"ab".repeat(32)}`;
+          }
+          throw new Error(`unexpected method ${method}`);
+        },
+      ),
+    };
+    await sendSettlePurchase(31337, FROM, VAULT, 4n);
+    await sendRejectPurchase(31337, FROM, VAULT, 5n);
+    expect(sent.map((t) => [t.from, t.to.toLowerCase()])).toEqual([
+      [FROM, VAULT],
+      [FROM, VAULT],
+    ]);
+    expect(
+      sent.map((t) => decodeFunctionData({ abi: vaultAbi, data: t.data })),
+    ).toEqual([
+      { functionName: "settlePurchase", args: [4n] },
+      { functionName: "rejectPurchase", args: [5n] },
+    ]);
+  });
+});
+
+// A wallet on chain 31337 that answers eth_call with a fixed result or reverts with revert data
+describe("forward-pricing reads", () => {
+  const ESCROW = "0x0000000000000000000000000000000000000050" as const;
+  const STRATEGY = "0x0000000000000000000000000000000000000060" as const;
+
+  function installReadProvider(
+    outcome: { result: Hex } | { revert: Hex } | { failure: Error },
+    chainId = 31337,
+  ) {
+    const calls: { to: string; data: Hex }[] = [];
+    const request = vi.fn(
+      async ({ method, params }: { method: string; params?: unknown[] }) => {
+        if (method === "eth_chainId") return `0x${chainId.toString(16)}`;
+        if (method !== "eth_call") throw new Error(`unexpected ${method}`);
+        calls.push(params![0] as (typeof calls)[number]);
+        if ("failure" in outcome) throw outcome.failure;
+        if ("revert" in outcome) {
+          throw {
+            code: 3,
+            message: "execution reverted",
+            data: outcome.revert,
+          };
+        }
+        return outcome.result;
+      },
+    );
+    (window as unknown as { ethereum: unknown }).ethereum = { request };
+    return { calls, request };
+  }
+
+  describe("readFundingPreview", () => {
+    it("returns the exact quote previewFunding reports", async () => {
+      const { calls } = installReadProvider({
+        result: encodeFunctionResult({
+          abi: redemptionEscrowAbi,
+          functionName: "previewFunding",
+          result: 475_123n,
+        }),
+      });
+      await expect(readFundingPreview(31337, ESCROW, 9n)).resolves.toEqual({
+        state: "priced",
+        amount: 475_123n,
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0].to.toLowerCase()).toBe(ESCROW);
+      expect(
+        decodeFunctionData({ abi: redemptionEscrowAbi, data: calls[0].data }),
+      ).toEqual({ functionName: "previewFunding", args: [9n] });
+    });
+
+    it.each([
+      [
+        "RoundNotAvailable",
+        encodeErrorResult({
+          abi: oracleStrategyErrorsAbi,
+          errorName: "RoundNotAvailable",
+          args: [88n],
+        }),
+        { state: "waiting" },
+      ],
+      [
+        "QuoteBelowMin",
+        encodeErrorResult({
+          abi: redemptionEscrowErrorsAbi,
+          errorName: "QuoteBelowMin",
+          args: [400n, 500n],
+        }),
+        { state: "belowMin", quoted: 400n, minQuoteOut: 500n },
+      ],
+      [
+        "FundingClosed",
+        encodeErrorResult({
+          abi: redemptionEscrowErrorsAbi,
+          errorName: "FundingClosed",
+          args: [1_800_000_000n, 1_800_000_001n],
+        }),
+        { state: "closed" },
+      ],
+    ])("maps a %s revert to its own state", async (_name, revert, expected) => {
+      installReadProvider({ revert });
+      await expect(readFundingPreview(31337, ESCROW, 9n)).resolves.toEqual(
+        expected,
+      );
+    });
+
+    it("explains any other revert as blocked, with the decoded message", async () => {
+      installReadProvider({
+        revert: encodeErrorResult({
+          abi: redemptionEscrowErrorsAbi,
+          errorName: "ZeroQuote",
+        }),
+      });
+      const preview = await readFundingPreview(31337, ESCROW, 9n);
+      expect(preview).toMatchObject({ state: "blocked" });
+      expect((preview as { message: string }).message).toMatch(
+        /priced quote is zero/,
+      );
+    });
+
+    it("throws, instead of reporting a state, when no revert data came back", async () => {
+      installReadProvider({ failure: new Error("network down") });
+      await expect(readFundingPreview(31337, ESCROW, 9n)).rejects.toThrow();
+    });
+
+    it("refuses to read from a wallet on another chain", async () => {
+      const { calls } = installReadProvider({ result: "0x" }, 1);
+      await expect(readFundingPreview(31337, ESCROW, 9n)).rejects.toThrow(
+        /chain/i,
+      );
+      expect(calls).toHaveLength(0);
+    });
+  });
+
+  describe("readOrderPricing", () => {
+    it("quotes on the order's own strategy with its token amount, base round and creation time", async () => {
+      const { calls } = installReadProvider({
+        result: encodeFunctionResult({
+          abi: oracleStrategyAbi,
+          functionName: "quotePurchaseAfter",
+          result: [2_500_000n, 1042n],
+        }),
+      });
+      await expect(
+        readOrderPricing(31337, STRATEGY, 3_000_000n, 1040n, 1_800_000_000n),
+      ).resolves.toEqual({
+        state: "priced",
+        quoteAmount: 2_500_000n,
+        roundId: 1042n,
+      });
+      expect(calls[0].to.toLowerCase()).toBe(STRATEGY);
+      expect(
+        decodeFunctionData({ abi: oracleStrategyAbi, data: calls[0].data }),
+      ).toEqual({
+        functionName: "quotePurchaseAfter",
+        args: [3_000_000n, 1040n, 1_800_000_000n],
+      });
+    });
+
+    it("maps RoundNotAvailable to waiting", async () => {
+      installReadProvider({
+        revert: encodeErrorResult({
+          abi: oracleStrategyErrorsAbi,
+          errorName: "RoundNotAvailable",
+          args: [1041n],
+        }),
+      });
+      await expect(
+        readOrderPricing(31337, STRATEGY, 1n, 1040n, 1_800_000_000n),
+      ).resolves.toEqual({ state: "waiting" });
+    });
+
+    it("maps an unusable answer to blocked with the decoded message", async () => {
+      installReadProvider({
+        revert: encodeErrorResult({
+          abi: oracleStrategyErrorsAbi,
+          errorName: "InvalidPrice",
+          args: [0n, 1_800_000_100n],
+        }),
+      });
+      const pricing = await readOrderPricing(
+        31337,
+        STRATEGY,
+        1n,
+        1040n,
+        1_800_000_000n,
+      );
+      expect(pricing).toMatchObject({ state: "blocked" });
+      expect((pricing as { message: string }).message).toMatch(/invalid/i);
+    });
+
+    it("throws when the wallet is on another chain", async () => {
+      installReadProvider({ result: "0x" }, 1);
+      await expect(
+        readOrderPricing(31337, STRATEGY, 1n, 1040n, 1_800_000_000n),
+      ).rejects.toThrow(/chain/i);
+    });
+  });
+
+  describe("readOrderMinQuote", () => {
+    const VAULT = "0x0000000000000000000000000000000000000040" as const;
+
+    it("reads the minimum recorded on the order from getPurchase", async () => {
+      const { calls } = installReadProvider({
+        result: encodeFunctionResult({
+          abi: vaultAbi,
+          functionName: "getPurchase",
+          result: {
+            buyer: "0x00000000000000000000000000000000000000b1",
+            createdAt: 1_800_000_000n,
+            status: 0,
+            recipient: "0x00000000000000000000000000000000000000b2",
+            strategy: STRATEGY,
+            baseRound: 40n,
+            tokenAmount: 3_000_000n,
+            maxQuoteAmount: 4_000_000n,
+            minPurchaseQuote: 1_500_000n,
+          },
+        }),
+      });
+      await expect(readOrderMinQuote(31337, VAULT, 5n)).resolves.toBe(
+        1_500_000n,
+      );
+      expect(calls[0].to.toLowerCase()).toBe(VAULT);
+      expect(
+        decodeFunctionData({ abi: vaultAbi, data: calls[0].data }),
+      ).toEqual({ functionName: "getPurchase", args: [5n] });
+    });
+
+    it("throws when the wallet is on another chain", async () => {
+      installReadProvider({ result: "0x" }, 1);
+      await expect(readOrderMinQuote(31337, VAULT, 5n)).rejects.toThrow(
+        /chain/i,
+      );
+    });
+  });
 });

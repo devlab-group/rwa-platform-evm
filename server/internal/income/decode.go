@@ -32,9 +32,14 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 			return "", nil, err
 		}
 		return "DistributionCreated", map[string]any{
-			"id": ev.ID.String(), "merkleRoot": ev.MerkleRoot.Hex(), "total": ev.Total.String(),
-			"recordBlock": uitoa(ev.RecordBlock), "claimDeadline": uitoa(ev.ClaimDeadline),
-			"snapshotURI": ev.SnapshotURI, "snapshotSha256": ev.SnapshotSha256.Hex(), "caller": ev.Caller.Hex(),
+			"id":             ev.ID.String(),
+			"merkleRoot":     ev.MerkleRoot.Hex(),
+			"total":          ev.Total.String(),
+			"recordBlock":    uitoa(ev.RecordBlock),
+			"claimDeadline":  uitoa(ev.ClaimDeadline),
+			"snapshotURI":    ev.SnapshotURI,
+			"snapshotSha256": ev.SnapshotSha256.Hex(),
+			"caller":         ev.Caller.Hex(),
 		}, nil
 	case d.EventID("IncomeClaimed"):
 		ev, err := d.UnpackIncomeClaimed(log.Data, log.Topics)
@@ -42,7 +47,9 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 			return "", nil, err
 		}
 		return "IncomeClaimed", map[string]any{
-			"id": ev.ID.String(), "account": ev.Account.Hex(), "amount": ev.Amount.String(),
+			"id":      ev.ID.String(),
+			"account": ev.Account.Hex(),
+			"amount":  ev.Amount.String(),
 		}, nil
 	case d.EventID("UnclaimedReclaimed"):
 		ev, err := d.UnpackUnclaimedReclaimed(log.Data, log.Topics)
@@ -50,7 +57,9 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 			return "", nil, err
 		}
 		return "UnclaimedReclaimed", map[string]any{
-			"id": ev.ID.String(), "treasury": ev.Treasury.Hex(), "amount": ev.Amount.String(),
+			"id":       ev.ID.String(),
+			"treasury": ev.Treasury.Hex(),
+			"amount":   ev.Amount.String(),
 		}, nil
 	case d.EventID("ClaimDeadlineExtended"):
 		ev, err := d.UnpackClaimDeadlineExtended(log.Data, log.Topics)
@@ -58,8 +67,10 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 			return "", nil, err
 		}
 		return "ClaimDeadlineExtended", map[string]any{
-			"id": ev.ID.String(), "previousDeadline": uitoa(ev.PreviousDeadline),
-			"newDeadline": uitoa(ev.NewDeadline), "caller": ev.Caller.Hex(),
+			"id":               ev.ID.String(),
+			"previousDeadline": uitoa(ev.PreviousDeadline),
+			"newDeadline":      uitoa(ev.NewDeadline),
+			"caller":           ev.Caller.Hex(),
 		}, nil
 	default:
 		return "unknown", map[string]any{"topic0": topic0.Hex()}, nil

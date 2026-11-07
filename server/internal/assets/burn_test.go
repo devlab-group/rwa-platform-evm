@@ -29,9 +29,10 @@ func newBurnTestEnv(t *testing.T) (*BurnService, *Profile, *models.AssetRecord, 
 	vaultAddr := common.HexToAddress("0x0000000000000000000000000000000000FADE")
 	rs, records := newTestService(t, auditorKey, controllerAddr, vaultAddr)
 	rec, err := rs.CreateRecord(context.Background(), profile, profile.ProjectID, CreateRecordRequest{
-		RecordID: "GOLD-BURN-1", Asset: json.RawMessage(`{"serialNumber":"1","weightGrams":"100","purity":"999.9"}`),
-		Amount: burnTestRecordAmount,
-		Proofs: []ProofRecord{{Type: "assay", SHA256: repeat("a", 64)}},
+		RecordID: "GOLD-BURN-1",
+		Asset:    json.RawMessage(`{"serialNumber":"1","weightGrams":"100","purity":"999.9"}`),
+		Amount:   burnTestRecordAmount,
+		Proofs:   []ProofRecord{{Type: "assay", SHA256: repeat("a", 64)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -356,8 +357,13 @@ func TestReconcileBurned(t *testing.T) {
 
 	for i, e := range []struct{ op, tx string }{{live.OperationID, "0xaaa"}, {expired.OperationID, "0xbbb"}, {"0x" + repeat("9", 64), "0xccc"}} {
 		if err := events.Create(ctx, &models.ChainEvent{
-			ChainID: 31337, Address: controller, Name: "Burned", TxHash: e.tx, LogIndex: uint(i), BlockNumber: 10,
-			Data: map[string]any{"operationId": e.op, "amount": "100"},
+			ChainID:     31337,
+			Address:     controller,
+			Name:        "Burned",
+			TxHash:      e.tx,
+			LogIndex:    uint(i),
+			BlockNumber: 10,
+			Data:        map[string]any{"operationId": e.op, "amount": "100"},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -396,8 +402,13 @@ func TestReconcileBurned_OrphanedBurnReturnsToPending(t *testing.T) {
 	}
 	for i, b := range []*models.Burn{burn, kept} {
 		if err := events.Create(ctx, &models.ChainEvent{
-			ChainID: 31337, Address: controller, Name: "Burned", TxHash: "0xaa" + string(rune('0'+i)), LogIndex: uint(i), BlockNumber: uint64(10 + i),
-			Data: map[string]any{"operationId": b.OperationID, "amount": b.Amount},
+			ChainID:     31337,
+			Address:     controller,
+			Name:        "Burned",
+			TxHash:      "0xaa" + string(rune('0'+i)),
+			LogIndex:    uint(i),
+			BlockNumber: uint64(10 + i),
+			Data:        map[string]any{"operationId": b.OperationID, "amount": b.Amount},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -415,8 +426,13 @@ func TestReconcileBurned_OrphanedBurnReturnsToPending(t *testing.T) {
 		t.Fatalf("DeleteFromBlock = %d, %v", n, err)
 	}
 	if err := events.Create(ctx, &models.ChainEvent{
-		ChainID: 31337, Address: controller, Name: "Burned", TxHash: "0xbb1", LogIndex: 0, BlockNumber: 11,
-		Data: map[string]any{"operationId": kept.OperationID, "amount": kept.Amount},
+		ChainID:     31337,
+		Address:     controller,
+		Name:        "Burned",
+		TxHash:      "0xbb1",
+		LogIndex:    0,
+		BlockNumber: 11,
+		Data:        map[string]any{"operationId": kept.OperationID, "amount": kept.Amount},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -463,8 +479,14 @@ func TestReconcileBurned_LeavesPendingAloneAndIgnoresRemovedEvents(t *testing.T)
 	pending, _ := createBurn(t, svc, profile, "100")
 	removed, _ := createBurn(t, svc, profile, "100")
 	if err := events.Create(ctx, &models.ChainEvent{
-		ChainID: 31337, Address: controller, Name: "Burned", TxHash: "0xcc", LogIndex: 0, BlockNumber: 5, Removed: true,
-		Data: map[string]any{"operationId": removed.OperationID},
+		ChainID:     31337,
+		Address:     controller,
+		Name:        "Burned",
+		TxHash:      "0xcc",
+		LogIndex:    0,
+		BlockNumber: 5,
+		Removed:     true,
+		Data:        map[string]any{"operationId": removed.OperationID},
 	}); err != nil {
 		t.Fatal(err)
 	}

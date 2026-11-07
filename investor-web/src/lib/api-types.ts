@@ -458,6 +458,39 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/sales/orders": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** @description Public rwa-v4 purchase orders rebuilt from Vault events. The list uses keyset pagination and supports exact status and case-insensitive buyer address filters. */
+    get: operations["listPurchaseOrders"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/sales/orders/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["getPurchaseOrder"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/redemptions": {
     parameters: {
       query?: never;
@@ -631,6 +664,8 @@ export interface components {
        * @enum {string}
        */
       strategyKind?: "Fixed" | "Oracle" | "Unknown";
+      /** @description Whether the Vault's current strategy uses forward pricing. When true, clients use requestPurchase instead of buy. Read for rwa-v4 projects; omitted before deployment, for rwa-v2 and rwa-v3, and when the read fails. */
+      forwardPriced?: boolean;
       oracle?: components["schemas"]["OraclePrice"];
       tokenUnit?: string;
       profileDigest?: string;
@@ -642,6 +677,8 @@ export interface components {
       redemptionManager?: string;
       /** @description Incoming DEFAULT_ADMIN for the first governance contract with a pending two-step transfer, projected from scheduling, cancellation and role events; see securityStale. Set while any contract awaits acceptance. The console offers wallet acceptance or a Safe batch for a pending Safe. */
       pendingAdmin?: string;
+      /** @description Each governance contract's latest uncancelled default-admin delay change, projected from events; see securityStale. No event marks when a change takes effect, so compare effectAt with the current time. Omitted when empty. */
+      adminDelayChanges?: components["schemas"]["AdminDelayChange"][];
       finalityConfirmations?: number;
       /** @description Non-empty code exists at every project contract address; checks presence, not identity against released artifacts. */
       bytecodeVerified?: boolean;
@@ -714,6 +751,11 @@ export interface components {
        * @description Seconds after a sequencer restart before prices are valid; omitted without a sequencer feed
        */
       gracePeriod?: number;
+      /**
+       * Format: int64
+       * @description Minimum seconds from an order to an eligible round's publication; omitted when the strategy lacks dealingCutoff
+       */
+      dealingCutoff?: number;
       /** @description latestPrice() succeeded on the cached read */
       available: boolean;
       /** @description Validated feed answer in feed units; omitted when unavailable */
@@ -766,6 +808,20 @@ export interface components {
       blockNumber?: number;
       logIndex?: number;
     };
+    AdminDelayChange: {
+      /** @description Contract label, as in rolesByContract. */
+      contract: string;
+      /**
+       * Format: int64
+       * @description New default-admin delay in seconds.
+       */
+      newDelay: number;
+      /**
+       * Format: int64
+       * @description Unix timestamp in seconds when the new delay takes effect.
+       */
+      effectAt: number;
+    };
     /** @description Role name (DEFAULT_ADMIN_ROLE, PAUSER_ROLE, ...) to holder-address map */
     RoleHolders: {
       [key: string]: string[];
@@ -779,7 +835,7 @@ export interface components {
       chainId: number;
       /** @description RWAFactory address for wallet-side deploy(ProjectConfig) */
       factoryAddress: string;
-      /** @description Configured RWAFactory.version(); supported encodings are rwa-v2 and rwa-v3. The first nonempty result is cached; failed reads return empty and retry after 30 seconds. The console blocks deployment for empty or unsupported versions. */
+      /** @description Configured RWAFactory.version(); supported encodings are rwa-v2, rwa-v3 and rwa-v4. The first nonempty result is cached; failed reads return empty and retry after 30 seconds. The console blocks deployment for empty or unsupported versions. */
       factoryVersion: string;
       /** @description Configured contract.project_id UUID; the console uses it in the Asset Profile and the server rejects mismatches. If unset, returns empty and the console blocks profile creation. */
       projectId: string;
@@ -898,6 +954,8 @@ export interface components {
     Inventory: {
       inventory?: string;
       quoteBalance?: string;
+      /** @description rwa-v4 only: open order deposits, in quote-token minimal units. Included in quoteBalance and excluded from withdrawProceeds. Omitted for earlier Vaults. */
+      pendingPurchaseQuote?: string;
       /** @description Per whole RWA token; omitted when the strategy read fails */
       purchasePrice?: string;
       /** @description Per whole RWA token; omitted when the strategy read fails */
@@ -919,7 +977,16 @@ export interface components {
       id?: string;
       beneficiary?: string;
       rwaAmount?: string;
+      /** @description Quote-token minimal units. A Pending forward request stores "0" until funding sets its quote; see pricedRound. */
       quoteAmount?: string;
+      /** @description rwa-v4 forward requests only: the stored strategy that prices this request */
+      strategy?: string;
+      /** @description rwa-v4 forward requests only: feed round at request time, as a decimal string to preserve uint80 precision */
+      baseRound?: string;
+      /** @description rwa-v4 forward requests only: holder's minimum quote, enforced at funding */
+      minQuoteOut?: string;
+      /** @description rwa-v4 forward requests only: round that priced the request; omitted until funded */
+      pricedRound?: string;
       /** @enum {string} */
       status?:
         "None" | "Pending" | "Funded" | "Completed" | "Rejected" | "Cancelled";
@@ -1090,6 +1157,38 @@ export interface components {
       target?: string;
       createdAt?: string;
       details?: Record<string, never>;
+    };
+    /** @description rwa-v4 purchase order rebuilt from Vault events. Pending does not establish price availability; read quotePurchaseAfter on its stored strategy. Settlement is permissionless but requires an unpaused project and an Allowed buyer. Cancellation requires the buyer, timeoutAt reached, no usable pricing round and an Allowed buyer. */
+    PurchaseOrder: {
+      id: string;
+      buyer: string;
+      recipient: string;
+      /** @description RWA minimal units */
+      tokenAmount: string;
+      /** @description Deposit in quote-token minimal units */
+      maxQuoteAmount: string;
+      /** @description Stored strategy that prices this order */
+      strategy: string;
+      /** @description Feed round at order time, as a decimal string to preserve uint80 precision */
+      baseRound: string;
+      /** @enum {string} */
+      status: "Pending" | "Settled" | "Refunded" | "Cancelled" | "Rejected";
+      /** Format: int64 */
+      createdAt: number;
+      /**
+       * Format: int64
+       * @description createdAt plus the Vault's purchaseTimeout
+       */
+      timeoutAt: number;
+      /** @description Round that priced the order; Settled and Refunded only */
+      pricedRound?: string;
+      /** @description Quote at pricedRound; charged when Settled, not charged when Refunded */
+      quoteAmount?: string;
+      /** @description Deposit returned to the buyer; omitted while Pending */
+      refund?: string;
+      requestTxHash: string;
+      /** @description Transaction that ended the order; omitted while Pending */
+      closeTxHash?: string;
     };
     Purchase: {
       txHash?: string;
@@ -1899,6 +1998,59 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Purchase"][];
+        };
+      };
+    };
+  };
+  listPurchaseOrders: {
+    parameters: {
+      query?: {
+        status?: string;
+        /** @description Filter by buyer wallet */
+        address?: string;
+        /** @description Item limit, capped at the server maximum even when omitted or exceeded */
+        limit?: components["parameters"]["Limit"];
+        /** @description Opaque X-Next-Cursor from a previous response; omit for the first page */
+        cursor?: components["parameters"]["Cursor"];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Purchase orders (bounded/paginated, see Limit/Cursor) */
+      200: {
+        headers: {
+          "X-Total-Count": components["headers"]["XTotalCount"];
+          "X-Page-Size": components["headers"]["XPageSize"];
+          "X-Next-Cursor": components["headers"]["XNextCursor"];
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PurchaseOrder"][];
+        };
+      };
+    };
+  };
+  getPurchaseOrder: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Purchase order */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PurchaseOrder"];
         };
       };
     };

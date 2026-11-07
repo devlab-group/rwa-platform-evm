@@ -2,8 +2,8 @@ package main
 
 // Recovery commands take dependencies and an io.Writer for testing with memory stores
 // and fakes. main.go owns configuration, connections and flags. Commands handle
-// transaction replacement, checkpoint reset, DLQ list/inspect/retry/dismiss and IPFS
-// retry/restore.
+// transaction replacement, checkpoint reset, DLQ list/inspect/retry/dismiss, IPFS
+// retry/restore and the asset profile check.
 
 import (
 	"context"
@@ -11,9 +11,12 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"strings"
 
+	"github.com/rwa-platform/server/internal/assets"
 	"github.com/rwa-platform/server/internal/auditlog"
 	"github.com/rwa-platform/server/internal/blockchain"
+	"github.com/rwa-platform/server/internal/dal/models"
 	"github.com/rwa-platform/server/internal/dal/repository"
 	"github.com/rwa-platform/server/internal/indexer"
 	"github.com/rwa-platform/server/internal/ipfs"
@@ -167,4 +170,56 @@ func runIPFSRestoreLocal(o opsCtx, rm *ipfs.ReplicationManager, id string) error
 		fmt.Fprintf(o.out, "%s: local copy restored from a backup destination\n", id)
 		return nil
 	})
+}
+
+// Asset profile check
+
+// runProfileCheck validates the stored profile and compares its recomputed and stored digests.
+// Record creation revalidates the profile, whose digest is fixed on-chain, so run this
+// read-only check before upgrading to detect incompatible validation or canonicalization.
+func runProfileCheck(o opsCtx) error {
+	stored, err := checkedProfile(o)
+	if err != nil {
+		return err
+	}
+	result, _ := assets.ValidateProfile(stored.ProfileRaw)
+	if !result.Valid {
+		fmt.Fprintf(o.out, "FAIL: stored profile %s does not validate with this build:\n", stored.ProjectID)
+		for _, e := range result.Errors {
+			fmt.Fprintf(o.out, "  - %s\n", e)
+		}
+		return fmt.Errorf("profile check: stored profile %s fails this build's validation; do not upgrade this deployment to it", stored.ProjectID)
+	}
+	if !strings.EqualFold(result.ProfileDigest, stored.Digest) {
+		fmt.Fprintf(o.out, "FAIL: stored profile %s validates, but its digest is now %s instead of the stored %s\n", stored.ProjectID, result.ProfileDigest, stored.Digest)
+		return fmt.Errorf("profile check: this build computes a different digest for stored profile %s; do not upgrade this deployment to it", stored.ProjectID)
+	}
+	fmt.Fprintf(o.out, "OK: stored profile %s validates with this build, digest %s unchanged\n", stored.ProjectID, stored.Digest)
+	return nil
+}
+
+// checkedProfile returns the profile bound to the project record, the one record creation
+// re-validates. Before deployment there is no project record, so it takes the latest stored
+// profile, which the deployment will bind.
+func checkedProfile(o opsCtx) (*models.AssetProfile, error) {
+	p, err := o.repos.Projects.Get(o.ctx)
+	switch {
+	case err == nil:
+		stored, err := o.repos.AssetProfiles.Get(o.ctx, p.ProjectID)
+		if err != nil {
+			return nil, fmt.Errorf("profile check: loading the asset profile of project %s: %w", p.ProjectID, err)
+		}
+		return stored, nil
+	case errors.Is(err, repository.ErrNotFound):
+		stored, err := o.repos.AssetProfiles.GetCurrent(o.ctx)
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, errors.New("profile check: no asset profile is stored, so there is nothing to check")
+		}
+		if err != nil {
+			return nil, fmt.Errorf("profile check: loading the latest asset profile: %w", err)
+		}
+		return stored, nil
+	default:
+		return nil, fmt.Errorf("profile check: loading the project record: %w", err)
+	}
 }

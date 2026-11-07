@@ -108,10 +108,12 @@ func (r *transactionRepo) ListByStatuses(ctx context.Context, statuses ...models
 // ListUnfinalized applies the interface's work filter using both branches of the
 // (status, blockNumber) index
 func (r *transactionRepo) ListUnfinalized(ctx context.Context, confirmedFromBlock uint64) ([]*models.Transaction, error) {
-	filter := bson.M{"$or": bson.A{
-		bson.M{"status": bson.M{"$nin": bson.A{models.TxReplaced, models.TxFailed, models.TxConfirmed}}},
-		bson.M{"status": models.TxConfirmed, "blockNumber": bson.M{"$gte": confirmedFromBlock}},
-	}}
+	filter := bson.M{
+		"$or": bson.A{
+			bson.M{"status": bson.M{"$nin": bson.A{models.TxReplaced, models.TxFailed, models.TxConfirmed}}},
+			bson.M{"status": models.TxConfirmed, "blockNumber": bson.M{"$gte": confirmedFromBlock}},
+		},
+	}
 	return findMany[models.Transaction](ctx, r.coll, filter, options.Find().SetSort(bson.D{{Key: "submittedAt", Value: 1}}))
 }
 
@@ -125,10 +127,12 @@ func (r *transactionRepo) ListPage(ctx context.Context, address, cursor string, 
 	clauses := bson.A{keysetFilterDirDate(cursor, "submittedAt", false)}
 	if address != "" {
 		pattern := "^" + regexp.QuoteMeta(address) + "$"
-		clauses = append(clauses, bson.M{"$or": bson.A{
-			bson.M{"from": bson.M{"$regex": pattern, "$options": "i"}},
-			bson.M{"to": bson.M{"$regex": pattern, "$options": "i"}},
-		}})
+		clauses = append(clauses, bson.M{
+			"$or": bson.A{
+				bson.M{"from": bson.M{"$regex": pattern, "$options": "i"}},
+				bson.M{"to": bson.M{"$regex": pattern, "$options": "i"}},
+			},
+		})
 	}
 	items, err := findMany[models.Transaction](ctx, r.coll, bson.M{"$and": clauses},
 		options.Find().SetSort(bson.D{{Key: "submittedAt", Value: 1}, {Key: "_id", Value: 1}}).SetLimit(int64(limit+1)))

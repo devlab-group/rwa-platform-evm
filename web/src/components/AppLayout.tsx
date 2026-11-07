@@ -6,6 +6,7 @@ import { WalletConnectButton } from "./WalletConnectButton";
 import { NetworkSwitcher } from "./NetworkSwitcher";
 import { useAuthSession } from "../hooks/useAuthSession";
 import { api } from "../lib/client";
+import { hasIncomeDistributor } from "../lib/projectVersion";
 
 const ADMIN_LINKS = [
   { to: "/admin/setup", label: "Setup" },
@@ -25,7 +26,7 @@ export function AppLayout() {
   const session = useAuthSession();
   // Require a live admin session for /admin paths; other paths still render the shell
   const requiresLogin = isAdmin && !session;
-  // Show Income for rwa-v3. Retry unknown versions on navigation to catch in-session
+  // Show Income for rwa-v3 and later. Retry unknown versions on navigation to catch in-session
   // deployment; retain known versions to avoid further requests.
   const signedIn = Boolean(session);
   const [version, setVersion] = useState<string>();
@@ -38,7 +39,9 @@ export function AppLayout() {
       .catch(() => undefined);
     return () => controller.abort();
   }, [signedIn, version, location.pathname]);
-  const links = ADMIN_LINKS.filter((l) => !l.rwaV3Only || version === "rwa-v3");
+  const links = ADMIN_LINKS.filter(
+    (l) => !l.rwaV3Only || hasIncomeDistributor(version),
+  );
   const mainRef = useRef<HTMLElement>(null);
   const isFirstRender = useRef(true);
 

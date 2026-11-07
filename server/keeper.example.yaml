@@ -1,0 +1,30 @@
+# Keeper configuration. Pass it with --config:
+#     ./bin/keeper --config /etc/rwa/keeper.yaml
+#
+# Keep this file separate from the platform config. Use a dedicated wallet with no roles
+# and a small gas balance; never reuse the compliance key.
+# Restrict the file to the service user (chmod 600). Unknown keys fail startup.
+environment: development
+
+rpc_url: "http://127.0.0.1:8545"
+chain_id: 31337
+vault_address: ""
+poll_interval: "30s"
+
+# Fee caps in base-10 wei; empty means uncapped.
+# Production requires max_fee_per_gas_wei or max_tx_total_cost_wei.
+max_fee_per_gas_wei: ""
+max_tip_per_gas_wei: ""
+max_tx_total_cost_wei: ""
+
+keys:
+  # "raw" (keeper_key), "local-keystore", "vault" or "kms-mock".
+  # Production accepts only "local-keystore" and "vault".
+  provider_mode: "raw"
+  keeper_key: ""                 # SECRET
+  keystore_dir: ""               # reads <keystore_dir>/keeper.json
+  keystore_password_file: ""
+  vault_addr: ""
+  vault_token: ""                # SECRET
+  vault_key_prefix: "rwa-"       # the key is <prefix>keeper
+  kms_mock_seed: ""              # test-only

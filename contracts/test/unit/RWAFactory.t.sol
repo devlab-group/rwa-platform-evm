@@ -19,7 +19,7 @@ import {FixedPriceStrategy} from "../../src/pricing/FixedPriceStrategy.sol";
 
 contract RWAFactoryTest is TestBase {
     function test_version() public view {
-        assertEq(factory.version(), "rwa-v3");
+        assertEq(factory.version(), "rwa-v4");
     }
 
     function test_deploy_wiresAllAddressesConsistently() public view {
@@ -111,7 +111,7 @@ contract RWAFactoryTest is TestBase {
         assertEq(e, dep.redemptionEscrow);
         assertEq(strat, dep.strategy);
         assertEq(inc, dep.incomeDistributor);
-        assertEq(ver, "rwa-v3");
+        assertEq(ver, "rwa-v4");
         assertTrue(inc != address(0));
         assertEq(IncomeDistributor(inc).vault(), dep.vault);
     }
@@ -121,9 +121,20 @@ contract RWAFactoryTest is TestBase {
         address b = factory.marketDeployer();
         address c = factory.supplyControllerDeployer();
         address d = factory.redemptionEscrowDeployer();
+        address e = factory.strategyDeployer();
         vm.expectRevert(RWAFactory.ZeroAddressDeployer.selector);
-        new RWAFactory(a, b, c, d, address(0));
+        new RWAFactory(a, b, c, d, address(0), e);
         assertTrue(factory.incomeDistributorDeployer() != address(0));
+    }
+
+    function test_constructor_zeroStrategyDeployerReverts() public {
+        address a = factory.complianceTokenDeployer();
+        address b = factory.marketDeployer();
+        address c = factory.supplyControllerDeployer();
+        address d = factory.redemptionEscrowDeployer();
+        address e = factory.incomeDistributorDeployer();
+        vm.expectRevert(RWAFactory.ZeroAddressDeployer.selector);
+        new RWAFactory(a, b, c, d, e, address(0));
     }
 
     function test_deploy_zeroComplianceOperatorReverts() public {
@@ -238,7 +249,8 @@ contract RWAFactoryTest is TestBase {
             address(new SilentRevertingDeployer()),
             factory.supplyControllerDeployer(),
             factory.redemptionEscrowDeployer(),
-            factory.incomeDistributorDeployer()
+            factory.incomeDistributorDeployer(),
+            factory.strategyDeployer()
         );
         vm.expectRevert(RWAFactory.DeployerCallFailed.selector);
         broken.deploy(_defaultConfig());
@@ -251,7 +263,8 @@ contract RWAFactoryTest is TestBase {
             factory.marketDeployer(),
             factory.supplyControllerDeployer(),
             address(new RevertingDeployer()),
-            factory.incomeDistributorDeployer()
+            factory.incomeDistributorDeployer(),
+            factory.strategyDeployer()
         );
         vm.expectRevert(data);
         broken.deploy(_defaultConfig());
@@ -260,16 +273,8 @@ contract RWAFactoryTest is TestBase {
     // ---- strategy kind ----
 
     function _oracleConfig() internal returns (IRWAFactory.ProjectConfig memory cfg) {
-        cfg = _defaultConfig();
+        cfg = _oracleConfig(address(quoteToken), address(new MockAggregatorV3(8, 2.5e8)));
         cfg.projectId = keccak256("oracle-project");
-        cfg.strategyKind = IRWAFactory.StrategyKind.Oracle;
-        cfg.pricer = address(0);
-        cfg.purchasePricePerWholeToken = 0;
-        cfg.redemptionPricePerWholeToken = 0;
-        cfg.priceFeed = address(new MockAggregatorV3(8, 2.5e8));
-        cfg.priceMaxAge = 1 hours;
-        cfg.purchaseSpreadBps = 100;
-        cfg.redemptionSpreadBps = 200;
     }
 
     function _expectInvalid(IRWAFactory.ProjectConfig memory cfg, string memory field) internal {
@@ -352,6 +357,61 @@ contract RWAFactoryTest is TestBase {
         cfg.purchaseSpreadBps = 10_000;
         cfg.redemptionSpreadBps = 9_999;
         assertTrue(factory.deploy(cfg).strategy != address(0));
+    }
+
+    function test_deploy_purchaseTimeoutBounds() public {
+        IRWAFactory.ProjectConfig memory cfg = _oracleConfig();
+        cfg.purchaseTimeout = 1 days - 1;
+        _expectInvalid(cfg, "purchaseTimeout");
+
+        cfg.purchaseTimeout = 365 days + 1;
+        _expectInvalid(cfg, "purchaseTimeout");
+
+        cfg.purchaseTimeout = 1 days;
+        assertEq(Vault(factory.deploy(cfg).vault).purchaseTimeout(), 1 days);
+
+        cfg.projectId = keccak256("oracle-project-max-timeout");
+        cfg.purchaseTimeout = 365 days;
+        assertEq(Vault(factory.deploy(cfg).vault).purchaseTimeout(), 365 days);
+    }
+
+    // A zero timeout would remove the purchase waiting period after a switch to oracle pricing
+    function test_deploy_fixed_requiresAPurchaseTimeout() public {
+        IRWAFactory.ProjectConfig memory cfg = _defaultConfig();
+        cfg.purchaseTimeout = 0;
+        _expectInvalid(cfg, "purchaseTimeout");
+    }
+
+    // The cutoff must leave a pricing window before either cancellation timeout
+    function test_deploy_oracle_dealingCutoffBounds() public {
+        IRWAFactory.ProjectConfig memory cfg = _oracleConfig();
+        cfg.dealingCutoff = 0;
+        _expectInvalid(cfg, "dealingCutoff");
+
+        cfg = _oracleConfig();
+        cfg.dealingCutoff = PURCHASE_TIMEOUT;
+        _expectInvalid(cfg, "dealingCutoff");
+
+        cfg = _oracleConfig();
+        cfg.purchaseTimeout = 30 days;
+        cfg.dealingCutoff = REDEMPTION_TIMEOUT;
+        _expectInvalid(cfg, "dealingCutoff");
+
+        cfg = _oracleConfig();
+        cfg.dealingCutoff = PURCHASE_TIMEOUT - 1;
+        assertEq(OraclePriceStrategy(factory.deploy(cfg).strategy).dealingCutoff(), PURCHASE_TIMEOUT - 1);
+
+        cfg = _oracleConfig();
+        cfg.projectId = keccak256("oracle-project-long-cutoff");
+        cfg.purchaseTimeout = 30 days;
+        cfg.dealingCutoff = REDEMPTION_TIMEOUT - 1;
+        assertEq(OraclePriceStrategy(factory.deploy(cfg).strategy).dealingCutoff(), REDEMPTION_TIMEOUT - 1);
+    }
+
+    function test_deploy_fixed_rejectsADealingCutoff() public {
+        IRWAFactory.ProjectConfig memory cfg = _defaultConfig();
+        cfg.dealingCutoff = 1;
+        _expectInvalid(cfg, "dealingCutoff");
     }
 
     function test_deploy_oracle_stillValidatesSharedFields() public {

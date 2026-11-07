@@ -36,8 +36,11 @@ func TestDecodeLogPurchasedMapsEveryField(t *testing.T) {
 		t.Fatalf("name = %q, want Purchased", name)
 	}
 	want := map[string]any{
-		"buyer": buyer.Hex(), "recipient": recipient.Hex(), "strategy": strategy.Hex(),
-		"tokenAmount": "123456789012345678901234567890", "quoteAmount": "98765432109876543210",
+		"buyer":       buyer.Hex(),
+		"recipient":   recipient.Hex(),
+		"strategy":    strategy.Hex(),
+		"tokenAmount": "123456789012345678901234567890",
+		"quoteAmount": "98765432109876543210",
 	}
 	for k, v := range want {
 		if data[k] != v {

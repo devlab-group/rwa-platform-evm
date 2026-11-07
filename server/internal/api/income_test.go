@@ -61,8 +61,12 @@ func withIncome(t *testing.T, env *testEnv) *ipfs.FakeClient {
 	transfer := func(block uint64, from, to common.Address, v string) {
 		t.Helper()
 		if err := repos.ChainEvents.Create(ctx, &models.ChainEvent{
-			ChainID: incomeChain, Address: incToken.Hex(), TxHash: fmt.Sprintf("0xt%d", block), BlockNumber: block, Name: "Transfer",
-			Data: map[string]any{"from": from.Hex(), "to": to.Hex(), "value": v},
+			ChainID:     incomeChain,
+			Address:     incToken.Hex(),
+			TxHash:      fmt.Sprintf("0xt%d", block),
+			BlockNumber: block,
+			Name:        "Transfer",
+			Data:        map[string]any{"from": from.Hex(), "to": to.Hex(), "value": v},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -154,51 +158,89 @@ func TestPrepareIncomeDistributionErrors(t *testing.T) {
 		{"numeric total is not a string", map[string]any{"recordBlock": 50, "total": 5, "claimDeadline": deadline.Unix()}, nil, 400, CodeInvalidRequest},
 		{"deadline too soon", prepareBody(50, "5", time.Now().Add(7*24*time.Hour)), nil, 400, CodeClaimWindowTooShort},
 		{"record block not final", prepareBody(99, "5", deadline), nil, 409, CodeRecordBlockNotFinal},
-		{"rwa-v2 project", prepareBody(50, "5", deadline), func(t *testing.T, env *testEnv) {
-			p, _ := env.app.Repos.Projects.Get(context.Background())
-			p.Version = "rwa-v2"
-			p.Addresses.IncomeDistributor = ""
-			if err := env.app.Repos.Projects.Upsert(context.Background(), p); err != nil {
-				t.Fatalf("Upsert: %v", err)
-			}
-		}, 409, CodeIncomeUnsupported},
-		{"project not active", prepareBody(50, "5", deadline), func(t *testing.T, env *testEnv) {
-			p, _ := env.app.Repos.Projects.Get(context.Background())
-			p.Status = models.ProjectStatusVerifying
-			if err := env.app.Repos.Projects.Upsert(context.Background(), p); err != nil {
-				t.Fatalf("Upsert: %v", err)
-			}
-		}, 409, CodeIncomeUnsupported},
-		{"nobody holds RWA", prepareBody(50, "5", deadline), func(t *testing.T, env *testEnv) {
-			if _, err := env.app.Repos.ChainEvents.DeleteFromBlock(context.Background(), incomeChain, incToken.Hex(), 2); err != nil {
-				t.Fatal(err)
-			}
-		}, 409, CodeNoEligibleHolders},
-		{"transfer history missing", prepareBody(50, "5", deadline), func(t *testing.T, env *testEnv) {
-			if err := env.app.Repos.ChainEvents.Create(context.Background(), &models.ChainEvent{
-				ChainID: incomeChain, Address: incToken.Hex(), TxHash: "0xbad", BlockNumber: 4, Name: "Transfer",
-				Data: map[string]any{"from": incAlice.Hex(), "to": incBob.Hex(), "value": "9999"},
-			}); err != nil {
-				t.Fatalf("Create: %v", err)
-			}
-		}, 409, CodeTransferHistoryMissing},
-		// 12,000 one-unit holders make a canonical snapshot of about 1.3 MB
-		{"snapshot over one IPFS block", prepareBody(50, "1"+strings.Repeat("0", 30), deadline), func(t *testing.T, env *testEnv) {
-			ctx := context.Background()
-			add := func(block uint64, tx string, from, to common.Address, v string) {
-				t.Helper()
-				if err := env.app.Repos.ChainEvents.Create(ctx, &models.ChainEvent{
-					ChainID: incomeChain, Address: incToken.Hex(), TxHash: tx, BlockNumber: block, Name: "Transfer",
-					Data: map[string]any{"from": from.Hex(), "to": to.Hex(), "value": v},
-				}); err != nil {
+		{
+			"rwa-v2 project",
+			prepareBody(50, "5", deadline),
+			func(t *testing.T, env *testEnv) {
+				p, _ := env.app.Repos.Projects.Get(context.Background())
+				p.Version = "rwa-v2"
+				p.Addresses.IncomeDistributor = ""
+				if err := env.app.Repos.Projects.Upsert(context.Background(), p); err != nil {
+					t.Fatalf("Upsert: %v", err)
+				}
+			},
+			409,
+			CodeIncomeUnsupported,
+		},
+		{
+			"project not active",
+			prepareBody(50, "5", deadline),
+			func(t *testing.T, env *testEnv) {
+				p, _ := env.app.Repos.Projects.Get(context.Background())
+				p.Status = models.ProjectStatusVerifying
+				if err := env.app.Repos.Projects.Upsert(context.Background(), p); err != nil {
+					t.Fatalf("Upsert: %v", err)
+				}
+			},
+			409,
+			CodeIncomeUnsupported,
+		},
+		{
+			"nobody holds RWA",
+			prepareBody(50, "5", deadline),
+			func(t *testing.T, env *testEnv) {
+				if _, err := env.app.Repos.ChainEvents.DeleteFromBlock(context.Background(), incomeChain, incToken.Hex(), 2); err != nil {
 					t.Fatal(err)
 				}
-			}
-			add(4, "0xmint", common.Address{}, env.vaultAddr, "12000")
-			for i := 0; i < 12000; i++ {
-				add(5, fmt.Sprintf("0xh%d", i), env.vaultAddr, common.BigToAddress(big.NewInt(int64(0x100000+i))), "1")
-			}
-		}, 409, CodeSnapshotTooLarge},
+			},
+			409,
+			CodeNoEligibleHolders,
+		},
+		{
+			"transfer history missing",
+			prepareBody(50, "5", deadline),
+			func(t *testing.T, env *testEnv) {
+				if err := env.app.Repos.ChainEvents.Create(context.Background(), &models.ChainEvent{
+					ChainID:     incomeChain,
+					Address:     incToken.Hex(),
+					TxHash:      "0xbad",
+					BlockNumber: 4,
+					Name:        "Transfer",
+					Data:        map[string]any{"from": incAlice.Hex(), "to": incBob.Hex(), "value": "9999"},
+				}); err != nil {
+					t.Fatalf("Create: %v", err)
+				}
+			},
+			409,
+			CodeTransferHistoryMissing,
+		},
+		// 12,000 one-unit holders make a canonical snapshot of about 1.3 MB
+		{
+			"snapshot over one IPFS block",
+			prepareBody(50, "1"+strings.Repeat("0", 30), deadline),
+			func(t *testing.T, env *testEnv) {
+				ctx := context.Background()
+				add := func(block uint64, tx string, from, to common.Address, v string) {
+					t.Helper()
+					if err := env.app.Repos.ChainEvents.Create(ctx, &models.ChainEvent{
+						ChainID:     incomeChain,
+						Address:     incToken.Hex(),
+						TxHash:      tx,
+						BlockNumber: block,
+						Name:        "Transfer",
+						Data:        map[string]any{"from": from.Hex(), "to": to.Hex(), "value": v},
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				add(4, "0xmint", common.Address{}, env.vaultAddr, "12000")
+				for i := 0; i < 12000; i++ {
+					add(5, fmt.Sprintf("0xh%d", i), env.vaultAddr, common.BigToAddress(big.NewInt(int64(0x100000+i))), "1")
+				}
+			},
+			409,
+			CodeSnapshotTooLarge,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -286,11 +328,35 @@ func TestListIncomeClaims(t *testing.T) {
 
 	// the manager creates it on-chain; alice claims
 	for _, e := range []*models.ChainEvent{
-		{ChainID: incomeChain, Address: incDistrib.Hex(), TxHash: "0xcreate", BlockNumber: 60, Name: "DistributionCreated", Data: map[string]any{
-			"id": "0", "merkleRoot": prep.MerkleRoot, "total": "1000", "recordBlock": "50", "claimDeadline": fmt.Sprint(deadline.Unix()),
-			"snapshotURI": prep.SnapshotURI, "snapshotSha256": prep.SnapshotSha256, "caller": incAlice.Hex()}},
-		{ChainID: incomeChain, Address: incDistrib.Hex(), TxHash: "0xclaim", BlockNumber: 61, Name: "IncomeClaimed", Data: map[string]any{
-			"id": "0", "account": incAlice.Hex(), "amount": "750"}},
+		{
+			ChainID:     incomeChain,
+			Address:     incDistrib.Hex(),
+			TxHash:      "0xcreate",
+			BlockNumber: 60,
+			Name:        "DistributionCreated",
+			Data: map[string]any{
+				"id":             "0",
+				"merkleRoot":     prep.MerkleRoot,
+				"total":          "1000",
+				"recordBlock":    "50",
+				"claimDeadline":  fmt.Sprint(deadline.Unix()),
+				"snapshotURI":    prep.SnapshotURI,
+				"snapshotSha256": prep.SnapshotSha256,
+				"caller":         incAlice.Hex(),
+			},
+		},
+		{
+			ChainID:     incomeChain,
+			Address:     incDistrib.Hex(),
+			TxHash:      "0xclaim",
+			BlockNumber: 61,
+			Name:        "IncomeClaimed",
+			Data: map[string]any{
+				"id":      "0",
+				"account": incAlice.Hex(),
+				"amount":  "750",
+			},
+		},
 	} {
 		if err := env.app.Repos.ChainEvents.Create(ctx, e); err != nil {
 			t.Fatal(err)
@@ -409,39 +475,42 @@ func oracleClient(t *testing.T, feed common.Address, stale bool) callScript {
 	vault := bindings.NewVault()
 	staleID := oracle.ABI.Errors["StalePrice"].ID
 	stalePrice := apiRevert{data: "0x" + common.Bytes2Hex(staleID[:4]) + strings.Repeat("00", 64)}
-	return callScript{FakeClient: blockchain.NewFakeClient(), fn: func(msg ethereum.CallMsg) ([]byte, error) {
-		if m, err := oracle.ABI.MethodById(msg.Data[:4]); err == nil && *msg.To != feed {
-			switch m.Name {
-			case "feed":
-				return m.Outputs.Pack(feed)
-			case "sequencerUptimeFeed":
-				return m.Outputs.Pack(common.Address{})
-			case "maxAge", "gracePeriod":
-				return m.Outputs.Pack(map[string]uint64{"maxAge": 3600, "gracePeriod": 0}[m.Name])
-			case "purchaseSpreadBps", "redemptionSpreadBps":
-				return m.Outputs.Pack(uint16(25))
-			case "feedDecimals":
-				return m.Outputs.Pack(uint8(8))
-			case "latestPrice":
-				if stale {
-					return nil, stalePrice
+	return callScript{
+		FakeClient: blockchain.NewFakeClient(),
+		fn: func(msg ethereum.CallMsg) ([]byte, error) {
+			if m, err := oracle.ABI.MethodById(msg.Data[:4]); err == nil && *msg.To != feed {
+				switch m.Name {
+				case "feed":
+					return m.Outputs.Pack(feed)
+				case "sequencerUptimeFeed":
+					return m.Outputs.Pack(common.Address{})
+				case "maxAge", "gracePeriod":
+					return m.Outputs.Pack(map[string]uint64{"maxAge": 3600, "gracePeriod": 0}[m.Name])
+				case "purchaseSpreadBps", "redemptionSpreadBps":
+					return m.Outputs.Pack(uint16(25))
+				case "feedDecimals":
+					return m.Outputs.Pack(uint8(8))
+				case "latestPrice":
+					if stale {
+						return nil, stalePrice
+					}
+					return m.Outputs.Pack(big.NewInt(150_000_000), big.NewInt(1_700_000_000))
+				case "purchasePricePerWholeToken", "redemptionPricePerWholeToken":
+					if stale {
+						return nil, stalePrice
+					}
+					return m.Outputs.Pack(big.NewInt(1_500_000))
 				}
-				return m.Outputs.Pack(big.NewInt(150_000_000), big.NewInt(1_700_000_000))
-			case "purchasePricePerWholeToken", "redemptionPricePerWholeToken":
-				if stale {
-					return nil, stalePrice
-				}
-				return m.Outputs.Pack(big.NewInt(1_500_000))
 			}
-		}
-		if m, err := agg.ABI.MethodById(msg.Data[:4]); err == nil && *msg.To == feed {
-			return m.Outputs.Pack(big.NewInt(1), big.NewInt(150_000_000), big.NewInt(1), big.NewInt(1_700_000_000), big.NewInt(1))
-		}
-		if m, err := vault.ABI.MethodById(msg.Data[:4]); err == nil && m.Name == "strategy" {
-			return m.Outputs.Pack(common.HexToAddress("0x000000000000000000000000000000000000c0c0"))
-		}
-		return nil, apiRevert{data: "0x"}
-	}}
+			if m, err := agg.ABI.MethodById(msg.Data[:4]); err == nil && *msg.To == feed {
+				return m.Outputs.Pack(big.NewInt(1), big.NewInt(150_000_000), big.NewInt(1), big.NewInt(1_700_000_000), big.NewInt(1))
+			}
+			if m, err := vault.ABI.MethodById(msg.Data[:4]); err == nil && m.Name == "strategy" {
+				return m.Outputs.Pack(common.HexToAddress("0x000000000000000000000000000000000000c0c0"))
+			}
+			return nil, apiRevert{data: "0x"}
+		},
+	}
 }
 
 func TestProjectResponseReportsAnOracleStrategy(t *testing.T) {
@@ -508,12 +577,15 @@ func TestProjectResponseFixedStrategyKeepsProjectedPrices(t *testing.T) {
 	data, _ := strategyABI.PackPurchasePricePerWholeToken()
 	out, _ := strategyABI.ABI.Methods["purchasePricePerWholeToken"].Outputs.Pack(big.NewInt(1500))
 	fixed.CallResponses[common.Bytes2Hex(data)] = out
-	env.app.Sales = sales.New(callScript{FakeClient: fixed, fn: func(msg ethereum.CallMsg) ([]byte, error) {
-		if out, ok := fixed.CallResponses[common.Bytes2Hex(msg.Data)]; ok {
-			return out, nil
-		}
-		return nil, apiRevert{data: "0x"} // feed() reverts: not an oracle
-	}}, env.vaultAddr, common.HexToAddress("0xA001"), env.app.Repos.Purchases)
+	env.app.Sales = sales.New(callScript{
+		FakeClient: fixed,
+		fn: func(msg ethereum.CallMsg) ([]byte, error) {
+			if out, ok := fixed.CallResponses[common.Bytes2Hex(msg.Data)]; ok {
+				return out, nil
+			}
+			return nil, apiRevert{data: "0x"} // feed() reverts: not an oracle
+		},
+	}, env.vaultAddr, common.HexToAddress("0xA001"), env.app.Repos.Purchases)
 
 	resp := getProjectResp(t, env)
 	if resp.StrategyKind != "Fixed" || resp.Oracle != nil {
@@ -598,7 +670,10 @@ func TestPrepareIncomeDistributionAlreadyOnChain(t *testing.T) {
 		t.Fatalf("first prepare = %d: %s", w.Code, w.Body.String())
 	}
 	if err := env.app.Repos.IncomeDistributions.Upsert(context.Background(), &models.IncomeDistribution{
-		ID: "0", MerkleRoot: got.MerkleRoot, SnapshotSha256: got.SnapshotSha256, ClaimDeadline: deadline.Unix(),
+		ID:             "0",
+		MerkleRoot:     got.MerkleRoot,
+		SnapshotSha256: got.SnapshotSha256,
+		ClaimDeadline:  deadline.Unix(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -623,13 +698,16 @@ func TestProjectResponseKeepsStoredKindWhenTheProbeFails(t *testing.T) {
 	}
 	down := true
 	calls := 0
-	env.app.Sales = sales.New(callScript{FakeClient: blockchain.NewFakeClient(), fn: func(ethereum.CallMsg) ([]byte, error) {
-		calls++
-		if down {
-			return nil, errors.New("rpc unreachable")
-		}
-		return nil, apiRevert{data: "0x"} // feed() reverts: not an oracle
-	}}, env.vaultAddr, common.HexToAddress("0xA001"), env.app.Repos.Purchases)
+	env.app.Sales = sales.New(callScript{
+		FakeClient: blockchain.NewFakeClient(),
+		fn: func(ethereum.CallMsg) ([]byte, error) {
+			calls++
+			if down {
+				return nil, errors.New("rpc unreachable")
+			}
+			return nil, apiRevert{data: "0x"} // feed() reverts: not an oracle
+		},
+	}, env.vaultAddr, common.HexToAddress("0xA001"), env.app.Repos.Purchases)
 
 	if resp := getProjectResp(t, env); resp.StrategyKind != "Fixed" {
 		t.Errorf("strategyKind during an RPC outage = %q, want the stored Fixed", resp.StrategyKind)
@@ -663,10 +741,13 @@ func TestProjectResponseCachesLivePricing(t *testing.T) {
 	}
 	inner := oracleClient(t, common.HexToAddress("0x000000000000000000000000000000000000feed"), false)
 	calls := 0
-	env.app.Sales = sales.New(callScript{FakeClient: inner.FakeClient, fn: func(msg ethereum.CallMsg) ([]byte, error) {
-		calls++
-		return inner.fn(msg)
-	}}, env.vaultAddr, common.HexToAddress("0xA001"), env.app.Repos.Purchases)
+	env.app.Sales = sales.New(callScript{
+		FakeClient: inner.FakeClient,
+		fn: func(msg ethereum.CallMsg) ([]byte, error) {
+			calls++
+			return inner.fn(msg)
+		},
+	}, env.vaultAddr, common.HexToAddress("0xA001"), env.app.Repos.Purchases)
 
 	first := getProjectResp(t, env)
 	after := calls
@@ -724,17 +805,20 @@ func TestProjectResponseCollapsesConcurrentPricingMisses(t *testing.T) {
 	oracle := bindings.NewOraclePriceStrategy()
 	var release chan struct{}
 	var priceReads atomic.Int32
-	env.app.Sales = sales.New(callScript{FakeClient: inner.FakeClient, fn: func(msg ethereum.CallMsg) ([]byte, error) {
-		if m, err := oracle.ABI.MethodById(msg.Data[:4]); err == nil {
-			switch m.Name {
-			case "feed":
-				<-release // hold the strategy probe until every request is in flight
-			case "latestPrice":
-				priceReads.Add(1)
+	env.app.Sales = sales.New(callScript{
+		FakeClient: inner.FakeClient,
+		fn: func(msg ethereum.CallMsg) ([]byte, error) {
+			if m, err := oracle.ABI.MethodById(msg.Data[:4]); err == nil {
+				switch m.Name {
+				case "feed":
+					<-release // hold the strategy probe until every request is in flight
+				case "latestPrice":
+					priceReads.Add(1)
+				}
 			}
-		}
-		return inner.fn(msg)
-	}}, env.vaultAddr, common.HexToAddress("0xA001"), env.app.Repos.Purchases)
+			return inner.fn(msg)
+		},
+	}, env.vaultAddr, common.HexToAddress("0xA001"), env.app.Repos.Purchases)
 
 	const n = 5
 	synctest.Test(t, func(t *testing.T) {

@@ -31,6 +31,7 @@ const (
 	collTransactions         = "transactions"
 	collChainEvents          = "chain_events"
 	collPurchases            = "purchases"
+	collPurchaseOrders       = "purchase_orders"
 	collRedemptionRequests   = "redemption_requests"
 	collIncomePreparations   = "income_preparations"
 	collIncomeDistributions  = "income_distributions"
@@ -63,6 +64,7 @@ func New(db *mongo.Database) *repository.Repositories {
 		Transactions:         &transactionRepo{coll: db.Collection(collTransactions)},
 		ChainEvents:          &chainEventRepo{coll: db.Collection(collChainEvents)},
 		Purchases:            &purchaseRepo{coll: db.Collection(collPurchases)},
+		PurchaseOrders:       &purchaseOrderRepo{coll: db.Collection(collPurchaseOrders)},
 		RedemptionRequests:   &redemptionRequestRepo{coll: db.Collection(collRedemptionRequests)},
 		IncomePreparations:   &incomePreparationRepo{coll: db.Collection(collIncomePreparations)},
 		IncomeDistributions:  &incomeDistributionRepo{coll: db.Collection(collIncomeDistributions)},
@@ -71,8 +73,10 @@ func New(db *mongo.Database) *repository.Repositories {
 		IndexerCheckpoints:   &indexerCheckpointRepo{coll: db.Collection(collIndexerCheckpoints)},
 		IndexerBlockHashes:   &blockHashRepo{coll: db.Collection(collIndexerBlockHashes)},
 		IndexerChunks: &chainChunkRepo{
-			db: db, events: db.Collection(collChainEvents),
-			blockHashes: db.Collection(collIndexerBlockHashes), checkpoints: db.Collection(collIndexerCheckpoints),
+			db:          db,
+			events:      db.Collection(collChainEvents),
+			blockHashes: db.Collection(collIndexerBlockHashes),
+			checkpoints: db.Collection(collIndexerCheckpoints),
 		},
 		IndexerDeadLetters: &deadLetterRepo{coll: db.Collection(collIndexerDeadLetters)},
 		Idempotency:        &idempotencyRepo{coll: db.Collection(collIdempotency)},
@@ -95,7 +99,8 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 		return err
 	}
 	_, err = db.Collection(collIndexerCheckpoints).Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "chainId", Value: 1}, {Key: "address", Value: 1}}, Options: options.Index().SetUnique(true),
+		Keys:    bson.D{{Key: "chainId", Value: 1}, {Key: "address", Value: 1}},
+		Options: options.Index().SetUnique(true),
 	})
 	if err != nil {
 		return err
@@ -103,7 +108,8 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	// unique per (chainId, blockNumber), so Record's upsert leaves one row per height
 	// and PruneBefore's range delete has an index
 	_, err = db.Collection(collIndexerBlockHashes).Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "chainId", Value: 1}, {Key: "blockNumber", Value: 1}}, Options: options.Index().SetUnique(true),
+		Keys:    bson.D{{Key: "chainId", Value: 1}, {Key: "blockNumber", Value: 1}},
+		Options: options.Index().SetUnique(true),
 	})
 	if err != nil {
 		return err
@@ -118,7 +124,8 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	// payloadHash is not the _id, so replay protection in kycEventRepo.Create is atomic
 	// only because of this unique index
 	_, err = db.Collection(collKYCEvents).Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "payloadHash", Value: 1}}, Options: options.Index().SetUnique(true),
+		Keys:    bson.D{{Key: "payloadHash", Value: 1}},
+		Options: options.Index().SetUnique(true),
 	})
 	if err != nil {
 		return err
@@ -151,7 +158,8 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	// claims. The idempotency TTL index cleans up completed or abandoned expired rows;
 	// Reserve independently checks expiry for atomic takeover.
 	_, err = db.Collection(collIdempotency).Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0),
+		Keys:    bson.D{{Key: "expiresAt", Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(0),
 	})
 	if err != nil {
 		return err
@@ -168,13 +176,15 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	// Wallet-session and admin-challenge Get methods enforce ExpiresAt directly; TTL
 	// indexes perform later background cleanup
 	_, err = db.Collection(collWalletSessions).Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0),
+		Keys:    bson.D{{Key: "expiresAt", Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(0),
 	})
 	if err != nil {
 		return err
 	}
 	_, err = db.Collection(collAdminChallenges).Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0),
+		Keys:    bson.D{{Key: "expiresAt", Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(0),
 	})
 	if err != nil {
 		return err
@@ -193,10 +203,19 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	if err != nil {
 		return err
 	}
+	// The buyer-filtered public list matches buyerKey exactly and sorts like the unfiltered one
+	_, err = db.Collection(collPurchaseOrders).Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}},
+		{Keys: bson.D{{Key: "buyerKey", Value: 1}, {Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}},
+	})
+	if err != nil {
+		return err
+	}
 	// one preparation per snapshot, so concurrent prepares cannot leave a second Prepared
 	// row that invites paying the same snapshot twice
 	_, err = db.Collection(collIncomePreparations).Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "merkleRoot", Value: 1}, {Key: "snapshotSha256", Value: 1}}, Options: options.Index().SetUnique(true),
+		Keys:    bson.D{{Key: "merkleRoot", Value: 1}, {Key: "snapshotSha256", Value: 1}},
+		Options: options.Index().SetUnique(true),
 	})
 	if err != nil {
 		return err
@@ -230,7 +249,8 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 		return err
 	}
 	_, err = db.Collection(collBurns).Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "operationId", Value: 1}}, Options: options.Index().SetUnique(true),
+		Keys:    bson.D{{Key: "operationId", Value: 1}},
+		Options: options.Index().SetUnique(true),
 	})
 	if err != nil {
 		return err
@@ -372,10 +392,12 @@ func keysetFilterOperand(cursor, sortField string, desc bool, operand func(int64
 		op = "$gt"
 	}
 	sv := operand(c.SortValue)
-	return bson.M{"$or": bson.A{
-		bson.M{sortField: bson.M{op: sv}},
-		bson.M{sortField: sv, "_id": bson.M{op: c.ID}},
-	}}
+	return bson.M{
+		"$or": bson.A{
+			bson.M{sortField: bson.M{op: sv}},
+			bson.M{sortField: sv, "_id": bson.M{op: c.ID}},
+		},
+	}
 }
 
 // trimKeysetPage trims limit+1 query results to limit. An extra row yields a cursor

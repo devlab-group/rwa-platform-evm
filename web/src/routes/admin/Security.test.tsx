@@ -161,6 +161,38 @@ const DEPLOYED = {
   },
 };
 
+describe("Security admin delay changes", () => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+
+  it("says which changes have taken effect, per contract", async () => {
+    vi.mocked(api.getProject).mockResolvedValue({
+      ...BASE,
+      quoteDecimals: 6,
+      adminDelayChanges: [
+        { contract: "vault", newDelay: 86400, effectAt: nowSeconds + 3600 },
+        { contract: "token", newDelay: 0, effectAt: nowSeconds - 3600 },
+      ],
+    });
+
+    render(<Security />);
+    await screen.findByRole("heading", { name: "Admin delay changes" });
+
+    expect(priceValue(/^vault$/)).toMatch(/^86400 seconds, from /);
+    expect(priceValue(/^token$/)).toMatch(/^0 seconds, since /);
+  });
+
+  it("renders no section when no contract has a change", async () => {
+    vi.mocked(api.getProject).mockResolvedValue({ ...BASE, quoteDecimals: 6 });
+
+    render(<Security />);
+    await screen.findByText(/current purchase price/i);
+
+    expect(
+      screen.queryByRole("heading", { name: "Admin delay changes" }),
+    ).toBeNull();
+  });
+});
+
 describe("Security admin actions (role-gated, connected wallet broadcasts)", () => {
   let wallet: ReturnType<typeof installFakeWallet>;
 
@@ -1107,6 +1139,40 @@ describe("Security oracle strategy", () => {
     expect(within(card).getByText("1800 s")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Update prices" })).toBeNull();
     expect(screen.queryByLabelText(/Purchase price \(whole/)).toBeNull();
+  });
+
+  it("shows the dealing cut-off of an rwa-v4 oracle and omits it for an rwa-v3 one", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({
+        ...V3,
+        version: "rwa-v4",
+        strategyKind: "Oracle",
+        oracle: { ...ORACLE, dealingCutoff: 7200 },
+        roles: {},
+      });
+    const { unmount } = renderWithWallet(<Security />, { connected: true });
+    const card = (
+      await screen.findByRole("heading", { name: "Price oracle" })
+    ).closest("section") as HTMLElement;
+    expect(within(card).getByText("Dealing cut-off").nextSibling).toHaveTextContent(
+      "7200 s",
+    );
+    unmount();
+
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({
+        ...V3,
+        strategyKind: "Oracle",
+        oracle: ORACLE,
+        roles: {},
+      });
+    renderWithWallet(<Security />, { connected: true });
+    const v3Card = (
+      await screen.findByRole("heading", { name: "Price oracle" })
+    ).closest("section") as HTMLElement;
+    expect(within(v3Card).queryByText("Dealing cut-off")).toBeNull();
   });
 
   it("names the failure when the feed is unavailable", async () => {

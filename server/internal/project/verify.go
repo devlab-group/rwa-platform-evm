@@ -337,11 +337,13 @@ func verifySystemAllowlist(ctx context.Context, client blockchain.Client, addrs 
 // mutable values.
 //
 // vaultStrategy is the separate Vault.strategy expectation. The rwa-v2 escrow holds the
-// deployed p.Addresses.Strategy immutably; the rwa-v3 escrow reads Vault.strategy(), so
-// it must equal vaultStrategy. An rwa-v3 project additionally checks the income
-// distributor's wiring, Vault.minPurchaseQuote and, for an Oracle strategy, its
-// immutables against the signed calldata. The first mismatch returns (false, reason,
-// nil); RPC, decoding or invalid expected-value errors propagate.
+// deployed p.Addresses.Strategy immutably; the rwa-v3 and later escrow reads
+// Vault.strategy(), so it must equal vaultStrategy. An rwa-v3 or later project
+// additionally checks the income distributor's wiring, Vault.minPurchaseQuote and, for an
+// Oracle strategy, its immutables against the signed calldata. An rwa-v4 project also
+// checks Vault.purchaseTimeout, the strategy's forwardPriced flag and an Oracle
+// strategy's dealing cut-off. The first mismatch returns (false, reason, nil); RPC,
+// decoding or invalid expected-value errors propagate.
 func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *models.Project, vaultStrategy common.Address) (bool, string, error) {
 	tokenABI := bindings.NewERC20().ABI
 	vaultABI := bindings.NewVault().ABI
@@ -358,7 +360,7 @@ func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *mod
 	wantQuoteToken := common.HexToAddress(p.QuoteToken)
 	wantTreasury := common.HexToAddress(p.Treasury)
 	wantAuditor := common.HexToAddress(p.Auditor)
-	v3 := p.Version == bindings.FactoryVersionV3
+	v3 := bindings.IsV3OrLater(p.Version)
 	escrowStrategy := strategy
 	if v3 {
 		escrowStrategy = vaultStrategy
@@ -429,6 +431,11 @@ func verifyImmutableConfig(ctx context.Context, client blockchain.Client, p *mod
 
 	if v3 {
 		if ok, reason, err := verifyV3Config(ctx, client, p, vault, token, wantQuoteToken, strategy); err != nil || !ok {
+			return ok, reason, err
+		}
+	}
+	if p.Version == bindings.FactoryVersionV4 {
+		if ok, reason, err := verifyV4Config(ctx, client, p, vault, strategy); err != nil || !ok {
 			return ok, reason, err
 		}
 	}
@@ -553,6 +560,39 @@ func verifyV3Config(ctx context.Context, client blockchain.Client, p *models.Pro
 		return false, "", fmt.Errorf("project: read strategy.quoteDecimals: %w", err)
 	} else if got != quoteDecimals {
 		return false, fmt.Sprintf("strategy.quoteDecimals = %d, want %d", got, quoteDecimals), nil
+	}
+	return true, "", nil
+}
+
+// verifyV4Config checks the rwa-v4 additions against the signed calldata:
+// Vault.purchaseTimeout, the deployed strategy's forwardPriced flag (true for Oracle, false
+// for Fixed) and an Oracle strategy's dealingCutoff. strategy is the deployed strategy.
+func verifyV4Config(ctx context.Context, client blockchain.Client, p *models.Project, vault, strategy common.Address) (bool, string, error) {
+	if got, err := viewUint64(ctx, client, bindings.NewVault().ABI, vault, "purchaseTimeout"); err != nil {
+		return false, "", fmt.Errorf("project: read vault.purchaseTimeout: %w", err)
+	} else if int64(got) != p.PurchaseTimeout {
+		return false, fmt.Sprintf("vault.purchaseTimeout = %d, want %d", got, p.PurchaseTimeout), nil
+	}
+
+	// forwardPriced() is declared by both strategy kinds
+	out, err := callView(ctx, client, bindings.NewFixedPriceStrategy().ABI, strategy, "forwardPriced")
+	if err != nil {
+		return false, "", fmt.Errorf("project: read strategy.forwardPriced: %w", err)
+	}
+	oracle := p.StrategyKind == models.StrategyKindOracle
+	if got := *abi.ConvertType(out[0], new(bool)).(*bool); got != oracle {
+		return false, fmt.Sprintf("strategy.forwardPriced = %t, want %t", got, oracle), nil
+	}
+	if !oracle {
+		return true, "", nil
+	}
+	if p.Oracle == nil {
+		return false, "oracle strategy has no stored configuration to verify against", nil
+	}
+	if got, err := viewUint64(ctx, client, bindings.NewOraclePriceStrategy().ABI, strategy, "dealingCutoff"); err != nil {
+		return false, "", fmt.Errorf("project: read strategy.dealingCutoff: %w", err)
+	} else if got != p.Oracle.DealingCutoff {
+		return false, fmt.Sprintf("strategy.dealingCutoff = %d, want %d", got, p.Oracle.DealingCutoff), nil
 	}
 	return true, "", nil
 }

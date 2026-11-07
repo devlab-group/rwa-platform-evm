@@ -27,7 +27,10 @@ func TestChainChunkCommitConditionalVersion(t *testing.T) {
 
 	// the first commit, built on version 0, succeeds and moves to version 1
 	ok, err := repo.CommitChunk(ctx, repository.ChunkCommit{
-		ChainID: 1, Events: []*models.ChainEvent{ev("0x1")}, Checkpoint: cp(5), ExpectedCheckpointVersion: 0,
+		ChainID:                   1,
+		Events:                    []*models.ChainEvent{ev("0x1")},
+		Checkpoint:                cp(5),
+		ExpectedCheckpointVersion: 0,
 	})
 	if err != nil || !ok {
 		t.Fatalf("first CommitChunk = %v,%v; want true,nil", ok, err)
@@ -42,7 +45,10 @@ func TestChainChunkCommitConditionalVersion(t *testing.T) {
 
 	// a stale commit that still expects version 0 is rejected and writes nothing
 	ok, err = repo.CommitChunk(ctx, repository.ChunkCommit{
-		ChainID: 1, Events: []*models.ChainEvent{ev("0xorphan")}, Checkpoint: cp(9), ExpectedCheckpointVersion: 0,
+		ChainID:                   1,
+		Events:                    []*models.ChainEvent{ev("0xorphan")},
+		Checkpoint:                cp(9),
+		ExpectedCheckpointVersion: 0,
 	})
 	if err != nil {
 		t.Fatalf("stale CommitChunk err = %v", err)
@@ -60,7 +66,10 @@ func TestChainChunkCommitConditionalVersion(t *testing.T) {
 
 	// a commit built on the current version 1 succeeds and moves to version 2
 	ok, err = repo.CommitChunk(ctx, repository.ChunkCommit{
-		ChainID: 1, Events: []*models.ChainEvent{ev("0x2")}, Checkpoint: cp(9), ExpectedCheckpointVersion: 1,
+		ChainID:                   1,
+		Events:                    []*models.ChainEvent{ev("0x2")},
+		Checkpoint:                cp(9),
+		ExpectedCheckpointVersion: 1,
 	})
 	if err != nil || !ok {
 		t.Fatalf("version-1 CommitChunk = %v,%v; want true,nil", ok, err)

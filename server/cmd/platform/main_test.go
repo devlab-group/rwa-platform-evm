@@ -95,8 +95,13 @@ func TestProviderRegistryTracksAllGenerations(t *testing.T) {
 func TestAddressesFromProject(t *testing.T) {
 	p := &models.Project{
 		Addresses: models.Addresses{
-			Token: "0xT001", Compliance: "0xC001", SupplyController: "0xS001",
-			Vault: "0xV001", RedemptionEscrow: "0xE001", Strategy: "0xST01", QuoteToken: "0xQ001",
+			Token:            "0xT001",
+			Compliance:       "0xC001",
+			SupplyController: "0xS001",
+			Vault:            "0xV001",
+			RedemptionEscrow: "0xE001",
+			Strategy:         "0xST01",
+			QuoteToken:       "0xQ001",
 		},
 		Auditor: "0xAUD1",
 	}
@@ -122,8 +127,13 @@ func TestLoadProjectAddressesOnlyWhenActive(t *testing.T) {
 
 	// Computed addresses remain gated until the project becomes Active
 	full := models.Addresses{
-		Token: "0xT001", Compliance: "0xC001", SupplyController: "0xS001",
-		Vault: "0xV001", RedemptionEscrow: "0xE001", Strategy: "0xST01", QuoteToken: "0xQ001",
+		Token:            "0xT001",
+		Compliance:       "0xC001",
+		SupplyController: "0xS001",
+		Vault:            "0xV001",
+		RedemptionEscrow: "0xE001",
+		Strategy:         "0xST01",
+		QuoteToken:       "0xQ001",
 	}
 	repos = memory.New()
 	if err := repos.Projects.Upsert(ctx, &models.Project{Status: models.ProjectStatusDeploying, Addresses: full, Auditor: "0xAUD1"}); err != nil {
@@ -163,7 +173,10 @@ func TestIndexerUnsafe(t *testing.T) {
 	}
 
 	if err := repos.IndexerCheckpoints.Set(ctx, &models.IndexerCheckpoint{
-		ChainID: chainID, Address: indexer.CheckpointAddress, LastBlock: 100, LastBlockHash: "0xabc",
+		ChainID:       chainID,
+		Address:       indexer.CheckpointAddress,
+		LastBlock:     100,
+		LastBlockHash: "0xabc",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +189,10 @@ func TestIndexerUnsafe(t *testing.T) {
 	}
 
 	if err := repos.IndexerCheckpoints.Set(ctx, &models.IndexerCheckpoint{
-		ChainID: chainID, Address: indexer.CheckpointAddress, LastBlock: 100, LastBlockHash: "0xabc",
+		ChainID:                chainID,
+		Address:                indexer.CheckpointAddress,
+		LastBlock:              100,
+		LastBlockHash:          "0xabc",
 		ReconciliationRequired: true,
 	}); err != nil {
 		t.Fatal(err)
@@ -210,7 +226,10 @@ func TestRunIndexDependentTickerSkipsWhileUnsafe(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		unsafeCP := &models.IndexerCheckpoint{
-			ChainID: chainID, Address: indexer.CheckpointAddress, LastBlock: 100, LastBlockHash: "0xabc",
+			ChainID:                chainID,
+			Address:                indexer.CheckpointAddress,
+			LastBlock:              100,
+			LastBlockHash:          "0xabc",
 			ReconciliationRequired: true,
 		}
 		if err := repos.IndexerCheckpoints.Set(ctx, unsafeCP); err != nil {

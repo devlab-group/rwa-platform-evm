@@ -17,6 +17,7 @@ type Transaction = components["schemas"]["Transaction"];
 type WebhookEvent = components["schemas"]["WebhookEvent"];
 type AuditLog = components["schemas"]["AuditLog"];
 type Purchase = components["schemas"]["Purchase"];
+type PurchaseOrder = components["schemas"]["PurchaseOrder"];
 type TxRef = components["schemas"]["TxRef"];
 type IncomeDistribution = components["schemas"]["IncomeDistribution"];
 
@@ -55,6 +56,8 @@ export interface MockState {
   webhooks: WebhookEvent[];
   auditLogs: AuditLog[];
   purchases: Purchase[];
+  /** rwa-v4 forward-priced orders served by GET /api/v1/sales/orders */
+  purchaseOrders: PurchaseOrder[];
   challenges: Record<string, Challenge>;
   /** Stored profiles keyed by projectId, with the digest and decimals derived at creation; each can be created once */
   createdProfiles: Map<
@@ -126,6 +129,7 @@ export function defaultState(): MockState {
     webhooks: [],
     auditLogs: [],
     purchases: [],
+    purchaseOrders: [],
     challenges: {},
     createdProfiles: new Map(),
   };
@@ -147,6 +151,7 @@ const PUBLIC_PATHS = [
   /^\/api\/v1\/compliance\/kyc\/start$/,
   /^\/api\/v1\/me\/wallet-status$/,
   /^\/api\/v1\/sales\/inventory$/,
+  /^\/api\/v1\/sales\/orders(\/[^/]+)?$/,
   /^\/api\/v1\/redemptions(\/[^/]+)?$/,
   /^\/api\/v1\/income\/claims\/[^/]+$/,
   /^\/api\/v1\/transactions$/,
@@ -383,6 +388,27 @@ export async function installMockApi(
     // through the mock wallet's __getSentTransactions.
     if (path === "/api/v1/sales/purchases" && method === "GET")
       return json(state.purchases);
+    // Public order projection; filters by status and buyer, ignoring case on the address
+    if (path === "/api/v1/sales/orders" && method === "GET") {
+      const status = url.searchParams.get("status");
+      const address = url.searchParams.get("address")?.toLowerCase();
+      return json(
+        state.purchaseOrders.filter(
+          (o) =>
+            (!status || o.status === status) &&
+            (!address || o.buyer.toLowerCase() === address),
+        ),
+      );
+    }
+    const orderMatch = path.match(/^\/api\/v1\/sales\/orders\/([^/]+)$/);
+    if (orderMatch && method === "GET") {
+      const order = state.purchaseOrders.find(
+        (o) => o.id === decodeURIComponent(orderMatch[1]),
+      );
+      return order
+        ? json(order)
+        : json({ code: "not_found", message: "order not found" }, 404);
+    }
 
     // --- redemptions ---------------------------------------------------
     if (path === "/api/v1/redemptions" && method === "GET") {

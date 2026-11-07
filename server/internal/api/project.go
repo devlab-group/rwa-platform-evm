@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/rwa-platform/server/internal/api/dto"
+	"github.com/rwa-platform/server/internal/bindings"
 	"github.com/rwa-platform/server/internal/dal/models"
 	"github.com/rwa-platform/server/internal/indexer"
 	"github.com/rwa-platform/server/internal/sales"
@@ -64,7 +65,9 @@ type livePricing struct {
 	kind                 string
 	oracle               *dto.OraclePriceResponse
 	purchase, redemption string
-	expires              time.Time
+	// forwardPriced is read for rwa-v4 projects only, nil when unknown
+	forwardPriced *bool
+	expires       time.Time
 }
 
 // pricingCache holds live pricing results by strategy address
@@ -95,6 +98,7 @@ func (app *App) applyLivePricing(ctx context.Context, p *models.Project, resp *d
 	app.pricing.mu.Unlock()
 	if ok && time.Now().Before(hit.expires) {
 		resp.ApplyPricing(hit.kind, hit.oracle, hit.purchase, hit.redemption)
+		resp.ForwardPriced = hit.forwardPriced
 		return
 	}
 
@@ -103,6 +107,7 @@ func (app *App) applyLivePricing(ctx context.Context, p *models.Project, resp *d
 	})
 	res := v.(livePricing)
 	resp.ApplyPricing(res.kind, res.oracle, res.purchase, res.redemption)
+	resp.ForwardPriced = res.forwardPriced
 }
 
 // readLivePricing caches strategy pricing for livePricingTTL, detaching reads from the
@@ -117,6 +122,9 @@ func (app *App) readLivePricing(ctx context.Context, p *models.Project, strategy
 		kind = p.StrategyKind
 	}
 	res := livePricing{kind: kind, expires: time.Now().Add(livePricingTTL)}
+	if p.Version == bindings.FactoryVersionV4 {
+		res.forwardPriced = app.Sales.ForwardPriced(ctx, addr)
+	}
 	if kind == sales.KindOracle {
 		if info, err := app.Sales.Oracle(ctx, addr); err == nil {
 			res.oracle = oracleView(info)
@@ -143,10 +151,16 @@ func (app *App) readLivePricing(ctx context.Context, p *models.Project, strategy
 // oracleView maps an OracleInfo to its API view, omitting an unset sequencer feed
 func oracleView(info *sales.OracleInfo) *dto.OraclePriceResponse {
 	v := &dto.OraclePriceResponse{
-		Feed: info.Feed.Hex(), MaxAge: info.MaxAge, PurchaseSpreadBps: info.PurchaseSpreadBps,
-		RedemptionSpreadBps: info.RedemptionSpreadBps, FeedDecimals: info.FeedDecimals,
-		Available: info.Available, UpdatedAt: info.UpdatedAt, Error: info.Error,
+		Feed:                info.Feed.Hex(),
+		MaxAge:              info.MaxAge,
+		PurchaseSpreadBps:   info.PurchaseSpreadBps,
+		RedemptionSpreadBps: info.RedemptionSpreadBps,
+		FeedDecimals:        info.FeedDecimals,
+		Available:           info.Available,
+		UpdatedAt:           info.UpdatedAt,
+		Error:               info.Error,
 	}
+	v.DealingCutoff = info.DealingCutoff
 	if info.SequencerUptimeFeed != (common.Address{}) {
 		v.SequencerUptimeFeed = info.SequencerUptimeFeed.Hex()
 		v.GracePeriod = info.GracePeriod

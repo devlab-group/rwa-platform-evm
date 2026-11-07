@@ -1,8 +1,9 @@
 // Package governance decodes shared OpenZeppelin Paused/Unpaused,
-// RoleGranted/RoleRevoked, DefaultAdminTransferScheduled and
-// DefaultAdminTransferCanceled events. serverwiring uses it after contract-specific
-// decoders return unknown. The security projector derives pause, role holders and
-// pending admin; only RWAToken emits Paused/Unpaused.
+// RoleGranted/RoleRevoked, DefaultAdminTransferScheduled, DefaultAdminTransferCanceled,
+// DefaultAdminDelayChangeScheduled and DefaultAdminDelayChangeCanceled events.
+// serverwiring calls it when a contract-specific decoder returns "unknown". The security
+// projector uses these events to derive pause state, role holders, pending admins and
+// delay changes. Only RWAToken emits Paused/Unpaused.
 package governance
 
 import (
@@ -14,8 +15,14 @@ import (
 // EventNames are the generic governance events this package decodes on any
 // project contract.
 var EventNames = []string{
-	"Paused", "Unpaused", "RoleGranted", "RoleRevoked",
-	"DefaultAdminTransferScheduled", "DefaultAdminTransferCanceled",
+	"Paused",
+	"Unpaused",
+	"RoleGranted",
+	"RoleRevoked",
+	"DefaultAdminTransferScheduled",
+	"DefaultAdminTransferCanceled",
+	"DefaultAdminDelayChangeScheduled",
+	"DefaultAdminDelayChangeCanceled",
 }
 
 // DecodeLog maps shared governance events: Paused/Unpaused decode account from data;
@@ -46,7 +53,9 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 		}
 		ev := g.UnpackRoleEvent(log.Topics)
 		return name, map[string]any{
-			"role": ev.Role.Hex(), "account": ev.Account.Hex(), "sender": ev.Sender.Hex(),
+			"role":    ev.Role.Hex(),
+			"account": ev.Account.Hex(),
+			"sender":  ev.Sender.Hex(),
 		}, nil
 	case g.EventID("DefaultAdminTransferScheduled"):
 		// the pending-admin projection needs only newAdmin, so the non-indexed
@@ -56,6 +65,17 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 		}, nil
 	case g.EventID("DefaultAdminTransferCanceled"):
 		return "DefaultAdminTransferCanceled", map[string]any{}, nil
+	case g.EventID("DefaultAdminDelayChangeScheduled"):
+		ev, err := g.UnpackAdminDelayChange(log.Data)
+		if err != nil {
+			return "", nil, err
+		}
+		return "DefaultAdminDelayChangeScheduled", map[string]any{
+			"newDelay":       ev.NewDelay.String(),
+			"effectSchedule": ev.EffectSchedule.String(),
+		}, nil
+	case g.EventID("DefaultAdminDelayChangeCanceled"):
+		return "DefaultAdminDelayChangeCanceled", map[string]any{}, nil
 	default:
 		return "unknown", map[string]any{"topic0": topic0.Hex()}, nil
 	}

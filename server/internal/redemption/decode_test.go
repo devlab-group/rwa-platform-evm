@@ -32,8 +32,10 @@ func TestDecodeLogTypesEveryRedemptionEvent(t *testing.T) {
 	}{
 		{
 			"RedemptionRequested",
-			types.Log{Topics: []common.Hash{e.EventID("RedemptionRequested"), idTopic, whoTopic},
-				Data: pack("RedemptionRequested", big.NewInt(1000), big.NewInt(950), uint64(1700000000))},
+			types.Log{
+				Topics: []common.Hash{e.EventID("RedemptionRequested"), idTopic, whoTopic},
+				Data:   pack("RedemptionRequested", big.NewInt(1000), big.NewInt(950), uint64(1700000000)),
+			},
 			map[string]any{"id": "42", "beneficiary": who.Hex(), "rwaAmount": "1000", "quoteAmount": "950", "createdAt": uint64(1700000000)},
 		},
 		{
@@ -43,8 +45,10 @@ func TestDecodeLogTypesEveryRedemptionEvent(t *testing.T) {
 		},
 		{
 			"RedemptionCompleted",
-			types.Log{Topics: []common.Hash{e.EventID("RedemptionCompleted"), idTopic, whoTopic},
-				Data: pack("RedemptionCompleted", big.NewInt(1000), big.NewInt(950))},
+			types.Log{
+				Topics: []common.Hash{e.EventID("RedemptionCompleted"), idTopic, whoTopic},
+				Data:   pack("RedemptionCompleted", big.NewInt(1000), big.NewInt(950)),
+			},
 			map[string]any{"id": "42", "beneficiary": who.Hex(), "rwaAmount": "1000", "quoteAmount": "950"},
 		},
 		{

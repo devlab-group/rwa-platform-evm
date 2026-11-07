@@ -4,7 +4,7 @@ SHELL := /bin/bash
 .PHONY: help bootstrap format lint contracts-test signer-test server-test web-test \
         investor-web-test web-e2e investor-web-e2e vectors-check dialect-check bindings-check \
         e2e ci up down \
-        security-scan platform signer embed-check
+        security-scan platform signer keeper embed-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -100,6 +100,10 @@ platform: ## Build the release binary with a fresh embedded admin app
 signer: ## Build the offline signer binary (signer/bin/signer)
 	cd signer && go build -o bin/signer ./cmd/signer
 	@echo "signer binary -> signer/bin/signer"
+
+keeper: ## Build the order keeper binary (server/bin/keeper)
+	cd server && go build -o bin/keeper ./cmd/keeper
+	@echo "keeper binary -> server/bin/keeper"
 
 embed-check: platform ## Prove the release binary builds with a freshly embedded SPA (dist is built at release, not committed)
 	# The built SPA is not committed, so there is no drift to diff. `platform` rebuilds

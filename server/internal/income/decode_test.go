@@ -33,10 +33,20 @@ func TestDecodeLogTypesEveryIncomeEvent(t *testing.T) {
 	}{
 		{
 			"DistributionCreated",
-			types.Log{Topics: []common.Hash{d.EventID("DistributionCreated"), idTopic, addrTopic},
-				Data: pack("DistributionCreated", root, big.NewInt(1000), uint64(55), uint64(2000), "ipfs://cid", sha)},
-			map[string]any{"id": "12", "merkleRoot": root.Hex(), "total": "1000", "recordBlock": "55", "claimDeadline": "2000",
-				"snapshotURI": "ipfs://cid", "snapshotSha256": sha.Hex(), "caller": acct.Hex()},
+			types.Log{
+				Topics: []common.Hash{d.EventID("DistributionCreated"), idTopic, addrTopic},
+				Data:   pack("DistributionCreated", root, big.NewInt(1000), uint64(55), uint64(2000), "ipfs://cid", sha),
+			},
+			map[string]any{
+				"id":             "12",
+				"merkleRoot":     root.Hex(),
+				"total":          "1000",
+				"recordBlock":    "55",
+				"claimDeadline":  "2000",
+				"snapshotURI":    "ipfs://cid",
+				"snapshotSha256": sha.Hex(),
+				"caller":         acct.Hex(),
+			},
 		},
 		{
 			"IncomeClaimed",

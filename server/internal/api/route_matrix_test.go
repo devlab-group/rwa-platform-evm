@@ -60,8 +60,10 @@ var routeClasses = map[string]routeClass{
 	"GET /api/v1/sales/inventory": classPublic,
 	"GET /api/v1/sales/purchases": classAdmin,
 
-	"GET /api/v1/redemptions":     classPublic, // on-chain-public data for investor UIs
-	"GET /api/v1/redemptions/:id": classPublic,
+	"GET /api/v1/sales/orders":     classPublic, // on-chain-public data for investor UIs
+	"GET /api/v1/sales/orders/:id": classPublic,
+	"GET /api/v1/redemptions":      classPublic, // on-chain-public data for investor UIs
+	"GET /api/v1/redemptions/:id":  classPublic,
 
 	"GET /api/v1/income/distributions":   classAdmin,
 	"POST /api/v1/income/distributions":  classAdmin,

@@ -17,7 +17,7 @@ contract DeployFactoryScriptTest is Test {
 
         // Check factory runtime and version
         assertTrue(address(factory).code.length > 0, "factory has no code");
-        assertEq(factory.version(), "rwa-v3");
+        assertEq(factory.version(), "rwa-v4");
 
         // Check all five helpers have deployed code
         assertTrue(factory.complianceTokenDeployer() != address(0));

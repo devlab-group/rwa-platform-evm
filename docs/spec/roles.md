@@ -9,7 +9,7 @@ Each governance contract maintains its own roles through `AccessControlEnumerabl
 | `PAUSER_ROLE`             | `keccak256("PAUSER_ROLE")`             | RWAToken                  | `pause` / `unpause`, the project-wide emergency flag                                                                                                                                |
 | `COMPLIANCE_ROLE`         | `keccak256("COMPLIANCE_ROLE")`         | ComplianceRegistry        | `setStatus` / `setStatuses` (wallet status and expiry)                                                                                                                              |
 | `PRICER_ROLE`             | `keccak256("PRICER_ROLE")`             | FixedPriceStrategy        | `setPurchasePrice` / `setRedemptionPrice`                                                                                                                                           |
-| `TREASURER_ROLE`          | `keccak256("TREASURER_ROLE")`          | Vault, RedemptionEscrow   | `Vault.withdrawProceeds`, `RedemptionEscrow.fundRedemption`                                                                                                                         |
+| `TREASURER_ROLE`          | `keccak256("TREASURER_ROLE")`          | Vault, RedemptionEscrow   | `Vault.withdrawProceeds`, `Vault.rejectPurchase`, `RedemptionEscrow.fundRedemption`                                                                                                 |
 | `REDEMPTION_MANAGER_ROLE` | `keccak256("REDEMPTION_MANAGER_ROLE")` | RedemptionEscrow          | `rejectRedemption`                                                                                                                                                                  |
 | `INCOME_MANAGER_ROLE`     | `keccak256("INCOME_MANAGER_ROLE")`     | IncomeDistributor         | `createDistribution`, `extendClaimDeadline`                                                                                                                                         |
 
@@ -28,6 +28,7 @@ transfers can later leave different admins.
   usually a multisig.
 - Redemption management follows `REDEMPTION_MANAGER_ROLE`; there is no separate manager setter.
   The escrow prices through the Vault's current strategy, so `Vault.setStrategy` changes both.
+  Existing forward orders retain their request-time strategy.
 - The auditor is a SupplyController address, not a role. It authorizes mint and burn by EOA or
   ERC-1271 signature. The admin replaces it with `setAuditor`, emitting `AuditorChanged`.
 - The factory uses bootstrap `COMPLIANCE_ROLE` to allowlist the Vault and escrow, then renounces

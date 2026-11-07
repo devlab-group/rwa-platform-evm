@@ -43,7 +43,10 @@ func newTestService(t *testing.T, auditorKey *ecdsa.PrivateKey, controllerAddr, 
 	packages := memory.NewAuditPackageRepository()
 	attestations := memory.NewAttestationRepository()
 	domainCfg := eip712.Domain{
-		Name: "RWA-Supply-Attestation", Version: "1", ChainID: big.NewInt(31337), VerifyingContract: controllerAddr,
+		Name:              "RWA-Supply-Attestation",
+		Version:           "1",
+		ChainID:           big.NewInt(31337),
+		VerifyingContract: controllerAddr,
 	}
 	auditor := crypto.PubkeyToAddress(auditorKey.PublicKey)
 	svc := NewRecordService(records, packages, attestations, &stubIPFS{}, controllerAddr, vaultAddr, domainCfg, auditor)
@@ -56,8 +59,9 @@ func TestCreateRecordPersistsPendingRecord(t *testing.T) {
 	svc, records := newTestService(t, auditorKey, common.Address{}, common.Address{})
 
 	req := CreateRecordRequest{
-		RecordID: "GOLD-BAR-99", Asset: json.RawMessage(`{"serialNumber":"99","weightGrams":"500","purity":"999.9"}`),
-		Amount: "500000000000000000000",
+		RecordID: "GOLD-BAR-99",
+		Asset:    json.RawMessage(`{"serialNumber":"99","weightGrams":"500","purity":"999.9"}`),
+		Amount:   "500000000000000000000",
 	}
 	rec, err := svc.CreateRecord(context.Background(), profile, profile.ProjectID, req)
 	if err != nil {
@@ -99,8 +103,9 @@ func TestBuildPackageDeterministicRebuild(t *testing.T) {
 	svc, _ := newTestService(t, auditorKey, controllerAddr, vaultAddr)
 
 	req := CreateRecordRequest{
-		RecordID: "GOLD-BAR-PKG", Asset: json.RawMessage(`{"serialNumber":"1","weightGrams":"100","purity":"999.9"}`),
-		Amount: "100000000000000000000",
+		RecordID: "GOLD-BAR-PKG",
+		Asset:    json.RawMessage(`{"serialNumber":"1","weightGrams":"100","purity":"999.9"}`),
+		Amount:   "100000000000000000000",
 	}
 	rec, err := svc.CreateRecord(context.Background(), profile, profile.ProjectID, req)
 	if err != nil {
@@ -133,8 +138,9 @@ func TestReissueRecordRotatesNonceAndExpiryPreservingIdentity(t *testing.T) {
 	svc, records := newTestService(t, auditorKey, common.Address{}, common.Address{})
 
 	req := CreateRecordRequest{
-		RecordID: "GOLD-BAR-REISSUE", Asset: json.RawMessage(`{"serialNumber":"7","weightGrams":"100","purity":"999.9"}`),
-		Amount: "100000000000000000000",
+		RecordID: "GOLD-BAR-REISSUE",
+		Asset:    json.RawMessage(`{"serialNumber":"7","weightGrams":"100","purity":"999.9"}`),
+		Amount:   "100000000000000000000",
 	}
 	rec, err := svc.CreateRecord(context.Background(), profile, profile.ProjectID, req)
 	if err != nil {
@@ -179,8 +185,9 @@ func TestReissueRecordRejectsNonPending(t *testing.T) {
 	svc, records := newTestService(t, auditorKey, common.Address{}, common.Address{})
 
 	req := CreateRecordRequest{
-		RecordID: "GOLD-BAR-SIGNED", Asset: json.RawMessage(`{"serialNumber":"8","weightGrams":"100","purity":"999.9"}`),
-		Amount: "100000000000000000000",
+		RecordID: "GOLD-BAR-SIGNED",
+		Asset:    json.RawMessage(`{"serialNumber":"8","weightGrams":"100","purity":"999.9"}`),
+		Amount:   "100000000000000000000",
 	}
 	rec, err := svc.CreateRecord(context.Background(), profile, profile.ProjectID, req)
 	if err != nil {
@@ -205,8 +212,9 @@ func TestCreateRecordRejectsInvalidAsset(t *testing.T) {
 	svc, _ := newTestService(t, auditorKey, common.Address{}, common.Address{})
 
 	req := CreateRecordRequest{
-		RecordID: "BAD-1", Asset: json.RawMessage(`{"serialNumber":"1"}`),
-		Amount: "1000",
+		RecordID: "BAD-1",
+		Asset:    json.RawMessage(`{"serialNumber":"1"}`),
+		Amount:   "1000",
 	}
 	if _, err := svc.CreateRecord(context.Background(), profile, profile.ProjectID, req); err == nil {
 		t.Fatal("expected error for asset missing required fields")

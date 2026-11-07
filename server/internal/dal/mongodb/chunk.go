@@ -130,7 +130,8 @@ func (r *chainChunkRepo) RewindChunk(ctx context.Context, rw repository.ChunkRew
 
 		for _, addr := range rw.Addresses {
 			if _, dErr := r.events.DeleteMany(txCtx, bson.M{
-				"chainId": rw.ChainID, "address": addr,
+				"chainId":     rw.ChainID,
+				"address":     addr,
 				"blockNumber": bson.M{"$gte": rw.DeleteFromBlock},
 			}); dErr != nil {
 				return nil, dErr

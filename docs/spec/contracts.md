@@ -14,10 +14,10 @@ OraclePriceStrategy has no roles. See `roles.md`.
 `RWAToken.paused()` is the project emergency flag, controlled by `PAUSER_ROLE` through
 `pause()` / `unpause()`.
 
-| While paused | Functions                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Revert       | every RWA transfer (OpenZeppelin `EnforcedPause`), `SupplyController.mint`/`burn`, `Vault.buy`, `withdrawProceeds`, `setStrategy`, `setTreasury`, `setMinPurchaseQuote`, `RedemptionEscrow.requestRedemption`, `fundRedemption`, `rejectRedemption`, `claimRedemption`, `IncomeDistributor.createDistribution`, `claim`, `reclaimUnclaimed` (all `ProjectPaused` except the transfers) |
-| Keep working | `RedemptionEscrow.cancelRedemption` (through `RWAToken.returnEscrowedRWA`), `RWAToken.setFrozenTokens`, `forcedTransfer`, `SupplyController.setAuditor`, `FixedPriceStrategy` price setters, `IncomeDistributor.extendClaimDeadline`, `ComplianceRegistry.setStatus`/`setStatuses`, role grants and revocations, admin transfers                                                       |
+| While paused | Functions                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Revert       | every RWA transfer (OpenZeppelin `EnforcedPause`), `SupplyController.mint`/`burn`, `Vault.buy`, `requestPurchase`, `settlePurchase`, `withdrawProceeds`, `setStrategy`, `setTreasury`, `setMinPurchaseQuote`, `RedemptionEscrow.requestRedemption`, `fundRedemption`, `rejectRedemption`, `claimRedemption`, `IncomeDistributor.createDistribution`, `claim`, `reclaimUnclaimed` (all `ProjectPaused` except the transfers) |
+| Keep working | `Vault.cancelPurchase`, `rejectPurchase` (only while paused), `RedemptionEscrow.cancelRedemption` (through `RWAToken.returnEscrowedRWA`), `RWAToken.setFrozenTokens`, `forcedTransfer`, `SupplyController.setAuditor`, `FixedPriceStrategy` price setters, `IncomeDistributor.extendClaimDeadline`, `ComplianceRegistry.setStatus`/`setStatuses`, role grants and revocations, admin transfers                              |
 
 The two token transfer paths available during pause are `returnEscrowedRWA` and `forcedTransfer`,
 described below. In an ordinary transfer the compliance and frozen-balance checks run before the
@@ -160,12 +160,17 @@ stablecoin. A depeg of the quote token is not detected.
 
 The strategy has no roles. Its parameters are immutable: `feed`, optional `sequencerUptimeFeed`,
 `maxAge`, `gracePeriod`, `purchaseSpreadBps`, `redemptionSpreadBps`, `tokenDecimals`,
-`quoteDecimals`, and `feedDecimals`, which the constructor reads from the feed. To change one,
-deploy a replacement and call `Vault.setStrategy`. The constructor rejects a zero
-feed (`ZeroFeed`), zero `maxAge` (`ZeroMaxAge`), `purchaseSpreadBps > 10000`
+`quoteDecimals`, `dealingCutoff`, and `feedDecimals`, which the constructor reads from the feed.
+To change a parameter, deploy a replacement and call `Vault.setStrategy`. The constructor rejects
+a zero feed (`ZeroFeed`), zero `maxAge` (`ZeroMaxAge`), zero `dealingCutoff` (`ZeroDealingCutoff`),
+`purchaseSpreadBps > 10000`
 (`PurchaseSpreadTooHigh`), `redemptionSpreadBps > 9999` (`RedemptionSpreadTooHigh`), token,
 quote or feed decimals above 36 (`DecimalsTooHigh`), and a sequencer feed without a grace
-period or a grace period without a feed (`InvalidGracePeriod`).
+period or a grace period without a feed (`InvalidGracePeriod`). It also probes round history.
+For the latest round, `getRoundData` must return that round's id, nonzero `updatedAt` and
+`answeredInRound >= roundId`; for the next round, it must revert or return `updatedAt == 0`.
+Violating these conditions raises `NoRoundHistory`. If `getRoundData` reverts on the latest round,
+deployment fails with that error instead. These probes do not guarantee future feed behavior.
 
 `latestPrice()` returns the feed answer and its `updatedAt` after these checks, in order:
 
@@ -184,43 +189,149 @@ Each quote is one `Math.mulDiv` over the validated price `p`, with no intermedia
 
 Both scale `p` from `feedDecimals` to `quoteDecimals` inside the same division. Overflow
 reverts. `purchasePricePerWholeToken()` and `redemptionPricePerWholeToken()` return the quotes
-for `10**tokenDecimals` units. Every quote and price getter applies the `latestPrice()` checks,
-so a failing feed blocks `Vault.buy`, `previewBuy`, `RedemptionEscrow.requestRedemption` and
-`previewRedeem`. Funding, claiming, rejecting and cancelling stored requests do not read the
-strategy.
+for `10**tokenDecimals` units. These latest-price quotes and getters apply the `latestPrice()`
+checks, so a failing feed blocks `previewBuy` and `previewRedeem`.
+
+### Forward pricing
+
+`forwardPriced()` returns true for OraclePriceStrategy and false for FixedPriceStrategy. Oracle
+orders store the strategy and `latestRound()` as their base round. The stored strategy selects
+the first later round with a publication timestamp at least `dealingCutoff` after the order.
+Settlement timing and caller identity do not change that selection.
+
+`latestRound()` runs the same sequencer checks as `latestPrice()` before reading the feed.
+With a sequencer feed configured, `SequencerDown` and `GracePeriodNotOver` block new orders during
+an L2 outage and the grace window after a restart. `maxAge` does not apply, so a stale feed does
+not block new orders. Settlement and funding use historical rounds without sequencer checks;
+cancellation is not gated on the sequencer either.
+
+The operator must set `dealingCutoff` to cover the longest delay between valuation and publication.
+If that bound holds, the selected round's valuation cannot predate the order. A longer delay can
+let an order use a price valued before it was placed. The contract checks publication timestamps
+and cannot verify that delay.
+
+`quotePurchaseAfter(amount, baseRound, orderTime)` and
+`quoteRedemptionAfter(amount, baseRound, orderTime)` apply the same formulas to the selected round's
+answer and return the quote and round ID. They search rounds `baseRound + 1` to `baseRound + 16`
+using `getRoundData`. Orders pass `createdAt` as `orderTime`. The checks run in this order:
+
+1. the feed's `decimals()` equals `feedDecimals`, else `FeedDecimalsChanged`
+2. for each round, `getRoundData` returns the requested `roundId`, a nonzero `updatedAt` and
+   `answeredInRound >= roundId`, else `RoundNotAvailable(roundId)`
+3. skip a round with `updatedAt < orderTime + dealingCutoff`, regardless of its answer
+4. the first remaining round must have `answer > 0` and `updatedAt <= block.timestamp`, else
+   `InvalidPrice`
+5. if all 16 rounds are skipped, `RoundNotAvailable(baseRound + 16)`
+
+These methods skip `maxAge` and sequencer checks. They require consecutive feed rounds with
+unchanged historical answers. A missing round stops the search because it could contain the
+first eligible price. If a phase change or another numbering gap leaves a round missing, or all
+16 searched rounds precede the cutoff, the affected orders can be cancelled after their timeout.
+While orders are open, do not migrate the feed's aggregator; keep each eligible pricing round
+within the first 16 rounds after its order's base round. To clear Pending purchases with Allowed
+buyers, pause the project and call `rejectPurchase`. While unpaused, `rejectRedemption` returns
+Pending redemptions' RWA to Allowed beneficiaries. Neither rejection reads the strategy.
+
+Redemption claims, rejections and cancellations do not read the strategy.
 
 ## Vault
 
 `token` and `quoteToken` are immutable. Admin-only `setStrategy` / `setTreasury` reject pause
 (`ProjectPaused`) and zero addresses (`ZeroAddress`), emitting
 `StrategyChanged` / `TreasuryChanged(previous, new, caller)`; `inventory() == token.balanceOf(vault)`.
+`setStrategy` also staticcalls the candidate's `forwardPriced()` and reverts
+`InvalidStrategy(strategy)` when the call fails or does not return one word, which covers an
+account without code. A forward-priced candidate must have `0 < dealingCutoff() < purchaseTimeout`,
+else `InvalidDealingCutoff(dealingCutoff, purchaseTimeout)`, because a longer cutoff lets buyers
+cancel before any round can price their orders. The Vault cannot see the escrow's timeout, so the
+escrow enforces its own bound (see RedemptionEscrow).
 Admin-only `setMinPurchaseQuote(newMinimum)` rejects pause (`ProjectPaused`), accepts 0 to
 remove the minimum and emits `MinPurchaseQuoteChanged(previous, new, caller)`; the constructor
 takes the initial `minPurchaseQuote`. The Vault uses `nonReentrant` and `SafeERC20`. Inventory is
-sold through `buy`; there is no off-chain distribution, `distribute`, `distributionCap` or
-`DISTRIBUTOR_ROLE`.
+sold through `buy` on an instant strategy and `requestPurchase` on a forward-priced one; there is
+no off-chain distribution, `distribute`, `distributionCap` or `DISTRIBUTOR_ROLE`.
 
 `buy(tokenAmount, maxQuoteAmount, recipient, deadline)` checks, in order: not paused
 (`ProjectPaused`), Allowed caller (`CallerNotAllowed`), Allowed recipient (`RecipientNotAllowed`),
 `deadline >= block.timestamp` (`DeadlineExpired`), positive amount (`ZeroAmount`), sufficient
-inventory (`InsufficientInventory`). It then computes `quote = strategy.quotePurchase(tokenAmount)`,
-which reverts with the strategy's error if pricing fails, and checks `quote >= minPurchaseQuote`
-(`QuoteBelowMinimum`) and `quote <= maxQuoteAmount` (`QuoteAboveMax`). It pulls the quote with
+inventory (`InsufficientInventory`), an instant strategy (`ForwardPriced`). It then computes
+`quote = strategy.quotePurchase(tokenAmount)`, which reverts with the strategy's error if pricing
+fails, and checks `quote >= minPurchaseQuote` (`QuoteBelowMinimum`) and
+`quote <= maxQuoteAmount` (`QuoteAboveMax`). It pulls the quote with
 `safeTransferFrom`, checks the Vault's exact balance delta (`QuoteDeltaMismatch`), sends RWA to
 the recipient and emits `Purchased(buyer, recipient, tokenAmount, quote, strategy)`.
 
+`requestPurchase(tokenAmount, maxQuoteAmount, recipient, deadline)` opens a forward order. Its
+checks through inventory match `buy`, with `ZeroAmount` also rejecting a zero `maxQuoteAmount`.
+It then requires `maxQuoteAmount >= minPurchaseQuote` (`QuoteBelowMinimum`) and a forward-priced
+strategy (`NotForwardPriced`), records `latestRound()` as `baseRound` (which rejects an outage or
+grace window when a sequencer feed is configured), pulls `maxQuoteAmount` as a deposit with an
+exact balance-delta check, adds it to `pendingPurchaseQuote` and emits `PurchaseRequested`.
+The order also records the current `minPurchaseQuote` as its own `minPurchaseQuote`. The inventory check does not reserve
+tokens. `deadline` only bounds when the request is mined and is not stored. A deadline that also
+bounded settlement would let a buyer who dislikes the pricing round wait for it to pass and take a
+refund; the order's lifetime is set by `purchaseTimeout` instead.
+
+`settlePurchase(id)` is permissionless. It checks a Pending order (`NotPending`), an unpaused
+project (`ProjectPaused`) and an Allowed buyer (`BuyerNotAllowed`), then uses the stored strategy
+to price the order. A missing or unusable pricing round reverts with the strategy's error. The
+order fills when the quote is at most the deposit and at least the order's recorded
+`minPurchaseQuote`, inventory covers it and the recipient is Allowed. Later `setMinPurchaseQuote`
+calls cannot raise that threshold to force a refund after the pricing round is public, or lower
+it to make an under-minimum quote eligible. Filling sends the RWA, returns the rest of the deposit
+and emits `Purchased` and `PurchaseSettled`. Otherwise it
+returns the whole deposit, marks the order Refunded and emits `PurchaseRefunded`. A failed token
+transfer or refund reverts settlement.
+
+`cancelPurchase(id)` returns the deposit to the buyer. It checks a Pending order, the buyer as
+caller (`NotBuyer`), `block.timestamp >= createdAt + purchaseTimeout` (`TimeoutNotReached`) and an
+Allowed buyer (`BuyerNotAllowed`). It then reverts with `RoundAvailable` if the stored strategy
+can produce the settlement quote; cancellation requires that pricing call to fail. Cancellation
+works while paused, but a usable round blocks it even then, while pause blocks settlement.
+
+`rejectPurchase(id)` requires `TREASURER_ROLE`. It checks for a Pending order, a paused project
+(`ProjectNotPaused`) and an Allowed buyer (`BuyerNotAllowed`), then marks the order Rejected,
+returns the whole deposit and emits `PurchaseRejected(id, buyer, refund)`. It does not read the
+strategy, so a bad round cannot block rejection. Rejection is unavailable while unpaused.
+
+Order status runs `None -> Pending`, then `Settled`, `Refunded`, `Cancelled` or `Rejected`.
+`purchaseTimeout` is immutable and must exceed `dealingCutoff` plus the feed's longest normal
+update interval. The contracts cannot read that interval, so a shorter timeout is not rejected, but
+it lets a buyer cancel after learning a price the feed has not yet published.
+Views are `getPurchase(id)` (which includes the recorded `minPurchaseQuote`), `nextPurchaseId`,
+`pendingPurchaseQuote` and `purchaseTimeout`. `previewBuy` returns the current strategy's
+latest-price quote. On a forward-priced strategy it is an estimate, not the order price, and it
+reverts on a stale feed while `requestPurchase` still works.
+
 `withdrawProceeds(amount)` requires `TREASURER_ROLE` and an unpaused project (`ProjectPaused`).
-It pays `treasury`, checks its exact quote-token balance delta (`QuoteDeltaMismatch`) and emits
-`ProceedsWithdrawn(treasury, amount, caller)`.
+Open deposits are excluded: `amount` must not exceed the balance less `pendingPurchaseQuote`
+(`InsufficientProceeds`). It pays `treasury`, checks its exact quote-token balance delta
+(`QuoteDeltaMismatch`) and emits `ProceedsWithdrawn(treasury, amount, caller)`.
 
 ## RedemptionEscrow
 
 See `redemption-state-machine.md` for transition guards. `token`, `quoteToken`, `vault` and
 `redemptionTimeout` are immutable. `strategy()` returns `Vault.strategy()`, so
-`Vault.setStrategy` also changes redemption pricing for new requests and `previewRedeem`; a
-stored request keeps the `quoteAmount` fixed at request time. The escrow uses `nonReentrant` and
-`SafeERC20`; views are `getRedemption(id)`, `previewRedeem(rwaAmount)`, `strategy()` and
-`nextId`.
+`Vault.setStrategy` also changes redemption pricing for new requests and `previewRedeem`. On an
+instant strategy a stored request keeps the `quoteAmount` fixed at request time. On a
+forward-priced strategy it stores `quoteAmount = 0`, the strategy, the base round and
+`minQuoteOut` and emits `RedemptionForwardPriced`. A forward request first requires the
+strategy's `dealingCutoff()` to be below `redemptionTimeout`, else
+`InvalidDealingCutoff(dealingCutoff, redemptionTimeout)`, because funding closes at the timeout
+and a longer cutoff would leave no round to price the request. `Vault.setStrategy` cannot check
+this: it only knows `purchaseTimeout`. Funding uses that stored strategy to select the
+request's pricing round (see "Forward pricing"), sets the quote and emits `RedemptionPriced`.
+Funding is discretionary after the round is public: the treasurer can fund selected requests
+and leave others for the holder to cancel at the timeout. The redemption manager can also reject
+Pending requests. `minQuoteOut` limits the holder's price, but does not guarantee funding.
+`previewRedeem` estimates the quote at the current strategy's latest price; forward requests are
+priced at funding. A stale feed blocks the preview but not `requestRedemption`. As with purchases,
+the request's `deadline` limits when it is mined and is not stored.
+The escrow uses `nonReentrant` and `SafeERC20`;
+views are `getRedemption(id)`, `previewRedeem(rwaAmount)`, `previewFunding(id)`, `strategy()` and
+`nextId`. For a Pending forward request, `previewFunding` checks the round, timeout and quote
+bounds and returns the funding quote. For other requests it returns the stored `quoteAmount`.
+It does not check pause, roles, beneficiary compliance, allowance or the funder's balance.
 
 ## IncomeDistributor
 
@@ -268,7 +379,7 @@ claim window. Views: `getDistribution(id)`, `isClaimed(id, account)` and `nextId
 
 ## RWAFactory
 
-The constructor requires five nonzero stateless helper addresses (`ZeroAddressDeployer`).
+The constructor requires a nonzero address for each deployment helper (`ZeroAddressDeployer`).
 Fixed-selector `delegatecall`s keep factory runtime code under the EIP-170 limit and make each
 child constructor see the factory as `msg.sender`.
 
@@ -281,11 +392,12 @@ Permissionless `deploy(ProjectConfig)` performs these steps in one transaction:
    - nonzero `quoteToken`, `admin`, `auditor`, `complianceOperator`, `treasurer`,
      `redemptionManager`, `incomeManager` and `treasury`; `decimals <= 36`
    - `Fixed`: nonzero `pricer`, positive purchase and redemption prices, and zero `priceFeed`,
-     `priceMaxAge`, spreads, `sequencerUptimeFeed` and `sequencerGracePeriod`
+     `priceMaxAge`, spreads, `sequencerUptimeFeed`, `sequencerGracePeriod` and `dealingCutoff`
    - `Oracle`: zero `pricer` and prices, nonzero `priceFeed` and `priceMaxAge`,
      `purchaseSpreadBps <= 10000`, `redemptionSpreadBps <= 9999`, and `sequencerUptimeFeed` and
      `sequencerGracePeriod` both set or both zero (reported as `sequencerGracePeriod`)
-   - `1 day <= redemptionTimeout <= 365 days`
+   - `1 day <= purchaseTimeout <= 365 days` and `1 day <= redemptionTimeout <= 365 days`
+   - `Oracle`: positive `dealingCutoff` below both timeouts
 
    It does not validate `name`, `symbol`, `projectId`, `profileDigest`, `minPurchaseQuote` or
    `adminTransferDelay`. An `Oracle` deployment also reverts if the quote token has no
@@ -304,4 +416,4 @@ Permissionless `deploy(ProjectConfig)` performs these steps in one transaction:
 
 The platform derives `projectId` and `profileDigest` from the profile (`asset-profile.md`).
 The factory emits both unchanged; the digest also becomes SupplyController's immutable value.
-`version()` returns `"rwa-v3"`.
+`version()` returns `"rwa-v4"`.

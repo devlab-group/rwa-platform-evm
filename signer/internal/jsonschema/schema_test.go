@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func mustCompile(t *testing.T, raw string) *Schema {
@@ -248,5 +249,36 @@ func TestValidate_ArchitectureGoldBarExample(t *testing.T) {
 	missing := `{"serialNumber":"12345","purity":"999.9"}`
 	if err := s.ValidateBytes([]byte(missing)); err == nil {
 		t.Error("expected rejection: missing required weightGrams")
+	}
+}
+
+// diamondSchema has levels definitions that each refer twice to the next, so a full
+// expansion visits 2^levels nodes
+func diamondSchema(levels int) string {
+	var defs []string
+	for i := 0; i < levels-1; i++ {
+		defs = append(defs, fmt.Sprintf(`"d%d":{"properties":{"a":{"$ref":"#/$defs/d%d"},"b":{"$ref":"#/$defs/d%d"}}}`, i, i+1, i+1))
+	}
+	defs = append(defs, fmt.Sprintf(`"d%d":{"type":"string"}`, levels-1))
+	return `{"$defs":{` + strings.Join(defs, ",") + `},"properties":{"a":{"$ref":"#/$defs/d0"}}}`
+}
+
+// A fan-out of shared definitions stops at the node cap, within the test's time budget
+func TestDialectDiamondRefsStopAtNodeCap(t *testing.T) {
+	start := time.Now()
+	_, err := CompileBytes([]byte(diamondSchema(30)))
+	if err == nil || !strings.Contains(err.Error(), "maximum node count of 10000") {
+		t.Fatalf("err = %v, want the node cap", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("took %v to refuse the schema", d)
+	}
+}
+
+// A definition nested in a $ref target that refers back to the target is a cycle
+func TestDialectCycleThroughDefsOfTarget(t *testing.T) {
+	_, err := CompileBytes([]byte(`{"$defs":{"t":{"$defs":{"x":{"$ref":"#/$defs/t"}}}}}`))
+	if err == nil || !strings.Contains(err.Error(), "cyclic $ref") {
+		t.Fatalf("err = %v, want a cyclic $ref error", err)
 	}
 }

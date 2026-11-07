@@ -30,8 +30,12 @@ type Service struct {
 // without a chain call
 func New(client blockchain.Client, escrowAddr common.Address, repo repository.RedemptionRequestRepository, complianceAddr common.Address) *Service {
 	return &Service{
-		client: client, escrow: bindings.NewRedemptionEscrow(), escrowAddr: escrowAddr, repo: repo,
-		registry: bindings.NewComplianceRegistry(), complianceAddr: complianceAddr,
+		client:         client,
+		escrow:         bindings.NewRedemptionEscrow(),
+		escrowAddr:     escrowAddr,
+		repo:           repo,
+		registry:       bindings.NewComplianceRegistry(),
+		complianceAddr: complianceAddr,
 	}
 }
 

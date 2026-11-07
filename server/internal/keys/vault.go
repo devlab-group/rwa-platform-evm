@@ -45,8 +45,10 @@ func newVaultProvider(role, addr, token, keyPrefix string) (*vaultProvider, erro
 		return nil, fmt.Errorf("keys: vault mode: VAULT_TOKEN is required")
 	}
 	p := &vaultProvider{
-		http: &http.Client{Timeout: 15 * time.Second}, addr: strings.TrimRight(addr, "/"),
-		token: token, keyName: keyPrefix + role,
+		http:    &http.Client{Timeout: 15 * time.Second},
+		addr:    strings.TrimRight(addr, "/"),
+		token:   token,
+		keyName: keyPrefix + role,
 	}
 	if err := p.fetchPublicKey(context.Background()); err != nil {
 		return nil, err
@@ -143,7 +145,9 @@ func (p *vaultProvider) SignTx(ctx context.Context, tx *types.Transaction, chain
 	sighash := ethSigner.Hash(tx)
 
 	reqBody, err := json.Marshal(transitSignRequest{
-		Input: base64.StdEncoding.EncodeToString(sighash[:]), Prehashed: true, HashAlgorithm: "sha2-256",
+		Input:         base64.StdEncoding.EncodeToString(sighash[:]),
+		Prehashed:     true,
+		HashAlgorithm: "sha2-256",
 	})
 	if err != nil {
 		return nil, err

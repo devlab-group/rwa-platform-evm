@@ -45,7 +45,9 @@ func TestLocalKeystoreLoadsAndSigns(t *testing.T) {
 	dir := writeTestKeystore(t, "compliance", "s3cret", "password.txt")
 
 	p, err := Load("compliance", Config{
-		Mode: ModeLocalKeystore, KeystoreDir: dir, PasswordFile: filepath.Join(dir, "password.txt"),
+		Mode:         ModeLocalKeystore,
+		KeystoreDir:  dir,
+		PasswordFile: filepath.Join(dir, "password.txt"),
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -85,7 +87,9 @@ func TestLocalKeystoreWrongPasswordErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := Load("compliance", Config{
-		Mode: ModeLocalKeystore, KeystoreDir: dir, PasswordFile: filepath.Join(dir, "wrong.txt"),
+		Mode:         ModeLocalKeystore,
+		KeystoreDir:  dir,
+		PasswordFile: filepath.Join(dir, "wrong.txt"),
 	}); err == nil {
 		t.Fatal("expected an error decrypting with the wrong password")
 	}
@@ -97,7 +101,9 @@ func TestLocalKeystoreMissingFileErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := Load("compliance", Config{
-		Mode: ModeLocalKeystore, KeystoreDir: dir, PasswordFile: filepath.Join(dir, "password.txt"),
+		Mode:         ModeLocalKeystore,
+		KeystoreDir:  dir,
+		PasswordFile: filepath.Join(dir, "password.txt"),
 	}); err == nil {
 		t.Fatal("expected an error for a role with no compliance.json in KeystoreDir")
 	}
@@ -160,7 +166,9 @@ func TestLocalKeystoreCloseZeroesKey(t *testing.T) {
 func TestLocalKeystoreSignTxIsBoundToTheChainID(t *testing.T) {
 	dir := writeTestKeystore(t, "compliance", "s3cret", "password.txt")
 	p, err := Load("compliance", Config{
-		Mode: ModeLocalKeystore, KeystoreDir: dir, PasswordFile: filepath.Join(dir, "password.txt"),
+		Mode:         ModeLocalKeystore,
+		KeystoreDir:  dir,
+		PasswordFile: filepath.Join(dir, "password.txt"),
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
