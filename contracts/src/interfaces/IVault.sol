@@ -15,7 +15,8 @@ interface IVault {
     }
 
     /// @dev The stored strategy and baseRound determine the pricing round; setStrategy does not
-    ///      reprice open orders
+    ///      reprice open orders. minPurchaseQuote records the Vault minimum at request time, so later
+    ///      setMinPurchaseQuote calls do not change the order's settlement threshold.
     struct PurchaseOrder {
         address buyer;
         uint64 createdAt;
@@ -25,6 +26,7 @@ interface IVault {
         uint80 baseRound;
         uint256 tokenAmount;
         uint256 maxQuoteAmount;
+        uint256 minPurchaseQuote;
     }
 
     event Purchased(
@@ -71,10 +73,14 @@ interface IVault {
     error TimeoutNotReached(uint64 availableAt, uint256 nowTs);
     error RoundAvailable(uint256 id, uint80 roundId);
     error InsufficientProceeds(uint256 requested, uint256 available);
+    error InvalidStrategy(address strategy);
+    error InvalidDealingCutoff(uint64 dealingCutoff, uint64 timeout);
 
     function buy(uint256 tokenAmount, uint256 maxQuoteAmount, address recipient, uint64 deadline) external;
 
-    /// @notice Deposits maxQuoteAmount for pricing at the first eligible round at or after the dealing cutoff
+    /// @notice Deposits maxQuoteAmount for pricing at the first eligible round at or after the dealing cutoff.
+    ///         deadline only bounds when this call is mined and is not stored; the order then stays open
+    ///         until it is settled, cancelled after purchaseTimeout or rejected.
     function requestPurchase(uint256 tokenAmount, uint256 maxQuoteAmount, address recipient, uint64 deadline)
         external
         returns (uint256 id);
@@ -92,6 +98,8 @@ interface IVault {
 
     function withdrawProceeds(uint256 amount) external;
 
+    /// @notice Replaces the price strategy. The candidate must answer forwardPriced(); if true, its
+    ///         dealingCutoff must be above zero and below purchaseTimeout. Open orders retain their strategy.
     function setStrategy(address newStrategy) external;
 
     function setTreasury(address newTreasury) external;
@@ -100,6 +108,9 @@ interface IVault {
 
     function inventory() external view returns (uint256);
 
+    /// @notice The current strategy's latest-price purchase quote. On a forward-priced strategy this is an
+    ///         estimate, not the order price: orders settle at a later round. It reverts on a stale feed
+    ///         while requestPurchase still works.
     function previewBuy(uint256 tokenAmount) external view returns (uint256 quoteAmount);
 
     function token() external view returns (address);

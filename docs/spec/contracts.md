@@ -199,6 +199,12 @@ orders store the strategy and `latestRound()` as their base round. The stored st
 the first later round with a publication timestamp at least `dealingCutoff` after the order.
 Settlement timing and caller identity do not change that selection.
 
+`latestRound()` runs the same sequencer checks as `latestPrice()` before reading the feed.
+With a sequencer feed configured, `SequencerDown` and `GracePeriodNotOver` block new orders during
+an L2 outage and the grace window after a restart. `maxAge` does not apply, so a stale feed does
+not block new orders. Settlement and funding use historical rounds without sequencer checks;
+cancellation is not gated on the sequencer either.
+
 The operator must set `dealingCutoff` to cover the longest delay between valuation and publication.
 If that bound holds, the selected round's valuation cannot predate the order. A longer delay can
 let an order use a price valued before it was placed. The contract checks publication timestamps
@@ -221,6 +227,10 @@ These methods skip `maxAge` and sequencer checks. They require consecutive feed 
 unchanged historical answers. A missing round stops the search because it could contain the
 first eligible price. If a phase change or another numbering gap leaves a round missing, or all
 16 searched rounds precede the cutoff, the affected orders can be cancelled after their timeout.
+While orders are open, do not migrate the feed's aggregator; keep each eligible pricing round
+within the first 16 rounds after its order's base round. To clear Pending purchases with Allowed
+buyers, pause the project and call `rejectPurchase`. While unpaused, `rejectRedemption` returns
+Pending redemptions' RWA to Allowed beneficiaries. Neither rejection reads the strategy.
 
 Redemption claims, rejections and cancellations do not read the strategy.
 
@@ -229,6 +239,12 @@ Redemption claims, rejections and cancellations do not read the strategy.
 `token` and `quoteToken` are immutable. Admin-only `setStrategy` / `setTreasury` reject pause
 (`ProjectPaused`) and zero addresses (`ZeroAddress`), emitting
 `StrategyChanged` / `TreasuryChanged(previous, new, caller)`; `inventory() == token.balanceOf(vault)`.
+`setStrategy` also staticcalls the candidate's `forwardPriced()` and reverts
+`InvalidStrategy(strategy)` when the call fails or does not return one word, which covers an
+account without code. A forward-priced candidate must have `0 < dealingCutoff() < purchaseTimeout`,
+else `InvalidDealingCutoff(dealingCutoff, purchaseTimeout)`, because a longer cutoff lets buyers
+cancel before any round can price their orders. The Vault cannot see the escrow's timeout, so the
+escrow enforces its own bound (see RedemptionEscrow).
 Admin-only `setMinPurchaseQuote(newMinimum)` rejects pause (`ProjectPaused`), accepts 0 to
 remove the minimum and emits `MinPurchaseQuoteChanged(previous, new, caller)`; the constructor
 takes the initial `minPurchaseQuote`. The Vault uses `nonReentrant` and `SafeERC20`. Inventory is
@@ -248,16 +264,22 @@ the recipient and emits `Purchased(buyer, recipient, tokenAmount, quote, strateg
 `requestPurchase(tokenAmount, maxQuoteAmount, recipient, deadline)` opens a forward order. Its
 checks through inventory match `buy`, with `ZeroAmount` also rejecting a zero `maxQuoteAmount`.
 It then requires `maxQuoteAmount >= minPurchaseQuote` (`QuoteBelowMinimum`) and a forward-priced
-strategy (`NotForwardPriced`), records `latestRound()` as `baseRound`, pulls `maxQuoteAmount` as a
-deposit with an exact balance-delta check, adds it to `pendingPurchaseQuote` and emits
-`PurchaseRequested`. The inventory check does not reserve tokens.
+strategy (`NotForwardPriced`), records `latestRound()` as `baseRound` (which rejects an outage or
+grace window when a sequencer feed is configured), pulls `maxQuoteAmount` as a deposit with an
+exact balance-delta check, adds it to `pendingPurchaseQuote` and emits `PurchaseRequested`.
+The order also records the current `minPurchaseQuote` as its own `minPurchaseQuote`. The inventory check does not reserve
+tokens. `deadline` only bounds when the request is mined and is not stored. A deadline that also
+bounded settlement would let a buyer who dislikes the pricing round wait for it to pass and take a
+refund; the order's lifetime is set by `purchaseTimeout` instead.
 
 `settlePurchase(id)` is permissionless. It checks a Pending order (`NotPending`), an unpaused
 project (`ProjectPaused`) and an Allowed buyer (`BuyerNotAllowed`), then uses the stored strategy
 to price the order. A missing or unusable pricing round reverts with the strategy's error. The
-order fills when the quote is at most the deposit and at least the current `minPurchaseQuote`,
-inventory covers it and the recipient is Allowed. Filling sends the
-RWA, returns the rest of the deposit and emits `Purchased` and `PurchaseSettled`. Otherwise it
+order fills when the quote is at most the deposit and at least the order's recorded
+`minPurchaseQuote`, inventory covers it and the recipient is Allowed. Later `setMinPurchaseQuote`
+calls cannot raise that threshold to force a refund after the pricing round is public, or lower
+it to make an under-minimum quote eligible. Filling sends the RWA, returns the rest of the deposit
+and emits `Purchased` and `PurchaseSettled`. Otherwise it
 returns the whole deposit, marks the order Refunded and emits `PurchaseRefunded`. A failed token
 transfer or refund reverts settlement.
 
@@ -274,8 +296,12 @@ strategy, so a bad round cannot block rejection. Rejection is unavailable while 
 
 Order status runs `None -> Pending`, then `Settled`, `Refunded`, `Cancelled` or `Rejected`.
 `purchaseTimeout` is immutable and must exceed `dealingCutoff` plus the feed's longest normal
-update interval. Views are `getPurchase(id)`, `nextPurchaseId`, `pendingPurchaseQuote` and
-`purchaseTimeout`.
+update interval. The contracts cannot read that interval, so a shorter timeout is not rejected, but
+it lets a buyer cancel after learning a price the feed has not yet published.
+Views are `getPurchase(id)` (which includes the recorded `minPurchaseQuote`), `nextPurchaseId`,
+`pendingPurchaseQuote` and `purchaseTimeout`. `previewBuy` returns the current strategy's
+latest-price quote. On a forward-priced strategy it is an estimate, not the order price, and it
+reverts on a stale feed while `requestPurchase` still works.
 
 `withdrawProceeds(amount)` requires `TREASURER_ROLE` and an unpaused project (`ProjectPaused`).
 Open deposits are excluded: `amount` must not exceed the balance less `pendingPurchaseQuote`
@@ -289,8 +315,18 @@ See `redemption-state-machine.md` for transition guards. `token`, `quoteToken`, 
 `Vault.setStrategy` also changes redemption pricing for new requests and `previewRedeem`. On an
 instant strategy a stored request keeps the `quoteAmount` fixed at request time. On a
 forward-priced strategy it stores `quoteAmount = 0`, the strategy, the base round and
-`minQuoteOut` and emits `RedemptionForwardPriced`. Funding uses that stored strategy to select the
+`minQuoteOut` and emits `RedemptionForwardPriced`. A forward request first requires the
+strategy's `dealingCutoff()` to be below `redemptionTimeout`, else
+`InvalidDealingCutoff(dealingCutoff, redemptionTimeout)`, because funding closes at the timeout
+and a longer cutoff would leave no round to price the request. `Vault.setStrategy` cannot check
+this: it only knows `purchaseTimeout`. Funding uses that stored strategy to select the
 request's pricing round (see "Forward pricing"), sets the quote and emits `RedemptionPriced`.
+Funding is discretionary after the round is public: the treasurer can fund selected requests
+and leave others for the holder to cancel at the timeout. The redemption manager can also reject
+Pending requests. `minQuoteOut` limits the holder's price, but does not guarantee funding.
+`previewRedeem` estimates the quote at the current strategy's latest price; forward requests are
+priced at funding. A stale feed blocks the preview but not `requestRedemption`. As with purchases,
+the request's `deadline` limits when it is mined and is not stored.
 The escrow uses `nonReentrant` and `SafeERC20`;
 views are `getRedemption(id)`, `previewRedeem(rwaAmount)`, `previewFunding(id)`, `strategy()` and
 `nextId`. For a Pending forward request, `previewFunding` checks the round, timeout and quote

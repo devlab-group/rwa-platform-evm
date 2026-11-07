@@ -53,7 +53,11 @@ interface IRedemptionEscrow {
     error ZeroReasonCode();
     error RwaDeltaMismatch(uint256 expected, uint256 actual);
     error QuoteDeltaMismatch(uint256 expected, uint256 actual);
+    error InvalidDealingCutoff(uint64 dealingCutoff, uint64 timeout);
 
+    /// @notice For forward pricing, dealingCutoff must be below redemptionTimeout to leave time for
+    ///         funding; otherwise reverts InvalidDealingCutoff. deadline limits when this call is mined
+    ///         and is not stored.
     function requestRedemption(uint256 rwaAmount, uint256 minQuoteOut, uint64 deadline) external returns (uint256 id);
 
     function fundRedemption(uint256 id) external;
@@ -66,6 +70,9 @@ interface IRedemptionEscrow {
 
     function getRedemption(uint256 id) external view returns (RedemptionRequest memory);
 
+    /// @notice The current strategy's latest-price redemption quote. On a forward-priced strategy this is
+    ///         an estimate, not the funded amount: requests are priced at a later round. It reverts on a
+    ///         stale feed while requestRedemption still works.
     function previewRedeem(uint256 rwaAmount) external view returns (uint256 quoteAmount);
 
     /// @notice Checks the round, timeout and quote bounds for a Pending forward request and returns

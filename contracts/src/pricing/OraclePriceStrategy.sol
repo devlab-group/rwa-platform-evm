@@ -16,20 +16,11 @@ function isValidSequencerConfig(address sequencerUptimeFeed, uint64 gracePeriod)
 }
 
 /// @title OraclePriceStrategy
-/// @notice Quotes purchases and redemptions from an oracle price feed with fixed spreads
-/// @dev Parameters are immutable and reads need no role. To change a feed or spread,
-///      deploy a replacement and call Vault.setStrategy.
-///      The feed must report the value of one whole token in the quote token's currency, such
-///      as a fund's published USD NAV for a USD stablecoin, not a market price of another asset;
-///      quote-token depegs remain an operator risk.
-///      Quotes use one Math.mulDiv without intermediate rounding: purchases round up,
-///      redemptions down, and arithmetic overflow reverts.
-///      Latest-price reads reject non-positive answers, zero/future timestamps, age > maxAge,
-///      or changed feed decimals. When configured, the sequencer must be up and
-///      strictly past its grace period before price validation.
-///      Orders store latestRound and use the first later round published at least dealingCutoff
-///      after the order. The cutoff must cover the longest delay between valuation and publication.
-///      The feed must retain consecutive rounds without changing past answers.
+/// @notice Oracle quotes with fixed purchase and redemption spreads
+/// @dev Immutable parameters; permissionless reads. The feed must value one whole token in quote
+///      currency and retain consecutive rounds with unchanged answers. Set dealingCutoff to cover
+///      the longest delay between valuation and publication; keep eligible rounds within 16 rounds
+///      after baseRound. Do not migrate the aggregator while orders are open.
 contract OraclePriceStrategy is IOraclePriceStrategy {
     uint256 private constant BPS = 10_000;
     uint8 private constant MAX_DECIMALS = 36;
@@ -108,6 +99,7 @@ contract OraclePriceStrategy is IOraclePriceStrategy {
     }
 
     function latestRound() external view returns (uint80 roundId) {
+        _requireSequencerUp();
         (roundId,,,,) = _feed.latestRoundData();
     }
 
@@ -132,11 +124,7 @@ contract OraclePriceStrategy is IOraclePriceStrategy {
     }
 
     function latestPrice() public view returns (uint256 price, uint256 updatedAt) {
-        if (address(_sequencerUptimeFeed) != address(0)) {
-            (, int256 status, uint256 startedAt,,) = _sequencerUptimeFeed.latestRoundData();
-            if (status != 0 || startedAt == 0) revert SequencerDown();
-            if (block.timestamp <= startedAt + _gracePeriod) revert GracePeriodNotOver(startedAt, _gracePeriod);
-        }
+        _requireSequencerUp();
 
         uint8 feedDecimals_ = _feed.decimals();
         if (feedDecimals_ != _feedDecimals) revert FeedDecimalsChanged(_feedDecimals, feedDecimals_);
@@ -147,6 +135,14 @@ contract OraclePriceStrategy is IOraclePriceStrategy {
         if (block.timestamp - updatedAt > _maxAge) revert StalePrice(updatedAt, _maxAge);
         // forge-lint: disable-next-line(unsafe-typecast)
         price = uint256(answer);
+    }
+
+    // Gate latest-price reads and new orders while the configured sequencer is down or in its grace period
+    function _requireSequencerUp() private view {
+        if (address(_sequencerUptimeFeed) == address(0)) return;
+        (, int256 status, uint256 startedAt,,) = _sequencerUptimeFeed.latestRoundData();
+        if (status != 0 || startedAt == 0) revert SequencerDown();
+        if (block.timestamp <= startedAt + _gracePeriod) revert GracePeriodNotOver(startedAt, _gracePeriod);
     }
 
     // Require the latest round to be readable and the next round to be absent. An adapter that

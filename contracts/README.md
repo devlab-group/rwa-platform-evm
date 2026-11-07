@@ -170,8 +170,11 @@ from a Chainlink-compatible feed, such as a fund's USD NAV for a USD stablecoin.
 and quote decimals. Latest-price reads reject non-positive, future-dated or stale answers
 (`maxAge`), changed feed decimals and, when configured, a down sequencer or unfinished grace
 period. These checks apply to `previewBuy` and `previewRedeem`. Placing a forward order reads the
-latest round id without validating its price. To change immutable parameters, deploy a
-replacement and call `Vault.setStrategy`.
+latest round id without validating its price, but applies the same sequencer and grace-period
+check, so no order is placed during an L2 outage. To change immutable parameters, deploy a
+replacement and call `Vault.setStrategy`. It reverts with `InvalidStrategy` when the candidate does
+not answer `forwardPriced()`, and with `InvalidDealingCutoff` when a forward-priced candidate's
+`dealingCutoff` is zero or not below `purchaseTimeout`.
 
 Oracle orders store their strategy and the latest round ID (`baseRound`). The stored strategy selects the
 first later round published at least `dealingCutoff` after the order. Settlement timing and caller
@@ -181,15 +184,16 @@ and next rounds (`NoRoundHistory`), but cannot guarantee future feed behavior.
 
 - `Vault.buy` reverts with `ForwardPriced`. `requestPurchase` holds `maxQuoteAmount` as a deposit;
   `settlePurchase` is permissionless, fills the order and returns the rest, or refunds it all when
-  the quote is over the deposit or under the minimum, inventory ran out, or the recipient is no
-  longer Allowed. Open deposits are excluded from `withdrawProceeds`.
+  the quote is over the deposit or under the minimum recorded with the order, inventory ran out,
+  or the recipient is no longer Allowed. Open deposits are excluded from `withdrawProceeds`.
 - `cancelPurchase` returns the deposit after `purchaseTimeout` if the order's round cannot produce
   a usable quote. Rejecting cancellation once that quote is available prevents a buyer from choosing
   settlement or cancellation after observing later price moves.
   `purchaseTimeout` must exceed the feed's longest normal gap between updates plus `dealingCutoff`.
 - While the project is paused, `rejectPurchase` lets `TREASURER_ROLE` return a Pending order's
   whole deposit to an Allowed buyer. Use it to clear orders affected by a bad round before unpausing.
-- Forward-priced `requestRedemption` stores no quote. `fundRedemption` prices the request;
+- Forward-priced `requestRedemption` stores no quote and reverts with `InvalidDealingCutoff` unless
+  the strategy's `dealingCutoff` is below `redemptionTimeout`. `fundRedemption` prices the request;
   `previewFunding` shows the amount to approve. Funding closes at the redemption timeout, when
   holder cancellation becomes available, preventing a choice between cancellation and a late payout.
 
@@ -206,7 +210,9 @@ opportunity. A keeper cannot settle while the buyer is not Allowed or the projec
 
 `Vault.minPurchaseQuote` starts at `ProjectConfig.minPurchaseQuote` and the admin can change it
 with `setMinPurchaseQuote`. `buy` reverts with `QuoteBelowMinimum` when the purchase quote is
-smaller, and `settlePurchase` refunds; 0 sets no minimum.
+smaller; 0 sets no minimum. Each forward order records the minimum in force when it was placed,
+and `settlePurchase` refunds when the quote is under that recorded value, so a later change does
+not affect open orders.
 
 ## Redemption state machine (`RedemptionEscrow`)
 

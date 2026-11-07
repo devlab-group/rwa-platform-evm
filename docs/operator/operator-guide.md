@@ -104,7 +104,13 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
      valuation and publication. With a NAV valued at 16:00, published at 18:00 and a 2-hour
      cutoff, an order at 15:30 uses that day's NAV; an order at 16:30 waits for the next eligible
      round. A longer publication delay can let an order use a valuation that predates it (§8).
-     Set each timeout above the feed's longest normal update interval plus the cutoff.
+     Set each timeout above the feed's longest normal update interval plus the cutoff. The
+     contracts cannot read or enforce that interval. For a daily NAV published 30 minutes after
+     its strike, a 6-hour cutoff and 24-hour purchase timeout open cancellation before the next
+     eligible round is published. A buyer who orders just before the strike can wait for an
+     unfavourable valuation and cancel before publication. While orders are open, do not migrate
+     the feed's aggregator (a Chainlink phase change), and keep each eligible pricing round
+     within 16 rounds after its order's base round. Otherwise pricing can remain blocked (§8).
    - `maxAge` on rwa-v4: it limits previews and displayed prices, but does not gate orders.
      The investor app blocks new orders when a preview fails, so set it above the update interval.
    - `maxAge` on rwa-v3: for a scheduled feed, such as a daily NAV, set `maxAge` so each answer
@@ -116,7 +122,8 @@ a rescue function. Recovery requires the quote-token issuer to lift the restrict
      spreads to cover the largest price move you expect while trading is open.
    - Minimum purchase: the smallest quote per purchase, in quote-token units; 0 disables it.
    - Purchase timeout (rwa-v4): the wait before a buyer can cancel an order with no usable
-     pricing round, from 1 to 365 days.
+     pricing round, from 1 to 365 days. It must exceed the dealing cutoff plus the feed's longest
+     normal update interval (see the cutoff above).
 
    Setup reads the factory version from `GET /api/v1/config`. Minimum purchase and oracle fields
    are available for rwa-v3 and rwa-v4; dealing cutoff and purchase timeout are available only
@@ -266,12 +273,16 @@ Outside Anvil, `Deploy.s.sol` defaults to 24 hours and refuses zero unless
   On rwa-v3 and rwa-v4, the escrow quotes new requests through the Vault's current strategy.
   Existing instant requests keep their quotes; rwa-v4 forward orders keep their stored strategy.
   To change an oracle feed or spread, deploy a replacement `OraclePriceStrategy` and point the
-  Vault at it. On rwa-v4, first check that its `dealingCutoff` is below both the Vault and escrow
-  timeouts; `setStrategy` does not check this. In rwa-v2 the
+  Vault at it. On rwa-v4, `setStrategy` rejects a candidate that does not answer
+  `forwardPriced()` (`InvalidStrategy`) and a forward-priced one whose `dealingCutoff` is zero or
+  not below the Vault's purchase timeout (`InvalidDealingCutoff`). It cannot see the escrow's
+  timeout, so also check that the cutoff is below the redemption timeout: otherwise every new
+  forward redemption request reverts `InvalidDealingCutoff`. In rwa-v2 the
   escrow retains its original strategy, so continue setting redemption prices there after a
   Vault strategy change; the split keeps `config_drift` raised (§7a).
 - Change the minimum purchase with `Vault.setMinPurchaseQuote` on the Security screen. It
-  requires the admin role and reverts while paused.
+  requires the admin role and reverts while paused. Each rwa-v4 forward order keeps the minimum
+  in force when it was placed, so existing orders are unaffected.
 - Replace the redemption manager by granting `REDEMPTION_MANAGER_ROLE` on `RedemptionEscrow`
   to the new holder and revoking it from the old holder on the Security screen.
 - Update prices with `FixedPriceStrategy.setPurchasePrice` and `setRedemptionPrice`
@@ -783,8 +794,9 @@ drift there.
   addresses and balances.
 - An oracle feed is a trusted pricing source. A wrong price can sell inventory too cheaply or set
   inflated redemption quotes; `maxAge`, the sequencer check and investors' slippage bounds limit
-  but do not remove that risk. On rwa-v4, `maxAge` and the sequencer check do not cover orders;
-  pause and reject open orders before they settle
+  but do not remove that risk. On rwa-v4, `maxAge` does not cover orders, and the sequencer check
+  only stops new orders during an outage or its grace window; it does not cover settlement.
+  Pause and reject open orders before they settle
   ([incident response](../security/incident-response.md)).
 - On rwa-v4, the selected valuation cannot predate the order if publication stays within
   `dealingCutoff` of valuation. A longer delay breaks this condition; the contract cannot verify
@@ -793,7 +805,15 @@ drift there.
   or the recipient's approval lapses first, so a rise can be taken and a drop dodged. A keeper
   narrows this, but cannot act while the buyer is not Allowed or the project is paused.
 - If all 16 searched rounds precede the cutoff, the order has no pricing round and can be
-  cancelled after its timeout.
+  cancelled after its timeout. A feed phase change can leave a missing round after an order's
+  base round and block pricing. To clear Pending purchases sooner, pause the project and call
+  `rejectPurchase` for Allowed buyers. While unpaused, the redemption manager can call
+  `rejectRedemption` for Pending requests with Allowed beneficiaries.
+- On rwa-v4 the treasurer funds each redemption after its round is public, so it can fund the
+  requests whose price it accepts and leave the rest. The holder is bounded by `minQuoteOut`,
+  can recover the RWA at the redemption timeout while Allowed and cannot cancel sooner.
+  `previewBuy` and `previewRedeem` use the latest price to estimate quotes, not final order quotes.
+  They revert on a stale feed even though forward requests still work.
 - On rwa-v3, oracle quotes use the feed's latest answer when a purchase or redemption request is
   made. While that answer is within `maxAge`, a
   holder who knows the next price before the feed updates can buy at the old price or lock a

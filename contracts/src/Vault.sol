@@ -86,6 +86,8 @@ contract Vault is IVault, AccessControlEnumerableAdminRules, ReentrancyGuard {
         uint256 received = IERC20(quoteToken).balanceOf(address(this)) - before;
         if (received != quote) revert QuoteDeltaMismatch(quote, received);
 
+        // RWAToken moves exactly tokenAmount or reverts, so only the quote-token legs need a delta
+        // check; a fork that adds transfer fees or rebasing to RWAToken must add one here
         IERC20(token).safeTransfer(recipient, tokenAmount);
         emit Purchased(msg.sender, recipient, tokenAmount, quote, strategy);
     }
@@ -129,7 +131,8 @@ contract Vault is IVault, AccessControlEnumerableAdminRules, ReentrancyGuard {
             strategy: strategy_,
             baseRound: baseRound,
             tokenAmount: tokenAmount,
-            maxQuoteAmount: maxQuoteAmount
+            maxQuoteAmount: maxQuoteAmount,
+            minPurchaseQuote: minPurchaseQuote
         });
         emit PurchaseRequested(
             id, msg.sender, recipient, tokenAmount, maxQuoteAmount, strategy_, baseRound, uint64(block.timestamp)
@@ -149,7 +152,8 @@ contract Vault is IVault, AccessControlEnumerableAdminRules, ReentrancyGuard {
             IOraclePriceStrategy(order.strategy).quotePurchaseAfter(tokenAmount, order.baseRound, order.createdAt);
 
         pendingPurchaseQuote -= deposit;
-        bool fillable = quote <= deposit && quote >= minPurchaseQuote
+        // Use the order's recorded minimum so later changes cannot alter its fill threshold
+        bool fillable = quote <= deposit && quote >= order.minPurchaseQuote
             && tokenAmount <= IERC20(token).balanceOf(address(this))
             && IComplianceRegistry(_compliance).isAllowed(order.recipient);
         if (!fillable) {
@@ -161,6 +165,7 @@ contract Vault is IVault, AccessControlEnumerableAdminRules, ReentrancyGuard {
 
         order.status = PurchaseStatus.Settled;
         uint256 refund = deposit - quote;
+        // No delta check for the same reason as in buy: RWAToken moves exactly tokenAmount or reverts
         IERC20(token).safeTransfer(order.recipient, tokenAmount);
         _refund(buyer, refund);
         emit Purchased(buyer, order.recipient, tokenAmount, quote, order.strategy);
@@ -225,6 +230,16 @@ contract Vault is IVault, AccessControlEnumerableAdminRules, ReentrancyGuard {
     function setStrategy(address newStrategy) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (IRWAToken(token).paused()) revert ProjectPaused();
         if (newStrategy == address(0)) revert ZeroAddress();
+        // Check the candidate before it can break purchases or redemptions. A forward-priced
+        // strategy must leave time to price an order before purchaseTimeout permits cancellation.
+        // staticcall maps a failed call or wrong-length reply to InvalidStrategy.
+        // slither-disable-next-line low-level-calls
+        (bool ok, bytes memory ret) = newStrategy.staticcall(abi.encodeCall(IPriceStrategy.forwardPriced, ()));
+        if (!ok || ret.length != 32) revert InvalidStrategy(newStrategy);
+        if (abi.decode(ret, (bool))) {
+            uint64 cutoff = IOraclePriceStrategy(newStrategy).dealingCutoff();
+            if (cutoff == 0 || cutoff >= purchaseTimeout) revert InvalidDealingCutoff(cutoff, purchaseTimeout);
+        }
         address previous = strategy;
         strategy = newStrategy;
         emit StrategyChanged(previous, newStrategy, msg.sender);

@@ -400,6 +400,36 @@ contract OraclePriceStrategyTest is Test {
         assertEq(s.latestRound(), 2);
     }
 
+    function test_latestRound_sequencerDownReverts() public {
+        OraclePriceStrategy s = _deploySequenced();
+        assertEq(s.latestRound(), 1);
+
+        sequencer.set(1, T0 - 1 days, T0 - 1 days);
+        vm.expectRevert(IOraclePriceStrategy.SequencerDown.selector);
+        s.latestRound();
+
+        sequencer.set(0, 0, T0);
+        vm.expectRevert(IOraclePriceStrategy.SequencerDown.selector);
+        s.latestRound();
+    }
+
+    function test_latestRound_graceBoundary() public {
+        OraclePriceStrategy s = _deploySequenced();
+        sequencer.set(0, T0 - GRACE, T0); // Grace is not over when elapsed == grace
+        vm.expectRevert(abi.encodeWithSelector(IOraclePriceStrategy.GracePeriodNotOver.selector, T0 - GRACE, GRACE));
+        s.latestRound();
+
+        sequencer.set(0, T0 - GRACE - 1, T0);
+        assertEq(s.latestRound(), 1);
+    }
+
+    function test_latestRound_ignoresPriceAge() public {
+        OraclePriceStrategy s = _deploySequenced();
+        vm.warp(T0 + MAX_AGE + 1);
+        sequencer.set(0, T0 - 1 days, T0 - 1 days);
+        assertEq(s.latestRound(), 1);
+    }
+
     function _roundNotAvailable(uint80 roundId) internal pure returns (bytes memory) {
         return abi.encodeWithSelector(IOraclePriceStrategy.RoundNotAvailable.selector, roundId);
     }

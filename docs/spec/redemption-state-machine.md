@@ -18,12 +18,18 @@ Request errors follow the listed order: `ProjectPaused`, `CallerNotAllowed`, `Ze
 `NotBeneficiary`, `TimeoutNotReached` and `BeneficiaryNotAllowed`.
 
 Forward-priced requests use the same states but are priced at funding. Request skips the two
-quote guards and stores `quoteAmount = 0`, the strategy, the base round and `minQuoteOut`.
+quote guards and stores `quoteAmount = 0`, the strategy, the base round and `minQuoteOut`. It
+first requires the strategy's `dealingCutoff` to be below `redemptionTimeout`
+(`InvalidDealingCutoff`) and reads the base round through `latestRound()`. With a sequencer feed
+configured, this reverts with `SequencerDown` or `GracePeriodNotOver` during an L2 outage or grace
+window. Funding, rejection, cancellation and claim of existing requests are not gated on the sequencer.
 Funding uses the stored strategy to find the first round after the base round published at least
 `dealingCutoff` after the request. It applies the quote guards, stores `quoteAmount` and emits
 `RedemptionPriced`. An unusable round makes funding revert with the strategy's error. A quote
 below `minQuoteOut` also reverts; the redemption manager can reject the request, or the holder can
-cancel after the timeout.
+cancel after the timeout. Once the round is public, the treasurer still chooses which requests to
+fund. `minQuoteOut` bounds the holder's price and timeout cancellation returns the RWA; neither
+guarantees a fill.
 
 Funding a forward request closes at `createdAt + redemptionTimeout` (`FundingClosed`), when
 cancellation becomes available. This prevents a holder from choosing cancellation or a late

@@ -29,7 +29,10 @@ contract OraclePriceFlowTest is TestBase {
     uint256 internal constant DEPOSIT = 100_000_000;
     uint256 internal constant INVENTORY = 1_000 ether;
 
+    uint64 internal constant GRACE = 30 minutes;
+
     MockAggregatorV3 internal feed;
+    MockAggregatorV3 internal sequencer;
     OraclePriceStrategy internal oracle;
 
     function setUp() public override {
@@ -47,6 +50,10 @@ contract OraclePriceFlowTest is TestBase {
     function _useOracleProject(address quote, bytes32 projectId) internal {
         IRWAFactory.ProjectConfig memory cfg = _oracleConfig(quote, address(feed));
         cfg.projectId = projectId;
+        _useOracleProject(cfg);
+    }
+
+    function _useOracleProject(IRWAFactory.ProjectConfig memory cfg) internal {
         IRWAFactory.Deployment memory dep = factory.deploy(cfg);
 
         oracle = OraclePriceStrategy(dep.strategy);
@@ -410,6 +417,18 @@ contract OraclePriceFlowTest is TestBase {
         assertEq(_order(1 ether, DEPOSIT), 0);
     }
 
+    function test_requestPurchase_recordsTheMinimumInForce() public {
+        vm.prank(admin);
+        vault.setMinPurchaseQuote(DEPOSIT);
+        uint256 first = _order(1 ether, DEPOSIT);
+        vm.prank(admin);
+        vault.setMinPurchaseQuote(5);
+        uint256 second = _order(1 ether, DEPOSIT);
+
+        assertEq(vault.getPurchase(first).minPurchaseQuote, DEPOSIT);
+        assertEq(vault.getPurchase(second).minPurchaseQuote, 5);
+    }
+
     function test_requestPurchase_rejectsAFeeOnTransferDeposit() public {
         FeeOnTransferERC20 fee = new FeeOnTransferERC20(500);
         _useOracleProject(address(fee), keccak256("fee-quote"));
@@ -493,9 +512,9 @@ contract OraclePriceFlowTest is TestBase {
     }
 
     function test_settlePurchase_fillsAtTheExactMinimumAndExactInventory() public {
-        uint256 id = _order(INVENTORY, DEPOSIT);
         vm.prank(admin);
         vault.setMinPurchaseQuote(10_100_000);
+        uint256 id = _order(INVENTORY, DEPOSIT);
         _land(0.01e8);
 
         vault.settlePurchase(id);
@@ -566,6 +585,31 @@ contract OraclePriceFlowTest is TestBase {
         vault.setMinPurchaseQuote(25_250_001);
         uint256 id = _order(10 ether, DEPOSIT);
         _land(2.5e8);
+
+        _assertRefunded(id, 25_250_000);
+    }
+
+    // The issuer cannot raise the minimum after seeing a round to refund an order that met it at request
+    function test_settlePurchase_raisedMinimumDoesNotRefundAnOpenOrder() public {
+        uint256 id = _order(10 ether, DEPOSIT);
+        _land(2.5e8);
+        vm.prank(admin);
+        vault.setMinPurchaseQuote(type(uint256).max);
+
+        vault.settlePurchase(id);
+
+        assertEq(uint8(vault.getPurchase(id).status), uint8(IVault.PurchaseStatus.Settled));
+        assertEq(token.balanceOf(investor), 10 ether);
+        _assertNoOpenDeposit(25_250_000);
+    }
+
+    function test_settlePurchase_loweredMinimumDoesNotRescueAnOrderBelowTheRecordedOne() public {
+        vm.prank(admin);
+        vault.setMinPurchaseQuote(25_250_001);
+        uint256 id = _order(10 ether, DEPOSIT);
+        _land(2.5e8);
+        vm.prank(admin);
+        vault.setMinPurchaseQuote(0);
 
         _assertRefunded(id, 25_250_000);
     }
@@ -1180,6 +1224,152 @@ contract OraclePriceFlowTest is TestBase {
         assertEq(escrow.strategy(), vault.strategy());
         assertEq(vault.previewBuy(1 ether), 9_000_000);
         assertEq(escrow.previewRedeem(1 ether), 9_000_000);
+    }
+
+    // ---- escrow dealing cut-off ----
+
+    function _useProjectWithLongPurchaseTimeout() internal {
+        IRWAFactory.ProjectConfig memory cfg = _oracleConfig(address(quoteToken), address(feed));
+        cfg.projectId = keccak256("long-purchase-timeout");
+        cfg.purchaseTimeout = 30 days;
+        cfg.redemptionTimeout = 1 days;
+        _useOracleProject(cfg);
+        vm.prank(investor);
+        quoteToken.approve(address(vault), type(uint256).max);
+    }
+
+    function _switchTo(uint64 cutoff) internal {
+        OraclePriceStrategy next = new OraclePriceStrategy(
+            address(feed), address(0), MAX_AGE, 0, 0, 0, TOKEN_DECIMALS, QUOTE_DECIMALS, cutoff
+        );
+        vm.prank(admin);
+        vault.setStrategy(address(next));
+    }
+
+    // setStrategy only compares the cutoff with purchaseTimeout, so the escrow must check its own timeout
+    function test_requestRedemption_cutoffMustBeBelowTheRedemptionTimeout() public {
+        _useProjectWithLongPurchaseTimeout();
+        _buy(10 ether);
+        _switchTo(1 days);
+
+        vm.startPrank(investor);
+        token.approve(address(escrow), 10 ether);
+        vm.expectRevert(abi.encodeWithSelector(IRedemptionEscrow.InvalidDealingCutoff.selector, 1 days, 1 days));
+        escrow.requestRedemption(10 ether, 0, uint64(block.timestamp));
+        vm.stopPrank();
+
+        _switchTo(1 days + 1);
+        vm.prank(investor);
+        vm.expectRevert(abi.encodeWithSelector(IRedemptionEscrow.InvalidDealingCutoff.selector, 1 days + 1, 1 days));
+        escrow.requestRedemption(10 ether, 0, uint64(block.timestamp));
+        assertEq(escrow.nextId(), 0);
+
+        _switchTo(1 days - 1);
+        assertEq(_request(10 ether, 0), 0);
+        assertEq(token.balanceOf(address(escrow)), 10 ether);
+    }
+
+    // ---- sequencer ----
+
+    function _useSequencedProject() internal {
+        sequencer = new MockAggregatorV3(0, 0);
+        sequencer.set(0, block.timestamp - 1 days, block.timestamp - 1 days);
+        IRWAFactory.ProjectConfig memory cfg = _oracleConfig(address(quoteToken), address(feed));
+        cfg.projectId = keccak256("sequenced");
+        cfg.sequencerUptimeFeed = address(sequencer);
+        cfg.sequencerGracePeriod = GRACE;
+        _useOracleProject(cfg);
+        vm.prank(investor);
+        quoteToken.approve(address(vault), type(uint256).max);
+    }
+
+    function _sequencerFails() internal {
+        sequencer.set(1, block.timestamp, block.timestamp);
+    }
+
+    function _sequencerRestarts() internal {
+        sequencer.set(0, block.timestamp, block.timestamp);
+    }
+
+    function test_sequencerDown_blocksNewOrders() public {
+        _useSequencedProject();
+        _buy(10 ether);
+        _sequencerFails();
+        uint256 vaultQuote = quoteToken.balanceOf(address(vault));
+
+        vm.startPrank(investor);
+        vm.expectRevert(IOraclePriceStrategy.SequencerDown.selector);
+        vault.requestPurchase(1 ether, DEPOSIT, investor, uint64(block.timestamp));
+        token.approve(address(escrow), 1 ether);
+        vm.expectRevert(IOraclePriceStrategy.SequencerDown.selector);
+        escrow.requestRedemption(1 ether, 0, uint64(block.timestamp));
+        vm.stopPrank();
+
+        assertEq(vault.nextPurchaseId(), 1, "only the setup order exists");
+        assertEq(escrow.nextId(), 0);
+        assertEq(quoteToken.balanceOf(address(vault)), vaultQuote);
+    }
+
+    function test_sequencerGracePeriod_blocksNewOrdersUntilItEnds() public {
+        _useSequencedProject();
+        _buy(10 ether);
+        _sequencerRestarts();
+        bytes memory grace =
+            abi.encodeWithSelector(IOraclePriceStrategy.GracePeriodNotOver.selector, block.timestamp, GRACE);
+
+        vm.prank(investor);
+        vm.expectRevert(grace);
+        vault.requestPurchase(1 ether, DEPOSIT, investor, uint64(block.timestamp));
+
+        // Not over while elapsed == grace
+        vm.warp(block.timestamp + GRACE);
+        vm.prank(investor);
+        vm.expectRevert(grace);
+        vault.requestPurchase(1 ether, DEPOSIT, investor, uint64(block.timestamp));
+
+        vm.startPrank(investor);
+        token.approve(address(escrow), 1 ether);
+        vm.expectRevert(grace);
+        escrow.requestRedemption(1 ether, 0, uint64(block.timestamp));
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 1);
+        assertEq(_order(1 ether, DEPOSIT), 1);
+        assertEq(_request(1 ether, 0), 0);
+    }
+
+    // An outage must not trap open orders: settling, cancelling and funding read historical rounds
+    function test_sequencerDown_openPurchasesStillSettleAndCancel() public {
+        _useSequencedProject();
+        uint256 settleId = _order(10 ether, DEPOSIT);
+        _land(2.5e8);
+        uint256 cancelId = _order(10 ether, DEPOSIT);
+        _timeoutPassed();
+        _sequencerFails();
+
+        vault.settlePurchase(settleId);
+        assertEq(uint8(vault.getPurchase(settleId).status), uint8(IVault.PurchaseStatus.Settled));
+
+        _assertCancels(cancelId);
+    }
+
+    function test_sequencerDown_openRedemptionsStillFundClaimAndCancel() public {
+        _useSequencedProject();
+        _buy(20 ether);
+        uint256 claimId = _request(10 ether, 0);
+        _land(2.5e8);
+        uint256 cancelId = _request(10 ether, 0);
+        _sequencerFails();
+
+        _fund(claimId);
+        escrow.claimRedemption(claimId);
+        assertEq(uint8(escrow.getRedemption(claimId).status), uint8(IRedemptionEscrow.RedemptionStatus.Completed));
+
+        vm.warp(block.timestamp + REDEMPTION_TIMEOUT);
+        _sequencerFails();
+        vm.prank(investor);
+        escrow.cancelRedemption(cancelId);
+        assertEq(uint8(escrow.getRedemption(cancelId).status), uint8(IRedemptionEscrow.RedemptionStatus.Cancelled));
     }
 
     /// @dev Zero-spread rounding must not let the investor profit from a buy/redeem round trip

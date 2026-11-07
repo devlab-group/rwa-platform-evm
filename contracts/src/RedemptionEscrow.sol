@@ -73,6 +73,9 @@ contract RedemptionEscrow is IRedemptionEscrow, AccessControlEnumerableAdminRule
         uint256 quoteAmount;
         uint80 baseRound;
         if (forward) {
+            // Funding closes at redemptionTimeout, so the cutoff must leave a pricing window before it
+            uint64 cutoff = IOraclePriceStrategy(strategy_).dealingCutoff();
+            if (cutoff >= redemptionTimeout) revert InvalidDealingCutoff(cutoff, redemptionTimeout);
             baseRound = IOraclePriceStrategy(strategy_).latestRound();
         } else {
             quoteAmount = IPriceStrategy(strategy_).quoteRedemption(rwaAmount);

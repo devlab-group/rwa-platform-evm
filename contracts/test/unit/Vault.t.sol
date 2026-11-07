@@ -6,7 +6,11 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {TestBase} from "../helpers/TestBase.sol";
 import {IVault} from "../../src/interfaces/IVault.sol";
 import {ISupplyController} from "../../src/interfaces/ISupplyController.sol";
+import {IPriceStrategy} from "../../src/interfaces/IPriceStrategy.sol";
 import {Vault} from "../../src/Vault.sol";
+import {FixedPriceStrategy} from "../../src/pricing/FixedPriceStrategy.sol";
+import {OraclePriceStrategy} from "../../src/pricing/OraclePriceStrategy.sol";
+import {MockAggregatorV3} from "../mocks/oracle/MockAggregatorV3.sol";
 import {FalseReturnERC20} from "../mocks/token/FalseReturnERC20.sol";
 import {FeeOnTransferERC20} from "../mocks/token/FeeOnTransferERC20.sol";
 
@@ -246,12 +250,79 @@ contract VaultTest is TestBase {
         new Vault(t, q, st, address(0), 0, 0, admin, treasurer, 0);
     }
 
+    function _fixedStrategy() internal returns (address) {
+        return address(new FixedPriceStrategy(TOKEN_DECIMALS, PURCHASE_PRICE, REDEMPTION_PRICE, pricer, admin, 0));
+    }
+
+    function _oracleStrategy(uint64 cutoff) internal returns (address) {
+        return address(
+            new OraclePriceStrategy(
+                address(new MockAggregatorV3(8, 1e8)),
+                address(0),
+                1 hours,
+                0,
+                0,
+                0,
+                TOKEN_DECIMALS,
+                QUOTE_DECIMALS,
+                cutoff
+            )
+        );
+    }
+
     function test_setStrategy_updatesAndEmits() public {
+        address next = _fixedStrategy();
         vm.prank(admin);
         vm.expectEmit(true, true, true, true, address(vault));
-        emit IVault.StrategyChanged(address(strategy), outsider, admin);
-        vault.setStrategy(outsider);
-        assertEq(vault.strategy(), outsider);
+        emit IVault.StrategyChanged(address(strategy), next, admin);
+        vault.setStrategy(next);
+        assertEq(vault.strategy(), next);
+    }
+
+    function test_setStrategy_rejectsAnAddressWithoutForwardPriced() public {
+        // An account with no code, a contract that has no such function, and one that answers with no data
+        address silent = makeAddr("silent");
+        vm.mockCall(silent, abi.encodeCall(IPriceStrategy.forwardPriced, ()), "");
+        address[3] memory bad = [outsider, address(quoteToken), silent];
+        for (uint256 i; i < bad.length; ++i) {
+            vm.prank(admin);
+            vm.expectRevert(abi.encodeWithSelector(IVault.InvalidStrategy.selector, bad[i]));
+            vault.setStrategy(bad[i]);
+        }
+        assertEq(vault.strategy(), address(strategy));
+    }
+
+    function test_setStrategy_rejectsAForwardPricedCutoffThatLeavesNoPricingWindow() public {
+        // Zero cannot be built into a real strategy, so mock the reading
+        address zero = _oracleStrategy(1 hours);
+        vm.mockCall(zero, abi.encodeCall(OraclePriceStrategy.dealingCutoff, ()), abi.encode(uint64(0)));
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(IVault.InvalidDealingCutoff.selector, 0, PURCHASE_TIMEOUT));
+        vault.setStrategy(zero);
+
+        // Equal to or above the purchase timeout, so every order could cancel before any round prices it
+        address atTimeout = _oracleStrategy(PURCHASE_TIMEOUT);
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(IVault.InvalidDealingCutoff.selector, PURCHASE_TIMEOUT, PURCHASE_TIMEOUT)
+        );
+        vault.setStrategy(atTimeout);
+
+        address above = _oracleStrategy(PURCHASE_TIMEOUT + 1);
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(IVault.InvalidDealingCutoff.selector, PURCHASE_TIMEOUT + 1, PURCHASE_TIMEOUT)
+        );
+        vault.setStrategy(above);
+
+        assertEq(vault.strategy(), address(strategy));
+    }
+
+    function test_setStrategy_acceptsACutoffOneSecondBelowThePurchaseTimeout() public {
+        address next = _oracleStrategy(PURCHASE_TIMEOUT - 1);
+        vm.prank(admin);
+        vault.setStrategy(next);
+        assertEq(vault.strategy(), next);
     }
 
     function test_setTreasury_updatesAndEmits() public {
