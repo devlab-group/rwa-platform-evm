@@ -38,7 +38,8 @@ Every run needs an independent local `--policy` pinning `chainId`, `controller`,
      `const`, `minLength`, `maxLength`, `pattern`, `minimum`, `maximum`, `exclusiveMinimum`,
      `exclusiveMaximum`, `minItems`, `maxItems`, `uniqueItems`.
    - Annotations/definitions: `$schema`, `$id`, `$comment`, `$defs`, `title`, `description`,
-     `default`, `examples`, `deprecated`, `readOnly`, `writeOnly`.
+     `default`, `examples`, `deprecated`, `readOnly`, `writeOnly`. `$schema` and `$id` have no
+     effect; the other annotations follow the dialect's value rules.
 
    `type` accepts any JSON type or a nonempty array of unique types. Local `$ref` (`#` or `#/...`)
    permits no siblings; cycles, depth and processed nodes are bounded. Unsupported keywords,
@@ -54,8 +55,9 @@ Every run needs an independent local `--policy` pinning `chainId`, `controller`,
    profile and policy project IDs must match, and `issuance.unit` must equal `profile.tokenUnit`.
 5. Profile/metadata validation canonicalizes through `internal/canonical`, then computes SHA-256.
    The CLI requires the profile digest to match policy/manifest and metadata to match the manifest.
-   Canonical parsing rejects duplicate keys/invalid UTF-8 and applies structural limits;
-   serialization uses UTF-16 key order, ECMAScript `Number::toString` and minimal escaping.
+   Canonical parsing rejects duplicate keys, invalid UTF-8 and unpaired surrogate escapes, and
+   applies structural limits. Serialization uses UTF-16 key order, ECMAScript `Number::toString`
+   and minimal escaping.
    `internal/cid` derives raw-codec (0x55), sha2-256 CIDv1 from those bytes for vectors; signing
    does not call it. CID fixtures use `ipfs add --cid-version=1 --raw-leaves --hash=sha2-256 --only-hash`.
 6. `cmd/signer/typeddata.go` checks `shared/schemas/typed-data.schema.json` field rules and package

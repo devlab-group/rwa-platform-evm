@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/rwa-platform/signer/internal/metadata"
 )
 
 // envelopeCase models whole profile/metadata envelopeCases from
@@ -22,9 +24,10 @@ type envelopeConformanceFile struct {
 	EnvelopeCases []envelopeCase `json:"envelopeCases"`
 }
 
-// Match shared profile envelopeCases, including unknown displayFields members. Keep
-// "Dialect" in the name for make dialect-check and this test in profile to avoid a
-// jsonschema import cycle.
+// Match shared envelopeCases for profiles and metadata, including unknown displayFields
+// members. Keep "Dialect" in the name for make dialect-check and this test in profile to
+// avoid a jsonschema import cycle; make dialect-check does not run the metadata package,
+// so the metadata cases run here too.
 func TestDialectEnvelopeConformance(t *testing.T) {
 	path, err := filepath.Abs(filepath.Join("..", "..", "..", "shared", "vectors", "schema-dialect-conformance.json"))
 	if err != nil {
@@ -46,14 +49,21 @@ func TestDialectEnvelopeConformance(t *testing.T) {
 	}
 
 	ran := 0
+	ranMetadata := 0
 	for _, c := range file.EnvelopeCases {
 		c := c
-		if c.Target != "profile" {
-			continue // metadata-target cases, if any, belong in internal/metadata
+		validate := func(doc []byte) error { _, err := Validate(doc); return err }
+		switch c.Target {
+		case "profile":
+			ran++
+		case "metadata":
+			ranMetadata++
+			validate = func(doc []byte) error { _, err := metadata.Validate(doc); return err }
+		default:
+			t.Fatalf("case %q: unknown target %q", c.Name, c.Target)
 		}
-		ran++
 		t.Run(c.Name, func(t *testing.T) {
-			_, err := Validate(c.Document)
+			err := validate(c.Document)
 			switch c.ExpectValid {
 			case "valid":
 				if err != nil {
@@ -68,7 +78,7 @@ func TestDialectEnvelopeConformance(t *testing.T) {
 			}
 		})
 	}
-	if ran == 0 {
-		t.Fatal("no envelopeCases targeted \"profile\"")
+	if ran == 0 || ranMetadata == 0 {
+		t.Fatalf("envelopeCases ran %d profile and %d metadata cases, want both non-zero", ran, ranMetadata)
 	}
 }

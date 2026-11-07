@@ -106,6 +106,11 @@ func ParseWithLimits(input []byte, lim Limits) (Value, error) {
 	if !utf8.Valid(input) {
 		return nil, errors.New("canonical: input is not valid UTF-8")
 	}
+	// encoding/json would turn an unpaired surrogate escape into U+FFFD, so two
+	// different documents would share one digest
+	if hasLoneSurrogateEscape(input) {
+		return nil, errors.New("canonical: input contains an unpaired UTF-16 surrogate escape")
+	}
 
 	dec := json.NewDecoder(bytes.NewReader(input))
 	dec.UseNumber()
@@ -122,6 +127,55 @@ func ParseWithLimits(input []byte, lim Limits) (Value, error) {
 		return nil, fmt.Errorf("canonical: trailing data after top-level JSON value: %w", err)
 	}
 	return v, nil
+}
+
+// hasLoneSurrogateEscape reports whether a JSON string in input holds a \uD800-\uDFFF
+// escape that is not half of a high-then-low pair (RFC 7493 section 2.1 forbids it).
+// The scan tracks string state so an escaped backslash followed by "ud800" is plain
+// text. Malformed input is left to the JSON decoder to refuse.
+func hasLoneSurrogateEscape(input []byte) bool {
+	inString := false
+	for i := 0; i < len(input); i++ {
+		c := input[i]
+		if !inString {
+			inString = c == '"'
+			continue
+		}
+		switch c {
+		case '"':
+			inString = false
+		case '\\':
+			if i+1 < len(input) && input[i+1] == 'u' {
+				u, ok := hex4(input, i+2)
+				switch {
+				case !ok:
+				case u >= 0xDC00 && u <= 0xDFFF:
+					return true
+				case u >= 0xD800 && u <= 0xDBFF:
+					lo, paired := uint32(0), false
+					if i+11 < len(input) && input[i+6] == '\\' && input[i+7] == 'u' {
+						lo, paired = hex4(input, i+8)
+					}
+					if !paired || lo < 0xDC00 || lo > 0xDFFF {
+						return true
+					}
+					i += 6
+				}
+				i += 4
+			}
+			i++
+		}
+	}
+	return false
+}
+
+// hex4 reads four hex digits at input[at:]
+func hex4(input []byte, at int) (uint32, bool) {
+	if at+4 > len(input) {
+		return 0, false
+	}
+	u, err := strconv.ParseUint(string(input[at:at+4]), 16, 32)
+	return uint32(u), err == nil
 }
 
 const hardMaxDepth = 512

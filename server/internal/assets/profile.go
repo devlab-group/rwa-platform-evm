@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"time"
 	"unicode/utf8"
 
@@ -111,20 +112,21 @@ func ValidateProfile(raw []byte) (ValidationResult, *Profile) {
 	if err := json.Unmarshal(top["projectId"], &p.ProjectID); err != nil || !uuidPattern.MatchString(p.ProjectID) {
 		errs = append(errs, "projectId must be a UUID string")
 	}
-	if err := json.Unmarshal(top["assetType"], &p.AssetType); err != nil || !lengthInRange(p.AssetType, 1, 128) {
-		errs = append(errs, "assetType must be a string of length 1..128")
+	// the signer shows these fields beside the amount, so they must be printable text
+	if err := json.Unmarshal(top["assetType"], &p.AssetType); err != nil || !printableLen(p.AssetType, 1, 128) {
+		errs = append(errs, "assetType must be printable text of 1..128 characters")
 	}
-	if err := json.Unmarshal(top["tokenUnit"], &p.TokenUnit); err != nil || !lengthInRange(p.TokenUnit, 1, 64) {
-		errs = append(errs, "tokenUnit must be a string of length 1..64")
+	if err := json.Unmarshal(top["tokenUnit"], &p.TokenUnit); err != nil || !printableLen(p.TokenUnit, 1, 64) {
+		errs = append(errs, "tokenUnit must be printable text of 1..64 characters")
 	}
-	var decimals float64
-	if err := json.Unmarshal(top["tokenDecimals"], &decimals); err != nil || decimals != float64(int64(decimals)) || decimals < 0 || decimals > 36 {
+	// the literal must be a plain integer: the signer refuses 6.0 and 1e1
+	if decimals, err := strconv.ParseInt(string(top["tokenDecimals"]), 10, 64); err != nil || decimals < 0 || decimals > 36 {
 		errs = append(errs, "tokenDecimals must be an integer in [0,36]")
 	} else {
 		p.TokenDecimals = uint8(decimals)
 	}
-	if err := json.Unmarshal(top["recordIdLabel"], &p.RecordIDLabel); err != nil || !lengthInRange(p.RecordIDLabel, 1, 128) {
-		errs = append(errs, "recordIdLabel must be a string of length 1..128")
+	if err := json.Unmarshal(top["recordIdLabel"], &p.RecordIDLabel); err != nil || !printableLen(p.RecordIDLabel, 1, 128) {
+		errs = append(errs, "recordIdLabel must be printable text of 1..128 characters")
 	}
 	if raw, ok := top["displayFields"]; ok {
 		var fields []DisplayField
@@ -134,8 +136,8 @@ func ValidateProfile(raw []byte) (ValidationResult, *Profile) {
 			errs = append(errs, "displayFields must be an array of {label, pointer} with no additional fields")
 		} else {
 			for i, f := range fields {
-				if f.Label == "" {
-					errs = append(errs, fmt.Sprintf("displayFields[%d].label must be non-empty", i))
+				if f.Label == "" || !printableText(f.Label) {
+					errs = append(errs, fmt.Sprintf("displayFields[%d].label must be non-empty printable text", i))
 				}
 				if len(f.Pointer) == 0 || f.Pointer[0] != '/' {
 					errs = append(errs, fmt.Sprintf("displayFields[%d].pointer must start with '/'", i))
@@ -152,9 +154,9 @@ func ValidateProfile(raw []byte) (ValidationResult, *Profile) {
 	}
 
 	p.AssetSchema = top["assetSchema"]
-	if err := guardAssetSchema(p.AssetSchema); err != nil {
+	if prepared, err := prepareAssetSchema(p.AssetSchema); err != nil {
 		errs = append(errs, err.Error())
-	} else if compiled, err := compileAssetSchema(p.AssetSchema); err != nil {
+	} else if compiled, err := compilePrepared(prepared); err != nil {
 		errs = append(errs, "assetSchema does not compile: "+err.Error())
 	} else {
 		p.compiledAssetSchema = compiled
@@ -180,7 +182,18 @@ func ValidateProfile(raw []byte) (ValidationResult, *Profile) {
 	}, p
 }
 
+// compileAssetSchema checks and compiles raw; ValidateProfile calls prepareAssetSchema and
+// compilePrepared itself so each step reports its own error
 func compileAssetSchema(raw json.RawMessage) (*jsonschema.Schema, error) {
+	prepared, err := prepareAssetSchema(raw)
+	if err != nil {
+		return nil, err
+	}
+	return compilePrepared(prepared)
+}
+
+// compilePrepared compiles the output of prepareAssetSchema
+func compilePrepared(raw json.RawMessage) (*jsonschema.Schema, error) {
 	c := jsonschema.NewCompiler()
 	c.Draft = jsonschema.Draft2020
 	// Reject external $ref resources regardless of registered loaders. Local references

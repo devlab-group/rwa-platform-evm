@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -72,16 +73,16 @@ type Schema struct {
 	additionalProperties *Schema // nil means "additionalProperties: true" (default)
 	additionalPropsFalse bool
 	items                *Schema
-	enum                 []canonical.Value
+	enumKeys             map[string]bool // valueKey of each member; nil means no enum
 	hasConst             bool
-	constVal             canonical.Value
+	constKey             string
 	minLength            *int
 	maxLength            *int
 	pattern              *regexp.Regexp
-	minimum              *big.Float
-	maximum              *big.Float
-	exclusiveMinimum     *big.Float
-	exclusiveMaximum     *big.Float
+	minimum              *big.Rat
+	maximum              *big.Rat
+	exclusiveMinimum     *big.Rat
+	exclusiveMaximum     *big.Rat
 	minItems             *int
 	maxItems             *int
 	uniqueItems          bool
@@ -143,6 +144,11 @@ func (c *compiler) compile(v canonical.Value, path string, depth int) (*Schema, 
 		if !strings.HasPrefix(ref, "#/") && ref != "#" {
 			return nil, fmt.Errorf("jsonschema: %s: only local \"#/...\" $ref is permitted, got %q", path, ref)
 		}
+		// The server's compiler percent-decodes the fragment, so a pointer here is literal
+		// and may not contain '%'
+		if strings.Contains(ref, "%") {
+			return nil, fmt.Errorf("jsonschema: %s: $ref must not contain '%%', got %q", path, ref)
+		}
 		if c.visiting[ref] {
 			return nil, fmt.Errorf("jsonschema: %s: cyclic $ref detected at %q", path, ref)
 		}
@@ -154,6 +160,10 @@ func (c *compiler) compile(v canonical.Value, path string, depth int) (*Schema, 
 		sub, err := c.compile(target, path+"->"+ref, depth+1)
 		delete(c.visiting, ref)
 		return sub, err
+	}
+
+	if err := checkAnnotationTypes(obj, path); err != nil {
+		return nil, err
 	}
 
 	s := &Schema{}
@@ -234,6 +244,9 @@ func (c *compiler) compile(v canonical.Value, path string, depth int) (*Schema, 
 			if !ok {
 				return nil, fmt.Errorf("jsonschema: %s.required: must contain only strings", path)
 			}
+			if s.required[str] {
+				return nil, fmt.Errorf("jsonschema: %s.required: duplicate name %q", path, str)
+			}
 			s.required[str] = true
 		}
 	}
@@ -266,12 +279,26 @@ func (c *compiler) compile(v canonical.Value, path string, depth int) (*Schema, 
 		if !ok {
 			return nil, fmt.Errorf("jsonschema: %s.enum: must be an array", path)
 		}
-		s.enum = arr
+		if len(arr) == 0 {
+			return nil, fmt.Errorf("jsonschema: %s.enum: must not be empty", path)
+		}
+		s.enumKeys = make(map[string]bool, len(arr))
+		for _, e := range arr {
+			k, err := valueKey(e, schemaRat)
+			if err != nil {
+				return nil, fmt.Errorf("jsonschema: %s.enum: %w", path, err)
+			}
+			s.enumKeys[k] = true
+		}
 	}
 
 	if cv, present := obj.Get("const"); present {
+		k, err := valueKey(cv, schemaRat)
+		if err != nil {
+			return nil, fmt.Errorf("jsonschema: %s.const: %w", path, err)
+		}
 		s.hasConst = true
-		s.constVal = cv
+		s.constKey = k
 	}
 
 	if v, present := obj.Get("minLength"); present {
@@ -368,19 +395,124 @@ func requireNonNegInt(v canonical.Value, path, kw string) (int, error) {
 	return n, nil
 }
 
-func requireNumber(v canonical.Value, path, kw string) (*big.Float, error) {
+func requireNumber(v canonical.Value, path, kw string) (*big.Rat, error) {
 	num, ok := v.(json.Number)
 	if !ok {
 		return nil, fmt.Errorf("jsonschema: %s.%s: must be a number", path, kw)
 	}
-	f, ok := new(big.Float).SetString(num.String())
-	if !ok {
-		return nil, fmt.Errorf("jsonschema: %s.%s: invalid number %q", path, kw, num.String())
+	r, err := schemaRat(num)
+	if err != nil {
+		return nil, fmt.Errorf("jsonschema: %s.%s: %w", path, kw, err)
 	}
-	return f, nil
+	return r, nil
 }
 
-// resolvePointer resolves a local JSON pointer such as "#/a/b/0" against root
+// checkAnnotationTypes applies the value types of the Draft 2020-12 meta-data and core
+// vocabularies to annotations at a schema position, as the server's compiler does
+func checkAnnotationTypes(obj *canonical.Object, path string) error {
+	for _, kw := range []string{"title", "description", "$comment"} {
+		if v, present := obj.Get(kw); present {
+			if _, ok := v.(string); !ok {
+				return fmt.Errorf("jsonschema: %s.%s: must be a string", path, kw)
+			}
+		}
+	}
+	for _, kw := range []string{"deprecated", "readOnly", "writeOnly"} {
+		if v, present := obj.Get(kw); present {
+			if _, ok := v.(bool); !ok {
+				return fmt.Errorf("jsonschema: %s.%s: must be a boolean", path, kw)
+			}
+		}
+	}
+	if v, present := obj.Get("examples"); present {
+		if _, ok := v.([]canonical.Value); !ok {
+			return fmt.Errorf("jsonschema: %s.examples: must be an array", path)
+		}
+	}
+	return nil
+}
+
+// schemaRat returns the exact value of a number written in the schema, such as a bound
+// or an enum member. A literal outside the float64 range is refused, as the server
+// refuses it when it decodes the schema.
+func schemaRat(n json.Number) (*big.Rat, error) {
+	if _, err := strconv.ParseFloat(string(n), 64); err != nil {
+		return nil, fmt.Errorf("number %q is outside the float64 range", string(n))
+	}
+	r, ok := new(big.Rat).SetString(string(n))
+	if !ok {
+		return nil, fmt.Errorf("invalid number %q", string(n))
+	}
+	return r, nil
+}
+
+// instanceRat rounds an instance number to float64 and returns its printed decimal value.
+// Canonicalization and server validation use that rounded value too, keeping integer
+// typing, bounds, enum, const and uniqueItems consistent.
+func instanceRat(n json.Number) (*big.Rat, error) {
+	f, err := strconv.ParseFloat(string(n), 64)
+	if err != nil {
+		return nil, fmt.Errorf("number %q is outside the float64 range", string(n))
+	}
+	r, ok := new(big.Rat).SetString(strconv.FormatFloat(f, 'g', -1, 64))
+	if !ok {
+		return nil, fmt.Errorf("invalid number %q", string(n))
+	}
+	return r, nil
+}
+
+// valueKey serializes v so two values have the same key exactly when the dialect treats
+// them as equal: numbers by exact rational value, objects by member set. rat supplies a
+// number's value, schemaRat for schema literals and instanceRat for instance data.
+func valueKey(v canonical.Value, rat func(json.Number) (*big.Rat, error)) (string, error) {
+	var b strings.Builder
+	if err := writeKey(&b, v, rat); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+func writeKey(b *strings.Builder, v canonical.Value, rat func(json.Number) (*big.Rat, error)) error {
+	switch t := v.(type) {
+	case nil:
+		b.WriteString("z")
+	case bool:
+		b.WriteString(strconv.FormatBool(t)[:1])
+	case json.Number:
+		r, err := rat(t)
+		if err != nil {
+			return err
+		}
+		b.WriteString("n" + r.RatString() + ";")
+	case string:
+		fmt.Fprintf(b, "s%d:%s", len(t), t)
+	case []canonical.Value:
+		b.WriteString("[")
+		for _, e := range t {
+			if err := writeKey(b, e, rat); err != nil {
+				return err
+			}
+		}
+		b.WriteString("]")
+	case *canonical.Object:
+		keys := append([]string(nil), t.Keys()...)
+		sort.Strings(keys)
+		b.WriteString("{")
+		for _, k := range keys {
+			fmt.Fprintf(b, "%d:%s", len(k), k)
+			e, _ := t.Get(k)
+			if err := writeKey(b, e, rat); err != nil {
+				return err
+			}
+		}
+		b.WriteString("}")
+	default:
+		return fmt.Errorf("unsupported value type %T", v)
+	}
+	return nil
+}
+
+// resolvePointer resolves a local JSON pointer such as "#/a/b" against root
 func resolvePointer(root canonical.Value, ref string) (canonical.Value, error) {
 	if ref == "#" {
 		return root, nil
@@ -390,22 +522,16 @@ func resolvePointer(root canonical.Value, ref string) (canonical.Value, error) {
 	for _, tok := range strings.Split(frag, "/") {
 		tok = strings.ReplaceAll(tok, "~1", "/")
 		tok = strings.ReplaceAll(tok, "~0", "~")
-		switch t := cur.(type) {
-		case *canonical.Object:
-			v, ok := t.Get(tok)
-			if !ok {
-				return nil, fmt.Errorf("$ref pointer segment %q not found", tok)
-			}
-			cur = v
-		case []canonical.Value:
-			idx, err := strconv.Atoi(tok)
-			if err != nil || idx < 0 || idx >= len(t) {
-				return nil, fmt.Errorf("$ref pointer segment %q is not a valid array index", tok)
-			}
-			cur = t[idx]
-		default:
-			return nil, fmt.Errorf("$ref pointer segment %q cannot descend into a scalar", tok)
+		// Traverse objects, not arrays; numeric tokens address object members only
+		obj, ok := cur.(*canonical.Object)
+		if !ok {
+			return nil, fmt.Errorf("$ref pointer segment %q does not resolve within the document", tok)
 		}
+		v, ok := obj.Get(tok)
+		if !ok {
+			return nil, fmt.Errorf("$ref pointer segment %q not found", tok)
+		}
+		cur = v
 	}
 	return cur, nil
 }
@@ -424,14 +550,15 @@ func (s *Schema) Validate(v canonical.Value) error {
 	return s.validateAt(v, "$")
 }
 
-func typeOf(v canonical.Value) string {
-	switch t := v.(type) {
+// typeOf names v's JSON type; num is v's value when v is a number
+func typeOf(v canonical.Value, num *big.Rat) string {
+	switch v.(type) {
 	case nil:
 		return "null"
 	case bool:
 		return "boolean"
 	case json.Number:
-		if isIntegerLiteral(t) {
+		if num.IsInt() {
 			return "integer"
 		}
 		return "number"
@@ -446,25 +573,17 @@ func typeOf(v canonical.Value) string {
 	}
 }
 
-func isIntegerLiteral(n json.Number) bool {
-	s := n.String()
-	if strings.ContainsAny(s, ".eE") {
-		// Fractions/exponents still represent integers when big.Float converts them exactly
-		// to big.Int
-		f, ok := new(big.Float).SetString(s)
-		if !ok {
-			return false
-		}
-		i, acc := f.Int(nil)
-		_ = i
-		return acc == big.Exact
-	}
-	return true
-}
-
 func (s *Schema) validateAt(v canonical.Value, path string) error {
+	var num *big.Rat
+	if n, ok := v.(json.Number); ok {
+		r, err := instanceRat(n)
+		if err != nil {
+			return fmt.Errorf("jsonschema: %s: %w", path, err)
+		}
+		num = r
+	}
 	if len(s.types) > 0 {
-		actual := typeOf(v)
+		actual := typeOf(v, num)
 		matched := false
 		for _, t := range s.types {
 			if t == actual || (t == "number" && actual == "integer") {
@@ -477,19 +596,15 @@ func (s *Schema) validateAt(v canonical.Value, path string) error {
 		}
 	}
 
-	if s.hasConst && !valuesEqual(v, s.constVal) {
-		return fmt.Errorf("jsonschema: %s: value does not match const", path)
-	}
-
-	if len(s.enum) > 0 {
-		ok := false
-		for _, e := range s.enum {
-			if valuesEqual(v, e) {
-				ok = true
-				break
-			}
+	if s.hasConst || s.enumKeys != nil {
+		key, err := valueKey(v, instanceRat)
+		if err != nil {
+			return fmt.Errorf("jsonschema: %s: %w", path, err)
 		}
-		if !ok {
+		if s.hasConst && key != s.constKey {
+			return fmt.Errorf("jsonschema: %s: value does not match const", path)
+		}
+		if s.enumKeys != nil && !s.enumKeys[key] {
 			return fmt.Errorf("jsonschema: %s: value not in enum", path)
 		}
 	}
@@ -500,7 +615,7 @@ func (s *Schema) validateAt(v canonical.Value, path string) error {
 			return err
 		}
 	case json.Number:
-		if err := s.validateNumber(t, path); err != nil {
+		if err := s.validateNumber(t, num, path); err != nil {
 			return err
 		}
 	case []canonical.Value:
@@ -530,22 +645,18 @@ func (s *Schema) validateString(str string, path string) error {
 	return nil
 }
 
-func (s *Schema) validateNumber(num json.Number, path string) error {
-	f, ok := new(big.Float).SetString(num.String())
-	if !ok {
-		return fmt.Errorf("jsonschema: %s: invalid number literal %q", path, num.String())
-	}
+func (s *Schema) validateNumber(lit json.Number, f *big.Rat, path string) error {
 	if s.minimum != nil && f.Cmp(s.minimum) < 0 {
-		return fmt.Errorf("jsonschema: %s: %s is less than minimum %s", path, num.String(), s.minimum.String())
+		return fmt.Errorf("jsonschema: %s: %s is less than minimum %s", path, lit.String(), s.minimum.RatString())
 	}
 	if s.maximum != nil && f.Cmp(s.maximum) > 0 {
-		return fmt.Errorf("jsonschema: %s: %s exceeds maximum %s", path, num.String(), s.maximum.String())
+		return fmt.Errorf("jsonschema: %s: %s exceeds maximum %s", path, lit.String(), s.maximum.RatString())
 	}
 	if s.exclusiveMinimum != nil && f.Cmp(s.exclusiveMinimum) <= 0 {
-		return fmt.Errorf("jsonschema: %s: %s must be greater than exclusiveMinimum %s", path, num.String(), s.exclusiveMinimum.String())
+		return fmt.Errorf("jsonschema: %s: %s must be greater than exclusiveMinimum %s", path, lit.String(), s.exclusiveMinimum.RatString())
 	}
 	if s.exclusiveMaximum != nil && f.Cmp(s.exclusiveMaximum) >= 0 {
-		return fmt.Errorf("jsonschema: %s: %s must be less than exclusiveMaximum %s", path, num.String(), s.exclusiveMaximum.String())
+		return fmt.Errorf("jsonschema: %s: %s must be less than exclusiveMaximum %s", path, lit.String(), s.exclusiveMaximum.RatString())
 	}
 	return nil
 }
@@ -560,14 +671,14 @@ func (s *Schema) validateArray(arr []canonical.Value, path string) error {
 	if s.uniqueItems {
 		seen := make(map[string]bool, len(arr))
 		for _, e := range arr {
-			b, err := canonical.Marshal(e)
+			key, err := valueKey(e, instanceRat)
 			if err != nil {
 				return fmt.Errorf("jsonschema: %s: %w", path, err)
 			}
-			if seen[string(b)] {
+			if seen[key] {
 				return fmt.Errorf("jsonschema: %s: array items must be unique", path)
 			}
-			seen[string(b)] = true
+			seen[key] = true
 		}
 	}
 	if s.items != nil {
@@ -604,13 +715,4 @@ func (s *Schema) validateObject(obj *canonical.Object, path string) error {
 		}
 	}
 	return nil
-}
-
-func valuesEqual(a, b canonical.Value) bool {
-	ab, errA := canonical.Marshal(a)
-	bb, errB := canonical.Marshal(b)
-	if errA != nil || errB != nil {
-		return false
-	}
-	return string(ab) == string(bb)
 }
