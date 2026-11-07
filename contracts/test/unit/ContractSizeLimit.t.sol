@@ -21,6 +21,7 @@ contract ContractSizeLimitTest is TestBase {
         vm.skip(vm.isContext(VmSafe.ForgeContext.Coverage));
         _assertUnderLimit(factory.complianceTokenDeployer(), "ComplianceTokenDeployer");
         _assertUnderLimit(factory.marketDeployer(), "MarketDeployer");
+        _assertUnderLimit(factory.strategyDeployer(), "StrategyDeployer");
         _assertUnderLimit(factory.supplyControllerDeployer(), "SupplyControllerDeployer");
         _assertUnderLimit(factory.redemptionEscrowDeployer(), "RedemptionEscrowDeployer");
         _assertUnderLimit(factory.incomeDistributorDeployer(), "IncomeDistributorDeployer");
@@ -39,7 +40,15 @@ contract ContractSizeLimitTest is TestBase {
 
     function test_oraclePriceStrategyUnderSizeLimit() public {
         OraclePriceStrategy oracle = new OraclePriceStrategy(
-            address(new MockAggregatorV3(8, 1e8)), address(0), 1 hours, 0, 0, 0, TOKEN_DECIMALS, QUOTE_DECIMALS
+            address(new MockAggregatorV3(8, 1e8)),
+            address(0),
+            1 hours,
+            0,
+            0,
+            0,
+            TOKEN_DECIMALS,
+            QUOTE_DECIMALS,
+            DEALING_CUTOFF
         );
         _assertUnderLimit(address(oracle), "OraclePriceStrategy");
     }

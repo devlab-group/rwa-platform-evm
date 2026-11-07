@@ -1,16 +1,18 @@
-// Builds rwa-v3 ProjectConfig from form values, checking per-strategy inputs before sending
+// Builds rwa-v3 and rwa-v4 ProjectConfig from form values, checking per-strategy inputs before sending
 import { isAddress, zeroAddress, type Address, type Hex } from "viem";
 import { AmountFormatError, toMinimalUnits } from "./format";
-import type { ProjectConfigV3Input } from "./wallet";
+import type { ProjectConfigV3Input, ProjectConfigV4Input } from "./wallet";
 
 /** RWAFactory.version() values the console can encode a deploy for */
-export type FactoryVersion = "rwa-v2" | "rwa-v3";
+export type FactoryVersion = "rwa-v2" | "rwa-v3" | "rwa-v4";
 
 /** Returns the supported factory version, or null for an empty or unknown value */
 export function parseFactoryVersion(
   value: string | undefined,
 ): FactoryVersion | null {
-  return value === "rwa-v2" || value === "rwa-v3" ? value : null;
+  return value === "rwa-v2" || value === "rwa-v3" || value === "rwa-v4"
+    ? value
+    : null;
 }
 
 export type StrategyChoice = "Fixed" | "Oracle";
@@ -22,6 +24,10 @@ const STRATEGY_CHOICE_VALUE = { Fixed: 0, Oracle: 1 } as const;
 const MAX_PURCHASE_SPREAD_BPS = 10_000;
 const MAX_REDEMPTION_SPREAD_BPS = 9_999;
 const MAX_UINT64 = (1n << 64n) - 1n;
+
+// Timeout bounds in seconds, shared by the redemption and purchase timeouts
+export const MIN_TIMEOUT_SECONDS = 86_400; // 1 day
+export const MAX_TIMEOUT_SECONDS = 31_536_000; // 365 days
 
 /** rwa-v3 deploy form values, with amounts and oracle integers kept as input strings */
 export interface DeployValuesV3 {
@@ -92,6 +98,11 @@ export function buildProjectConfigV3(
   v: DeployValuesV3,
   ctx: DeployContext,
 ): BuildResult {
+  // BigInt throws a RangeError on a fractional or NaN number, so check before any conversion
+  if (!Number.isInteger(v.redemptionTimeout)) {
+    return { error: "Redemption timeout must be a whole number of seconds." };
+  }
+
   const required: [string, string][] = [
     ["Quote token", v.quoteToken],
     ["Admin", v.admin],
@@ -224,6 +235,88 @@ export function buildProjectConfigV3(
       incomeManager: resolved["Income manager"],
       treasury: resolved["Treasury"],
       adminTransferDelay: v.adminTransferDelay,
+    },
+  };
+}
+
+/** rwa-v4 deploy form values: the rwa-v3 values plus the two new inputs */
+export interface DeployValuesV4 extends DeployValuesV3 {
+  /** Oracle only, in seconds; ignored for Fixed */
+  dealingCutoff: string;
+  purchaseTimeout: number;
+}
+
+export type BuildResultV4 =
+  { config: ProjectConfigV4Input } | { error: string };
+
+/** Whether a timeout is a whole number of seconds from 1 to 365 days */
+export function timeoutInBounds(seconds: number): boolean {
+  return (
+    Number.isInteger(seconds) &&
+    seconds >= MIN_TIMEOUT_SECONDS &&
+    seconds <= MAX_TIMEOUT_SECONDS
+  );
+}
+
+/**
+ * Explain an invalid Oracle cutoff, or return null. It must be positive and below both timeouts
+ * to leave a pricing window before cancellation becomes available.
+ */
+export function dealingCutoffProblem(
+  cutoff: bigint,
+  redemptionTimeout: number,
+  purchaseTimeout: number,
+): string | null {
+  if (cutoff <= 0n) return "Dealing cut-off must be above 0.";
+  if (
+    cutoff >= BigInt(Math.floor(redemptionTimeout)) ||
+    cutoff >= BigInt(Math.floor(purchaseTimeout))
+  ) {
+    return `Dealing cut-off must be below both the redemption timeout (${redemptionTimeout} s) and the purchase timeout (${purchaseTimeout} s).`;
+  }
+  return null;
+}
+
+/**
+ * Builds the rwa-v4 config: everything rwa-v3 checks, plus both timeouts within 1 to 365 days and,
+ * for Oracle, a positive dealing cut-off below both. Fixed projects send a zero cut-off.
+ */
+export function buildProjectConfigV4(
+  v: DeployValuesV4,
+  ctx: DeployContext,
+): BuildResultV4 {
+  const base = buildProjectConfigV3(v, ctx);
+  if ("error" in base) return base;
+
+  for (const [label, seconds] of [
+    ["Redemption timeout", v.redemptionTimeout],
+    ["Purchase timeout", v.purchaseTimeout],
+  ] as const) {
+    if (!timeoutInBounds(seconds)) {
+      return {
+        error: `${label} must be a whole number of seconds between ${MIN_TIMEOUT_SECONDS} and ${MAX_TIMEOUT_SECONDS}.`,
+      };
+    }
+  }
+
+  let dealingCutoff = 0n;
+  if (v.strategyKind === "Oracle") {
+    const cutoff = uint("Dealing cut-off", v.dealingCutoff, 1n, MAX_UINT64);
+    if (typeof cutoff === "string") return { error: cutoff };
+    const problem = dealingCutoffProblem(
+      cutoff,
+      v.redemptionTimeout,
+      v.purchaseTimeout,
+    );
+    if (problem) return { error: problem };
+    dealingCutoff = cutoff;
+  }
+
+  return {
+    config: {
+      ...base.config,
+      dealingCutoff,
+      purchaseTimeout: BigInt(v.purchaseTimeout),
     },
   };
 }

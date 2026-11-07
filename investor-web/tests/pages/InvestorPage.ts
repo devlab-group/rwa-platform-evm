@@ -71,6 +71,19 @@ export class InvestorPage {
     await this.buySection.getByRole("button", { name: "2. Buy" }).click();
   }
 
+  async placeOrder(): Promise<void> {
+    await this.buySection.getByRole("button", { name: "2. Place order" }).click();
+  }
+
+  // --- Purchase orders (forward-priced projects) -----------------------------------
+  get ordersSection() {
+    return sectionByHeading(this.page, "Purchase orders");
+  }
+
+  async refreshOrders(): Promise<void> {
+    await this.ordersSection.getByRole("button", { name: "Refresh orders" }).click();
+  }
+
   // --- Redemption ----------------------------------------------------------------
   get redemptionSection() {
     return sectionByHeading(this.page, "Redemption");

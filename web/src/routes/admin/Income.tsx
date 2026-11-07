@@ -24,6 +24,7 @@ import {
   toLocalInputValue,
 } from "../../lib/income";
 import { safeHttpsHref } from "../../lib/legal";
+import { hasIncomeDistributor } from "../../lib/projectVersion";
 import { ROLES } from "../../lib/roles";
 import { exportSafeBatch } from "../../lib/safeBatch";
 import { useTxRoute } from "../../lib/txRoute";
@@ -81,7 +82,7 @@ export function Income() {
   // Outcome of the last send or extend, shown after its panel closes
   const [notice, setNotice] = useState<string | null>(null);
 
-  const supported = proj?.version === "rwa-v3";
+  const supported = hasIncomeDistributor(proj?.version);
 
   return (
     <div>
@@ -95,9 +96,9 @@ export function Income() {
 
       <AsyncSection state={project} onRetry={project.reload}>
         {(data) =>
-          data.version === "rwa-v3" ? null : (
+          hasIncomeDistributor(data.version) ? null : (
             <p className="async-state--error" role="alert">
-              Income distribution needs an rwa-v3 project
+              Income distribution needs an rwa-v3 or later project
               {data.version ? ` (this one is ${data.version})` : ""}.
             </p>
           )

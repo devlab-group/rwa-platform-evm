@@ -69,9 +69,16 @@ func NewRecordService(
 	eip712Domain eip712.Domain, auditor common.Address,
 ) *RecordService {
 	return &RecordService{
-		records: records, packages: packages, attestations: attestations, ipfs: ipfsClient,
-		controller: bindings.NewSupplyController(), controllerAddr: controllerAddr, vaultAddr: vaultAddr,
-		eip712Domain: eip712Domain, auditor: auditor, baselineAuditor: auditor,
+		records:         records,
+		packages:        packages,
+		attestations:    attestations,
+		ipfs:            ipfsClient,
+		controller:      bindings.NewSupplyController(),
+		controllerAddr:  controllerAddr,
+		vaultAddr:       vaultAddr,
+		eip712Domain:    eip712Domain,
+		auditor:         auditor,
+		baselineAuditor: auditor,
 	}
 }
 
@@ -110,8 +117,12 @@ func (s *RecordService) CreateRecord(ctx context.Context, profile *Profile, proj
 		Proofs    []ProofRecord `json:"proofs,omitempty"`
 		CreatedAt string        `json:"createdAt"`
 	}{
-		PlatformVersion: "1.0", ProjectID: projectID, RecordID: req.RecordID, Asset: req.Asset,
-		Proofs: proofs, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		PlatformVersion: "1.0",
+		ProjectID:       projectID,
+		RecordID:        req.RecordID,
+		Asset:           req.Asset,
+		Proofs:          proofs,
+		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 	envelope.Issuance.Amount = req.Amount
 	envelope.Issuance.Unit = profile.TokenUnit
@@ -134,11 +145,21 @@ func (s *RecordService) CreateRecord(ctx context.Context, profile *Profile, proj
 	now := time.Now().UTC()
 
 	record := &models.AssetRecord{
-		RecordID: req.RecordID, ProjectID: projectID, Status: models.RecordStatusPending,
-		AssetRaw: req.Asset, MetadataRaw: meta.Canonical, Amount: req.Amount, Unit: profile.TokenUnit,
-		Proofs: toDomainProofs(proofs), MetadataDigest: meta.DigestHex(), CID: meta.CID,
-		RecordKey: recordKey.Hex(), Nonce: nonce.String(), ValidUntil: now.Add(attestationValidUntilWindow).Unix(),
-		CreatedAt: now, UpdatedAt: now,
+		RecordID:       req.RecordID,
+		ProjectID:      projectID,
+		Status:         models.RecordStatusPending,
+		AssetRaw:       req.Asset,
+		MetadataRaw:    meta.Canonical,
+		Amount:         req.Amount,
+		Unit:           profile.TokenUnit,
+		Proofs:         toDomainProofs(proofs),
+		MetadataDigest: meta.DigestHex(),
+		CID:            meta.CID,
+		RecordKey:      recordKey.Hex(),
+		Nonce:          nonce.String(),
+		ValidUntil:     now.Add(attestationValidUntilWindow).Unix(),
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	// Reserve before Publish to reject duplicate RecordIDs. The replication layer also
 	// rejects changed CIDs; see ipfs.ErrPublicationCIDConflict.
@@ -252,8 +273,14 @@ type packageFields struct {
 // SHA-256, and the hex EIP-712 digest of the MintAttestation
 func (s *RecordService) buildFromFields(recordID string, f packageFields, profileRaw, metadataRaw []byte) (zipBytes []byte, packageSHA256, typedDataDigestHex string, err error) {
 	attestation := eip712.MintAttestation{
-		Auditor: f.auditor, ProfileDigest: f.profileDigest, RecordKey: f.recordKey, MetadataDigest: f.metadataDigest,
-		Amount: f.amount, Nonce: f.nonce, ValidUntil: f.validUntil, Vault: f.vault,
+		Auditor:        f.auditor,
+		ProfileDigest:  f.profileDigest,
+		RecordKey:      f.recordKey,
+		MetadataDigest: f.metadataDigest,
+		Amount:         f.amount,
+		Nonce:          f.nonce,
+		ValidUntil:     f.validUntil,
+		Vault:          f.vault,
 	}
 	typedData := auditpkg.NewMintTypedDataDoc(s.eip712Domain, recordID, attestation)
 	digest := eip712.MintDigest(s.eip712Domain, attestation)
@@ -285,8 +312,14 @@ func (s *RecordService) liveFieldsFor(record *models.AssetRecord, profileDigest 
 		return packageFields{}, fmt.Errorf("assets: invalid stored nonce %q", record.Nonce)
 	}
 	return packageFields{
-		auditor: s.currentAuditor(), profileDigest: profileDigest, metadataDigest: metadataDigestBytes,
-		recordKey: recordKey, amount: amount, nonce: nonce, validUntil: uint64(record.ValidUntil), vault: s.vaultAddr,
+		auditor:        s.currentAuditor(),
+		profileDigest:  profileDigest,
+		metadataDigest: metadataDigestBytes,
+		recordKey:      recordKey,
+		amount:         amount,
+		nonce:          nonce,
+		validUntil:     uint64(record.ValidUntil),
+		vault:          s.vaultAddr,
 	}, nil
 }
 
@@ -314,7 +347,9 @@ func (s *RecordService) BuildPackage(ctx context.Context, record *models.AssetRe
 // tagged with the record version and CID it was built from
 func packageRecordFromFields(recordID string, f packageFields, packageSHA256, typedDataDigestHex string, size int, recordVersion int, cid string) *models.AuditPackage {
 	return &models.AuditPackage{
-		RecordID: recordID, PackageSHA256: packageSHA256, Size: int64(size),
+		RecordID:        recordID,
+		PackageSHA256:   packageSHA256,
+		Size:            int64(size),
 		RecordVersion:   recordVersion,
 		CID:             cid,
 		Auditor:         f.auditor.Hex(),

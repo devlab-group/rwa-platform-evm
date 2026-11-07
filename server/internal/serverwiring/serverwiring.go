@@ -204,11 +204,15 @@ func decodeProjectDeployed(log types.Log) (string, map[string]any, error) {
 		return "", nil, err
 	}
 	data := map[string]any{
-		"projectId": ev.ProjectID.Hex(), "profileDigest": ev.ProfileDigest.Hex(),
-		"token": ev.Token.Hex(), "compliance": ev.Compliance.Hex(),
-		"supplyController": ev.SupplyController.Hex(), "vault": ev.Vault.Hex(),
-		"redemptionEscrow": ev.RedemptionEscrow.Hex(), "strategy": ev.Strategy.Hex(),
-		"version": ev.Version,
+		"projectId":        ev.ProjectID.Hex(),
+		"profileDigest":    ev.ProfileDigest.Hex(),
+		"token":            ev.Token.Hex(),
+		"compliance":       ev.Compliance.Hex(),
+		"supplyController": ev.SupplyController.Hex(),
+		"vault":            ev.Vault.Hex(),
+		"redemptionEscrow": ev.RedemptionEscrow.Hex(),
+		"strategy":         ev.Strategy.Hex(),
+		"version":          ev.Version,
 	}
 	if ev.Layout == bindings.FactoryVersionV3 {
 		data["incomeDistributor"] = ev.IncomeDistributor.Hex()
@@ -221,8 +225,8 @@ func decodeProjectDeployed(log types.Log) (string, map[string]any, error) {
 var complianceEventNames = []string{"StatusChanged"}
 
 // KnownEventNames lists typed events for configured contracts; empty means only generic
-// decoding is available. Any child enables role/admin-transfer events; only the token
-// enables Paused/Unpaused.
+// decoding is available. Any child enables role, admin-transfer and admin-delay events;
+// only the token enables Paused/Unpaused.
 func KnownEventNames(addrs models.Addresses, factoryAddr string) map[string]bool {
 	set := map[string]bool{}
 	add := func(addr string, names []string) {
@@ -243,7 +247,14 @@ func KnownEventNames(addrs models.Addresses, factoryAddr string) map[string]bool
 	add(addrs.Token, append([]string{"Paused", "Unpaused"}, token.EventNames...))
 	// Every child can emit role and two-step admin-transfer events
 	for _, a := range []string{addrs.Compliance, addrs.SupplyController, addrs.Vault, addrs.RedemptionEscrow, addrs.Strategy, addrs.Token, addrs.IncomeDistributor} {
-		add(a, []string{"RoleGranted", "RoleRevoked", "DefaultAdminTransferScheduled", "DefaultAdminTransferCanceled"})
+		add(a, []string{
+			"RoleGranted",
+			"RoleRevoked",
+			"DefaultAdminTransferScheduled",
+			"DefaultAdminTransferCanceled",
+			"DefaultAdminDelayChangeScheduled",
+			"DefaultAdminDelayChangeCanceled",
+		})
 	}
 	return set
 }

@@ -22,7 +22,12 @@ type BootstrapConfigResponse struct {
 // NewBootstrapConfigResponse builds the bootstrap view from server
 // configuration; no model backs it
 func NewBootstrapConfigResponse(chainID int64, factoryAddress, factoryVersion, projectID string) BootstrapConfigResponse {
-	return BootstrapConfigResponse{ChainID: chainID, FactoryAddress: factoryAddress, FactoryVersion: factoryVersion, ProjectID: projectID}
+	return BootstrapConfigResponse{
+		ChainID:        chainID,
+		FactoryAddress: factoryAddress,
+		FactoryVersion: factoryVersion,
+		ProjectID:      projectID,
+	}
 }
 
 // ProjectResponse mirrors components.schemas.Project
@@ -68,9 +73,16 @@ type ProjectResponse struct {
 	// strategy as read from the chain; see ApplyPricing
 	StrategyKind string               `json:"strategyKind,omitempty"`
 	Oracle       *OraclePriceResponse `json:"oracle,omitempty"`
+	// ForwardPriced is the rwa-v4 flag that the current strategy prices orders at a later
+	// feed round; nil (omitted) for earlier versions and when the read fails
+	ForwardPriced *bool `json:"forwardPriced,omitempty"`
 
-	// Paused, Auditor, Treasury, RedemptionManager, PendingAdmin, Roles and prices reflect
-	// indexed AccessControl and governance events through project.ReconcileSecurity,
+	// AdminDelayChanges lists each contract's latest uncancelled default-admin delay change;
+	// omitted when empty
+	AdminDelayChanges []AdminDelayChange `json:"adminDelayChanges,omitempty"`
+
+	// Paused, Auditor, Treasury, RedemptionManager, PendingAdmin, AdminDelayChanges, Roles and
+	// prices reflect indexed AccessControl and governance events through project.ReconcileSecurity,
 	// including changes made outside the server. SecurityAsOfBlock and SecurityAsOfTime
 	// show how current the projection is; api.securityStale checks its age and the indexer
 	// checkpoint. Before the first projection, deploy-time values are reported as stale.
@@ -80,6 +92,13 @@ type ProjectResponse struct {
 	SecurityAsOfBlock uint64 `json:"securityAsOfBlock,omitempty"`
 	SecurityAsOfTime  string `json:"securityAsOfTime,omitempty"`
 	SecurityStale     bool   `json:"securityStale"`
+}
+
+// AdminDelayChange mirrors components.schemas.AdminDelayChange
+type AdminDelayChange struct {
+	Contract string `json:"contract"`
+	NewDelay uint64 `json:"newDelay"`
+	EffectAt uint64 `json:"effectAt"`
 }
 
 // EnforcementResponse mirrors components.schemas.Enforcement. It is admin-only because
@@ -110,8 +129,12 @@ func ToEnforcementResponse(p *models.Project, securityStale bool) EnforcementRes
 	resp.FrozenBalances = s.FrozenBalances
 	if f := s.LastForcedTransfer; f != nil {
 		resp.LastForcedTransfer = &ForcedTransfer{
-			From: f.From, To: f.To, Amount: f.Amount,
-			TxHash: f.TxHash, BlockNumber: f.BlockNumber, LogIndex: f.LogIndex,
+			From:        f.From,
+			To:          f.To,
+			Amount:      f.Amount,
+			TxHash:      f.TxHash,
+			BlockNumber: f.BlockNumber,
+			LogIndex:    f.LogIndex,
 		}
 	}
 	resp.SecurityAsOfBlock = s.AsOfBlock
@@ -154,10 +177,12 @@ type OraclePriceResponse struct {
 	FeedDecimals        uint8  `json:"feedDecimals"`
 	SequencerUptimeFeed string `json:"sequencerUptimeFeed,omitempty"`
 	GracePeriod         uint64 `json:"gracePeriod,omitempty"`
-	Available           bool   `json:"available"`
-	Price               string `json:"price,omitempty"`
-	UpdatedAt           *int64 `json:"updatedAt,omitempty"`
-	Error               string `json:"error,omitempty"`
+	// DealingCutoff is the rwa-v4 cut-off in seconds; nil (omitted) for an rwa-v3 strategy
+	DealingCutoff *uint64 `json:"dealingCutoff,omitempty"`
+	Available     bool    `json:"available"`
+	Price         string  `json:"price,omitempty"`
+	UpdatedAt     *int64  `json:"updatedAt,omitempty"`
+	Error         string  `json:"error,omitempty"`
 }
 
 // ApplyPricing sets strategy fields from the supplied read result. Oracle prices replace
@@ -181,18 +206,35 @@ type RoleHolders map[string][]string
 // value) and checkpoint-derived securityStale.
 func ToProjectResponse(p *models.Project, tokenUnit string, legal *models.LegalDescriptor, finalityConfirmations uint64, securityStale bool) ProjectResponse {
 	resp := ProjectResponse{
-		ProjectID: p.ProjectID, Version: p.Version, ChainID: p.ChainID, ProfileDigest: p.ProfileDigest,
-		Status: string(p.Status), VerificationNote: p.VerificationNote,
-		Decimals: p.TokenDecimals, QuoteDecimals: p.QuoteDecimals, TokenUnit: tokenUnit, Legal: legal,
+		ProjectID:        p.ProjectID,
+		Version:          p.Version,
+		ChainID:          p.ChainID,
+		ProfileDigest:    p.ProfileDigest,
+		Status:           string(p.Status),
+		VerificationNote: p.VerificationNote,
+		Decimals:         p.TokenDecimals,
+		QuoteDecimals:    p.QuoteDecimals,
+		TokenUnit:        tokenUnit,
+		Legal:            legal,
 		Addresses: Addresses{
-			Token: p.Addresses.Token, Compliance: p.Addresses.Compliance, SupplyController: p.Addresses.SupplyController,
-			Vault: p.Addresses.Vault, RedemptionEscrow: p.Addresses.RedemptionEscrow, Strategy: p.Addresses.Strategy,
-			QuoteToken: p.Addresses.QuoteToken, IncomeDistributor: p.Addresses.IncomeDistributor,
+			Token:             p.Addresses.Token,
+			Compliance:        p.Addresses.Compliance,
+			SupplyController:  p.Addresses.SupplyController,
+			Vault:             p.Addresses.Vault,
+			RedemptionEscrow:  p.Addresses.RedemptionEscrow,
+			Strategy:          p.Addresses.Strategy,
+			QuoteToken:        p.Addresses.QuoteToken,
+			IncomeDistributor: p.Addresses.IncomeDistributor,
 		},
 		MinPurchaseQuote: p.MinPurchaseQuote,
 		// Deploy-time values are the fallback until a projection exists
-		Paused: p.Paused, Auditor: p.Auditor, Treasury: p.Treasury, RedemptionManager: p.RedemptionManager,
-		FinalityConfirmations: finalityConfirmations, BytecodeVerified: p.BytecodeVerified, Roles: RoleHolders(p.Roles),
+		Paused:                       p.Paused,
+		Auditor:                      p.Auditor,
+		Treasury:                     p.Treasury,
+		RedemptionManager:            p.RedemptionManager,
+		FinalityConfirmations:        finalityConfirmations,
+		BytecodeVerified:             p.BytecodeVerified,
+		Roles:                        RoleHolders(p.Roles),
 		PurchasePricePerWholeToken:   p.PurchasePricePerWholeToken,
 		RedemptionPricePerWholeToken: p.RedemptionPricePerWholeToken,
 		SecurityStale:                securityStale,
@@ -210,6 +252,9 @@ func ToProjectResponse(p *models.Project, tokenUnit string, legal *models.LegalD
 		resp.Treasury = s.Treasury
 		resp.RedemptionManager = s.RedemptionManager
 		resp.PendingAdmin = s.PendingAdmin
+		for _, c := range s.AdminDelayChanges {
+			resp.AdminDelayChanges = append(resp.AdminDelayChanges, AdminDelayChange(c))
+		}
 		resp.Roles = RoleHolders(s.Roles)
 		if len(s.RolesByContract) > 0 {
 			resp.RolesByContract = make(map[string]RoleHolders, len(s.RolesByContract))

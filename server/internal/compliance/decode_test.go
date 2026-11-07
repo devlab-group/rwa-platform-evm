@@ -31,9 +31,12 @@ func TestDecodeLogStatusChanged(t *testing.T) {
 		t.Fatalf("name = %q, want StatusChanged", name)
 	}
 	want := map[string]any{
-		"account": account.Hex(), "caller": caller.Hex(),
-		"previousStatus": uint8(1), "newStatus": uint8(2),
-		"previousValidUntil": uint64(0), "newValidUntil": uint64(999),
+		"account":            account.Hex(),
+		"caller":             caller.Hex(),
+		"previousStatus":     uint8(1),
+		"newStatus":          uint8(2),
+		"previousValidUntil": uint64(0),
+		"newValidUntil":      uint64(999),
 	}
 	for k, v := range want {
 		if data[k] != v {

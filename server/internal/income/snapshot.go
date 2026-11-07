@@ -263,12 +263,18 @@ func BuildSnapshot(p SnapshotParams) (*Snapshot, error) {
 	}
 	root := tree.Root()
 	doc := SnapshotDoc{
-		FormatVersion: "1", ChainID: fmt.Sprint(p.ChainID),
-		Token: p.Token.Hex(), IncomeDistributor: p.IncomeDistributor.Hex(), QuoteToken: p.Quote.Hex(),
-		RecordBlock: fmt.Sprint(p.RecordBlock), Total: p.Total.String(),
-		EligibleSupply: p.Entitlements.EligibleSupply.String(), Distributed: p.Entitlements.Distributed.String(),
-		MerkleRoot: "0x" + hex.EncodeToString(root[:]), LeafEncoding: []string{"address", "uint256"},
-		Entries: entries,
+		FormatVersion:     "1",
+		ChainID:           fmt.Sprint(p.ChainID),
+		Token:             p.Token.Hex(),
+		IncomeDistributor: p.IncomeDistributor.Hex(),
+		QuoteToken:        p.Quote.Hex(),
+		RecordBlock:       fmt.Sprint(p.RecordBlock),
+		Total:             p.Total.String(),
+		EligibleSupply:    p.Entitlements.EligibleSupply.String(),
+		Distributed:       p.Entitlements.Distributed.String(),
+		MerkleRoot:        "0x" + hex.EncodeToString(root[:]),
+		LeafEncoding:      []string{"address", "uint256"},
+		Entries:           entries,
 	}
 	raw, err := json.Marshal(doc)
 	if err != nil {

@@ -5,8 +5,10 @@
 #
 # The Go e2e/harness/main.go acts as the admin wallet: deploy and verify the stack,
 # prove ownership, allow compliance, create/sign/mint an asset, buy, redeem/fund/claim,
-# time out/cancel, check ERC-7943 enforcement, and run the rwa-v3 income flow (snapshot,
-# createDistribution, investor claim). Assertions poll server read models,
+# time out/cancel, check ERC-7943 enforcement, run the rwa-v3 income flow (snapshot,
+# createDistribution, investor claim) and then the rwa-v4 forward-pricing flow on a mock
+# feed and an OraclePriceStrategy that this script deploys: a forward purchase, a forward
+# redemption and a purchase rejected during a pause. Assertions poll server read models,
 # not just receipts; HTTP calls and readiness need no curl or wget.
 #
 # Ports default to Anvil 8545, API 8090, Mongo 27017 and IPFS 5001 and can be moved with
@@ -49,9 +51,13 @@ IPFS_IMAGE="${E2E_IPFS_IMAGE:-ipfs/kubo:v0.32.1@sha256:7cc0e0de8f845d6c9fa1dce41
 IPFS_API_PORT="${E2E_IPFS_API_PORT:-5001}"
 IPFS_CONTAINER="rwa-e2e-ipfs-$$"
 
-# RWAFactory requires at least a 1-day redemptionTimeout; evm_increaseTime lets the
-# harness test timeout/cancel without waiting
+# RWAFactory requires at least a 1-day redemptionTimeout and purchaseTimeout;
+# evm_increaseTime lets the harness test timeout/cancel without waiting
 REDEMPTION_TIMEOUT="${REDEMPTION_TIMEOUT:-86400}"
+PURCHASE_TIMEOUT="${PURCHASE_TIMEOUT:-604800}"
+# The OraclePriceStrategy's dealing cut-off in seconds: an order prices at the first feed
+# round that lands at least this long after it. It stays below both timeouts.
+DEALING_CUTOFF="${DEALING_CUTOFF:-3600}"
 
 # Anvil's default accounts 0 and 1. Account 0 holds every role in the ProjectConfig
 # that the harness deploys (admin, auditor, compliance operator, pricer, treasurer,
@@ -61,6 +67,8 @@ DEPLOYER_PK="${DEPLOYER_PK:-ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae78
 INVESTOR_PK="${INVESTOR_PK:-59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d}"
 DEPLOYER_PK="${DEPLOYER_PK#0x}"
 INVESTOR_PK="${INVESTOR_PK#0x}"
+# Anvil account 9: a funded wallet with no role, for the keeper
+KEEPER_PK="${KEEPER_PK:-2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6}"
 
 # The profile and harness share this UUID; its keccak256 is on-chain
 # ProjectConfig.projectId. The server uses it to bind ProjectDeployed to the profile.
@@ -221,9 +229,10 @@ find "${WEBUI_EMBED_DIR}" -mindepth 1 ! -name .gitkeep -delete
 cp -r "${WEB_DIR}/dist/." "${WEBUI_EMBED_DIR}/"
 echo "web SPA embedded from ${WEB_DIR}/dist into ${WEBUI_EMBED_DIR}."
 
-echo "=== [4/9] building signer + platform binaries ==="
+echo "=== [4/9] building signer, platform and keeper binaries ==="
 (cd "${SIGNER_DIR}" && go build -o "${WORKDIR}/signer" ./cmd/signer)
 (cd "${SERVER_DIR}" && go build -o "${WORKDIR}/platform" ./cmd/platform)
+(cd "${SERVER_DIR}" && go build -o "${WORKDIR}/keeper" ./cmd/keeper)
 
 echo "=== [5/9] preparing auditor keystore + asset profile ==="
 cat >"${WORKDIR}/profile.json" <<EOF
@@ -302,6 +311,36 @@ if [[ -z "${QUOTE_TOKEN}" ]]; then
 fi
 echo "quoteToken=${QUOTE_TOKEN}"
 
+# Forward pricing: a mock Chainlink feed with round history (8 decimals, first answer 2.5)
+# and an OraclePriceStrategy over it (18-decimal token, 6-decimal quote, 1% spreads, no
+# sequencer feed). The Vault is created with a Fixed strategy; the harness points it at
+# this one with Vault.setStrategy once the Fixed flow is done.
+deploy_contract() {
+    local out
+    out="$(cd "${CONTRACTS_DIR}" && forge create "$1" --rpc-url "${RPC_URL}" \
+        --private-key "0x${DEPLOYER_PK}" --broadcast --json --constructor-args "${@:2}")"
+    grep -oE '"deployedTo"\s*:\s*"0x[0-9a-fA-F]{40}"' <<<"${out}" | grep -oE "0x[0-9a-fA-F]{40}"
+}
+ORACLE_FEED="$(deploy_contract test/mocks/oracle/MockAggregatorV3.sol:MockAggregatorV3 8 250000000)"
+if [[ -z "${ORACLE_FEED}" ]]; then
+    echo "run_e2e.sh: could not deploy MockAggregatorV3" >&2
+    exit 1
+fi
+ORACLE_STRATEGY="$(deploy_contract src/pricing/OraclePriceStrategy.sol:OraclePriceStrategy \
+    "${ORACLE_FEED}" 0x0000000000000000000000000000000000000000 3600 0 100 100 18 6 "${DEALING_CUTOFF}")"
+if [[ -z "${ORACLE_STRATEGY}" ]]; then
+    echo "run_e2e.sh: could not deploy OraclePriceStrategy" >&2
+    exit 1
+fi
+echo "oracleFeed=${ORACLE_FEED} oracleStrategy=${ORACLE_STRATEGY} dealingCutoff=${DEALING_CUTOFF}s"
+# The harness swaps to this strategy first to check backfilling of an unwatched address
+REPLACEMENT_STRATEGY="$(deploy_contract src/pricing/FixedPriceStrategy.sol:FixedPriceStrategy \
+    18 2000000 1950000 "${DEPLOYER_ADDR}" "${DEPLOYER_ADDR}" 0)"
+if [[ -z "${REPLACEMENT_STRATEGY}" ]]; then
+    echo "run_e2e.sh: could not deploy the replacement FixedPriceStrategy" >&2
+    exit 1
+fi
+
 echo "=== [7/9] (no project seeding: the harness deploys the project through the factory) ==="
 # The harness deploys the full stack through RWAFactory.deploy(config);
 # ReconcileDeployment observes ProjectDeployed, verifies it and stores the Active
@@ -359,10 +398,12 @@ set +e
     E2E_BASE_URL="${BASE_URL}" CHAIN_RPC_URL="${RPC_URL}" CHAIN_ID=31337 \
     DEPLOYER_PK="${DEPLOYER_PK}" INVESTOR_PK="${INVESTOR_PK}" \
     SIGNER_BIN="${WORKDIR}/signer" KEYSTORE_PATH="${WORKDIR}/keystore/auditor" KEYSTORE_PASSWORD_FILE="${WORKDIR}/keystore.password" \
-    E2E_WORKDIR="${WORKDIR}" \
+    E2E_WORKDIR="${WORKDIR}" KEEPER_BIN="${WORKDIR}/keeper" KEEPER_PK="${KEEPER_PK}" \
     QUOTE_TOKEN_ADDRESS="${QUOTE_TOKEN}" E2E_PROJECT_ID="${PROJECT_ID_UUID}" \
     E2E_PURCHASE_PRICE="2000000" E2E_REDEMPTION_PRICE="1950000" \
-    REDEMPTION_TIMEOUT="${REDEMPTION_TIMEOUT}" \
+    REDEMPTION_TIMEOUT="${REDEMPTION_TIMEOUT}" PURCHASE_TIMEOUT="${PURCHASE_TIMEOUT}" \
+    E2E_ORACLE_FEED="${ORACLE_FEED}" E2E_ORACLE_STRATEGY="${ORACLE_STRATEGY}" E2E_DEALING_CUTOFF="${DEALING_CUTOFF}" \
+    E2E_REPLACEMENT_STRATEGY="${REPLACEMENT_STRATEGY}" \
     go run ./e2e/harness)
 harness_status=$?
 set -e

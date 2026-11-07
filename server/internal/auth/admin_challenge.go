@@ -66,8 +66,12 @@ func (s *AdminChallengeService) Create(ctx context.Context, address string) (non
 	)
 
 	c := &models.AdminChallenge{
-		Address: addr.Hex(), Message: message, Nonce: nonce,
-		ExpiresAt: expiresAt, Used: false, CreatedAt: now,
+		Address:   addr.Hex(),
+		Message:   message,
+		Nonce:     nonce,
+		ExpiresAt: expiresAt,
+		Used:      false,
+		CreatedAt: now,
 	}
 	if err := s.repo.Insert(ctx, c); err != nil {
 		return "", "", time.Time{}, err

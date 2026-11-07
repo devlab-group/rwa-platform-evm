@@ -14,9 +14,16 @@ import (
 func seedReissueRecord(t *testing.T, env *testEnv, id string, status models.RecordStatus) {
 	t.Helper()
 	rec := &models.AssetRecord{
-		RecordID: id, Status: status, Amount: "1", Nonce: "12345", ValidUntil: 1000,
-		RecordKey: "0x" + repeatHex("11", 32), MetadataDigest: "0x" + repeatHex("22", 32),
-		CID: "bafk-reissue", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		RecordID:       id,
+		Status:         status,
+		Amount:         "1",
+		Nonce:          "12345",
+		ValidUntil:     1000,
+		RecordKey:      "0x" + repeatHex("11", 32),
+		MetadataDigest: "0x" + repeatHex("22", 32),
+		CID:            "bafk-reissue",
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 	if err := env.app.Repos.AssetRecords.Create(context.Background(), rec); err != nil {
 		t.Fatal(err)

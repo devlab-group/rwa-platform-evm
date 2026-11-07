@@ -21,9 +21,15 @@ func TestBuildAndOpenPackageRoundTrip(t *testing.T) {
 		PrimaryType: "MintAttestation",
 		Domain:      TypedDataDomain{Name: "RWA-Supply-Attestation", Version: "1", ChainID: 31337, VerifyingContract: "0x5FbDB2315678afecb367f032d93F642f64180aa"},
 		Message: TypedDataMessage{
-			Auditor: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", ProfileDigest: "0x" + hexZeros(),
-			RecordID: "GOLD-1", RecordKey: "0x" + hexZeros(), MetadataDigest: "0x" + hexZeros(),
-			Amount: "1000", Nonce: "1", ValidUntil: 1800000000, Vault: "0x5FbDB2315678afecb367f032d93F642f64180aa",
+			Auditor:        "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+			ProfileDigest:  "0x" + hexZeros(),
+			RecordID:       "GOLD-1",
+			RecordKey:      "0x" + hexZeros(),
+			MetadataDigest: "0x" + hexZeros(),
+			Amount:         "1000",
+			Nonce:          "1",
+			ValidUntil:     1800000000,
+			Vault:          "0x5FbDB2315678afecb367f032d93F642f64180aa",
 		},
 	}
 	proofs := []ProofFile{{Name: "report.pdf", MIME: "application/pdf", Data: []byte("%PDF-fake")}}

@@ -23,7 +23,10 @@ func ev(name, id string, block uint64, logIndex uint, extra map[string]any) *mod
 func TestBuildStatesRequestOnly(t *testing.T) {
 	events := []*models.ChainEvent{
 		ev("RedemptionRequested", "1", 10, 0, map[string]any{
-			"beneficiary": "0xAAA", "rwaAmount": "1000", "quoteAmount": "950", "createdAt": uint64(1000),
+			"beneficiary": "0xAAA",
+			"rwaAmount":   "1000",
+			"quoteAmount": "950",
+			"createdAt":   uint64(1000),
 		}),
 	}
 	states := BuildStates(events, 1209600)
@@ -158,25 +161,33 @@ func TestReconcileNeverExposesEmptyOrPartialRedemptionsBetweenWrites(t *testing.
 	events := memory.NewChainEventRepository()
 	inner := memory.NewRedemptionRequestRepository()
 	armed, probes, minObserved := false, 0, 1<<30
-	repo := probedRedemptionRequestRepo{RedemptionRequestRepository: inner, probe: func() {
-		if !armed {
-			return // only the rebuild under test is observed
-		}
-		probes++
-		list, err := inner.List(context.Background(), "")
-		if err != nil {
-			t.Errorf("probe List: %v", err)
-			return
-		}
-		minObserved = min(minObserved, len(list))
-	}}
+	repo := probedRedemptionRequestRepo{
+		RedemptionRequestRepository: inner,
+		probe: func() {
+			if !armed {
+				return // only the rebuild under test is observed
+			}
+			probes++
+			list, err := inner.List(context.Background(), "")
+			if err != nil {
+				t.Errorf("probe List: %v", err)
+				return
+			}
+			minObserved = min(minObserved, len(list))
+		},
+	}
 	svc := New(nil, escrowAddr, repo, common.Address{})
 
 	ctx := context.Background()
 	seedRequested := func(id string, block uint64) {
 		if err := events.Create(ctx, &models.ChainEvent{
-			ChainID: 31337, Address: escrowAddr.Hex(), Name: "RedemptionRequested", TxHash: "req-" + id, LogIndex: 0, BlockNumber: block,
-			Data: map[string]any{"id": id, "beneficiary": "0xAAA", "rwaAmount": "1000", "quoteAmount": "950", "createdAt": uint64(1000)},
+			ChainID:     31337,
+			Address:     escrowAddr.Hex(),
+			Name:        "RedemptionRequested",
+			TxHash:      "req-" + id,
+			LogIndex:    0,
+			BlockNumber: block,
+			Data:        map[string]any{"id": id, "beneficiary": "0xAAA", "rwaAmount": "1000", "quoteAmount": "950", "createdAt": uint64(1000)},
 		}); err != nil {
 			t.Fatal(err)
 		}

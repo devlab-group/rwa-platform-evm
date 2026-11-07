@@ -23,8 +23,13 @@ var decimalAmountPattern = regexp.MustCompile(`^[0-9]+$`)
 var maxIssuanceAmount = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 
 var metadataAllowedTopLevelKeys = map[string]bool{
-	"platformVersion": true, "projectId": true, "recordId": true, "asset": true,
-	"issuance": true, "proofs": true, "createdAt": true,
+	"platformVersion": true,
+	"projectId":       true,
+	"recordId":        true,
+	"asset":           true,
+	"issuance":        true,
+	"proofs":          true,
+	"createdAt":       true,
 }
 
 // ProofRecord mirrors one shared/schemas/metadata.schema.json proofs[] entry
@@ -127,8 +132,8 @@ func ValidateRecord(profile *Profile, raw []byte, expectedAmount, expectedProjec
 		} else if expectedAmount != "" && issuance.Amount != expectedAmount {
 			errs = append(errs, "issuance.amount must equal the record's amount / EIP-712 amount")
 		}
-		if issuance.Unit == "" {
-			errs = append(errs, "issuance.unit must be non-empty")
+		if issuance.Unit == "" || !printableText(issuance.Unit) {
+			errs = append(errs, "issuance.unit must be non-empty printable text")
 		}
 		m.IssuanceAmount = issuance.Amount
 		m.IssuanceUnit = issuance.Unit
@@ -141,8 +146,8 @@ func ValidateRecord(profile *Profile, raw []byte, expectedAmount, expectedProjec
 			errs = append(errs, "proofs must be an array of {type, sha256, uri?} with no additional fields")
 		} else {
 			for i, pr := range proofs {
-				if pr.Type == "" {
-					errs = append(errs, fmt.Sprintf("proofs[%d].type must be non-empty", i))
+				if pr.Type == "" || !printableText(pr.Type) {
+					errs = append(errs, fmt.Sprintf("proofs[%d].type must be non-empty printable text", i))
 				}
 				if !sha256HexPattern.MatchString(pr.SHA256) {
 					errs = append(errs, fmt.Sprintf("proofs[%d].sha256 must match ^[0-9a-f]{64}$", i))

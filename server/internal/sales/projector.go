@@ -23,7 +23,9 @@ func BuildPurchases(events []*models.ChainEvent) []*models.Purchase {
 			Recipient:   toString(e.Data["recipient"]),
 			TokenAmount: toString(e.Data["tokenAmount"]),
 			QuoteAmount: toString(e.Data["quoteAmount"]),
-			TxHash:      e.TxHash, BlockNumber: e.BlockNumber, CreatedAt: e.IndexedAt,
+			TxHash:      e.TxHash,
+			BlockNumber: e.BlockNumber,
+			CreatedAt:   e.IndexedAt,
 		})
 	}
 	return out

@@ -47,8 +47,13 @@ type Guard struct {
 // disables the cap, and nil sanctions matches nothing.
 func NewGuard(repos *repository.Repositories, maxWallets int, excluded []string, sanctions *SanctionsList) *Guard {
 	return &Guard{
-		investors: repos.Investors, ops: repos.ComplianceOperations, events: repos.KYCEvents, txs: repos.Transactions,
-		maxWallets: maxWallets, excluded: excluded, sanctions: sanctions,
+		investors:  repos.Investors,
+		ops:        repos.ComplianceOperations,
+		events:     repos.KYCEvents,
+		txs:        repos.Transactions,
+		maxWallets: maxWallets,
+		excluded:   excluded,
+		sanctions:  sanctions,
 	}
 }
 

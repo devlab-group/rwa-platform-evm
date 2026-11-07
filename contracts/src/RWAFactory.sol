@@ -7,6 +7,7 @@ import {ComplianceRegistry} from "./ComplianceRegistry.sol";
 import {RWAToken} from "./RWAToken.sol";
 import {ComplianceTokenDeployer} from "./factory/ComplianceTokenDeployer.sol";
 import {MarketDeployer} from "./factory/MarketDeployer.sol";
+import {StrategyDeployer} from "./factory/StrategyDeployer.sol";
 import {SupplyControllerDeployer} from "./factory/SupplyControllerDeployer.sol";
 import {RedemptionEscrowDeployer} from "./factory/RedemptionEscrowDeployer.sol";
 import {IncomeDistributorDeployer} from "./factory/IncomeDistributorDeployer.sol";
@@ -18,13 +19,13 @@ import {
 
 /// @title RWAFactory
 /// @notice Deploys and wires a versioned project stack in one transaction
-/// @dev Delegatecalls five stateless helpers to preserve factory-owned bootstrap wiring while
+/// @dev Delegatecalls stateless helpers to preserve factory-owned bootstrap wiring while
 ///      splitting creation code below the EIP-170 runtime limit; see ComplianceTokenDeployer
 contract RWAFactory is IRWAFactory {
-    string private constant VERSION = "rwa-v3";
+    string private constant VERSION = "rwa-v4";
 
-    uint64 private constant MIN_REDEMPTION_TIMEOUT = 1 days;
-    uint64 private constant MAX_REDEMPTION_TIMEOUT = 365 days;
+    uint64 private constant MIN_TIMEOUT = 1 days;
+    uint64 private constant MAX_TIMEOUT = 365 days;
     uint8 private constant MAX_DECIMALS = 36;
 
     address public immutable complianceTokenDeployer;
@@ -32,6 +33,7 @@ contract RWAFactory is IRWAFactory {
     address public immutable supplyControllerDeployer;
     address public immutable redemptionEscrowDeployer;
     address public immutable incomeDistributorDeployer;
+    address public immutable strategyDeployer;
 
     error ZeroAddressDeployer();
     error DeployerCallFailed();
@@ -41,12 +43,13 @@ contract RWAFactory is IRWAFactory {
         address marketDeployer_,
         address supplyControllerDeployer_,
         address redemptionEscrowDeployer_,
-        address incomeDistributorDeployer_
+        address incomeDistributorDeployer_,
+        address strategyDeployer_
     ) {
         if (
             complianceTokenDeployer_ == address(0) || marketDeployer_ == address(0)
                 || supplyControllerDeployer_ == address(0) || redemptionEscrowDeployer_ == address(0)
-                || incomeDistributorDeployer_ == address(0)
+                || incomeDistributorDeployer_ == address(0) || strategyDeployer_ == address(0)
         ) {
             revert ZeroAddressDeployer();
         }
@@ -55,13 +58,15 @@ contract RWAFactory is IRWAFactory {
         supplyControllerDeployer = supplyControllerDeployer_;
         redemptionEscrowDeployer = redemptionEscrowDeployer_;
         incomeDistributorDeployer = incomeDistributorDeployer_;
+        strategyDeployer = strategyDeployer_;
     }
 
     function deploy(ProjectConfig calldata config) external returns (Deployment memory) {
         _validateConfig(config);
 
         (address compliance, address token) = _deployComplianceAndToken(config);
-        (address strategy, address vault) = _deployMarket(config, token);
+        address strategy = _deployStrategy(config);
+        address vault = _deployMarket(config, token, strategy);
         address supplyController = _deploySupplyController(config, token, vault);
         address escrow = _deployEscrow(config, token, vault);
         address incomeDistributor = _deployIncomeDistributor(config, token, vault);
@@ -114,12 +119,18 @@ contract RWAFactory is IRWAFactory {
         (compliance, token) = abi.decode(ret, (address, address));
     }
 
-    function _deployMarket(ProjectConfig calldata config, address token)
+    function _deployStrategy(ProjectConfig calldata config) private returns (address strategy) {
+        bytes memory ret = _delegateDeploy(strategyDeployer, abi.encodeCall(StrategyDeployer.deploy, (config)));
+        strategy = abi.decode(ret, (address));
+    }
+
+    function _deployMarket(ProjectConfig calldata config, address token, address strategy)
         private
-        returns (address strategy, address vault)
+        returns (address vault)
     {
-        bytes memory ret = _delegateDeploy(marketDeployer, abi.encodeCall(MarketDeployer.deploy, (config, token)));
-        (strategy, vault) = abi.decode(ret, (address, address));
+        bytes memory ret =
+            _delegateDeploy(marketDeployer, abi.encodeCall(MarketDeployer.deploy, (config, token, strategy)));
+        vault = abi.decode(ret, (address));
     }
 
     function _deploySupplyController(ProjectConfig calldata config, address token, address vault)
@@ -195,6 +206,7 @@ contract RWAFactory is IRWAFactory {
             if (config.redemptionSpreadBps != 0) revert InvalidConfig("redemptionSpreadBps");
             if (config.sequencerUptimeFeed != address(0)) revert InvalidConfig("sequencerUptimeFeed");
             if (config.sequencerGracePeriod != 0) revert InvalidConfig("sequencerGracePeriod");
+            if (config.dealingCutoff != 0) revert InvalidConfig("dealingCutoff");
         } else {
             if (config.pricer != address(0)) revert InvalidConfig("pricer");
             if (config.purchasePricePerWholeToken != 0) revert InvalidConfig("purchasePricePerWholeToken");
@@ -207,8 +219,21 @@ contract RWAFactory is IRWAFactory {
                 revert InvalidConfig("sequencerGracePeriod");
             }
         }
-        if (config.redemptionTimeout < MIN_REDEMPTION_TIMEOUT || config.redemptionTimeout > MAX_REDEMPTION_TIMEOUT) {
+        // Fixed projects also need a timeout because setStrategy can switch them to oracle pricing
+        if (config.purchaseTimeout < MIN_TIMEOUT || config.purchaseTimeout > MAX_TIMEOUT) {
+            revert InvalidConfig("purchaseTimeout");
+        }
+        if (config.redemptionTimeout < MIN_TIMEOUT || config.redemptionTimeout > MAX_TIMEOUT) {
             revert InvalidConfig("redemptionTimeout");
+        }
+        // Leave a pricing window before either cancellation timeout
+        if (
+            config.strategyKind == StrategyKind.Oracle
+                && (config.dealingCutoff == 0
+                    || config.dealingCutoff >= config.purchaseTimeout
+                    || config.dealingCutoff >= config.redemptionTimeout)
+        ) {
+            revert InvalidConfig("dealingCutoff");
         }
     }
 }

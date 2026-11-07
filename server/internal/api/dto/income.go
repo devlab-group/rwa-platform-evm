@@ -32,10 +32,18 @@ type IncomeDistributionResponse struct {
 // indexed events.
 func ToIncomeDistributionResponse(p *models.IncomePreparation, d *models.IncomeDistribution, status string) IncomeDistributionResponse {
 	resp := IncomeDistributionResponse{
-		PreparationID: p.ID, Status: status, MerkleRoot: p.MerkleRoot, Total: p.Total, RecordBlock: p.RecordBlock,
-		ClaimDeadline: p.ClaimDeadline, SnapshotURI: p.SnapshotURI, SnapshotSha256: p.SnapshotSha256,
-		EligibleSupply: p.EligibleSupply, Distributed: p.Distributed, HolderCount: p.HolderCount,
-		CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339),
+		PreparationID:  p.ID,
+		Status:         status,
+		MerkleRoot:     p.MerkleRoot,
+		Total:          p.Total,
+		RecordBlock:    p.RecordBlock,
+		ClaimDeadline:  p.ClaimDeadline,
+		SnapshotURI:    p.SnapshotURI,
+		SnapshotSha256: p.SnapshotSha256,
+		EligibleSupply: p.EligibleSupply,
+		Distributed:    p.Distributed,
+		HolderCount:    p.HolderCount,
+		CreatedAt:      p.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if d != nil {
 		resp.DistributionID = d.ID
@@ -65,7 +73,14 @@ type IncomeClaimResponse struct {
 // derived from indexed events.
 func ToIncomeClaimResponse(d *models.IncomeDistribution, account, amount string, proof []string, status, claimTxHash string) IncomeClaimResponse {
 	return IncomeClaimResponse{
-		DistributionID: d.ID, Account: account, Amount: amount, Proof: proof, MerkleRoot: d.MerkleRoot,
-		ClaimDeadline: d.ClaimDeadline, SnapshotURI: d.SnapshotURI, Status: status, ClaimTxHash: claimTxHash,
+		DistributionID: d.ID,
+		Account:        account,
+		Amount:         amount,
+		Proof:          proof,
+		MerkleRoot:     d.MerkleRoot,
+		ClaimDeadline:  d.ClaimDeadline,
+		SnapshotURI:    d.SnapshotURI,
+		Status:         status,
+		ClaimTxHash:    claimTxHash,
 	}
 }

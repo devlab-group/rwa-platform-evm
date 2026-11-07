@@ -11,8 +11,9 @@ import (
 
 // Alert is one finding from an evaluator
 type Alert struct {
-	Kind         string // "pending_redemption_sla" or "funded_claim_failure"
-	RedemptionID string
+	Kind         string // "pending_redemption_sla", "funded_claim_failure" or "pending_purchase_sla"
+	RedemptionID string // set for redemption findings
+	OrderID      string // set for purchase-order findings
 	Message      string
 	Since        time.Time // when the condition being alerted on started
 	Age          time.Duration
@@ -33,8 +34,11 @@ func EvaluatePendingRedemptionSLA(requests []*models.RedemptionRequest, threshol
 			continue
 		}
 		out = append(out, Alert{
-			Kind: "pending_redemption_sla", RedemptionID: r.ID, Since: createdAt, Age: age,
-			Message: fmt.Sprintf("redemption %s has been Pending for %s (SLA %s)", r.ID, age.Round(time.Second), threshold),
+			Kind:         "pending_redemption_sla",
+			RedemptionID: r.ID,
+			Since:        createdAt,
+			Age:          age,
+			Message:      fmt.Sprintf("redemption %s has been Pending for %s (SLA %s)", r.ID, age.Round(time.Second), threshold),
 		})
 	}
 	return out
@@ -60,8 +64,36 @@ func EvaluateFundedClaimFailure(requests []*models.RedemptionRequest, threshold 
 			continue
 		}
 		out = append(out, Alert{
-			Kind: "funded_claim_failure", RedemptionID: r.ID, Since: fundedAt, Age: age,
-			Message: fmt.Sprintf("redemption %s has been Funded for %s without being claimed (SLA %s)", r.ID, age.Round(time.Second), threshold),
+			Kind:         "funded_claim_failure",
+			RedemptionID: r.ID,
+			Since:        fundedAt,
+			Age:          age,
+			Message:      fmt.Sprintf("redemption %s has been Funded for %s without being claimed (SLA %s)", r.ID, age.Round(time.Second), threshold),
+		})
+	}
+	return out
+}
+
+// EvaluatePendingPurchaseSLA reports Pending orders whose on-chain creation time is at
+// least threshold old. Check pricing, settlement, pause and compliance conditions when
+// investigating; the order's age does not identify the cause.
+func EvaluatePendingPurchaseSLA(orders []*models.PurchaseOrder, threshold time.Duration, now time.Time) []Alert {
+	var out []Alert
+	for _, o := range orders {
+		if o.Status != models.PurchaseOrderPending {
+			continue
+		}
+		createdAt := time.Unix(o.CreatedAt, 0).UTC()
+		age := now.Sub(createdAt)
+		if age < threshold {
+			continue
+		}
+		out = append(out, Alert{
+			Kind:    "pending_purchase_sla",
+			OrderID: o.ID,
+			Since:   createdAt,
+			Age:     age,
+			Message: fmt.Sprintf("purchase order %s has been Pending for %s (SLA %s); check the price feed and the keeper", o.ID, age.Round(time.Second), threshold),
 		})
 	}
 	return out

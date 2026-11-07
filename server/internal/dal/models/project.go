@@ -21,9 +21,10 @@ const (
 	StrategyKindOracle = "Oracle"
 )
 
-// OracleConfig is the OraclePriceStrategy configuration signed in the rwa-v3 deploy
-// calldata, which verification compares with the strategy's immutables. Addresses are
+// OracleConfig is the OraclePriceStrategy configuration signed in the rwa-v3 and rwa-v4
+// deploy calldata, which verification compares with the strategy's immutables. Addresses are
 // 0x-hex; SequencerUptimeFeed is the zero address and GracePeriod 0 without a sequencer feed.
+// DealingCutoff is the rwa-v4 forward-pricing cut-off in seconds, 0 for rwa-v3.
 type OracleConfig struct {
 	Feed                string `json:"feed" bson:"feed"`
 	MaxAge              uint64 `json:"maxAge" bson:"maxAge"`
@@ -31,6 +32,7 @@ type OracleConfig struct {
 	RedemptionSpreadBps uint16 `json:"redemptionSpreadBps" bson:"redemptionSpreadBps"`
 	SequencerUptimeFeed string `json:"sequencerUptimeFeed" bson:"sequencerUptimeFeed"`
 	GracePeriod         uint64 `json:"gracePeriod" bson:"gracePeriod"`
+	DealingCutoff       uint64 `json:"dealingCutoff,omitempty" bson:"dealingCutoff,omitempty"`
 }
 
 // ProjectStatus tracks deployment lifecycle
@@ -77,7 +79,10 @@ type Project struct {
 	PurchasePricePerWholeToken   string        `json:"purchasePricePerWholeToken" bson:"purchasePricePerWholeToken"`
 	RedemptionPricePerWholeToken string        `json:"redemptionPricePerWholeToken" bson:"redemptionPricePerWholeToken"`
 	RedemptionTimeout            int64         `json:"redemptionTimeout" bson:"redemptionTimeout"`
-	TokenDecimals                uint8         `json:"tokenDecimals" bson:"tokenDecimals"`
+	// PurchaseTimeout is the rwa-v4 Vault.purchaseTimeout in seconds from the deploy
+	// calldata; 0 for earlier projects, which have no forward-priced orders
+	PurchaseTimeout int64 `json:"purchaseTimeout,omitempty" bson:"purchaseTimeout,omitempty"`
+	TokenDecimals   uint8 `json:"tokenDecimals" bson:"tokenDecimals"`
 	// QuoteDecimals stores Addresses.QuoteToken's decimals() from deployment verification
 	// for API/UI scaling without per-request reads. An unreadable value stays unset and
 	// does not fail deployment.
@@ -156,6 +161,17 @@ type SecurityState struct {
 	// LastForcedTransfer is a bounded auditor hint for the latest canonical seizure. Full
 	// history remains in chain_events and the transaction index.
 	LastForcedTransfer *ForcedTransferState `json:"lastForcedTransfer,omitempty" bson:"lastForcedTransfer,omitempty"`
-	AsOfBlock          uint64               `json:"asOfBlock" bson:"asOfBlock"`
-	AsOfTime           time.Time            `json:"asOfTime" bson:"asOfTime"`
+	// AdminDelayChanges holds each contract's latest uncancelled delay change
+	AdminDelayChanges []AdminDelayChange `json:"adminDelayChanges,omitempty" bson:"adminDelayChanges,omitempty"`
+	AsOfBlock         uint64             `json:"asOfBlock" bson:"asOfBlock"`
+	AsOfTime          time.Time          `json:"asOfTime" bson:"asOfTime"`
+}
+
+// AdminDelayChange records a contract's default-admin delay change, labelled as in
+// RolesByContract. NewDelay is in seconds; EffectAt is a Unix timestamp in seconds.
+// No event marks when the change takes effect, so it remains listed after EffectAt.
+type AdminDelayChange struct {
+	Contract string `json:"contract" bson:"contract"`
+	NewDelay uint64 `json:"newDelay" bson:"newDelay"`
+	EffectAt uint64 `json:"effectAt" bson:"effectAt"`
 }

@@ -96,8 +96,16 @@ func TestGuardCountsInFlightWebhookAllow(t *testing.T) {
 	if err := repos.Transactions.Create(ctx, &models.Transaction{ID: "tx1", Status: models.TxPending, SubmittedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repos.KYCEvents.Create(ctx, &models.KYCEvent{ID: "e1", Address: wA, Provider: "p", EventID: "e1", Outcome: "Allowed",
-		ApplyStatus: models.KYCApplyApplying, TxID: "tx1", PayloadHash: "h1"}); err != nil {
+	if err := repos.KYCEvents.Create(ctx, &models.KYCEvent{
+		ID:          "e1",
+		Address:     wA,
+		Provider:    "p",
+		EventID:     "e1",
+		Outcome:     "Allowed",
+		ApplyStatus: models.KYCApplyApplying,
+		TxID:        "tx1",
+		PayloadHash: "h1",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := g.CheckAllow(ctx, wB, now); !errors.Is(err, ErrHolderCapReached) {
@@ -207,8 +215,18 @@ func seedEvent(t *testing.T, repos *repository.Repositories, id, addr, outcome s
 	if _, err := repos.KYCEvents.ClaimLatestForAddress(ctx, addr, at, kycEventIDKey("p", id)); err != nil {
 		t.Fatal(err)
 	}
-	if err := repos.KYCEvents.Create(ctx, &models.KYCEvent{ID: id, Address: addr, Provider: "p", EventID: id, Status: outcome, Outcome: outcome,
-		ApplyStatus: models.KYCApplyAccepted, OccurredAt: at, ReceivedAt: at, PayloadHash: id}); err != nil {
+	if err := repos.KYCEvents.Create(ctx, &models.KYCEvent{
+		ID:          id,
+		Address:     addr,
+		Provider:    "p",
+		EventID:     id,
+		Status:      outcome,
+		Outcome:     outcome,
+		ApplyStatus: models.KYCApplyAccepted,
+		OccurredAt:  at,
+		ReceivedAt:  at,
+		PayloadHash: id,
+	}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -354,8 +372,12 @@ func (failingInvestors) List(context.Context) ([]*models.Investor, error) {
 func TestReconciler_GuardReadError_LeavesApprovalRetryable(t *testing.T) {
 	ctx := context.Background()
 	repos := memory.New()
-	g := NewGuard(&repository.Repositories{Investors: failingInvestors{repos.Investors},
-		ComplianceOperations: repos.ComplianceOperations, KYCEvents: repos.KYCEvents, Transactions: repos.Transactions}, 1, nil, nil)
+	g := NewGuard(&repository.Repositories{
+		Investors:            failingInvestors{repos.Investors},
+		ComplianceOperations: repos.ComplianceOperations,
+		KYCEvents:            repos.KYCEvents,
+		Transactions:         repos.Transactions,
+	}, 1, nil, nil)
 	r, raisedAlerts := guardedReconciler(t, repos, g)
 	seedEvent(t, repos, "allow-b", wB, "Allowed")
 

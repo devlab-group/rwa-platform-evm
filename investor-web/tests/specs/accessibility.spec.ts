@@ -5,6 +5,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 import { expect, mockOnly, test } from "../fixtures/fixtures";
+import { allowTheWallet, makeForward } from "../fixtures/helpers";
+import { ADDRESSES } from "../fixtures/mock-api";
 import { MOCK_WALLET_ADDRESS, mockWalletSwitchChain } from "../fixtures/mock-wallet";
 import { InvestorPage } from "../pages/InvestorPage";
 
@@ -76,6 +78,50 @@ test.describe("connected states", () => {
     await investor.connectWallet();
     await expect(investor.redemptionRow("3").getByRole("button", { name: "Claim (permissionless)" })).toBeVisible();
     await expect(investor.redemptionRow("2").getByRole("button", { name: "Cancel (timeout elapsed)" })).toBeVisible();
+    await expectNoAxeViolations(page);
+  });
+
+  test("with a forward-priced order preview, order list and priced-at-funding redemption", async ({
+    page,
+    api,
+  }) => {
+    await makeForward(api, page);
+    allowTheWallet(api);
+    const now = Math.floor(Date.now() / 1000);
+    api.orders.push({
+      id: "7",
+      buyer: MOCK_WALLET_ADDRESS,
+      recipient: MOCK_WALLET_ADDRESS,
+      tokenAmount: "1000000000000000000",
+      maxQuoteAmount: "1005000",
+      strategy: ADDRESSES.strategy,
+      baseRound: "100",
+      status: "Pending",
+      createdAt: now - 15 * 86_400,
+      timeoutAt: now - 86_400,
+      requestTxHash: `0x${"01".repeat(32)}`,
+    });
+    api.redemptions.push({
+      id: "9",
+      beneficiary: MOCK_WALLET_ADDRESS,
+      rwaAmount: "500000000000000000",
+      quoteAmount: "0",
+      strategy: ADDRESSES.strategy,
+      baseRound: "100",
+      minQuoteOut: "470000",
+      status: "Pending",
+      claimable: false,
+      createdAt: now - 7200,
+      timeoutAt: now + 3600,
+      beneficiaryAllowed: true,
+    });
+    const investor = new InvestorPage(page);
+    await investor.goto();
+    await investor.connectWallet();
+    await investor.previewBuy("1");
+    await expect(page.getByRole("region", { name: "Purchase preview" })).toBeVisible();
+    await expect(investor.ordersSection.getByRole("button", { name: "Cancel order" })).toBeVisible();
+    await expect(investor.redemptionRow("9")).toContainText("Priced at funding");
     await expectNoAxeViolations(page);
   });
 

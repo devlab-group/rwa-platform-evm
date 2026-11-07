@@ -18,4 +18,8 @@ type IndexerCheckpoint struct {
 	// writes change nothing. Plain Set stores the supplied version, so legacy non-atomic
 	// rollback/reset paths can reset it to 0.
 	Version int `json:"version,omitempty" bson:"version,omitempty"`
+	// Watched lists addresses indexed from the start block through LastBlock. Poll backfills
+	// addresses missing from this list. Older checkpoints omit it, triggering a one-time
+	// backfill of the watch set.
+	Watched []string `json:"watched,omitempty" bson:"watched,omitempty"`
 }

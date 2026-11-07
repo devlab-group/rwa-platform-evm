@@ -3,7 +3,13 @@
 // passes plain data; the browser pads argument-dependent allowance and quote
 // responses as uint256 words without importing dependencies.
 import type { Page } from "@playwright/test";
-import { encodeFunctionResult, erc20Abi } from "viem";
+import {
+  encodeErrorResult,
+  encodeFunctionResult,
+  erc20Abi,
+  parseAbi,
+  toFunctionSelector,
+} from "viem";
 
 export const MOCK_WALLET_ADDRESS =
   "0x1111111111111111111111111111111111111111" as const;
@@ -13,6 +19,9 @@ export const MOCK_TOKEN_BALANCE = 1_500_000_000_000_000_000n; // 1.5 tokens
 /** Quote-token price of one whole RWA token, as the mock Vault and escrow views report it. */
 export const MOCK_PURCHASE_PRICE = 1_000_000n;
 export const MOCK_REDEMPTION_PRICE = 950_000n;
+/** Price per whole token of the round that prices a forward order once the mock feed has published it */
+export const MOCK_ROUND_PRICE = 990_000n;
+export const MOCK_ROUND_ID = 102n;
 
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const DECIMALS_SELECTOR = "0x313ce567";
@@ -20,6 +29,14 @@ const APPROVE_SELECTOR = "0x095ea7b3";
 const ALLOWANCE_SELECTOR = "0xdd62ed3e";
 const PREVIEW_BUY_SELECTOR = "0x48153279";
 const PREVIEW_REDEEM_SELECTOR = "0x4cdad506";
+const QUOTE_PURCHASE_AFTER_SELECTOR = toFunctionSelector(
+  "quotePurchaseAfter(uint256,uint80,uint64)",
+);
+const GET_PURCHASE_SELECTOR = toFunctionSelector("getPurchase(uint256)");
+const STRATEGY_SELECTOR = toFunctionSelector("strategy()");
+const FORWARD_PRICED_SELECTOR = toFunctionSelector("forwardPriced()");
+/** Strategy address the mock Vault names; matches the mock API's project strategy */
+const MOCK_STRATEGY = `0x${"77".repeat(20)}`;
 
 export interface InstallMockWalletOptions {
   /** Chain the mock wallet reports via eth_chainId (default MOCK_CHAIN_ID). */
@@ -41,6 +58,13 @@ export async function installMockWallet(
     result: MOCK_TOKEN_DECIMALS,
   });
 
+  // quotePurchaseAfter reverts with this until a spec calls setMockRound(page, true)
+  const roundNotAvailable = encodeErrorResult({
+    abi: parseAbi(["error RoundNotAvailable(uint80 roundId)"]),
+    errorName: "RoundNotAvailable",
+    args: [MOCK_ROUND_ID - 1n],
+  });
+
   await page.addInitScript(
     (args: {
       address: string;
@@ -53,6 +77,14 @@ export async function installMockWallet(
       allowanceSelector: string;
       previewBuySelector: string;
       previewRedeemSelector: string;
+      quotePurchaseAfterSelector: string;
+      getPurchaseSelector: string;
+      strategySelector: string;
+      forwardPricedSelector: string;
+      strategy: string;
+      roundNotAvailable: string;
+      roundPrice: string;
+      roundId: string;
       purchasePrice: string;
       redemptionPrice: string;
     }) => {
@@ -68,6 +100,8 @@ export async function installMockWallet(
       >();
       const sentTransactions: { to: string | null; data: string | null }[] = [];
       let currentChainIdHex = args.chainIdHex;
+      // Whether the feed has published the round that prices a forward order
+      let roundPriced = false;
 
       const provider = {
         isMockWallet: true,
@@ -89,6 +123,10 @@ export async function installMockWallet(
         __setChainId(chainId: number) {
           currentChainIdHex = `0x${chainId.toString(16)}`;
           this._emit("chainChanged", currentChainIdHex);
+        },
+        // Test-only hook: publishes (or withdraws) the round that prices forward orders
+        __setRoundPriced(priced: boolean) {
+          roundPriced = priced;
         },
         // Test-only hook: exposes every eth_sendTransaction payload so specs can
         // decode the outgoing calldata (e.g. an approval's token and spender)
@@ -175,6 +213,48 @@ export async function installMockWallet(
                 const amount = allowances.get(`${token}:${spender}`) ?? 0n;
                 return `0x${amount.toString(16).padStart(64, "0")}`;
               }
+              // Vault.strategy() and strategy.forwardPriced(): the chain's own answer on
+              // whether purchases are orders or instant buys, set by the specs through
+              // window.__mockForwardPriced; window.__mockModeUnreadable makes the Vault
+              // return no strategy, as a failing RPC read does
+              const mode = window as unknown as {
+                __mockForwardPriced?: boolean;
+                __mockModeUnreadable?: boolean;
+              };
+              if (data.startsWith(args.strategySelector)) {
+                if (mode.__mockModeUnreadable) return "0x";
+                return `0x${args.strategy.slice(2).padStart(64, "0")}`;
+              }
+              if (data.startsWith(args.forwardPricedSelector)) {
+                return `0x${(mode.__mockForwardPriced ? 1 : 0)
+                  .toString(16)
+                  .padStart(64, "0")}`;
+              }
+              // Vault.getPurchase(id): the order struct, whose last word is the minimum the
+              // Vault recorded on the order (window.__mockOrderMinQuote, default none)
+              if (data.startsWith(args.getPurchaseSelector)) {
+                const recorded = BigInt(
+                  (window as unknown as { __mockOrderMinQuote?: string })
+                    .__mockOrderMinQuote ?? "0",
+                );
+                const word = (n: bigint) => n.toString(16).padStart(64, "0");
+                return `0x${word(0n).repeat(8)}${word(recorded)}`;
+              }
+              // quotePurchaseAfter(tokenAmount, baseRound, orderTime) on the order's
+              // strategy: the quote of the pricing round, or RoundNotAvailable until the
+              // feed has published it
+              if (data.startsWith(args.quotePurchaseAfterSelector)) {
+                if (!roundPriced) {
+                  throw Object.assign(new Error("execution reverted"), {
+                    code: 3,
+                    data: args.roundNotAvailable,
+                  });
+                }
+                const amount = BigInt(`0x${data.slice(10, 74)}`);
+                const quote = (amount * BigInt(args.roundPrice)) / 10n ** 18n;
+                const word = (n: bigint) => n.toString(16).padStart(64, "0");
+                return `0x${word(quote)}${word(BigInt(args.roundId))}`;
+              }
               // Vault.previewBuy and RedemptionEscrow.previewRedeem, the buy and
               // redemption quotes. Both take a uint256 amount in RWA minimal
               // units and return a quote-token amount at the fixed price
@@ -211,6 +291,14 @@ export async function installMockWallet(
       allowanceSelector: ALLOWANCE_SELECTOR,
       previewBuySelector: PREVIEW_BUY_SELECTOR,
       previewRedeemSelector: PREVIEW_REDEEM_SELECTOR,
+      quotePurchaseAfterSelector: QUOTE_PURCHASE_AFTER_SELECTOR,
+      getPurchaseSelector: GET_PURCHASE_SELECTOR,
+      strategySelector: STRATEGY_SELECTOR,
+      forwardPricedSelector: FORWARD_PRICED_SELECTOR,
+      strategy: MOCK_STRATEGY,
+      roundNotAvailable,
+      roundPrice: MOCK_ROUND_PRICE.toString(),
+      roundId: MOCK_ROUND_ID.toString(),
       purchasePrice: MOCK_PURCHASE_PRICE.toString(),
       redemptionPrice: MOCK_REDEMPTION_PRICE.toString(),
     },
@@ -229,6 +317,17 @@ export async function mockWalletSwitchChain(
   }, chainId);
 }
 
+/** Publishes the feed round that prices forward orders; before this, reading an order's price reverts */
+export async function setMockRound(page: Page, priced: boolean): Promise<void> {
+  await page.evaluate((value: boolean) => {
+    (
+      window as unknown as {
+        ethereum: { __setRoundPriced: (p: boolean) => void };
+      }
+    ).ethereum.__setRoundPriced(value);
+  }, priced);
+}
+
 export interface MockSentTransaction {
   to: string | null;
   data: string | null;
@@ -245,4 +344,36 @@ export async function getMockSentTransactions(
       }
     ).ethereum.__getSentTransactions(),
   );
+}
+
+/** Makes the mock chain report forward pricing (or instant pricing) for the Vault's strategy; call before goto */
+export async function setMockForwardPriced(
+  page: Page,
+  forward: boolean,
+): Promise<void> {
+  await page.addInitScript((value: boolean) => {
+    (
+      window as unknown as { __mockForwardPriced: boolean }
+    ).__mockForwardPriced = value;
+  }, forward);
+}
+
+/** Makes the mock Vault return no strategy, so the pricing mode cannot be read; call before goto */
+export async function setMockModeUnreadable(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    (
+      window as unknown as { __mockModeUnreadable: boolean }
+    ).__mockModeUnreadable = true;
+  });
+}
+
+/** Sets the minimum the mock Vault recorded on every order, in quote-token minimal units; call before goto */
+export async function setMockOrderMinQuote(
+  page: Page,
+  minimum: bigint,
+): Promise<void> {
+  await page.addInitScript((value: string) => {
+    (window as unknown as { __mockOrderMinQuote: string }).__mockOrderMinQuote =
+      value;
+  }, minimum.toString());
 }

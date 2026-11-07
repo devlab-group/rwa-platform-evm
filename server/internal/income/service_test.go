@@ -61,10 +61,18 @@ func newEnv(t *testing.T, mutate func(p *models.Project)) *env {
 func newEnvWith(t *testing.T, repos *repository.Repositories, mutate func(p *models.Project)) *env {
 	t.Helper()
 	p := &models.Project{
-		ProjectID: "p", Version: "rwa-v3", ChainID: testChain, Status: models.ProjectStatusActive, RedemptionTimeout: 1000,
+		ProjectID:         "p",
+		Version:           "rwa-v3",
+		ChainID:           testChain,
+		Status:            models.ProjectStatusActive,
+		RedemptionTimeout: 1000,
 		Addresses: models.Addresses{
-			Token: tokenA.Hex(), SupplyController: controllerA.Hex(), Vault: vaultA.Hex(), RedemptionEscrow: escrowA.Hex(),
-			IncomeDistributor: distribA.Hex(), QuoteToken: quoteA.Hex(),
+			Token:             tokenA.Hex(),
+			SupplyController:  controllerA.Hex(),
+			Vault:             vaultA.Hex(),
+			RedemptionEscrow:  escrowA.Hex(),
+			IncomeDistributor: distribA.Hex(),
+			QuoteToken:        quoteA.Hex(),
 		},
 	}
 	if mutate != nil {
@@ -278,18 +286,29 @@ func TestPrepareAttributesPendingRedemptions(t *testing.T) {
 
 func distributionCreated(block uint64, idx uint, id string, prep *models.IncomePreparation, deadline string) *models.ChainEvent {
 	return ev(distribA, &models.ChainEvent{
-		Name: "DistributionCreated", BlockNumber: block, LogIndex: idx, TxHash: fmt.Sprintf("0xd%d_%d", block, idx),
+		Name:        "DistributionCreated",
+		BlockNumber: block,
+		LogIndex:    idx,
+		TxHash:      fmt.Sprintf("0xd%d_%d", block, idx),
 		Data: map[string]any{
-			"id": id, "merkleRoot": prep.MerkleRoot, "total": prep.Total, "recordBlock": "30", "claimDeadline": deadline,
-			"snapshotURI": prep.SnapshotURI, "snapshotSha256": prep.SnapshotSha256, "caller": alice.Hex(),
+			"id":             id,
+			"merkleRoot":     prep.MerkleRoot,
+			"total":          prep.Total,
+			"recordBlock":    "30",
+			"claimDeadline":  deadline,
+			"snapshotURI":    prep.SnapshotURI,
+			"snapshotSha256": prep.SnapshotSha256,
+			"caller":         alice.Hex(),
 		},
 	})
 }
 
 func claimedEv(block uint64, id string, account common.Address, amount string) *models.ChainEvent {
 	return ev(distribA, &models.ChainEvent{
-		Name: "IncomeClaimed", BlockNumber: block, TxHash: fmt.Sprintf("0xc%d", block),
-		Data: map[string]any{"id": id, "account": account.Hex(), "amount": amount},
+		Name:        "IncomeClaimed",
+		BlockNumber: block,
+		TxHash:      fmt.Sprintf("0xc%d", block),
+		Data:        map[string]any{"id": id, "account": account.Hex(), "amount": amount},
 	})
 }
 
@@ -434,8 +453,12 @@ func TestListStatusFollowsDeadlineReclaimAndExtension(t *testing.T) {
 	}
 
 	// an extension reopens it; a reclaim closes it for good
-	mustCreate(t, e, ev(distribA, &models.ChainEvent{Name: "ClaimDeadlineExtended", BlockNumber: 42, TxHash: "0xe",
-		Data: map[string]any{"id": "0", "previousDeadline": deadlineStr(-time.Second), "newDeadline": deadlineStr(24 * time.Hour)}}))
+	mustCreate(t, e, ev(distribA, &models.ChainEvent{
+		Name:        "ClaimDeadlineExtended",
+		BlockNumber: 42,
+		TxHash:      "0xe",
+		Data:        map[string]any{"id": "0", "previousDeadline": deadlineStr(-time.Second), "newDeadline": deadlineStr(24 * time.Hour)},
+	}))
 	if err := e.svc.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -443,8 +466,12 @@ func TestListStatusFollowsDeadlineReclaimAndExtension(t *testing.T) {
 	if v.Status != StatusActive || v.Dist.ClaimDeadline != fixedNow.Add(24*time.Hour).Unix() {
 		t.Errorf("extended: status=%s deadline=%d", v.Status, v.Dist.ClaimDeadline)
 	}
-	mustCreate(t, e, ev(distribA, &models.ChainEvent{Name: "UnclaimedReclaimed", BlockNumber: 43, TxHash: "0xf",
-		Data: map[string]any{"id": "0", "treasury": bob.Hex(), "amount": "250"}}))
+	mustCreate(t, e, ev(distribA, &models.ChainEvent{
+		Name:        "UnclaimedReclaimed",
+		BlockNumber: 43,
+		TxHash:      "0xf",
+		Data:        map[string]any{"id": "0", "treasury": bob.Hex(), "amount": "250"},
+	}))
 	if err := e.svc.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -530,8 +557,12 @@ func TestClaimsForReclaimedWithoutClaimIsExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustCreate(t, e, distributionCreated(40, 0, "0", prep, deadlineStr(8*24*time.Hour)),
-		ev(distribA, &models.ChainEvent{Name: "UnclaimedReclaimed", BlockNumber: 50, TxHash: "0xrc",
-			Data: map[string]any{"id": "0", "treasury": bob.Hex(), "amount": "1000"}}))
+		ev(distribA, &models.ChainEvent{
+			Name:        "UnclaimedReclaimed",
+			BlockNumber: 50,
+			TxHash:      "0xrc",
+			Data:        map[string]any{"id": "0", "treasury": bob.Hex(), "amount": "1000"},
+		}))
 	if err := e.svc.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -762,8 +793,13 @@ func TestClaimsFor_UnreadableSnapshot_DoesNotHideOtherDistributions(t *testing.T
 		t.Fatal(err)
 	}
 	broken := &models.IncomePreparation{
-		ID: "broken", MerkleRoot: "0x" + strings.Repeat("ab", 32), SnapshotSha256: "0x" + strings.Repeat("cd", 32),
-		Total: "1", SnapshotURI: "ipfs://broken", SnapshotRaw: []byte(`{"entries":[`), CreatedAt: fixedNow,
+		ID:             "broken",
+		MerkleRoot:     "0x" + strings.Repeat("ab", 32),
+		SnapshotSha256: "0x" + strings.Repeat("cd", 32),
+		Total:          "1",
+		SnapshotURI:    "ipfs://broken",
+		SnapshotRaw:    []byte(`{"entries":[`),
+		CreatedAt:      fixedNow,
 	}
 	if err := e.repos.IncomePreparations.Create(ctx, broken); err != nil {
 		t.Fatal(err)
@@ -792,16 +828,26 @@ func TestDistributions_DeadlineAboveInt64_StaysOpen(t *testing.T) {
 		name   string
 		events func(prep *models.IncomePreparation) []*models.ChainEvent
 	}{
-		{"created with uint64 max", func(prep *models.IncomePreparation) []*models.ChainEvent {
-			return []*models.ChainEvent{distributionCreated(40, 0, "0", prep, uint64Max)}
-		}},
-		{"extended to uint64 max", func(prep *models.IncomePreparation) []*models.ChainEvent {
-			return []*models.ChainEvent{
-				distributionCreated(40, 0, "0", prep, deadlineStr(8*24*time.Hour)),
-				ev(distribA, &models.ChainEvent{Name: "ClaimDeadlineExtended", BlockNumber: 41, TxHash: "0xx",
-					Data: map[string]any{"id": "0", "previousDeadline": deadlineStr(8 * 24 * time.Hour), "newDeadline": uint64Max}}),
-			}
-		}},
+		{
+			"created with uint64 max",
+			func(prep *models.IncomePreparation) []*models.ChainEvent {
+				return []*models.ChainEvent{distributionCreated(40, 0, "0", prep, uint64Max)}
+			},
+		},
+		{
+			"extended to uint64 max",
+			func(prep *models.IncomePreparation) []*models.ChainEvent {
+				return []*models.ChainEvent{
+					distributionCreated(40, 0, "0", prep, deadlineStr(8*24*time.Hour)),
+					ev(distribA, &models.ChainEvent{
+						Name:        "ClaimDeadlineExtended",
+						BlockNumber: 41,
+						TxHash:      "0xx",
+						Data:        map[string]any{"id": "0", "previousDeadline": deadlineStr(8 * 24 * time.Hour), "newDeadline": uint64Max},
+					}),
+				}
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

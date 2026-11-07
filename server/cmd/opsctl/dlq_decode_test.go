@@ -72,9 +72,12 @@ func TestRunDLQRetryRefusesGenericDecode(t *testing.T) {
 	}
 	// A canonical (block-hash-matching) log the typed decoder does not recognize
 	logEntry := types.Log{
-		Address: controllerAddr, BlockNumber: 5, BlockHash: header.Hash(),
-		TxHash: common.HexToHash("0xbeef"), Index: 0,
-		Topics: []common.Hash{common.HexToHash("0xdeadbeef")},
+		Address:     controllerAddr,
+		BlockNumber: 5,
+		BlockHash:   header.Hash(),
+		TxHash:      common.HexToHash("0xbeef"),
+		Index:       0,
+		Topics:      []common.Hash{common.HexToHash("0xdeadbeef")},
 	}
 	seedDLQ(t, repos, "dlq-generic", logEntry)
 
@@ -120,8 +123,11 @@ func buildMintedLog(t *testing.T, addr common.Address, blockHash common.Hash) ty
 	}
 	vault := common.HexToAddress("0x0000000000000000000000000000000000005a17")
 	return types.Log{
-		Address: addr, BlockNumber: 5, BlockHash: blockHash,
-		TxHash: common.HexToHash("0xa11ce"), Index: 0,
+		Address:     addr,
+		BlockNumber: 5,
+		BlockHash:   blockHash,
+		TxHash:      common.HexToHash("0xa11ce"),
+		Index:       0,
 		Topics: []common.Hash{
 			controller.EventID("Minted"),
 			common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111"),
@@ -140,9 +146,17 @@ func seedDLQ(t *testing.T, repos *repository.Repositories, id string, logEntry t
 	}
 	now := time.Now().UTC()
 	if err := repos.IndexerDeadLetters.Record(context.Background(), &models.DeadLetterEntry{
-		ID: id, ChainID: 31337, BlockNumber: logEntry.BlockNumber, BlockHash: logEntry.BlockHash.Hex(),
-		TxHash: logEntry.TxHash.Hex(), LogIndex: logEntry.Index, ErrorCategory: models.DLQErrorDecode,
-		ErrorMessage: "original typed decode failed", FirstFailedAt: now, LastFailedAt: now, SourceData: raw,
+		ID:            id,
+		ChainID:       31337,
+		BlockNumber:   logEntry.BlockNumber,
+		BlockHash:     logEntry.BlockHash.Hex(),
+		TxHash:        logEntry.TxHash.Hex(),
+		LogIndex:      logEntry.Index,
+		ErrorCategory: models.DLQErrorDecode,
+		ErrorMessage:  "original typed decode failed",
+		FirstFailedAt: now,
+		LastFailedAt:  now,
+		SourceData:    raw,
 	}); err != nil {
 		t.Fatal(err)
 	}

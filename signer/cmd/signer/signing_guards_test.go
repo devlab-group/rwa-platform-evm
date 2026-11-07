@@ -95,8 +95,11 @@ func policyBindings(t *testing.T, burn bool) {
 				return writePolicyFile(t, dir, testChainID, testController, testVault, testProjectID, pkg)
 			},
 			pkg: builtPackage{
-				zipBytes: pkg.zipBytes, keystorePath: wrongKeystore, password: wrongPassword,
-				auditorAddr: pkg.auditorAddr, profileDigest: pkg.profileDigest,
+				zipBytes:      pkg.zipBytes,
+				keystorePath:  wrongKeystore,
+				password:      wrongPassword,
+				auditorAddr:   pkg.auditorAddr,
+				profileDigest: pkg.profileDigest,
 			},
 			wantErr: "signing key address " + wrongAddr.Hex() + " does not match typed-data auditor " + pkg.auditorAddr,
 		},
@@ -119,7 +122,11 @@ func policyBindings(t *testing.T, burn bool) {
 // Answers other than y or yes abort the run before any key is unlocked
 func TestE2E_DecliningConfirmationAborts(t *testing.T) {
 	for name, answer := range map[string]string{
-		"n": "n\n", "no": "no\n", "blank": "\n", "end of input": "", "near miss": "yeah\n",
+		"n":            "n\n",
+		"no":           "no\n",
+		"blank":        "\n",
+		"end of input": "",
+		"near miss":    "yeah\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			pkg := buildGoldenPackage(t, testChainID, testController, testVault)
@@ -368,12 +375,14 @@ func TestE2E_PackageBindingsAreEnforcedIndividually(t *testing.T) {
 		{
 			name: "typed-data recordId differs from the metadata",
 			ov: func(bool) docOverrides {
-				return docOverrides{typedEdit: func(td map[string]any) {
-					msg := td["message"].(map[string]any)
-					msg["recordId"] = "OTHER-BAR-1"
-					key := attestation.RecordKey("OTHER-BAR-1") // consistent, so only the recordId check can fire
-					msg["recordKey"] = "0x" + hex.EncodeToString(key[:])
-				}}
+				return docOverrides{
+					typedEdit: func(td map[string]any) {
+						msg := td["message"].(map[string]any)
+						msg["recordId"] = "OTHER-BAR-1"
+						key := attestation.RecordKey("OTHER-BAR-1") // consistent, so only the recordId check can fire
+						msg["recordKey"] = "0x" + hex.EncodeToString(key[:])
+					},
+				}
 			},
 			mintOnly: true,
 			wantErr:  `typed-data.json message.recordId "OTHER-BAR-1" does not match metadata.json recordId "GOLD-BAR-12345"`,

@@ -45,7 +45,13 @@ func TestInternalErrorOnPublicRouteLeaksNothing(t *testing.T) {
 
 	body := w.Body.String()
 	for _, secret := range []string{
-		"10.4.2.17", "27017", "rwa-rs0", "rwa_platform", "collection", "connection refused", "handshake",
+		"10.4.2.17",
+		"27017",
+		"rwa-rs0",
+		"rwa_platform",
+		"collection",
+		"connection refused",
+		"handshake",
 	} {
 		if strings.Contains(body, secret) {
 			t.Errorf("response leaks %q: %s", secret, body)

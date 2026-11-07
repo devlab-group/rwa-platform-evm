@@ -66,10 +66,16 @@ func (s *scripted) CallContract(_ context.Context, msg ethereum.CallMsg, _ *big.
 }
 
 func newScripted(answers map[common.Address]map[string]any) *scripted {
-	return &scripted{answers: answers, abis: []abi.ABI{
-		bindings.NewOraclePriceStrategy().ABI, bindings.NewAggregatorV3().ABI, bindings.NewVault().ABI,
-		bindings.NewERC20().ABI, bindings.NewFixedPriceStrategy().ABI,
-	}}
+	return &scripted{
+		answers: answers,
+		abis: []abi.ABI{
+			bindings.NewOraclePriceStrategy().ABI,
+			bindings.NewAggregatorV3().ABI,
+			bindings.NewVault().ABI,
+			bindings.NewERC20().ABI,
+			bindings.NewFixedPriceStrategy().ABI,
+		},
+	}
 }
 
 func oracleAnswers() map[common.Address]map[string]any {
@@ -77,8 +83,13 @@ func oracleAnswers() map[common.Address]map[string]any {
 		oVault: {"strategy": oStrategy, "inventory": big.NewInt(500)},
 		oQuote: {"balanceOf": big.NewInt(900)},
 		oStrategy: {
-			"feed": oFeed, "sequencerUptimeFeed": oSeq, "maxAge": uint64(3600), "gracePeriod": uint64(900),
-			"purchaseSpreadBps": uint16(25), "redemptionSpreadBps": uint16(40), "feedDecimals": uint8(8),
+			"feed":                         oFeed,
+			"sequencerUptimeFeed":          oSeq,
+			"maxAge":                       uint64(3600),
+			"gracePeriod":                  uint64(900),
+			"purchaseSpreadBps":            uint16(25),
+			"redemptionSpreadBps":          uint16(40),
+			"feedDecimals":                 uint8(8),
 			"latestPrice":                  []any{big.NewInt(150_000_000), big.NewInt(1_700_000_000)},
 			"purchasePricePerWholeToken":   big.NewInt(1_503_750),
 			"redemptionPricePerWholeToken": big.NewInt(1_494_000),

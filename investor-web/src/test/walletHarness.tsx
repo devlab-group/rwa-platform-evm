@@ -18,6 +18,8 @@ export interface FakeWalletOptions {
   notAddedChains?: number[];
   // eth_call rejects with this, the way a wallet reports a revert; otherwise it returns 0x
   callRevert?: unknown;
+  // eth_call returns this ABI-encoded result instead of 0x, for contract reads
+  callResult?: string;
 }
 
 const DEFAULT_ACCOUNT = "0x1111111111111111111111111111111111111111";
@@ -63,7 +65,7 @@ export function installFakeWallet(opts: FakeWalletOptions = {}) {
             },
           );
           if (opts.callRevert) throw opts.callRevert;
-          return "0x";
+          return opts.callResult ?? "0x";
         case "eth_sendTransaction":
           sentTransactions.push(
             (params?.[0] ?? {}) as {

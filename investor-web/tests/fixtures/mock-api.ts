@@ -8,6 +8,7 @@ type Project = components["schemas"]["Project"];
 type WalletStatus = components["schemas"]["WalletStatus"];
 type Challenge = components["schemas"]["Challenge"];
 type Redemption = components["schemas"]["Redemption"];
+type PurchaseOrder = components["schemas"]["PurchaseOrder"];
 type Transaction = components["schemas"]["Transaction"];
 type IncomeClaim = components["schemas"]["IncomeClaim"];
 
@@ -32,6 +33,8 @@ export interface MockState {
   project: Project;
   wallets: WalletStatus[];
   redemptions: Redemption[];
+  // rwa-v4 forward orders; specs seed what the indexer would project from Vault events
+  orders: PurchaseOrder[];
   transactions: Transaction[];
   incomeClaims: IncomeClaim[];
   inventory: components["schemas"]["Inventory"];
@@ -64,6 +67,7 @@ export function defaultState(): MockState {
       },
     ],
     redemptions: [],
+    orders: [],
     transactions: [],
     incomeClaims: [],
     inventory: { inventory: "0", quoteBalance: "0" },
@@ -193,6 +197,19 @@ export async function installMockApi(
           404,
         );
       return json(redemption);
+    }
+
+    // --- forward purchase orders ---------------------------------------
+    if (path === "/api/v1/sales/orders" && method === "GET") {
+      const status = url.searchParams.get("status");
+      const address = url.searchParams.get("address")?.toLowerCase();
+      return json(
+        state.orders.filter(
+          (o) =>
+            (!status || o.status === status) &&
+            (!address || o.buyer.toLowerCase() === address),
+        ),
+      );
     }
 
     // --- transactions --------------------------------------------------

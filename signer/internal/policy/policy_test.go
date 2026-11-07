@@ -72,8 +72,12 @@ func TestLoad_RejectsUnknownField(t *testing.T) {
 func TestLoad_RejectsMissingRequiredFields(t *testing.T) {
 	for _, missing := range []string{"chainId", "controller", "vault", "auditor", "projectId", "profileDigest"} {
 		fields := map[string]string{
-			"chainId": "31337", "controller": "0xabc", "vault": "0xdef",
-			"auditor": "0x111", "projectId": "p1", "profileDigest": "0xdigest",
+			"chainId":       "31337",
+			"controller":    "0xabc",
+			"vault":         "0xdef",
+			"auditor":       "0x111",
+			"projectId":     "p1",
+			"profileDigest": "0xdigest",
 		}
 		delete(fields, missing)
 		content := "{"

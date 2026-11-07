@@ -32,8 +32,10 @@ func (app *App) createAuthChallenge(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"address": common.HexToAddress(body.Address).Hex(), "nonce": nonce,
-		"message": message, "expiresAt": expiresAt.Unix(),
+		"address":   common.HexToAddress(body.Address).Hex(),
+		"nonce":     nonce,
+		"message":   message,
+		"expiresAt": expiresAt.Unix(),
 	})
 }
 
@@ -78,6 +80,9 @@ func (app *App) createSession(c *gin.Context) {
 	// Record the login in the audit trail; best effort, never blocks the token
 	app.recordAudit(c.Request.Context(), "auth", adminAddr, "auth.login", adminAddr, nil)
 	c.JSON(http.StatusOK, dto.AuthSession{
-		Token: token, ExpiresAt: expiresAt.Unix(), Role: string(auth.RoleAdmin), Address: adminAddr,
+		Token:     token,
+		ExpiresAt: expiresAt.Unix(),
+		Role:      string(auth.RoleAdmin),
+		Address:   adminAddr,
 	})
 }

@@ -22,8 +22,12 @@ type StoredProfileResponse struct {
 // digest covers the JCS canonical form.
 func ToStoredProfileResponse(p *models.AssetProfile) StoredProfileResponse {
 	return StoredProfileResponse{
-		Profile: json.RawMessage(p.ProfileRaw), ProjectID: p.ProjectID, ProfileDigest: p.Digest,
-		CID: p.CID, Decimals: p.TokenDecimals, TokenUnit: p.TokenUnit,
+		Profile:       json.RawMessage(p.ProfileRaw),
+		ProjectID:     p.ProjectID,
+		ProfileDigest: p.Digest,
+		CID:           p.CID,
+		Decimals:      p.TokenDecimals,
+		TokenUnit:     p.TokenUnit,
 	}
 }
 
@@ -46,9 +50,15 @@ type AssetRecordResponse struct {
 // ToAssetRecordResponse maps one stored asset record onto its API view
 func ToAssetRecordResponse(r *models.AssetRecord) AssetRecordResponse {
 	return AssetRecordResponse{
-		RecordID: r.RecordID, Status: string(r.Status), MetadataDigest: r.MetadataDigest,
-		CID: r.CID, Amount: r.Amount, RecordKey: r.RecordKey, Nonce: r.Nonce, ValidUntil: r.ValidUntil,
-		CreatedAt: r.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		RecordID:       r.RecordID,
+		Status:         string(r.Status),
+		MetadataDigest: r.MetadataDigest,
+		CID:            r.CID,
+		Amount:         r.Amount,
+		RecordKey:      r.RecordKey,
+		Nonce:          r.Nonce,
+		ValidUntil:     r.ValidUntil,
+		CreatedAt:      r.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
 
@@ -74,9 +84,19 @@ type BurnResponse struct {
 // ToBurnResponse maps one stored burn onto its API view; remaining may be empty
 func ToBurnResponse(b *models.Burn, remaining string) BurnResponse {
 	return BurnResponse{
-		BurnID: b.BurnID, RecordID: b.RecordID, OperationID: b.OperationID, Amount: b.Amount, Unit: b.Unit,
-		Status: string(b.Status), MetadataDigest: b.MetadataDigest, CID: b.CID, Nonce: b.Nonce, ValidUntil: b.ValidUntil,
-		BurnTxHash: b.BurnTxHash, Remaining: remaining,
-		CreatedAt: b.CreatedAt.Format("2006-01-02T15:04:05Z07:00"), UpdatedAt: b.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		BurnID:         b.BurnID,
+		RecordID:       b.RecordID,
+		OperationID:    b.OperationID,
+		Amount:         b.Amount,
+		Unit:           b.Unit,
+		Status:         string(b.Status),
+		MetadataDigest: b.MetadataDigest,
+		CID:            b.CID,
+		Nonce:          b.Nonce,
+		ValidUntil:     b.ValidUntil,
+		BurnTxHash:     b.BurnTxHash,
+		Remaining:      remaining,
+		CreatedAt:      b.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:      b.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }

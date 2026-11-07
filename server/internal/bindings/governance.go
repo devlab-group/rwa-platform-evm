@@ -1,6 +1,8 @@
 package bindings
 
 import (
+	"math/big"
+
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -10,7 +12,9 @@ import (
 // account and sender; DefaultAdminTransferScheduled indexes newAdmin with
 // acceptSchedule in log.Data; DefaultAdminTransferCanceled has no fields.
 // Admin-transfer acceptance emits RoleRevoked/RoleGranted for the role projection, with
-// no separate completion event.
+// no separate completion event. DefaultAdminDelayChangeScheduled stores newDelay and
+// effectSchedule in log.Data; DefaultAdminDelayChangeCanceled has no fields. No event
+// marks when a delay change takes effect.
 const governanceEventsABIJSON = `[
   {"type":"event","name":"Paused","anonymous":false,"inputs":[{"name":"account","type":"address","indexed":false}]},
   {"type":"event","name":"Unpaused","anonymous":false,"inputs":[{"name":"account","type":"address","indexed":false}]},
@@ -20,7 +24,10 @@ const governanceEventsABIJSON = `[
     {"name":"role","type":"bytes32","indexed":true},{"name":"account","type":"address","indexed":true},{"name":"sender","type":"address","indexed":true}]},
   {"type":"event","name":"DefaultAdminTransferScheduled","anonymous":false,"inputs":[
     {"name":"newAdmin","type":"address","indexed":true},{"name":"acceptSchedule","type":"uint48","indexed":false}]},
-  {"type":"event","name":"DefaultAdminTransferCanceled","anonymous":false,"inputs":[]}
+  {"type":"event","name":"DefaultAdminTransferCanceled","anonymous":false,"inputs":[]},
+  {"type":"event","name":"DefaultAdminDelayChangeScheduled","anonymous":false,"inputs":[
+    {"name":"newDelay","type":"uint48","indexed":false},{"name":"effectSchedule","type":"uint48","indexed":false}]},
+  {"type":"event","name":"DefaultAdminDelayChangeCanceled","anonymous":false,"inputs":[]}
 ]`
 
 // Governance decodes the generic OpenZeppelin Pausable, AccessControl and
@@ -69,6 +76,20 @@ func (g Governance) AdminTransferNewAdmin(topics []common.Hash) common.Address {
 		return common.HexToAddress(topics[1].Hex())
 	}
 	return common.Address{}
+}
+
+// AdminDelayChange holds a DefaultAdminDelayChangeScheduled log's new delay and
+// effective Unix timestamp, both in seconds
+type AdminDelayChange struct {
+	NewDelay       *big.Int
+	EffectSchedule *big.Int
+}
+
+// UnpackAdminDelayChange decodes a DefaultAdminDelayChangeScheduled log's data
+func (g Governance) UnpackAdminDelayChange(data []byte) (AdminDelayChange, error) {
+	var ev AdminDelayChange
+	err := g.ABI.UnpackIntoInterface(&ev, "DefaultAdminDelayChangeScheduled", data)
+	return ev, err
 }
 
 // roleNamesByID maps the roles in internal/project's knownRoles to projection names.

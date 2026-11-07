@@ -14,7 +14,12 @@ import (
 func v3Addrs() models.Addresses {
 	a := func(n byte) string { return common.BytesToAddress([]byte{0xB0, n}).Hex() }
 	return models.Addresses{
-		Token: a(1), Compliance: a(2), SupplyController: a(3), Vault: a(4), RedemptionEscrow: a(5), Strategy: a(6),
+		Token:             a(1),
+		Compliance:        a(2),
+		SupplyController:  a(3),
+		Vault:             a(4),
+		RedemptionEscrow:  a(5),
+		Strategy:          a(6),
 		IncomeDistributor: a(7),
 	}
 }
@@ -52,8 +57,9 @@ func TestBuildDecoderRoutesIncomeAndTransferLogs(t *testing.T) {
 	}
 	acct := common.HexToAddress("0x00000000000000000000000000000000000000a1")
 	name, got, err := dec(types.Log{
-		Address: common.HexToAddress(addrs.IncomeDistributor), Data: data,
-		Topics: []common.Hash{d.EventID("IncomeClaimed"), common.BigToHash(big.NewInt(3)), common.BytesToHash(acct.Bytes())},
+		Address: common.HexToAddress(addrs.IncomeDistributor),
+		Data:    data,
+		Topics:  []common.Hash{d.EventID("IncomeClaimed"), common.BigToHash(big.NewInt(3)), common.BytesToHash(acct.Bytes())},
 	})
 	if err != nil || name != "IncomeClaimed" || got["amount"] != "5" {
 		t.Errorf("income log: %q %v %v", name, got, err)
@@ -75,8 +81,9 @@ func TestBuildDecoderRoutesIncomeAndTransferLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 	name, got, err = dec(types.Log{
-		Address: common.HexToAddress(addrs.Token), Data: tdata,
-		Topics: []common.Hash{erc20.ABI.Events["Transfer"].ID, common.BytesToHash(acct.Bytes()), common.BytesToHash(acct.Bytes())},
+		Address: common.HexToAddress(addrs.Token),
+		Data:    tdata,
+		Topics:  []common.Hash{erc20.ABI.Events["Transfer"].ID, common.BytesToHash(acct.Bytes()), common.BytesToHash(acct.Bytes())},
 	})
 	if err != nil || name != "Transfer" || got["value"] != "7" {
 		t.Errorf("token Transfer: %q %v %v", name, got, err)

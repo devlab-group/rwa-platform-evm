@@ -192,7 +192,9 @@ func TestKYCWebhookDropsDecisionWithNoProviderTimestamp(t *testing.T) {
 	// Bind the workflow first; otherwise an unresolvable reference returns 422 before
 	// timestamp validation and could mask a missing check
 	if err := env.app.Repos.KYCVerifications.Upsert(context.Background(), &models.KYCVerification{
-		Provider: "onfido", Ref: "run-123", Address: walletAddr,
+		Provider: "onfido",
+		Ref:      "run-123",
+		Address:  walletAddr,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +369,10 @@ func TestListPurchasesPaginatesViaKeysetCursor(t *testing.T) {
 	for i := 0; i < total; i++ {
 		txHash := fmt.Sprintf("0xtx%04d", i)
 		if err := env.app.Repos.Purchases.Create(ctx, &models.Purchase{
-			ID: txHash + ":0", TxHash: txHash, BlockNumber: uint64(i), Buyer: "0xBUYER",
+			ID:          txHash + ":0",
+			TxHash:      txHash,
+			BlockNumber: uint64(i),
+			Buyer:       "0xBUYER",
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -432,7 +437,8 @@ func TestListWalletsPaginatesViaKeysetCursor(t *testing.T) {
 	for i := 0; i < total; i++ {
 		addr := common.BigToAddress(big.NewInt(int64(1000 + i))).Hex()
 		if err := env.app.Repos.Investors.Upsert(ctx, &models.Investor{
-			Address: addr, Status: models.ComplianceAllowed,
+			Address: addr,
+			Status:  models.ComplianceAllowed,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -484,8 +490,14 @@ func TestRedemptionResponseIncludesClaimable(t *testing.T) {
 	ctx := context.Background()
 	// Funded 5 blocks before the indexed head (LastIndexedBlock=100) with finality 3, so claimable
 	if err := env.app.Repos.RedemptionRequests.Upsert(ctx, &models.RedemptionRequest{
-		ID: "1", Beneficiary: addr("0xB0B0"), RWAAmount: "1000", QuoteAmount: "950",
-		Status: models.RedemptionFunded, FundedAtBlock: 95, CreatedAt: 1000, TimeoutAt: 2000,
+		ID:            "1",
+		Beneficiary:   addr("0xB0B0"),
+		RWAAmount:     "1000",
+		QuoteAmount:   "950",
+		Status:        models.RedemptionFunded,
+		FundedAtBlock: 95,
+		CreatedAt:     1000,
+		TimeoutAt:     2000,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -511,8 +523,13 @@ func TestRedemptionResponseReflectsLiveBeneficiaryAllowed(t *testing.T) {
 	ctx := context.Background()
 	beneficiary := addr("0xB0B1")
 	if err := env.app.Repos.RedemptionRequests.Upsert(ctx, &models.RedemptionRequest{
-		ID: "2", Beneficiary: beneficiary, RWAAmount: "1000", QuoteAmount: "950",
-		Status: models.RedemptionPending, CreatedAt: 1000, TimeoutAt: 2000,
+		ID:          "2",
+		Beneficiary: beneficiary,
+		RWAAmount:   "1000",
+		QuoteAmount: "950",
+		Status:      models.RedemptionPending,
+		CreatedAt:   1000,
+		TimeoutAt:   2000,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -547,14 +564,26 @@ func TestListTransactionsFiltersByAddress(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	if err := env.app.Repos.Transactions.Create(ctx, &models.Transaction{
-		ID: "tx1", Kind: "compliance.setStatus", From: addr("0xAAAA"), To: addr("0xBBBB"),
-		TxHash: "0x01", Status: models.TxPending, SubmittedAt: now, UpdatedAt: now,
+		ID:          "tx1",
+		Kind:        "compliance.setStatus",
+		From:        addr("0xAAAA"),
+		To:          addr("0xBBBB"),
+		TxHash:      "0x01",
+		Status:      models.TxPending,
+		SubmittedAt: now,
+		UpdatedAt:   now,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := env.app.Repos.Transactions.Create(ctx, &models.Transaction{
-		ID: "tx2", Kind: "assets.relaySignedResult", From: addr("0xCCCC"), To: addr("0xDDDD"),
-		TxHash: "0x02", Status: models.TxPending, SubmittedAt: now, UpdatedAt: now,
+		ID:          "tx2",
+		Kind:        "assets.relaySignedResult",
+		From:        addr("0xCCCC"),
+		To:          addr("0xDDDD"),
+		TxHash:      "0x02",
+		Status:      models.TxPending,
+		SubmittedAt: now,
+		UpdatedAt:   now,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -590,13 +619,19 @@ func TestListTransactionsIncludesEventDerived(t *testing.T) {
 	vault := addr("0x0000000000000000000000000000000000000004")
 	caller := addr("0xCAFE")
 	if err := env.app.Repos.ChainEvents.Create(ctx, &models.ChainEvent{
-		ChainID: env.app.ChainID, Address: vault, TxHash: "0xwd1", LogIndex: 0, BlockNumber: 10,
-		BlockHash: "0xblk", Name: "ProceedsWithdrawn", IndexedAt: time.Now().UTC(),
-		Data: map[string]any{"treasury": addr("0xBEEF"), "quoteAmount": "4200", "caller": caller},
+		ChainID:     env.app.ChainID,
+		Address:     vault,
+		TxHash:      "0xwd1",
+		LogIndex:    0,
+		BlockNumber: 10,
+		BlockHash:   "0xblk",
+		Name:        "ProceedsWithdrawn",
+		IndexedAt:   time.Now().UTC(),
+		Data:        map[string]any{"treasury": addr("0xBEEF"), "quoteAmount": "4200", "caller": caller},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := txindex.ReconcileStackTransactions(ctx, env.app.Repos.Transactions, env.app.Repos.ChainEvents, env.app.Repos.IndexerCheckpoints, env.app.ChainID); err != nil {
+	if err := txindex.ReconcileStackTransactions(ctx, env.app.Repos.Transactions, env.app.Repos.ChainEvents, env.app.Repos.IndexerCheckpoints, env.app.ChainID, nil); err != nil {
 		t.Fatalf("ReconcileStackTransactions: %v", err)
 	}
 
@@ -626,14 +661,24 @@ func TestListRedemptionsFiltersByBeneficiary(t *testing.T) {
 	alice := addr("0xAAAA")
 	bob := addr("0xBBBB")
 	if err := env.app.Repos.RedemptionRequests.Upsert(ctx, &models.RedemptionRequest{
-		ID: "1", Beneficiary: alice, RWAAmount: "100", QuoteAmount: "95",
-		Status: models.RedemptionPending, CreatedAt: 1, UpdatedAt: now,
+		ID:          "1",
+		Beneficiary: alice,
+		RWAAmount:   "100",
+		QuoteAmount: "95",
+		Status:      models.RedemptionPending,
+		CreatedAt:   1,
+		UpdatedAt:   now,
 	}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 	if err := env.app.Repos.RedemptionRequests.Upsert(ctx, &models.RedemptionRequest{
-		ID: "2", Beneficiary: bob, RWAAmount: "200", QuoteAmount: "190",
-		Status: models.RedemptionPending, CreatedAt: 2, UpdatedAt: now,
+		ID:          "2",
+		Beneficiary: bob,
+		RWAAmount:   "200",
+		QuoteAmount: "190",
+		Status:      models.RedemptionPending,
+		CreatedAt:   2,
+		UpdatedAt:   now,
 	}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
@@ -673,9 +718,14 @@ func TestListTransactionsPaginatesViaKeysetCursor(t *testing.T) {
 	for i := 0; i < total; i++ {
 		id := fmt.Sprintf("tx-%04d", i)
 		if err := env.app.Repos.Transactions.Create(ctx, &models.Transaction{
-			ID: id, Kind: "test", From: addr("0xAAAA"), To: addr("0xBBBB"),
-			TxHash: fmt.Sprintf("0x%04x", i), Status: models.TxPending,
-			SubmittedAt: now.Add(time.Duration(i) * time.Millisecond), UpdatedAt: now,
+			ID:          id,
+			Kind:        "test",
+			From:        addr("0xAAAA"),
+			To:          addr("0xBBBB"),
+			TxHash:      fmt.Sprintf("0x%04x", i),
+			Status:      models.TxPending,
+			SubmittedAt: now.Add(time.Duration(i) * time.Millisecond),
+			UpdatedAt:   now,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -896,8 +946,12 @@ func seedEnforcementState(t *testing.T, env *testEnv) {
 	p.Security = &models.SecurityState{
 		FrozenBalances: map[string]string{frozenHolder: hugeFrozenAmount},
 		LastForcedTransfer: &models.ForcedTransferState{
-			From: frozenHolder, To: "0x0000000000000000000000000000000000000B02", Amount: "42",
-			TxHash: "0xdeadbeef", BlockNumber: 21, LogIndex: 3,
+			From:        frozenHolder,
+			To:          "0x0000000000000000000000000000000000000B02",
+			Amount:      "42",
+			TxHash:      "0xdeadbeef",
+			BlockNumber: 21,
+			LogIndex:    3,
 		},
 	}
 	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {

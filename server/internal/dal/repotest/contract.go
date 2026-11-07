@@ -23,6 +23,7 @@ func Run(t *testing.T, repos *repository.Repositories) {
 	t.Run("Transaction", func(t *testing.T) { transaction(t, repos.Transactions) })
 	t.Run("AssetRecord", func(t *testing.T) { assetRecord(t, repos.AssetRecords) })
 	t.Run("KYCClaim", func(t *testing.T) { kycClaim(t, repos.KYCEvents) })
+	t.Run("PurchaseOrder", func(t *testing.T) { purchaseOrder(t, repos.PurchaseOrders) })
 }
 
 // consumeConcurrently runs n simultaneous attempts and returns how many succeeded
@@ -184,8 +185,10 @@ func walletChallenge(t *testing.T, repo repository.WalletChallengeRepository) {
 		return &models.WalletChallenge{ID: id, Address: addr, Nonce: id, Message: "m", ExpiresAt: exp, CreatedAt: now}
 	}
 	for _, c := range []*models.WalletChallenge{
-		mk("w1", "0xA", now.Add(time.Hour)), mk("w2", "0xA", now.Add(time.Hour)),
-		mk("w-old", "0xA", now.Add(-time.Hour)), mk("w-other", "0xB", now.Add(time.Hour)),
+		mk("w1", "0xA", now.Add(time.Hour)),
+		mk("w2", "0xA", now.Add(time.Hour)),
+		mk("w-old", "0xA", now.Add(-time.Hour)),
+		mk("w-other", "0xB", now.Add(time.Hour)),
 	} {
 		if err := repo.Create(ctx, c); err != nil {
 			t.Fatalf("Create %s: %v", c.ID, err)
@@ -444,5 +447,151 @@ func kycClaim(t *testing.T, repo repository.KYCEventRepository) {
 		if k, _ := repo.CurrentClaimEventKey(ctx, addr); k != string(rune('a'+n-1)) {
 			t.Fatalf("round %d: after concurrent claims the current key is %q, want %q", round, k, string(rune('a'+n-1)))
 		}
+	}
+}
+
+func purchaseOrder(t *testing.T, repo repository.PurchaseOrderRepository) {
+	ctx := context.Background()
+	updated := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	order := func(id, buyer string, status models.PurchaseOrderStatus, createdAt int64) *models.PurchaseOrder {
+		return &models.PurchaseOrder{
+			ID:             id,
+			Buyer:          buyer,
+			Recipient:      "0xRECIPIENT",
+			TokenAmount:    "1000",
+			MaxQuoteAmount: "2500",
+			Strategy:       "0xSTRATEGY",
+			BaseRound:      "36893488147419103232",
+			Status:         status,
+			CreatedAt:      createdAt,
+			TimeoutAt:      createdAt + 600,
+			RequestTxHash:  "0xreq-" + id,
+			UpdatedAt:      updated,
+			Generation:     1,
+		}
+	}
+
+	if _, err := repo.Get(ctx, "missing"); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("Get of an unknown id = %v, want ErrNotFound", err)
+	}
+
+	// every field survives a round trip, including the closing fields and the uint80 round
+	closed := order("o-closed", "0xAlice", models.PurchaseOrderSettled, 10)
+	closed.PricedRound, closed.QuoteAmount, closed.Refund, closed.CloseTxHash = "36893488147419103233", "2400", "100", "0xclose"
+	if err := repo.Upsert(ctx, closed); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(ctx, "o-closed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.UpdatedAt.Equal(updated) {
+		t.Errorf("UpdatedAt = %v, want %v", got.UpdatedAt, updated)
+	}
+	got.UpdatedAt = closed.UpdatedAt
+	if *got != *closed {
+		t.Errorf("round trip:\n got %+v\nwant %+v", *got, *closed)
+	}
+
+	// Upsert replaces in place: the same id keeps one row
+	replaced := order("o-closed", "0xAlice", models.PurchaseOrderPending, 10)
+	if err := repo.Upsert(ctx, replaced); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := repo.Get(ctx, "o-closed"); got.Status != models.PurchaseOrderPending || got.PricedRound != "" || got.Refund != "" {
+		t.Errorf("replaced order = %+v, want Pending with no closing fields", got)
+	}
+
+	// filters: exact status, buyer case-insensitively and exactly (no prefix or substring match)
+	for _, o := range []*models.PurchaseOrder{
+		order("o-1", "0xAlice", models.PurchaseOrderPending, 20),
+		order("o-2", "0xBob", models.PurchaseOrderSettled, 30),
+		order("o-3", "0xAlice", models.PurchaseOrderSettled, 40),
+		order("o-4", "0xAlice2", models.PurchaseOrderPending, 50),
+	} {
+		if err := repo.Upsert(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := func(status, address string) []string {
+		page, next, err := repo.ListPage(ctx, status, address, "", 50)
+		if err != nil || next != "" {
+			t.Fatalf("ListPage(%q, %q) = next %q, err %v", status, address, next, err)
+		}
+		out := make([]string, len(page))
+		for i, o := range page {
+			out[i] = o.ID
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		status, address string
+		want            []string
+	}{
+		{"", "", []string{"o-4", "o-3", "o-2", "o-1", "o-closed"}},
+		{"Settled", "", []string{"o-3", "o-2"}},
+		{"", "0xALICE", []string{"o-3", "o-1", "o-closed"}},
+		{"Pending", "0xalice", []string{"o-1", "o-closed"}},
+		{"Settled", "0xBOB", []string{"o-2"}},
+		{"Rejected", "", []string{}},
+		{"", "0xAli", []string{}},
+		{"", "0xAlice.*", []string{}},
+	} {
+		if got := ids(tc.status, tc.address); len(got) != len(tc.want) || (len(got) > 0 && fmt.Sprint(got) != fmt.Sprint(tc.want)) {
+			t.Errorf("ListPage(status %q, address %q) = %v, want %v", tc.status, tc.address, got, tc.want)
+		}
+	}
+
+	// keyset pages walk every order once, newest first, with ties on createdAt broken by id
+	for i := 0; i < 7; i++ {
+		if err := repo.Upsert(ctx, order(fmt.Sprintf("tie-%d", i), "0xCarol", models.PurchaseOrderPending, 100)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var walked []string
+	cursor := ""
+	for page := 0; ; page++ {
+		if page > 10 {
+			t.Fatal("pagination did not terminate")
+		}
+		items, next, err := repo.ListPage(ctx, "", "", cursor, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range items {
+			walked = append(walked, o.ID)
+		}
+		if next == "" {
+			break
+		}
+		if len(items) != 3 {
+			t.Fatalf("page %d has %d items but handed out a cursor", page, len(items))
+		}
+		cursor = next
+	}
+	want := []string{"tie-6", "tie-5", "tie-4", "tie-3", "tie-2", "tie-1", "tie-0", "o-4", "o-3", "o-2", "o-1", "o-closed"}
+	if fmt.Sprint(walked) != fmt.Sprint(want) {
+		t.Errorf("walked %v, want %v", walked, want)
+	}
+
+	// generation swap: only the rows stamped with the new generation survive
+	for _, id := range []string{"o-1", "o-2"} {
+		o := order(id, "0xAlice", models.PurchaseOrderPending, 20)
+		o.Generation = 2
+		if err := repo.Upsert(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.DeleteStaleGeneration(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := ids("", ""); fmt.Sprint(got) != fmt.Sprint([]string{"o-2", "o-1"}) {
+		t.Errorf("after DeleteStaleGeneration(2) = %v, want [o-2 o-1]", got)
+	}
+	if err := repo.DeleteAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := ids("", ""); len(got) != 0 {
+		t.Errorf("after DeleteAll = %v, want none", got)
 	}
 }

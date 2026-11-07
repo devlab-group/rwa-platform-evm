@@ -127,7 +127,9 @@ func TestStartKYC_Onfido_StoresWorkflowRunBindingAndOmitsExpiry(t *testing.T) {
 	env := setupTestApp(t)
 	wallet := addr("0xB0B0")
 	stub := newKYCProviderStub(t, http.StatusOK, map[string]string{
-		"/v3.6/applicants": `{"id":"app-1"}`, "/v3.6/workflow_runs": `{"id":"run-77"}`, "/v3.6/sdk_token": `{"token":"onfido-sdk-token"}`,
+		"/v3.6/applicants":    `{"id":"app-1"}`,
+		"/v3.6/workflow_runs": `{"id":"run-77"}`,
+		"/v3.6/sdk_token":     `{"token":"onfido-sdk-token"}`,
 	})
 	onfido, err := kyc.New(kyc.Config{Mode: kyc.ModeOnfido, Onfido: kyc.OnfidoConfig{APIToken: "t", WebhookToken: "w", WorkflowID: "wf", Region: "eu", BaseURL: stub.srv.URL + "/v3.6"}})
 	if err != nil {

@@ -175,9 +175,17 @@ func (s *WebhookService) ProcessDecision(ctx context.Context, rawForHash []byte,
 	// recoverable by the reconciler. Create's unique payloadHash and (provider, eventId)
 	// constraints reject resends.
 	event := &models.KYCEvent{
-		ID: uuid.NewString(), Address: wp.Address, Status: wp.Status, Provider: wp.Provider, EventID: wp.EventID,
-		Outcome: wp.Status, ApplyStatus: models.KYCApplyClaiming, ValidUntil: wp.ValidUntil, OccurredAt: occurredAt,
-		ReceivedAt: now, PayloadHash: payloadHash,
+		ID:          uuid.NewString(),
+		Address:     wp.Address,
+		Status:      wp.Status,
+		Provider:    wp.Provider,
+		EventID:     wp.EventID,
+		Outcome:     wp.Status,
+		ApplyStatus: models.KYCApplyClaiming,
+		ValidUntil:  wp.ValidUntil,
+		OccurredAt:  occurredAt,
+		ReceivedAt:  now,
+		PayloadHash: payloadHash,
 	}
 	if err := s.events.Create(ctx, event); err != nil {
 		if errors.Is(err, repository.ErrAlreadyExists) {

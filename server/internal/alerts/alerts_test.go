@@ -94,3 +94,34 @@ func TestEvaluatorsHandleEmptyInput(t *testing.T) {
 		t.Errorf("got %d alerts for nil input, want 0", len(got))
 	}
 }
+
+func TestEvaluatePendingPurchaseSLA(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	threshold := 24 * time.Hour
+
+	orders := []*models.PurchaseOrder{
+		{ID: "old-pending", Status: models.PurchaseOrderPending, CreatedAt: now.Add(-48 * time.Hour).Unix()},
+		{ID: "fresh-pending", Status: models.PurchaseOrderPending, CreatedAt: now.Add(-time.Hour).Unix()},
+		{ID: "exactly-at-threshold", Status: models.PurchaseOrderPending, CreatedAt: now.Add(-threshold).Unix()},
+		{ID: "old-but-settled", Status: models.PurchaseOrderSettled, CreatedAt: now.Add(-48 * time.Hour).Unix()},
+		{ID: "old-but-refunded", Status: models.PurchaseOrderRefunded, CreatedAt: now.Add(-48 * time.Hour).Unix()},
+		{ID: "old-but-cancelled", Status: models.PurchaseOrderCancelled, CreatedAt: now.Add(-48 * time.Hour).Unix()},
+		{ID: "old-but-rejected", Status: models.PurchaseOrderRejected, CreatedAt: now.Add(-48 * time.Hour).Unix()},
+	}
+
+	got := EvaluatePendingPurchaseSLA(orders, threshold, now)
+
+	// only Pending orders aged 48h or exactly 24h alert
+	if len(got) != 2 {
+		t.Fatalf("got %d alerts, want 2: %+v", len(got), got)
+	}
+	ids := map[string]bool{got[0].OrderID: true, got[1].OrderID: true}
+	if !ids["old-pending"] || !ids["exactly-at-threshold"] {
+		t.Errorf("alerts = %+v, want old-pending and exactly-at-threshold", got)
+	}
+	for _, a := range got {
+		if a.Kind != "pending_purchase_sla" || a.RedemptionID != "" {
+			t.Errorf("alert = %+v, want kind pending_purchase_sla and no redemption id", a)
+		}
+	}
+}

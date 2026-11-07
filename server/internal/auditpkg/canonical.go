@@ -24,10 +24,11 @@ const (
 	MaxObjectKeys    = 4096
 )
 
-// CheckLimits requires non-empty, valid UTF-8 JSON within document size, nesting depth,
-// string length, array length and object key limits, regardless of schema bounds. Its
-// iterative token scan prevents deep input from exhausting the Go stack. Call it before
-// recursive schema guards, compilation or validation in internal/assets.
+// CheckLimits requires non-empty, valid UTF-8 JSON with no unpaired surrogate escape,
+// within document size, nesting depth, string length, array length and object key
+// limits, regardless of schema bounds. Its iterative token scan prevents deep input from
+// exhausting the Go stack. Call it before recursive schema guards, compilation or
+// validation in internal/assets.
 func CheckLimits(raw []byte) error {
 	if len(raw) == 0 {
 		return fmt.Errorf("auditpkg: empty document")
@@ -37,6 +38,9 @@ func CheckLimits(raw []byte) error {
 	}
 	if !utf8.Valid(raw) {
 		return fmt.Errorf("auditpkg: document is not valid UTF-8")
+	}
+	if hasLoneSurrogateEscape(raw) {
+		return fmt.Errorf("auditpkg: document contains an unpaired UTF-16 surrogate escape")
 	}
 	return checkLimits(raw)
 }

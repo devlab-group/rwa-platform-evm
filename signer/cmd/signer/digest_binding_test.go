@@ -56,7 +56,11 @@ var (
 
 func fieldTypes(names []string) []apitypes.Type {
 	solType := map[string]string{
-		"auditor": "address", "vault": "address", "amount": "uint256", "nonce": "uint256", "validUntil": "uint64",
+		"auditor":    "address",
+		"vault":      "address",
+		"amount":     "uint256",
+		"nonce":      "uint256",
+		"validUntil": "uint64",
 	}
 	out := make([]apitypes.Type, len(names))
 	for i, n := range names {
@@ -87,8 +91,10 @@ func oracleDigest(t *testing.T, primary string, domain, message fieldMap) common
 	td := apitypes.TypedData{
 		Types: apitypes.Types{
 			"EIP712Domain": {
-				{Name: "name", Type: "string"}, {Name: "version", Type: "string"},
-				{Name: "chainId", Type: "uint256"}, {Name: "verifyingContract", Type: "address"},
+				{Name: "name", Type: "string"},
+				{Name: "version", Type: "string"},
+				{Name: "chainId", Type: "uint256"},
+				{Name: "verifyingContract", Type: "address"},
 			},
 			primary: fieldTypes(names),
 		},
@@ -154,10 +160,15 @@ func changes(primary string, domain, message fieldMap) []struct {
 		message fieldMap
 	}
 	other := map[string]any{
-		"auditor": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8", "vault": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
-		"profileDigest": "0x" + strings.Repeat("aa", 32), "recordKey": "0x" + strings.Repeat("bb", 32),
-		"operationId": "0x" + strings.Repeat("bb", 32), "metadataDigest": "0x" + strings.Repeat("cc", 32),
-		"amount": "1000000000000000000001", "nonce": "1", "validUntil": json.Number("1800000001"),
+		"auditor":        "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+		"vault":          "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+		"profileDigest":  "0x" + strings.Repeat("aa", 32),
+		"recordKey":      "0x" + strings.Repeat("bb", 32),
+		"operationId":    "0x" + strings.Repeat("bb", 32),
+		"metadataDigest": "0x" + strings.Repeat("cc", 32),
+		"amount":         "1000000000000000000001",
+		"nonce":          "1",
+		"validUntil":     json.Number("1800000001"),
 	}
 	var rows []row
 	names := mintFields
@@ -181,8 +192,11 @@ func changes(primary string, domain, message fieldMap) []struct {
 		third = "operationId"
 	}
 	for _, pair := range [][2]string{
-		{"profileDigest", "metadataDigest"}, {"profileDigest", third}, {third, "metadataDigest"},
-		{"auditor", "vault"}, {"amount", "nonce"},
+		{"profileDigest", "metadataDigest"},
+		{"profileDigest", third},
+		{third, "metadataDigest"},
+		{"auditor", "vault"},
+		{"amount", "nonce"},
 	} {
 		m := cloneFields(message)
 		m[pair[0]], m[pair[1]] = message[pair[1]], message[pair[0]]

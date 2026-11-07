@@ -6,8 +6,11 @@
 // .rwa package with the offline CLI before broadcasting mint. It then waits for
 // Minted, burns part of the record and checks Burned, supply and remaining amount.
 // It also tests purchase, redemption funding and claim, timeout/cancellation,
-// ERC-7943 freeze and seizure, and the rwa-v3 income flow: snapshot, createDistribution
-// by the income manager, and an investor claim with the served proof.
+// ERC-7943 freeze and seizure, the rwa-v3 income flow (snapshot, createDistribution
+// by the income manager, and an investor claim with the served proof), and finally the
+// rwa-v4 forward-pricing flow: it points the Vault at an OraclePriceStrategy over a mock
+// feed, settles a forward purchase, funds and claims a forward redemption, and rejects a
+// purchase during a pause (see forward.go).
 //
 // Wallet transactions use the existing go-ethereum dependency. Configuration comes
 // from the environment; see run_e2e.sh. Every step and read-model assertion must
@@ -81,11 +84,33 @@ type config struct {
 	escrowAddr     common.Address
 	auditorAddr    common.Address
 	signerBin      string
+	keeperBin      string
+	keeperPK       string // anvil acct9, a wallet with no role
 	keystorePath   string
 	keystorePass   string
 	workDir        string
 	redeemTimeout  int64
 	incomeAddr     common.Address
+	// purchaseTimeout is the ProjectConfig.purchaseTimeout in seconds
+	purchaseTimeout int64
+	// oracleFeed and oracleStrategy are the mock feed and OraclePriceStrategy that
+	// run_e2e.sh deploys for the forward-pricing flow; dealingCutoff is the strategy's
+	// cut-off in seconds
+	oracleFeed     common.Address
+	oracleStrategy common.Address
+	dealingCutoff  int64
+	// replacementStrategy is a FixedPriceStrategy the indexer does not watch until the swap
+	replacementStrategy common.Address
+}
+
+// checkCutoff requires the dealing cut-off to be below both timeouts, as Vault.setStrategy and
+// RedemptionEscrow.requestRedemption do on-chain; otherwise the forward-pricing steps would
+// fail with InvalidDealingCutoff instead of a clear message
+func checkCutoff(cutoff, purchaseTimeout, redemptionTimeout int64) error {
+	if cutoff >= purchaseTimeout || cutoff >= redemptionTimeout {
+		return fmt.Errorf("E2E_DEALING_CUTOFF %d must be below PURCHASE_TIMEOUT %d and REDEMPTION_TIMEOUT %d", cutoff, purchaseTimeout, redemptionTimeout)
+	}
+	return nil
 }
 
 func envOr(key, def string) string {
@@ -102,14 +127,21 @@ func loadConfig() (config, error) {
 		deployerPK:   os.Getenv("DEPLOYER_PK"),
 		investorPK:   os.Getenv("INVESTOR_PK"),
 		signerBin:    os.Getenv("SIGNER_BIN"),
+		keeperBin:    os.Getenv("KEEPER_BIN"),
+		keeperPK:     os.Getenv("KEEPER_PK"),
 		keystorePath: os.Getenv("KEYSTORE_PATH"),
 		keystorePass: os.Getenv("KEYSTORE_PASSWORD_FILE"),
 		workDir:      envOr("E2E_WORKDIR", "."),
 		projectUUID:  envOr("E2E_PROJECT_ID", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
 	}
 	for _, req := range []struct{ name, val string }{
-		{"DEPLOYER_PK", cfg.deployerPK}, {"INVESTOR_PK", cfg.investorPK},
-		{"SIGNER_BIN", cfg.signerBin}, {"KEYSTORE_PATH", cfg.keystorePath}, {"KEYSTORE_PASSWORD_FILE", cfg.keystorePass},
+		{"DEPLOYER_PK", cfg.deployerPK},
+		{"INVESTOR_PK", cfg.investorPK},
+		{"SIGNER_BIN", cfg.signerBin},
+		{"KEEPER_BIN", cfg.keeperBin},
+		{"KEEPER_PK", cfg.keeperPK},
+		{"KEYSTORE_PATH", cfg.keystorePath},
+		{"KEYSTORE_PASSWORD_FILE", cfg.keystorePass},
 		{"QUOTE_TOKEN_ADDRESS", os.Getenv("QUOTE_TOKEN_ADDRESS")},
 	} {
 		if req.val == "" {
@@ -129,6 +161,29 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("invalid REDEMPTION_TIMEOUT")
 	}
 	cfg.redeemTimeout = timeout.Int64()
+
+	purchaseTimeout, ok := new(big.Int).SetString(envOr("PURCHASE_TIMEOUT", "604800"), 10)
+	if !ok {
+		return config{}, fmt.Errorf("invalid PURCHASE_TIMEOUT")
+	}
+	cfg.purchaseTimeout = purchaseTimeout.Int64()
+
+	for _, req := range []struct{ name string }{{"E2E_ORACLE_FEED"}, {"E2E_ORACLE_STRATEGY"}, {"E2E_REPLACEMENT_STRATEGY"}} {
+		if !common.IsHexAddress(os.Getenv(req.name)) {
+			return config{}, fmt.Errorf("required env var %s is not an address", req.name)
+		}
+	}
+	cfg.oracleFeed = common.HexToAddress(os.Getenv("E2E_ORACLE_FEED"))
+	cfg.oracleStrategy = common.HexToAddress(os.Getenv("E2E_ORACLE_STRATEGY"))
+	cfg.replacementStrategy = common.HexToAddress(os.Getenv("E2E_REPLACEMENT_STRATEGY"))
+	cutoff, ok := new(big.Int).SetString(envOr("E2E_DEALING_CUTOFF", "3600"), 10)
+	if !ok || cutoff.Sign() <= 0 {
+		return config{}, fmt.Errorf("invalid E2E_DEALING_CUTOFF")
+	}
+	cfg.dealingCutoff = cutoff.Int64()
+	if err := checkCutoff(cfg.dealingCutoff, cfg.purchaseTimeout, cfg.redeemTimeout); err != nil {
+		return config{}, err
+	}
 
 	cfg.purchasePrice, ok = new(big.Int).SetString(envOr("E2E_PURCHASE_PRICE", "2000000"), 10)
 	if !ok {
@@ -304,6 +359,16 @@ func run() error {
 		return fmt.Errorf("income distribution: %w", err)
 	}
 
+	step("forward pricing (rwa-v4): setStrategy to the oracle, settle a forward purchase")
+	if err := forwardPricingLifecycle(ctx, api, chain, cfg, deployerKey, deployerAddr, investorKey, investorAddr); err != nil {
+		return fmt.Errorf("forward pricing: %w", err)
+	}
+
+	step("admin delay change: schedule and cancel, projected into GET /project and GET /transactions")
+	if err := adminDelayLifecycle(ctx, api, chain, cfg, deployerKey); err != nil {
+		return fmt.Errorf("admin delay change: %w", err)
+	}
+
 	return nil
 }
 
@@ -435,8 +500,14 @@ func (cc *chainClient) sendTx(ctx context.Context, key *ecdsa.PrivateKey, to com
 		return nil, fmt.Errorf("estimate gas: %w", err)
 	}
 	tx := types.NewTx(&types.DynamicFeeTx{
-		ChainID: cc.chainID, Nonce: nonce, GasTipCap: tip, GasFeeCap: feeCap,
-		Gas: gasLimit + gasLimit/5, To: &to, Value: big.NewInt(0), Data: data,
+		ChainID:   cc.chainID,
+		Nonce:     nonce,
+		GasTipCap: tip,
+		GasFeeCap: feeCap,
+		Gas:       gasLimit + gasLimit/5,
+		To:        &to,
+		Value:     big.NewInt(0),
+		Data:      data,
 	})
 	signer := types.LatestSignerForChainID(cc.chainID)
 	signedTx, err := types.SignTx(tx, signer, key)
@@ -621,7 +692,9 @@ func authenticateAdmin(api *apiClient, key *ecdsa.PrivateKey, addr common.Addres
 		Address string `json:"address"`
 	}
 	if err := api.postJSON("/auth/session", "", map[string]string{
-		"address": addr.Hex(), "nonce": ch.Nonce, "signature": "0x" + hex.EncodeToString(sig),
+		"address":   addr.Hex(),
+		"nonce":     ch.Nonce,
+		"signature": "0x" + hex.EncodeToString(sig),
 	}, &sess, ""); err != nil {
 		return "", fmt.Errorf("session: %w", err)
 	}
@@ -704,15 +777,25 @@ type projectResponse struct {
 		QuoteToken        string `json:"quoteToken"`
 		IncomeDistributor string `json:"incomeDistributor"`
 	} `json:"addresses"`
-	Auditor          string                         `json:"auditor"`
-	Version          string                         `json:"version"`
-	MinPurchaseQuote *string                        `json:"minPurchaseQuote"`
-	StrategyKind     string                         `json:"strategyKind"`
-	RolesByContract  map[string]map[string][]string `json:"rolesByContract"`
+	Auditor          string  `json:"auditor"`
+	Version          string  `json:"version"`
+	MinPurchaseQuote *string `json:"minPurchaseQuote"`
+	StrategyKind     string  `json:"strategyKind"`
+	ForwardPriced    *bool   `json:"forwardPriced"`
+	Oracle           *struct {
+		DealingCutoff *int64 `json:"dealingCutoff"`
+	} `json:"oracle"`
+	RolesByContract   map[string]map[string][]string `json:"rolesByContract"`
+	PurchasePrice     string                         `json:"purchasePricePerWholeToken"`
+	AdminDelayChanges []struct {
+		Contract string `json:"contract"`
+		NewDelay uint64 `json:"newDelay"`
+		EffectAt uint64 `json:"effectAt"`
+	} `json:"adminDelayChanges"`
 }
 
-// checkV3ProjectFields checks GET /api/v1/project's rwa-v3 fields, polling for the
-// security projection's 15-second refresh
+// checkV3ProjectFields checks GET /api/v1/project's rwa-v3 and rwa-v4 fields, polling for
+// the security projection's 15-second refresh
 func checkV3ProjectFields(api *apiClient, incomeManager common.Address) error {
 	var proj projectResponse
 	return poll("GET /api/v1/project to show the rwa-v3 fields and projected rolesByContract", 90*time.Second, 3*time.Second, func() (bool, error) {
@@ -720,8 +803,8 @@ func checkV3ProjectFields(api *apiClient, incomeManager common.Address) error {
 		if err := api.getJSON("/api/v1/project", "", &proj); err != nil {
 			return false, err
 		}
-		if proj.Version != "rwa-v3" {
-			return false, fmt.Errorf("GET /api/v1/project: version = %q, want rwa-v3", proj.Version)
+		if proj.Version != "rwa-v4" {
+			return false, fmt.Errorf("GET /api/v1/project: version = %q, want rwa-v4", proj.Version)
 		}
 		if proj.MinPurchaseQuote == nil {
 			return false, fmt.Errorf("GET /api/v1/project: minPurchaseQuote is missing for an rwa-v3 project")
@@ -732,6 +815,10 @@ func checkV3ProjectFields(api *apiClient, incomeManager common.Address) error {
 		if proj.StrategyKind != "Fixed" {
 			// strategyKind is probed from the chain once the sales service is wired
 			return false, fmt.Errorf("GET /api/v1/project: strategyKind = %q, want Fixed", proj.StrategyKind)
+		}
+		// the Vault starts on a Fixed strategy, which prices instantly
+		if proj.ForwardPriced == nil || *proj.ForwardPriced {
+			return false, fmt.Errorf("GET /api/v1/project: forwardPriced = %v, want false for a Fixed strategy", proj.ForwardPriced)
 		}
 		if len(proj.RolesByContract["vault"]) == 0 {
 			return false, fmt.Errorf("GET /api/v1/project: rolesByContract.vault is empty (projection not run yet?)")
@@ -763,8 +850,8 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 	if err := api.getJSON("/api/v1/config", "", &boot); err != nil {
 		return fmt.Errorf("GET /api/v1/config: %w", err)
 	}
-	if boot.FactoryVersion != "rwa-v3" {
-		return fmt.Errorf("GET /api/v1/config: factoryVersion = %q, want rwa-v3 (the version() read from the deployed factory)", boot.FactoryVersion)
+	if boot.FactoryVersion != "rwa-v4" {
+		return fmt.Errorf("GET /api/v1/config: factoryVersion = %q, want rwa-v4 (the version() read from the deployed factory)", boot.FactoryVersion)
 	}
 	if !common.IsHexAddress(boot.FactoryAddress) || common.HexToAddress(boot.FactoryAddress) == (common.Address{}) {
 		return fmt.Errorf("GET /api/v1/config returned no factory address (got %q)", boot.FactoryAddress)
@@ -780,13 +867,17 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 	projectID := crypto.Keccak256Hash([]byte(cfg.projectUUID))
 
 	config := bindings.ProjectConfig{
-		Name: "Gold Bar Token", Symbol: "GBT", Decimals: 18,
-		ProfileDigest: digestBytes, ProjectID: projectID,
+		Name:                         "Gold Bar Token",
+		Symbol:                       "GBT",
+		Decimals:                     18,
+		ProfileDigest:                digestBytes,
+		ProjectID:                    projectID,
 		QuoteToken:                   cfg.quoteAddr,
 		PurchasePricePerWholeToken:   cfg.purchasePrice,
 		RedemptionPricePerWholeToken: cfg.redemptionPrice,
 		MinPurchaseQuote:             big.NewInt(0),
 		RedemptionTimeout:            uint64(cfg.redeemTimeout),
+		PurchaseTimeout:              uint64(cfg.purchaseTimeout),
 		Admin:                        deployerAddr,
 		Auditor:                      deployerAddr,
 		ComplianceOperator:           deployerAddr,
@@ -801,7 +892,8 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 	if err != nil {
 		return fmt.Errorf("encode deploy calldata: %w", err)
 	}
-	if _, err := chain.sendTx(ctx, deployerKey, factory, data); err != nil {
+	deployReceipt, err := chain.sendTx(ctx, deployerKey, factory, data)
+	if err != nil {
 		return fmt.Errorf("broadcast RWAFactory.deploy: %w", err)
 	}
 
@@ -859,6 +951,9 @@ func deployProject(ctx context.Context, api *apiClient, chain *chainClient, cfg 
 	if err := checkV3ProjectFields(api, deployerAddr); err != nil {
 		return err
 	}
+	if err := expectDeployLogsIndexed(api, *cfg, factory, deployReceipt.TxHash); err != nil {
+		return fmt.Errorf("deploy logs: %w", err)
+	}
 
 	fmt.Printf("    project Active: token=%s vault=%s supplyController=%s escrow=%s\n",
 		cfg.tokenAddr.Hex(), cfg.vaultAddr.Hex(), cfg.supplyCtrlAddr.Hex(), cfg.escrowAddr.Hex())
@@ -879,7 +974,9 @@ func walletOwnership(api *apiClient, key *ecdsa.PrivateKey, addr common.Address)
 	}
 	var ws walletStatus
 	if err := api.postJSON("/api/v1/compliance/challenge/verify", "", map[string]string{
-		"address": addr.Hex(), "nonce": ch.Nonce, "signature": "0x" + hex.EncodeToString(sig),
+		"address":   addr.Hex(),
+		"nonce":     ch.Nonce,
+		"signature": "0x" + hex.EncodeToString(sig),
 	}, &ws, ""); err != nil {
 		return err
 	}
@@ -899,7 +996,9 @@ type walletStatus struct {
 func allowInvestor(api *apiClient, cfg config, investor common.Address) error {
 	var tx struct{ TxHash, Status, IdempotencyKey string }
 	if err := api.postJSON("/api/v1/compliance/status", cfg.adminBearer, map[string]any{
-		"address": investor.Hex(), "status": "Allowed", "validUntil": 0,
+		"address":    investor.Hex(),
+		"status":     "Allowed",
+		"validUntil": 0,
 	}, &tx, "e2e-allow-investor"); err != nil {
 		return err
 	}
@@ -1013,13 +1112,18 @@ func signPackage(cfg config, pkgPath, profileDigest string) (string, error) {
 		return "", fmt.Errorf("write signer policy: %w", err)
 	}
 	args := []string{
-		"sign", pkgPath,
-		"--keystore", cfg.keystorePath,
-		"--password-file", cfg.keystorePass,
-		"--policy", policyPath,
+		"sign",
+		pkgPath,
+		"--keystore",
+		cfg.keystorePath,
+		"--password-file",
+		cfg.keystorePass,
+		"--policy",
+		policyPath,
 		"--yes",
 		"--unsafe-test-mode",
-		"--out", outPath,
+		"--out",
+		outPath,
 	}
 	cmd := exec.Command(cfg.signerBin, args...)
 	out, err := cmd.CombinedOutput()
@@ -1090,9 +1194,14 @@ func mintOnChain(ctx context.Context, chain *chainClient, cfg config, deployerKe
 	}
 
 	data, err := bindings.NewSupplyController().PackMint(bindings.MintAttestation{
-		Auditor: common.HexToAddress(td.Message.Auditor), ProfileDigest: profileDigest, RecordKey: recordKey,
-		MetadataDigest: metadataDigest, Amount: amount, Nonce: nonce,
-		ValidUntil: uint64(td.Message.ValidUntil), Vault: common.HexToAddress(td.Message.Vault),
+		Auditor:        common.HexToAddress(td.Message.Auditor),
+		ProfileDigest:  profileDigest,
+		RecordKey:      recordKey,
+		MetadataDigest: metadataDigest,
+		Amount:         amount,
+		Nonce:          nonce,
+		ValidUntil:     uint64(td.Message.ValidUntil),
+		Vault:          common.HexToAddress(td.Message.Vault),
 	}, sig)
 	if err != nil {
 		return fmt.Errorf("encode mint calldata: %w", err)
@@ -1238,9 +1347,14 @@ func burnOnChain(ctx context.Context, chain *chainClient, cfg config, deployerKe
 	}
 
 	data, err := bindings.NewSupplyController().PackBurn(bindings.BurnAttestation{
-		Auditor: common.HexToAddress(td.Message.Auditor), ProfileDigest: profileDigest, OperationID: operationID,
-		MetadataDigest: metadataDigest, Amount: amount, Nonce: nonce,
-		ValidUntil: uint64(td.Message.ValidUntil), Vault: common.HexToAddress(td.Message.Vault),
+		Auditor:        common.HexToAddress(td.Message.Auditor),
+		ProfileDigest:  profileDigest,
+		OperationID:    operationID,
+		MetadataDigest: metadataDigest,
+		Amount:         amount,
+		Nonce:          nonce,
+		ValidUntil:     uint64(td.Message.ValidUntil),
+		Vault:          common.HexToAddress(td.Message.Vault),
 	}, sig)
 	if err != nil {
 		return fmt.Errorf("encode burn calldata: %w", err)
@@ -1599,7 +1713,9 @@ func enforcementLifecycle(
 func allowRecoveryWallet(api *apiClient, cfg config, addr common.Address) error {
 	var tx struct{ TxHash, Status string }
 	if err := api.postJSON("/api/v1/compliance/status", cfg.adminBearer, map[string]any{
-		"address": addr.Hex(), "status": "Allowed", "validUntil": 0,
+		"address":    addr.Hex(),
+		"status":     "Allowed",
+		"validUntil": 0,
 	}, &tx, "e2e-allow-recovery-wallet"); err != nil {
 		return err
 	}
@@ -1669,7 +1785,9 @@ func incomeLifecycle(ctx context.Context, api *apiClient, chain *chainClient, cf
 	// server says the record block is not final yet
 	if err := poll("POST /api/v1/income/distributions to accept recordBlock "+fmt.Sprint(recordBlock), 60*time.Second, 2*time.Second, func() (bool, error) {
 		err := api.postJSON("/api/v1/income/distributions", cfg.adminBearer, map[string]any{
-			"recordBlock": recordBlock, "total": total.String(), "claimDeadline": claimDeadline,
+			"recordBlock":   recordBlock,
+			"total":         total.String(),
+			"claimDeadline": claimDeadline,
 		}, &prep, "e2e-income-prepare")
 		if apiErr, ok := err.(*apiError); ok && apiErr.status == http.StatusConflict && strings.Contains(string(apiErr.body), "record_block_not_final") {
 			return false, nil

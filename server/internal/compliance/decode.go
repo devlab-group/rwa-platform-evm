@@ -20,7 +20,11 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 		return "", nil, err
 	}
 	return "StatusChanged", map[string]any{
-		"account": ev.Account.Hex(), "previousStatus": ev.PreviousStatus, "newStatus": ev.NewStatus,
-		"previousValidUntil": ev.PreviousValidUntil, "newValidUntil": ev.NewValidUntil, "caller": ev.Caller.Hex(),
+		"account":            ev.Account.Hex(),
+		"previousStatus":     ev.PreviousStatus,
+		"newStatus":          ev.NewStatus,
+		"previousValidUntil": ev.PreviousValidUntil,
+		"newValidUntil":      ev.NewValidUntil,
+		"caller":             ev.Caller.Hex(),
 	}, nil
 }

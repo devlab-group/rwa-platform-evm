@@ -33,9 +33,12 @@ func (s LogSpec) toLog() types.Log {
 		topics[i] = common.HexToHash(t)
 	}
 	return types.Log{
-		Address: common.HexToAddress(s.Address), BlockNumber: s.BlockNumber,
-		TxHash: common.HexToHash(s.TxHash), Index: s.LogIndex, Topics: topics,
-		Data: common.FromHex(s.Data),
+		Address:     common.HexToAddress(s.Address),
+		BlockNumber: s.BlockNumber,
+		TxHash:      common.HexToHash(s.TxHash),
+		Index:       s.LogIndex,
+		Topics:      topics,
+		Data:        common.FromHex(s.Data),
 	}
 }
 

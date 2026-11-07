@@ -6,7 +6,12 @@ import { api, ApiError } from "../../lib/client";
 import type { components } from "../../lib/api-types";
 import {
   buildProjectConfigV3,
+  buildProjectConfigV4,
+  dealingCutoffProblem,
+  MAX_TIMEOUT_SECONDS,
+  MIN_TIMEOUT_SECONDS,
   parseFactoryVersion,
+  timeoutInBounds,
   type FactoryVersion,
   type StrategyChoice,
 } from "../../lib/deployConfig";
@@ -27,6 +32,7 @@ import {
   waitForTxReceipt,
   type ProjectConfigInput,
   type ProjectConfigV3Input,
+  type ProjectConfigV4Input,
 } from "../../lib/wallet";
 
 type Project = components["schemas"]["Project"];
@@ -809,11 +815,7 @@ const REQUIRED_ADDRESS_FIELDS = [
   "treasury",
 ] as const;
 
-// Bounds from contracts/src/RWAFactory.sol, in seconds
-const MIN_REDEMPTION_TIMEOUT = 86_400; // 1 day
-const MAX_REDEMPTION_TIMEOUT = 31_536_000; // 365 days
-
-// The v3 fields stay at their neutral values on an rwa-v2 factory and are not sent
+// The v3 and v4 fields stay at their neutral values on an older factory and are not sent
 const EMPTY_DEPLOY = {
   name: "",
   symbol: "",
@@ -821,6 +823,8 @@ const EMPTY_DEPLOY = {
   purchasePricePerWholeToken: "",
   redemptionPricePerWholeToken: "",
   redemptionTimeout: 604800,
+  purchaseTimeout: 604800,
+  dealingCutoff: "",
   admin: "",
   auditor: "",
   complianceOperator: "",
@@ -880,7 +884,7 @@ function DeployForm({
       <div className="async-state async-state--error" role="alert">
         <p>
           {reported
-            ? `Deployment is blocked: the configured factory reports an unsupported version (${reported}). This console deploys rwa-v2 and rwa-v3 factories only. Check contract.factory_address in the server config.`
+            ? `Deployment is blocked: the configured factory reports an unsupported version (${reported}). This console deploys rwa-v2, rwa-v3 and rwa-v4 factories only. Check contract.factory_address in the server config.`
             : "The server could not read the configured factory's version, so deployment is blocked. Check the chain RPC and contract.factory_address. The server retries after 30 seconds."}
         </p>
         <button
@@ -914,7 +918,9 @@ function DeployFormBody({
   bootstrap: components["schemas"]["BootstrapConfig"];
   onDeployed: () => void;
 }) {
-  const v3 = version === "rwa-v3";
+  // rwa-v4 is a superset of rwa-v3, so the v3 fields show for both
+  const v3 = version !== "rwa-v2";
+  const v4 = version === "rwa-v4";
   const [form, setForm] = useState(EMPTY_DEPLOY);
   const oracle = v3 && form.strategyKind === "Oracle";
   const [confirming, setConfirming] = useState(false);
@@ -936,16 +942,35 @@ function DeployFormBody({
     ? Boolean(form.priceFeed) && Boolean(form.priceMaxAge)
     : Boolean(form.purchasePricePerWholeToken) &&
       Boolean(form.redemptionPricePerWholeToken);
+  // Shown inline and blocks review: the cut-off must be a positive number below both timeouts
+  const cutoffText = form.dealingCutoff.trim();
+  const cutoffProblem =
+    v4 && oracle && /^\d+$/.test(cutoffText)
+      ? dealingCutoffProblem(
+          BigInt(cutoffText),
+          form.redemptionTimeout,
+          form.purchaseTimeout,
+        )
+      : null;
+  // Shown inline beside the field, since a bad value only disables Review
+  const cutoffError =
+    v4 && oracle && cutoffText !== "" && !/^\d+$/.test(cutoffText)
+      ? "Dealing cut-off must be a whole number of seconds."
+      : cutoffProblem;
+  const redemptionTimeoutFraction = !Number.isInteger(form.redemptionTimeout);
+  const purchaseTimeoutFraction = !Number.isInteger(form.purchaseTimeout);
   const readyToReview =
     Boolean(form.name) &&
     Boolean(form.symbol) &&
     strategyReady &&
-    form.redemptionTimeout >= MIN_REDEMPTION_TIMEOUT &&
-    form.redemptionTimeout <= MAX_REDEMPTION_TIMEOUT &&
+    timeoutInBounds(form.redemptionTimeout) &&
     REQUIRED_ADDRESS_FIELDS.every(
       (key) => (oracle && key === "pricer") || Boolean(form[key]),
     ) &&
-    (!v3 || Boolean(form.incomeManager));
+    (!v3 || Boolean(form.incomeManager)) &&
+    (!v4 ||
+      (timeoutInBounds(form.purchaseTimeout) &&
+        (!oracle || (/^\d+$/.test(cutoffText) && cutoffProblem === null))));
 
   async function handleDeploy() {
     setSubmitting(true);
@@ -987,41 +1012,51 @@ function DeployFormBody({
       // Build config locally: keccak256(profile UUID) for projectId, stored profile decimals/digest
       // for identity
       const projectId = keccak256(toBytes(profile.projectId));
-      let projectConfig: ProjectConfigInput | ProjectConfigV3Input;
+      let projectConfig:
+        ProjectConfigInput | ProjectConfigV3Input | ProjectConfigV4Input;
       if (v3) {
-        const built = buildProjectConfigV3(
-          {
-            name: form.name,
-            symbol: form.symbol,
-            quoteToken: form.quoteToken,
-            strategyKind: form.strategyKind,
-            purchasePrice: form.purchasePricePerWholeToken,
-            redemptionPrice: form.redemptionPricePerWholeToken,
-            minPurchase: form.minPurchase,
-            priceFeed: form.priceFeed,
-            priceMaxAge: form.priceMaxAge,
-            purchaseSpreadBps: form.purchaseSpreadBps,
-            redemptionSpreadBps: form.redemptionSpreadBps,
-            sequencerUptimeFeed: form.sequencerUptimeFeed,
-            sequencerGracePeriod: form.sequencerGracePeriod,
-            redemptionTimeout: form.redemptionTimeout,
-            admin: form.admin,
-            auditor: form.auditor,
-            complianceOperator: form.complianceOperator,
-            pricer: form.pricer,
-            treasurer: form.treasurer,
-            redemptionManager: form.redemptionManager,
-            incomeManager: form.incomeManager,
-            treasury: form.treasury,
-            adminTransferDelay: form.adminTransferDelay,
-          },
-          {
-            decimals: profile.tokenDecimals,
-            profileDigest: profile.profileDigest as Hex,
-            projectId,
-            quoteDecimals,
-          },
-        );
+        const values = {
+          name: form.name,
+          symbol: form.symbol,
+          quoteToken: form.quoteToken,
+          strategyKind: form.strategyKind,
+          purchasePrice: form.purchasePricePerWholeToken,
+          redemptionPrice: form.redemptionPricePerWholeToken,
+          minPurchase: form.minPurchase,
+          priceFeed: form.priceFeed,
+          priceMaxAge: form.priceMaxAge,
+          purchaseSpreadBps: form.purchaseSpreadBps,
+          redemptionSpreadBps: form.redemptionSpreadBps,
+          sequencerUptimeFeed: form.sequencerUptimeFeed,
+          sequencerGracePeriod: form.sequencerGracePeriod,
+          redemptionTimeout: form.redemptionTimeout,
+          admin: form.admin,
+          auditor: form.auditor,
+          complianceOperator: form.complianceOperator,
+          pricer: form.pricer,
+          treasurer: form.treasurer,
+          redemptionManager: form.redemptionManager,
+          incomeManager: form.incomeManager,
+          treasury: form.treasury,
+          adminTransferDelay: form.adminTransferDelay,
+        };
+        // Token decimals and digest come from the stored profile, not from the form
+        const context = {
+          decimals: profile.tokenDecimals,
+          profileDigest: profile.profileDigest as Hex,
+          projectId,
+          quoteDecimals,
+        };
+        const built = v4
+          ? buildProjectConfigV4(
+              {
+                ...values,
+                dealingCutoff: form.dealingCutoff,
+                purchaseTimeout: form.purchaseTimeout,
+              },
+              context,
+            )
+          : buildProjectConfigV3(values, context);
         if ("error" in built) {
           setError(built.error);
           return;
@@ -1081,7 +1116,7 @@ function DeployFormBody({
       // deployment
       onDeployed();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Deployment failed.");
+      setError(err instanceof Error ? err.message : "Deployment failed.");
     } finally {
       setSubmitting(false);
     }
@@ -1234,8 +1269,9 @@ function DeployFormBody({
               aria-describedby="priceMaxAge-hint"
             />
             <span className="field__hint" id="priceMaxAge-hint">
-              New purchases and redemption requests revert when the feed is older
-              than this.
+              {v4
+                ? "Previews and indicative quotes revert when the feed's answer exceeds this age. Orders are priced at a later round and do not read it."
+                : "New purchases and redemption requests revert when the feed's answer exceeds this age. For a scheduled feed such as a daily NAV, set this age so the answer expires before the next price can be known."}
             </span>
           </div>
           <div className="field">
@@ -1291,6 +1327,40 @@ function DeployFormBody({
               onChange={(e) => set("sequencerGracePeriod", e.target.value)}
             />
           </div>
+          {v4 && (
+            <div className="field">
+              <label htmlFor="dealingCutoff">Dealing cut-off (seconds)</label>
+              <input
+                id="dealingCutoff"
+                inputMode="numeric"
+                value={form.dealingCutoff}
+                onChange={(e) => set("dealingCutoff", e.target.value)}
+                aria-describedby={
+                  cutoffError
+                    ? "dealingCutoff-hint dealingCutoff-error"
+                    : "dealingCutoff-hint"
+                }
+                aria-invalid={cutoffError ? true : undefined}
+              />
+              <span className="field__hint" id="dealingCutoff-hint">
+                The longest gap from a price&apos;s strike to its publication
+                that you commit to. An order is priced only at a round published
+                at least this long after it, so the price was struck after the
+                order. It must be above 0 and below both timeouts, and the
+                timeouts must exceed the gap between price updates plus this
+                cut-off.
+              </span>
+              {cutoffError && (
+                <span
+                  className="async-state--error"
+                  id="dealingCutoff-error"
+                  role="alert"
+                >
+                  {cutoffError}
+                </span>
+              )}
+            </div>
+          )}
         </>
       )}
       <div className="field">
@@ -1298,16 +1368,70 @@ function DeployFormBody({
         <input
           id="redemptionTimeout"
           type="number"
-          min={MIN_REDEMPTION_TIMEOUT}
-          max={MAX_REDEMPTION_TIMEOUT}
+          min={MIN_TIMEOUT_SECONDS}
+          max={MAX_TIMEOUT_SECONDS}
           value={form.redemptionTimeout}
           onChange={(e) => set("redemptionTimeout", Number(e.target.value))}
-          aria-describedby="redemptionTimeout-hint"
+          aria-describedby={
+            redemptionTimeoutFraction
+              ? "redemptionTimeout-hint redemptionTimeout-error"
+              : "redemptionTimeout-hint"
+          }
+          aria-invalid={redemptionTimeoutFraction ? true : undefined}
         />
         <span className="field__hint" id="redemptionTimeout-hint">
           Between 1 day (86,400s) and 365 days (31,536,000s).
+          {v4 && oracle
+            ? " It must exceed the longest gap between price updates plus the dealing cut-off."
+            : ""}
         </span>
+        {redemptionTimeoutFraction && (
+          <span
+            className="async-state--error"
+            id="redemptionTimeout-error"
+            role="alert"
+          >
+            Redemption timeout must be a whole number of seconds.
+          </span>
+        )}
       </div>
+      {v4 && (
+        <div className="field">
+          <label htmlFor="purchaseTimeout">Purchase timeout (seconds)</label>
+          <input
+            id="purchaseTimeout"
+            type="number"
+            min={MIN_TIMEOUT_SECONDS}
+            max={MAX_TIMEOUT_SECONDS}
+            value={form.purchaseTimeout}
+            onChange={(e) => set("purchaseTimeout", Number(e.target.value))}
+            aria-describedby={
+              purchaseTimeoutFraction
+                ? "purchaseTimeout-hint purchaseTimeout-error"
+                : "purchaseTimeout-hint"
+            }
+            aria-invalid={purchaseTimeoutFraction ? true : undefined}
+          />
+          <span className="field__hint" id="purchaseTimeout-hint">
+            How long a buyer waits before cancelling an order that has no usable
+            price round. Between 1 day (86,400s) and 365 days (31,536,000s), and
+            required for every strategy because a Fixed project can switch to an
+            oracle later.
+            {oracle
+              ? " It must exceed the longest gap between price updates plus the dealing cut-off."
+              : ""}
+          </span>
+          {purchaseTimeoutFraction && (
+            <span
+              className="async-state--error"
+              id="purchaseTimeout-error"
+              role="alert"
+            >
+              Purchase timeout must be a whole number of seconds.
+            </span>
+          )}
+        </div>
+      )}
       <div className="field">
         <label htmlFor="admin">Admin address</label>
         <input
@@ -1463,6 +1587,24 @@ function DeployFormBody({
                         ? `${form.sequencerUptimeFeed} / ${form.sequencerGracePeriod} s`
                         : "none"}
                     </dd>
+                  </div>
+                </>
+              )}
+              {v4 && (
+                <>
+                  {oracle && (
+                    <div className="tx-preview__row">
+                      <dt>Dealing cut-off</dt>
+                      <dd>{form.dealingCutoff} s</dd>
+                    </div>
+                  )}
+                  <div className="tx-preview__row">
+                    <dt>Purchase timeout</dt>
+                    <dd>{form.purchaseTimeout} s</dd>
+                  </div>
+                  <div className="tx-preview__row">
+                    <dt>Redemption timeout</dt>
+                    <dd>{form.redemptionTimeout} s</dd>
                   </div>
                 </>
               )}

@@ -9,4 +9,7 @@ interface IPriceStrategy {
     function quotePurchase(uint256 tokenAmount) external view returns (uint256 quoteAmount);
 
     function quoteRedemption(uint256 tokenAmount) external view returns (uint256 quoteAmount);
+
+    /// @notice True when orders use a feed round published after they are placed
+    function forwardPriced() external view returns (bool);
 }

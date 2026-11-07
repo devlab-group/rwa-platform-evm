@@ -127,13 +127,25 @@ describe("Income page", () => {
     wallet.uninstall();
   });
 
+  it("offers the same income flow on an rwa-v4 project", async () => {
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue({ ...PROJECT, version: "rwa-v4" } as never);
+    renderWithWallet(<Income />, { connected: true });
+
+    expect(
+      await screen.findByRole("button", { name: "Prepare distribution" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/needs an rwa-v3 or later project/)).toBeNull();
+  });
+
   it("explains that an rwa-v2 project has no income distribution", async () => {
     vi.mocked(api.getProject)
       .mockReset()
       .mockResolvedValue({ ...PROJECT, version: "rwa-v2" } as never);
     renderWithWallet(<Income />, { connected: true });
 
-    await screen.findByText(/needs an rwa-v3 project \(this one is rwa-v2\)/);
+    await screen.findByText(/needs an rwa-v3 or later project \(this one is rwa-v2\)/);
     expect(
       screen.queryByRole("button", { name: "Prepare distribution" }),
     ).toBeNull();
@@ -492,7 +504,8 @@ describe("Income page", () => {
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
     expect(screen.getByText("javascript:alert(1)").closest("a")).toBeNull();
     const active = screen.getByText("Active").closest("tr") as HTMLElement;
-    expect(within(active).getByText("1,000")).toBeInTheDocument();
+    // Amounts render once the quote decimals resolve
+    expect(await within(active).findByText("1,000")).toBeInTheDocument();
     expect(within(active).getByText("250")).toBeInTheDocument();
     expect(
       within(active).getByText(`0x${"cd".repeat(32)}`),

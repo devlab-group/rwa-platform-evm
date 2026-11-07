@@ -8,14 +8,15 @@ import {IRWAFactory} from "../../src/interfaces/IRWAFactory.sol";
 import {RWAFactory} from "../../src/RWAFactory.sol";
 import {IncomeDistributor} from "../../src/IncomeDistributor.sol";
 import {RWAToken} from "../../src/RWAToken.sol";
+import {Vault} from "../../src/Vault.sol";
 import {OraclePriceStrategy} from "../../src/pricing/OraclePriceStrategy.sol";
 import {MockAggregatorV3} from "../mocks/oracle/MockAggregatorV3.sol";
 
 /// @notice Tests chain-31337 public-key fallback, ADMIN_TRANSFER_DELAY defaults/guards, strategy
 ///         env bounds and DeployFactory's inherited key guard; excludes E2EFlow's INVESTOR_PK guard
 /// @dev Keep all suite writes to DEPLOYER_PK, ADMIN_TRANSFER_DELAY, ALLOW_ZERO_ADMIN_TRANSFER_DELAY,
-///      STRATEGY_KIND, PURCHASE_SPREAD_BPS, PRICE_FEED and PRICE_MAX_AGE in this test: vm.setEnv
-///      changes process-wide state, so parallel test functions could race.
+///      STRATEGY_KIND, PURCHASE_SPREAD_BPS, PRICE_FEED, PRICE_MAX_AGE, DEALING_CUTOFF and PURCHASE_TIMEOUT
+///      in this test: vm.setEnv changes process-wide state, so parallel test functions could race.
 ///      _clearDeployEnv() removes dependence on the operator's exported values.
 contract DeployScriptTest is Test {
     /// @dev Empty values make vm.envOr use its default and vm.envUint revert into the key guard;
@@ -28,6 +29,8 @@ contract DeployScriptTest is Test {
         vm.setEnv("PURCHASE_SPREAD_BPS", "");
         vm.setEnv("PRICE_FEED", "");
         vm.setEnv("PRICE_MAX_AGE", "");
+        vm.setEnv("DEALING_CUTOFF", "");
+        vm.setEnv("PURCHASE_TIMEOUT", "");
     }
 
     function test_deployScripts_anvilKeyFallbackAndAdminDelayGuards() public {
@@ -67,7 +70,7 @@ contract DeployScriptTest is Test {
         DeployFactory successFactoryScript = new DeployFactory();
         RWAFactory factory = successFactoryScript.run();
         assertTrue(address(factory).code.length > 0);
-        assertEq(factory.version(), "rwa-v3");
+        assertEq(factory.version(), "rwa-v4");
 
         // 6. Reject explicit zero delay outside chain 31337
         vm.setEnv("ADMIN_TRANSFER_DELAY", "0");
@@ -123,6 +126,7 @@ contract DeployScriptTest is Test {
         vm.setEnv("STRATEGY_KIND", "1");
         vm.setEnv("PRICE_FEED", vm.toString(address(priceFeed)));
         vm.setEnv("PRICE_MAX_AGE", "3600");
+        vm.setEnv("DEALING_CUTOFF", "7200");
         vm.setEnv("PURCHASE_SPREAD_BPS", "70000");
         Deploy spreadScript = new Deploy();
         vm.expectRevert(
@@ -141,7 +145,16 @@ contract DeployScriptTest is Test {
         (IRWAFactory.Deployment memory dep,,) = oracleScript.run();
         assertEq(OraclePriceStrategy(dep.strategy).feed(), address(priceFeed));
         assertEq(OraclePriceStrategy(dep.strategy).maxAge(), 3600);
+        assertEq(OraclePriceStrategy(dep.strategy).dealingCutoff(), 7200);
         assertEq(OraclePriceStrategy(dep.strategy).purchaseSpreadBps(), 0);
         assertEq(OraclePriceStrategy(dep.strategy).quotePurchase(1 ether), 1_000_000);
+        assertEq(Vault(dep.vault).purchaseTimeout(), 7 days);
+
+        // An explicit PURCHASE_TIMEOUT overrides the default
+        vm.setEnv("PURCHASE_TIMEOUT", "172800");
+        Deploy timeoutScript = new Deploy();
+        (dep,,) = timeoutScript.run();
+        assertEq(Vault(dep.vault).purchaseTimeout(), 2 days);
+        vm.setEnv("PURCHASE_TIMEOUT", "");
     }
 }

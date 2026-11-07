@@ -79,7 +79,10 @@ func TestVaultProviderAddressMatchesKey(t *testing.T) {
 	defer srv.Close()
 
 	p, err := Load("compliance", Config{
-		Mode: ModeVault, VaultAddr: srv.URL, VaultToken: "test-token", VaultKeyPrefix: "rwa-",
+		Mode:           ModeVault,
+		VaultAddr:      srv.URL,
+		VaultToken:     "test-token",
+		VaultKeyPrefix: "rwa-",
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -99,7 +102,10 @@ func TestVaultProviderSignTxRecoversToItsOwnAddress(t *testing.T) {
 	defer srv.Close()
 
 	p, err := Load("compliance", Config{
-		Mode: ModeVault, VaultAddr: srv.URL, VaultToken: "test-token", VaultKeyPrefix: "rwa-",
+		Mode:           ModeVault,
+		VaultAddr:      srv.URL,
+		VaultToken:     "test-token",
+		VaultKeyPrefix: "rwa-",
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -108,8 +114,13 @@ func TestVaultProviderSignTxRecoversToItsOwnAddress(t *testing.T) {
 	chainID := big.NewInt(31337)
 	to := common.HexToAddress("0x00000000000000000000000000000000000042")
 	tx := types.NewTx(&types.DynamicFeeTx{
-		ChainID: chainID, Nonce: 0, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
-		Gas: 21000, To: &to, Value: big.NewInt(0),
+		ChainID:   chainID,
+		Nonce:     0,
+		GasTipCap: big.NewInt(1),
+		GasFeeCap: big.NewInt(2),
+		Gas:       21000,
+		To:        &to,
+		Value:     big.NewInt(0),
 	})
 	signed, err := p.SignTx(context.Background(), tx, chainID)
 	if err != nil {
@@ -139,7 +150,10 @@ func TestVaultProviderWrongTokenErrors(t *testing.T) {
 	srv, _ := newFakeVaultTransit(t, "rwa-compliance", "correct-token")
 	defer srv.Close()
 	if _, err := Load("compliance", Config{
-		Mode: ModeVault, VaultAddr: srv.URL, VaultToken: "wrong-token", VaultKeyPrefix: "rwa-",
+		Mode:           ModeVault,
+		VaultAddr:      srv.URL,
+		VaultToken:     "wrong-token",
+		VaultKeyPrefix: "rwa-",
 	}); err == nil {
 		t.Fatal("expected an error with the wrong Vault token")
 	}
@@ -151,7 +165,10 @@ func TestVaultProviderCloseIsNoOp(t *testing.T) {
 	srv, f := newFakeVaultTransit(t, "rwa-compliance", "test-token")
 	defer srv.Close()
 	p, err := Load("compliance", Config{
-		Mode: ModeVault, VaultAddr: srv.URL, VaultToken: "test-token", VaultKeyPrefix: "rwa-",
+		Mode:           ModeVault,
+		VaultAddr:      srv.URL,
+		VaultToken:     "test-token",
+		VaultKeyPrefix: "rwa-",
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)

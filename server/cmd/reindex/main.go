@@ -1,6 +1,6 @@
 // Command reindex deletes chain_events for stored child addresses, the chain's shared
-// indexer checkpoint/hash history, purchases, redemption_requests and the rwa-v3 income
-// read models (income_distributions, income_claims). Factory events, Asset Profiles,
+// indexer checkpoint/hash history, purchases, purchase_orders, redemption_requests and the
+// rwa-v3 income read models (income_distributions, income_claims). Factory events, Asset Profiles,
 // prepared income snapshots (income_preparations), investor OwnershipVerified flags,
 // audit logs and idempotency records remain.
 //
@@ -80,7 +80,7 @@ func main() {
 	for role, addr := range addresses {
 		fmt.Printf("  %-16s %s\n", role, addr)
 	}
-	fmt.Println("This will DROP chain_events, indexer_checkpoints, purchases,")
+	fmt.Println("This will DROP chain_events, indexer_checkpoints, purchases, purchase_orders,")
 	fmt.Println("redemption_requests, income_distributions and income_claims, then rely on the platform server's own background reconcile")
 	fmt.Println("loops to rebuild them from the chain. Asset profiles, investor ownership flags,")
 	fmt.Println("and audit logs are NOT touched.")
@@ -118,6 +118,9 @@ func main() {
 	if err := repos.Purchases.DeleteAll(ctx); err != nil {
 		log.Fatalf("reindex: dropping purchases: %v", err)
 	}
+	if err := repos.PurchaseOrders.DeleteAll(ctx); err != nil {
+		log.Fatalf("reindex: dropping purchase_orders: %v", err)
+	}
 	if err := repos.RedemptionRequests.DeleteAll(ctx); err != nil {
 		log.Fatalf("reindex: dropping redemption_requests: %v", err)
 	}
@@ -137,7 +140,7 @@ func main() {
 // rehearsal script polls before/after counts while platform rebuilds
 func snapshotCounts(ctx context.Context, db *mongo.Database) map[string]int64 {
 	counts := map[string]int64{}
-	for _, coll := range []string{"chain_events", "purchases", "redemption_requests", "income_distributions", "income_claims"} {
+	for _, coll := range []string{"chain_events", "purchases", "purchase_orders", "redemption_requests", "income_distributions", "income_claims"} {
 		n, err := db.Collection(coll).CountDocuments(ctx, bson.M{})
 		if err != nil {
 			counts[coll] = -1

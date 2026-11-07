@@ -52,8 +52,13 @@ func TestReconcilePreservesOwnershipVerified(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := events.Create(ctx, &models.ChainEvent{
-		ChainID: 31337, Address: complianceAddr, Name: "StatusChanged", TxHash: "0x01", LogIndex: 0, BlockNumber: 10,
-		Data: map[string]any{"account": "0xAAA", "newStatus": uint8(1), "newValidUntil": uint64(0)},
+		ChainID:     31337,
+		Address:     complianceAddr,
+		Name:        "StatusChanged",
+		TxHash:      "0x01",
+		LogIndex:    0,
+		BlockNumber: 10,
+		Data:        map[string]any{"account": "0xAAA", "newStatus": uint8(1), "newValidUntil": uint64(0)},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -83,8 +88,13 @@ func TestReconcileCreatesInvestorForOnChainOnlyAccount(t *testing.T) {
 	// No investor record exists, as for a manual action on a wallet that never
 	// went through the challenge flow
 	if err := events.Create(ctx, &models.ChainEvent{
-		ChainID: 31337, Address: complianceAddr, Name: "StatusChanged", TxHash: "0x01", LogIndex: 0, BlockNumber: 10,
-		Data: map[string]any{"account": "0xBBB", "newStatus": uint8(1), "newValidUntil": uint64(0)},
+		ChainID:     31337,
+		Address:     complianceAddr,
+		Name:        "StatusChanged",
+		TxHash:      "0x01",
+		LogIndex:    0,
+		BlockNumber: 10,
+		Data:        map[string]any{"account": "0xBBB", "newStatus": uint8(1), "newValidUntil": uint64(0)},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -115,8 +125,13 @@ func TestReconcileResetsSubjectWhenLastStatusEventIsOrphaned(t *testing.T) {
 	complianceAddr := "0x0000000000000000000000000000000000C0A1"
 
 	if err := events.Create(ctx, &models.ChainEvent{
-		ChainID: 31337, Address: complianceAddr, Name: "StatusChanged", TxHash: "0x01", LogIndex: 0, BlockNumber: 10,
-		Data: map[string]any{"account": "0xDDD", "newStatus": uint8(1), "newValidUntil": uint64(5000)},
+		ChainID:     31337,
+		Address:     complianceAddr,
+		Name:        "StatusChanged",
+		TxHash:      "0x01",
+		LogIndex:    0,
+		BlockNumber: 10,
+		Data:        map[string]any{"account": "0xDDD", "newStatus": uint8(1), "newValidUntil": uint64(5000)},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -170,8 +185,13 @@ func TestReconcileReflectsManualStatusChangeOutsideServer(t *testing.T) {
 	}
 	// A multisig then blocks the wallet directly on-chain
 	if err := events.Create(ctx, &models.ChainEvent{
-		ChainID: 31337, Address: complianceAddr, Name: "StatusChanged", TxHash: "0x02", LogIndex: 0, BlockNumber: 20,
-		Data: map[string]any{"account": "0xCCC", "newStatus": uint8(2), "newValidUntil": uint64(0)},
+		ChainID:     31337,
+		Address:     complianceAddr,
+		Name:        "StatusChanged",
+		TxHash:      "0x02",
+		LogIndex:    0,
+		BlockNumber: 20,
+		Data:        map[string]any{"account": "0xCCC", "newStatus": uint8(2), "newValidUntil": uint64(0)},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -222,8 +242,12 @@ func TestBuildStatuses_NumericEncodingsOfStatusAndExpiry(t *testing.T) {
 // Out-of-range statuses must become Unknown; wrapping 257 would incorrectly produce Allowed
 func TestBuildStatuses_OutOfRangeStatusDoesNotWrapIntoAValidOne(t *testing.T) {
 	for name, v := range map[string]any{
-		"int 257": 257, "int64 257": int64(257), "uint64 257": uint64(257), "float64 257": float64(257),
-		"int32 negative": int32(-255), "int64 negative": int64(-255),
+		"int 257":        257,
+		"int64 257":      int64(257),
+		"uint64 257":     uint64(257),
+		"float64 257":    float64(257),
+		"int32 negative": int32(-255),
+		"int64 negative": int64(-255),
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := ev("StatusChanged", "0xAAA", 1, 0, map[string]any{"newStatus": v})

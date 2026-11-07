@@ -13,7 +13,15 @@ import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { api } from "../../lib/client";
 import type { components } from "../../lib/api-types";
 import { resolveQuoteDecimals } from "../../lib/decimals";
-import { encodeReasonCode, fundBatchCalls } from "../../lib/redemption";
+import {
+  encodeReasonCode,
+  fundBatchCalls,
+  fundingStateMessage,
+  isForwardRedemption,
+  redemptionQuote,
+  redemptionQuoteLabel,
+  resolveFundingAmount,
+} from "../../lib/redemption";
 import { ROLES } from "../../lib/roles";
 import { exportSafeBatch } from "../../lib/safeBatch";
 import type { TxRoute } from "../../lib/txRoute";
@@ -25,11 +33,13 @@ import {
 import { redemptionBlockedByCompliance } from "../../lib/status";
 import {
   readErc20Allowance,
+  readFundingPreview,
   sendErc20Approve,
   rejectRedemptionCall,
   sendFundRedemption,
   sendRejectRedemption,
   waitForTxReceipt,
+  type FundingPreview,
 } from "../../lib/wallet";
 import { TableWrap } from "../../components/TableWrap";
 
@@ -48,8 +58,8 @@ const STATUS_FILTERS = [
 ] as const;
 
 /**
- * Shows redemption states, eligibility, fixed quotes and timeout; routes fund/reject through wallet
- * or Safe
+ * Shows redemption states, eligibility, quotes and timeout; routes fund/reject through wallet
+ * or Safe. A forward-priced request has no quote until funding, which reads previewFunding first.
  */
 export function Redemptions() {
   const [statusFilter, setStatusFilter] =
@@ -126,7 +136,7 @@ export function Redemptions() {
                       <th>ID</th>
                       <th>Beneficiary</th>
                       <th>RWA amount</th>
-                      <th>Quote amount</th>
+                      <th>Quote</th>
                       <th>Status</th>
                       <th>Beneficiary allowed</th>
                       <th>Timeout</th>
@@ -144,9 +154,8 @@ export function Redemptions() {
                           {formatTokenAmount(r.rwaAmount ?? "", rwaDecimals)}
                         </td>
                         <td>
-                          {formatTokenAmount(
-                            r.quoteAmount ?? "",
-                            quoteDecimals,
+                          {redemptionQuoteLabel(redemptionQuote(r), (raw) =>
+                            formatTokenAmount(raw, quoteDecimals),
                           )}
                         </td>
                         <td>
@@ -194,6 +203,7 @@ export function Redemptions() {
 
       {selectedId && (
         <RedemptionDetail
+          key={selectedId}
           id={selectedId}
           chainId={chainId}
           finalityConfirmations={finalityConfirmations}
@@ -239,12 +249,31 @@ function RedemptionDetail({
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  // The funding amount the operator was last shown in a message, when it differed from the price row
+  const [reviewedAmount, setReviewedAmount] = useState<bigint | null>(null);
   const blocked =
     detail.status === "success" &&
     redemptionBlockedByCompliance(
       detail.data.status,
       detail.data.beneficiaryAllowed,
     );
+  const fmtQuote = (raw: bigint | string) =>
+    formatTokenAmount(String(raw), quoteDecimals);
+  // A Pending forward request has no quote yet: the contract prices it when it is funded
+  const awaitingPrice =
+    detail.status === "success" &&
+    isForwardRedemption(detail.data) &&
+    detail.data.status === "Pending";
+  const escrowAddress = addresses?.redemptionEscrow;
+  const preview = useAsync<FundingPreview | null>(async () => {
+    if (!awaitingPrice || !escrowAddress || !chainId) return null;
+    return readFundingPreview(chainId, escrowAddress as Address, BigInt(id));
+  }, [id, awaitingPrice, escrowAddress, chainId]);
+  // Known not to be fundable right now; an unreadable preview leaves funding to its own re-read
+  const fundingBlocked =
+    preview.status === "success" &&
+    preview.data !== null &&
+    preview.data.state !== "priced";
 
   function begin() {
     setError(null);
@@ -254,7 +283,8 @@ function RedemptionDetail({
 
   // Wallet funding checks allowance, awaits approval if needed, then confirms funding.
   // Safe export combines approval/funding and optional claim; live eligibility preflight
-  // blocks funding for an ineligible Pending beneficiary.
+  // blocks funding for an ineligible Pending beneficiary. A forward request is priced by the
+  // contract, so its amount is read from previewFunding right before the transaction is built.
   async function handleFund(route: TxRoute) {
     begin();
     if (blocked) return;
@@ -264,35 +294,65 @@ function RedemptionDetail({
     }
     const escrow = addresses?.redemptionEscrow;
     const quoteToken = addresses?.quoteToken;
-    const quoteAmount =
-      detail.status === "success" ? detail.data.quoteAmount : undefined;
-    if (!escrow || !quoteToken || !quoteAmount) {
+    const request = detail.status === "success" ? detail.data : undefined;
+    if (!escrow || !quoteToken || !request) {
       setError(
         "Escrow, quote-token address or quote amount is missing. Check deployment.",
       );
       return;
     }
-    if (route.kind === "safe") {
-      setDone(
-        exportSafeBatch(
-          chainId,
-          route.safe,
-          claimInBatch ? "Fund and claim redemption" : "Fund redemption",
-          fundBatchCalls(
-            quoteToken as Address,
-            escrow as Address,
-            BigInt(id),
-            BigInt(quoteAmount),
-            claimInBatch,
-          ),
-        ),
-      );
-      return;
-    }
-    if (!from) return;
     setBusy("fund");
     try {
-      const amount = BigInt(quoteAmount);
+      if (isForwardRedemption(request) && request.status === "Pending") {
+        setProgress("Reading the funding quote…");
+      }
+      const resolved = await resolveFundingAmount(
+        request,
+        () => readFundingPreview(chainId, escrow as Address, BigInt(id)),
+        fmtQuote,
+      );
+      if ("error" in resolved) {
+        setError(resolved.error);
+        return;
+      }
+      const amount = resolved.amount;
+      // Approve only an amount the operator has seen: the price row, or the message below
+      if (isForwardRedemption(request) && request.status === "Pending") {
+        const onScreen =
+          preview.status === "success" && preview.data?.state === "priced"
+            ? preview.data.amount
+            : undefined;
+        if (amount !== onScreen && amount !== reviewedAmount) {
+          setReviewedAmount(amount);
+          preview.reload();
+          setError(
+            `The funding price is now ${fmtQuote(amount)}${
+              onScreen === undefined
+                ? ""
+                : ` (the figure on screen was ${fmtQuote(onScreen)})`
+            }. Check it, then click Fund again to approve exactly ${fmtQuote(amount)}.`,
+          );
+          return;
+        }
+      }
+      if (route.kind === "safe") {
+        setDone(
+          exportSafeBatch(
+            chainId,
+            route.safe,
+            claimInBatch ? "Fund and claim redemption" : "Fund redemption",
+            fundBatchCalls(
+              quoteToken as Address,
+              escrow as Address,
+              BigInt(id),
+              amount,
+              claimInBatch,
+            ),
+          ),
+        );
+        return;
+      }
+      if (!from) return;
       const allowance = await readErc20Allowance(
         chainId,
         quoteToken as Address,
@@ -402,9 +462,34 @@ function RedemptionDetail({
               </dd>
             </div>
             <div className="tx-preview__row">
-              <dt>Snapshotted quote</dt>
-              <dd>{formatTokenAmount(r.quoteAmount ?? "", quoteDecimals)}</dd>
+              <dt>{isForwardRedemption(r) ? "Quote" : "Snapshotted quote"}</dt>
+              <dd>
+                {redemptionQuoteLabel(redemptionQuote(r), (raw) =>
+                  formatTokenAmount(raw, quoteDecimals),
+                )}
+              </dd>
             </div>
+            {isForwardRedemption(r) && r.pricedRound && (
+              <div className="tx-preview__row">
+                <dt>Priced at round</dt>
+                <dd className="mono">{r.pricedRound}</dd>
+              </div>
+            )}
+            {awaitingPrice && (
+              <div className="tx-preview__row">
+                <dt>Funding price</dt>
+                <dd>
+                  <FundingPreviewText state={preview} fmt={fmtQuote} />{" "}
+                  <button
+                    type="button"
+                    className="button button--secondary"
+                    onClick={preview.reload}
+                  >
+                    Refresh price
+                  </button>
+                </dd>
+              </div>
+            )}
             <div className="tx-preview__row">
               <dt>Created</dt>
               <dd>{formatUnixSeconds(r.createdAt)}</dd>
@@ -447,11 +532,13 @@ function RedemptionDetail({
                 type="button"
                 className="button button--primary"
                 onClick={() => handleFund(route)}
-                disabled={busy !== null || blocked}
+                disabled={busy !== null || blocked || fundingBlocked}
                 title={
                   blocked
                     ? "The beneficiary is not Allowed. Restore compliance before funding or the call will revert."
-                    : undefined
+                    : fundingBlocked
+                      ? "This request cannot be funded right now; see Funding price."
+                      : undefined
                 }
               >
                 {busy === "fund"
@@ -530,3 +617,41 @@ function RedemptionDetail({
     </section>
   );
 }
+
+// Distinct text per funding state: priced, waiting for a round, below the holder's minimum,
+// closed at the timeout, or otherwise blocked
+function FundingPreviewText({
+  state,
+  fmt,
+}: {
+  state: ReturnType<typeof useAsync<FundingPreview | null>>;
+  fmt: (minimalUnits: bigint | string) => string;
+}) {
+  if (state.status === "loading") return <span role="status">Reading…</span>;
+  if (state.status === "error") {
+    return (
+      <span className="async-state--error" role="alert">
+        Could not read the funding price: {state.error}
+      </span>
+    );
+  }
+  if (state.data === null) return <span>-</span>;
+  const tone =
+    state.data.state === "priced" ? "badge--success" : "badge--warning";
+  return (
+    <span data-funding-state={state.data.state}>
+      <span className={`badge ${tone}`}>
+        {FUNDING_STATE_LABEL[state.data.state]}
+      </span>{" "}
+      {fundingStateMessage(state.data, fmt)}
+    </span>
+  );
+}
+
+const FUNDING_STATE_LABEL: Record<FundingPreview["state"], string> = {
+  priced: "Priced",
+  waiting: "Waiting for a round",
+  belowMin: "Below holder minimum",
+  closed: "Funding closed",
+  blocked: "Blocked",
+};

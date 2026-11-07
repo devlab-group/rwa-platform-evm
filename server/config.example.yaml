@@ -157,6 +157,13 @@ tx:
 alerts:
   pending_redemption_sla: "48h"
   funded_claim_failure_sla: "24h"
+  # Alert when a forward-priced purchase order remains Pending this long;
+  # check the feed and keeper when investigating
+  pending_purchase_sla: "24h"
+  # Delay StalePrice alerts until this feed age, if the age is readable.
+  # When maxAge is below the update interval, allow the longest normal gap plus a tolerance.
+  # Unset: no extra delay after maxAge expires.
+  # price_feed_sla: "26h"
 
 # Production emergency overrides; leave false unless the reason is documented
 production_overrides:

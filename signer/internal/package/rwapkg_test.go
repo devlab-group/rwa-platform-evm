@@ -270,9 +270,11 @@ func TestParseManifest_RejectsDuplicatePaths(t *testing.T) {
 	files = append(files, manifestFileEntry("proofs/a.pdf", contents["proofs/a.pdf"], "application/octet-stream"))
 
 	manifest := Manifest{
-		PackageVersion: "1.0", PrimaryType: "MintAttestation",
-		ProfileDigest: "0x" + strings.Repeat("11", 32), MetadataDigest: "0x" + strings.Repeat("22", 32),
-		Files: files,
+		PackageVersion: "1.0",
+		PrimaryType:    "MintAttestation",
+		ProfileDigest:  "0x" + strings.Repeat("11", 32),
+		MetadataDigest: "0x" + strings.Repeat("22", 32),
+		Files:          files,
 	}
 	raw, err := json.Marshal(manifest)
 	if err != nil {
@@ -292,9 +294,11 @@ func TestParseManifest_RejectsNonProofsExtraPath(t *testing.T) {
 		files = append(files, manifestFileEntry(path, data, "application/octet-stream"))
 	}
 	manifest := Manifest{
-		PackageVersion: "1.0", PrimaryType: "MintAttestation",
-		ProfileDigest: "0x" + strings.Repeat("11", 32), MetadataDigest: "0x" + strings.Repeat("22", 32),
-		Files: files,
+		PackageVersion: "1.0",
+		PrimaryType:    "MintAttestation",
+		ProfileDigest:  "0x" + strings.Repeat("11", 32),
+		MetadataDigest: "0x" + strings.Repeat("22", 32),
+		Files:          files,
 	}
 	raw, err := json.Marshal(manifest)
 	if err != nil {
@@ -310,9 +314,11 @@ func TestParseManifest_RejectsNonProofsExtraPath(t *testing.T) {
 func TestParseManifest_RejectsMissingMandatoryFile(t *testing.T) {
 	data := []byte(`{"profile":1}`)
 	manifest := Manifest{
-		PackageVersion: "1.0", PrimaryType: "MintAttestation",
-		ProfileDigest: "0x" + strings.Repeat("11", 32), MetadataDigest: "0x" + strings.Repeat("22", 32),
-		Files: []ManifestFile{manifestFileEntry("profile.json", data, "application/json")},
+		PackageVersion: "1.0",
+		PrimaryType:    "MintAttestation",
+		ProfileDigest:  "0x" + strings.Repeat("11", 32),
+		MetadataDigest: "0x" + strings.Repeat("22", 32),
+		Files:          []ManifestFile{manifestFileEntry("profile.json", data, "application/json")},
 	}
 	raw, err := json.Marshal(manifest)
 	if err != nil {
@@ -416,8 +422,10 @@ func FuzzExtract(f *testing.F) {
 
 func FuzzParseManifest(f *testing.F) {
 	good, err := json.Marshal(Manifest{
-		PackageVersion: "1.0", PrimaryType: "MintAttestation",
-		ProfileDigest: "0x" + strings.Repeat("a", 64), MetadataDigest: "0x" + strings.Repeat("b", 64),
+		PackageVersion: "1.0",
+		PrimaryType:    "MintAttestation",
+		ProfileDigest:  "0x" + strings.Repeat("a", 64),
+		MetadataDigest: "0x" + strings.Repeat("b", 64),
 		Files: []ManifestFile{
 			manifestFileEntry("profile.json", []byte("p"), "application/json"),
 			manifestFileEntry("metadata.json", []byte("m"), "application/json"),

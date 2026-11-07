@@ -5,7 +5,7 @@ import { installFakeWallet, renderWithWallet } from "../../test/walletHarness";
 import { Investor } from "./Investor";
 import { api } from "../../lib/client";
 import { tokenErrorsAbi } from "../../lib/abis";
-import { sendErc20Transfer } from "../../lib/wallet";
+import { sendErc20Transfer, waitForTxReceipt } from "../../lib/wallet";
 
 vi.mock("../../lib/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/client")>();
@@ -27,6 +27,7 @@ vi.mock("../../lib/wallet", async (importOriginal) => {
   return {
     ...actual,
     sendErc20Transfer: vi.fn(),
+    waitForTxReceipt: vi.fn(),
   };
 });
 
@@ -78,6 +79,9 @@ describe("Investor transfer section", () => {
     vi.mocked(sendErc20Transfer)
       .mockReset()
       .mockResolvedValue("0xtransferhash");
+    vi.mocked(waitForTxReceipt)
+      .mockReset()
+      .mockResolvedValue({ status: "success" } as never);
     window.localStorage.clear();
   });
 
@@ -106,6 +110,45 @@ describe("Investor transfer section", () => {
     expect(await screen.findByText(/Submitted:/)).toHaveTextContent(
       "0xtransferhash",
     );
+  });
+
+  it("keeps Transfer disabled until the receipt arrives", async () => {
+    vi.mocked(api.isAddressAllowed).mockResolvedValue({ allowed: true });
+    let mined!: (value: never) => void;
+    vi.mocked(waitForTxReceipt).mockReturnValue(
+      new Promise<never>((resolve) => {
+        mined = resolve;
+      }),
+    );
+    renderWithWallet(<Investor />, { connected: true });
+    await waitFor(() => expect(api.getProject).toHaveBeenCalled());
+    fillTransfer(RECIPIENT, "1");
+    await waitFor(() => expect(transferButton()).toBeEnabled());
+    fireEvent.click(transferButton());
+
+    await waitFor(() =>
+      expect(waitForTxReceipt).toHaveBeenCalledWith("0xtransferhash"),
+    );
+    expect(screen.getByRole("button", { name: "Submitting…" })).toBeDisabled();
+    mined({ status: "success" } as never);
+    await waitFor(() => expect(transferButton()).toBeEnabled());
+  });
+
+  it("reports a transfer that was mined but reverted", async () => {
+    vi.mocked(api.isAddressAllowed).mockResolvedValue({ allowed: true });
+    vi.mocked(waitForTxReceipt).mockRejectedValue(
+      new Error("Transaction 0xtransferhash was mined but reverted on-chain."),
+    );
+    renderWithWallet(<Investor />, { connected: true });
+    await waitFor(() => expect(api.getProject).toHaveBeenCalled());
+    fillTransfer(RECIPIENT, "1");
+    await waitFor(() => expect(transferButton()).toBeEnabled());
+    fireEvent.click(transferButton());
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "mined but reverted on-chain",
+    );
+    await waitFor(() => expect(transferButton()).toBeEnabled());
   });
 
   // Fail closed: anything but a literal true keeps the recipient ineligible

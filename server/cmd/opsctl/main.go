@@ -1,5 +1,5 @@
 // Command opsctl recovers transactions, indexer checkpoints, DLQ entries and IPFS
-// publications. It reads platform's --config and uses the same MongoDB, or a throwaway
+// publications, and checks the stored asset profile against this build. It reads platform's --config and uses the same MongoDB, or a throwaway
 // store with mongo.persistence_mode: memory.
 //
 // Host and config-file permissions control access; opsctl does not authenticate
@@ -18,6 +18,7 @@
 //	opsctl --config <path> dlq dismiss --id=<id>
 //	opsctl --config <path> ipfs retry --id=<id> --file=<path>
 //	opsctl --config <path> ipfs restore-local --id=<id>
+//	opsctl --config <path> profile check
 package main
 
 import (
@@ -82,8 +83,11 @@ func run(args []string) int {
 	defer closeRepos()
 
 	o := opsCtx{
-		ctx: ctx, repos: repos, audit: auditlog.New(repos.AuditLogs),
-		actor: auditActor(*actorFlag), out: os.Stdout,
+		ctx:   ctx,
+		repos: repos,
+		audit: auditlog.New(repos.AuditLogs),
+		actor: auditActor(*actorFlag),
+		out:   os.Stdout,
 	}
 
 	if err := dispatch(o, cfg, group, action, rest); err != nil {
@@ -183,9 +187,13 @@ func loadRoleSigner(role string, cfg config.Config) (keys.Provider, error) {
 		return nil, fmt.Errorf("unknown --role %q (want compliance)", role)
 	}
 	return keys.Load(role, keys.Config{
-		Mode: keys.Mode(cfg.KeyProviderMode), RawHexKey: rawHex,
-		KeystoreDir: cfg.KeystoreDir, PasswordFile: cfg.KeystorePasswordFile,
-		VaultAddr: cfg.VaultAddr, VaultToken: cfg.VaultToken, VaultKeyPrefix: cfg.VaultKeyPrefix,
+		Mode:           keys.Mode(cfg.KeyProviderMode),
+		RawHexKey:      rawHex,
+		KeystoreDir:    cfg.KeystoreDir,
+		PasswordFile:   cfg.KeystorePasswordFile,
+		VaultAddr:      cfg.VaultAddr,
+		VaultToken:     cfg.VaultToken,
+		VaultKeyPrefix: cfg.VaultKeyPrefix,
 		KMSMockSeedHex: cfg.KMSMockSeedHex,
 	})
 }
@@ -350,6 +358,9 @@ func dispatch(o opsCtx, cfg config.Config, group, action string, args []string) 
 		}
 		return runIPFSRestoreLocal(o, rm, *id)
 
+	case "profile check":
+		return runProfileCheck(o)
+
 	default:
 		printUsage()
 		return fmt.Errorf("unknown command %q", strings.TrimSpace(group+" "+action))
@@ -367,6 +378,7 @@ func printUsage() {
   dlq dismiss         --id=<id>
   ipfs retry          --id=<id> --file=<path>
   ipfs restore-local  --id=<id>
+  profile check       re-validate the stored asset profile with this build (run before upgrading)
 
 opsctl does not authenticate its caller. It reads the platform's --config file, so host
 access to that file is the access boundary. --actor only labels the audit trail.`)

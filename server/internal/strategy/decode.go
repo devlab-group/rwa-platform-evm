@@ -29,7 +29,9 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 			return "", nil, err
 		}
 		return "PurchasePriceUpdated", map[string]any{
-			"previousPrice": ev.PreviousPrice.String(), "newPrice": ev.NewPrice.String(), "caller": ev.Caller.Hex(),
+			"previousPrice": ev.PreviousPrice.String(),
+			"newPrice":      ev.NewPrice.String(),
+			"caller":        ev.Caller.Hex(),
 		}, nil
 	case s.EventID("RedemptionPriceUpdated"):
 		ev, err := s.UnpackPriceUpdated("RedemptionPriceUpdated", log.Data, log.Topics)
@@ -37,7 +39,9 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 			return "", nil, err
 		}
 		return "RedemptionPriceUpdated", map[string]any{
-			"previousPrice": ev.PreviousPrice.String(), "newPrice": ev.NewPrice.String(), "caller": ev.Caller.Hex(),
+			"previousPrice": ev.PreviousPrice.String(),
+			"newPrice":      ev.NewPrice.String(),
+			"caller":        ev.Caller.Hex(),
 		}, nil
 	default:
 		return "unknown", map[string]any{"topic0": topic0.Hex()}, nil

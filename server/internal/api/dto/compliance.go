@@ -21,8 +21,10 @@ type WalletStatus struct {
 // ToWalletStatus maps one stored investor record onto its API view
 func ToWalletStatus(inv *models.Investor) WalletStatus {
 	return WalletStatus{
-		Address: inv.Address, Status: string(inv.Status),
-		ValidUntil: inv.ValidUntil, OwnershipVerified: inv.OwnershipVerified,
+		Address:           inv.Address,
+		Status:            string(inv.Status),
+		ValidUntil:        inv.ValidUntil,
+		OwnershipVerified: inv.OwnershipVerified,
 	}
 }
 
@@ -72,7 +74,11 @@ type TxRef struct {
 // ToTxRef maps a submitted transaction record onto the minimal reference an
 // accepted (202) side-effecting response returns
 func ToTxRef(tx *models.Transaction) TxRef {
-	return TxRef{TxHash: tx.TxHash, Status: string(tx.Status), IdempotencyKey: tx.IdempotencyKey}
+	return TxRef{
+		TxHash:         tx.TxHash,
+		Status:         string(tx.Status),
+		IdempotencyKey: tx.IdempotencyKey,
+	}
 }
 
 // KYCSession mirrors components.schemas.KYCSession for POST /compliance/kyc/start.
@@ -97,7 +103,9 @@ type ChallengeResponse struct {
 // ToChallengeResponse maps a freshly issued wallet challenge onto its API view
 func ToChallengeResponse(ch *models.WalletChallenge) ChallengeResponse {
 	return ChallengeResponse{
-		Address: ch.Address, Nonce: ch.Nonce, Message: ch.Message,
+		Address:   ch.Address,
+		Nonce:     ch.Nonce,
+		Message:   ch.Message,
 		ExpiresAt: ch.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
@@ -122,9 +130,14 @@ type WebhookEventResponse struct {
 // occurrence timestamp.
 func ToWebhookEventResponse(e *models.KYCEvent) WebhookEventResponse {
 	out := WebhookEventResponse{
-		ID: e.ID, Address: e.Address, Provider: e.Provider, EventID: e.EventID, Outcome: e.Outcome,
+		ID:          e.ID,
+		Address:     e.Address,
+		Provider:    e.Provider,
+		EventID:     e.EventID,
+		Outcome:     e.Outcome,
 		ReceivedAt:  e.ReceivedAt.Format("2006-01-02T15:04:05Z07:00"),
-		ApplyStatus: string(e.ApplyStatus), Applied: e.ApplyStatus == models.KYCApplyApplied,
+		ApplyStatus: string(e.ApplyStatus),
+		Applied:     e.ApplyStatus == models.KYCApplyApplied,
 	}
 	if !e.OccurredAt.IsZero() {
 		out.OccurredAt = e.OccurredAt.Format("2006-01-02T15:04:05Z07:00")
@@ -146,7 +159,12 @@ type AuditLogResponse struct {
 // ToAuditLogResponse maps one operational audit entry onto its API view
 func ToAuditLogResponse(e *models.AuditLogEntry) AuditLogResponse {
 	return AuditLogResponse{
-		ID: e.ID, Category: e.Category, Actor: e.Actor, Action: e.Action, Target: e.Target,
-		CreatedAt: e.CreatedAt.Format("2006-01-02T15:04:05Z07:00"), Details: e.Metadata,
+		ID:        e.ID,
+		Category:  e.Category,
+		Actor:     e.Actor,
+		Action:    e.Action,
+		Target:    e.Target,
+		CreatedAt: e.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		Details:   e.Metadata,
 	}
 }

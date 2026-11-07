@@ -10,5 +10,9 @@ type Health struct {
 
 // NewHealth builds the probe view from server state; no model backs it
 func NewHealth(status string, chainID int64, lastIndexedBlock uint64) Health {
-	return Health{Status: status, ChainID: chainID, LastIndexedBlock: lastIndexedBlock}
+	return Health{
+		Status:           status,
+		ChainID:          chainID,
+		LastIndexedBlock: lastIndexedBlock,
+	}
 }

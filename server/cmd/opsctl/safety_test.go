@@ -23,8 +23,12 @@ func TestRefuseIfIndexerUnsafe(t *testing.T) {
 	}
 
 	if err := repos.IndexerCheckpoints.Set(ctx, &models.IndexerCheckpoint{
-		ChainID: 31337, Address: indexer.CheckpointAddress, LastBlock: 42,
-		LastBlockHash: "0xabc", ReconciliationRequired: true, UpdatedAt: time.Now().UTC(),
+		ChainID:                31337,
+		Address:                indexer.CheckpointAddress,
+		LastBlock:              42,
+		LastBlockHash:          "0xabc",
+		ReconciliationRequired: true,
+		UpdatedAt:              time.Now().UTC(),
 	}); err != nil {
 		t.Fatal(err)
 	}

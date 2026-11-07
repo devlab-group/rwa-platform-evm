@@ -18,7 +18,9 @@ state or automatic redemption; operators and holders must use the normal flows.
 1. **Close sales without pausing redemption.** On rwa-v3, the admin calls
    `Vault.setMinPurchaseQuote(2**256 - 1)` from its wallet or Safe while unpaused. Quotes below
    that maximum revert with `QuoteBelowMinimum`; an equal quote still passes the minimum check.
-   Restore the old minimum to reopen sales. On rwa-v2, use a separately implemented and verified
+   On rwa-v4, `requestPurchase` rejects deposits below that maximum, and settlement refunds
+   open orders whose quote falls below it. Restore the old minimum to reopen sales. On rwa-v2,
+   use a separately implemented and verified
    closure mechanism: `setPurchasePrice(2**256 - 1)` can leave fractional purchases payable
    because quotes scale by token decimals. Project pause also blocks redemption requests,
    funding and claims. Keep sales closed, since completed redemptions return RWA to inventory.
@@ -28,7 +30,8 @@ state or automatic redemption; operators and holders must use the normal flows.
    deploy a `FixedPriceStrategy` with redemption price `par` and call `Vault.setStrategy`
    while unpaused. On rwa-v2, the pricer calls `setRedemptionPrice(par)` on
    `RedemptionEscrow.strategy()`, which keeps its deploy-time strategy even after
-   `Vault.setStrategy`. Existing requests keep their quoted amounts. The redemption manager can
+   `Vault.setStrategy`. Existing instant requests keep their quotes. On rwa-v4, Pending forward
+   requests retain their stored strategy and pricing round. The redemption manager can
    reject only Pending requests, with a reason code, and ask holders to request again; Funded
    payouts stay fixed.
 3. **Use normal redemption:** request, fund, permissionless claim; see the

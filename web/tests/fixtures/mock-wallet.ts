@@ -60,6 +60,8 @@ export async function installMockWallet(
       const sentTransactions: { to: string | null; data: string | null }[] = [];
       let currentChainIdHex = args.chainIdHex;
       const signRequests: { messageHex: string; signer: string }[] = [];
+      // Exact calldata (lowercase) -> eth_call outcome, set by specs through __setCall
+      const callOutcomes = new Map<string, { result?: string; revert?: string }>();
 
       const provider = {
         isMockWallet: true,
@@ -88,6 +90,11 @@ export async function installMockWallet(
         // Test-only hook: every personal_sign request, so specs can check what was signed
         __getSignRequests() {
           return signRequests;
+        },
+        // Test-only hook: answers eth_call for exactly this calldata with a result, or reverts
+        // with this revert data; a later call for the same calldata replaces the earlier one
+        __setCall(data: string, outcome: { result?: string; revert?: string }) {
+          callOutcomes.set(data.toLowerCase(), outcome);
         },
         async request({ method, params }: { method: string; params?: unknown[] }) {
           switch (method) {
@@ -152,6 +159,11 @@ export async function installMockWallet(
             case "eth_call": {
               const call = (params?.[0] ?? {}) as { data?: string; to?: string };
               const data = call.data ?? "";
+              const outcome = callOutcomes.get(data.toLowerCase());
+              if (outcome?.revert) {
+                throw { code: 3, message: "execution reverted", data: outcome.revert };
+              }
+              if (outcome?.result) return outcome.result;
               if (data.startsWith(args.balanceOfSelector)) return args.balanceOfResult;
               if (data.startsWith(args.decimalsSelector)) return args.decimalsResult;
               if (data.startsWith(args.nextIdSelector)) return `0x${"0".repeat(64)}`;
@@ -224,4 +236,25 @@ export async function getMockSignRequests(page: Page): Promise<MockSignRequest[]
     ).ethereum.__getSignRequests(),
   );
   return raw.map((r) => ({ message: hexToString(r.messageHex as Hex), signer: r.signer }));
+}
+
+/**
+ * Makes the mock wallet answer eth_call for exactly `data` with `result`, or revert with `revert`.
+ * Use it for contract views the console reads through the wallet, such as previewFunding.
+ */
+export async function setMockCall(
+  page: Page,
+  data: Hex,
+  outcome: { result: Hex } | { revert: Hex },
+): Promise<void> {
+  await page.evaluate(
+    ({ data, outcome }) => {
+      (
+        window as unknown as {
+          ethereum: { __setCall: (d: string, o: { result?: string; revert?: string }) => void };
+        }
+      ).ethereum.__setCall(data, outcome);
+    },
+    { data, outcome },
+  );
 }

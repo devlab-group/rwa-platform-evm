@@ -201,9 +201,60 @@ export const vaultAbi = [
     outputs: [],
     stateMutability: "nonpayable",
   },
+  // rwa-v4 forward orders; permissionless, reverts until the pricing round exists and while paused
+  {
+    type: "function",
+    name: "settlePurchase",
+    inputs: [{ name: "id", type: "uint256" }],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  // rwa-v4 only; TREASURER_ROLE, reverts unless the project is paused
+  {
+    type: "function",
+    name: "rejectPurchase",
+    inputs: [{ name: "id", type: "uint256" }],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  // rwa-v4 only; open order deposits that withdrawProceeds cannot touch
+  {
+    type: "function",
+    name: "pendingPurchaseQuote",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+  },
+  // rwa-v4 only; minPurchaseQuote is the Vault minimum recorded when the order was requested
+  {
+    type: "function",
+    name: "getPurchase",
+    inputs: [{ name: "id", type: "uint256" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        components: [
+          { name: "buyer", type: "address" },
+          { name: "createdAt", type: "uint64" },
+          { name: "status", type: "uint8" },
+          { name: "recipient", type: "address" },
+          { name: "strategy", type: "address" },
+          { name: "baseRound", type: "uint80" },
+          { name: "tokenAmount", type: "uint256" },
+          { name: "maxQuoteAmount", type: "uint256" },
+          { name: "minPurchaseQuote", type: "uint256" },
+        ],
+      },
+    ],
+    stateMutability: "view",
+  },
 ] as const satisfies Abi;
 
-/** Vault revert raised by buy when the quote is under the rwa-v3 minimum */
+/**
+ * Vault reverts shown by describeWalletError: the rwa-v3 minimum, the rwa-v4 order lifecycle and
+ * the strategy checks of setStrategy
+ */
 export const vaultErrorsAbi = [
   {
     type: "error",
@@ -211,6 +262,48 @@ export const vaultErrorsAbi = [
     inputs: [
       { name: "quoted", type: "uint256" },
       { name: "minimum", type: "uint256" },
+    ],
+  },
+  { type: "error", name: "ForwardPriced", inputs: [] },
+  { type: "error", name: "NotForwardPriced", inputs: [] },
+  { type: "error", name: "ProjectNotPaused", inputs: [] },
+  {
+    type: "error",
+    name: "NotPending",
+    inputs: [{ name: "id", type: "uint256" }],
+  },
+  {
+    type: "error",
+    name: "BuyerNotAllowed",
+    inputs: [{ name: "account", type: "address" }],
+  },
+  {
+    type: "error",
+    name: "RoundAvailable",
+    inputs: [
+      { name: "id", type: "uint256" },
+      { name: "roundId", type: "uint80" },
+    ],
+  },
+  {
+    type: "error",
+    name: "InsufficientProceeds",
+    inputs: [
+      { name: "requested", type: "uint256" },
+      { name: "available", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "InvalidStrategy",
+    inputs: [{ name: "strategy", type: "address" }],
+  },
+  {
+    type: "error",
+    name: "InvalidDealingCutoff",
+    inputs: [
+      { name: "dealingCutoff", type: "uint64" },
+      { name: "timeout", type: "uint64" },
     ],
   },
 ] as const satisfies Abi;
@@ -238,7 +331,7 @@ export const oracleStrategyErrorsAbi = [
     type: "error",
     name: "GracePeriodNotOver",
     inputs: [
-      { name: "sinceRestart", type: "uint256" },
+      { name: "startedAt", type: "uint256" },
       { name: "gracePeriod", type: "uint256" },
     ],
   },
@@ -249,6 +342,33 @@ export const oracleStrategyErrorsAbi = [
       { name: "expected", type: "uint8" },
       { name: "actual", type: "uint8" },
     ],
+  },
+  {
+    type: "error",
+    name: "RoundNotAvailable",
+    inputs: [{ name: "roundId", type: "uint80" }],
+  },
+  { type: "error", name: "NoRoundHistory", inputs: [] },
+] as const satisfies Abi;
+
+/**
+ * rwa-v4 forward pricing from the order's base round and creation time. RoundNotAvailable
+ * covers missing or unreadable rounds; publication at the dealing cutoff qualifies.
+ */
+export const oracleStrategyAbi = [
+  {
+    type: "function",
+    name: "quotePurchaseAfter",
+    inputs: [
+      { name: "tokenAmount", type: "uint256" },
+      { name: "baseRound", type: "uint80" },
+      { name: "orderTime", type: "uint64" },
+    ],
+    outputs: [
+      { name: "quoteAmount", type: "uint256" },
+      { name: "roundId", type: "uint80" },
+    ],
+    stateMutability: "view",
   },
 ] as const satisfies Abi;
 
@@ -334,6 +454,69 @@ export const rwaFactoryV3Abi = [
           { name: "sequencerUptimeFeed", type: "address" },
           { name: "sequencerGracePeriod", type: "uint64" },
           { name: "redemptionTimeout", type: "uint64" },
+          { name: "admin", type: "address" },
+          { name: "auditor", type: "address" },
+          { name: "complianceOperator", type: "address" },
+          { name: "pricer", type: "address" },
+          { name: "treasurer", type: "address" },
+          { name: "redemptionManager", type: "address" },
+          { name: "incomeManager", type: "address" },
+          { name: "treasury", type: "address" },
+          { name: "adminTransferDelay", type: "uint48" },
+        ],
+      },
+    ],
+    outputs: [
+      {
+        name: "deployment",
+        type: "tuple",
+        components: [
+          { name: "token", type: "address" },
+          { name: "compliance", type: "address" },
+          { name: "supplyController", type: "address" },
+          { name: "vault", type: "address" },
+          { name: "redemptionEscrow", type: "address" },
+          { name: "strategy", type: "address" },
+          { name: "incomeDistributor", type: "address" },
+        ],
+      },
+    ],
+    stateMutability: "nonpayable",
+  },
+] as const satisfies Abi;
+
+/**
+ * rwa-v4 deployment: the rwa-v3 tuple plus dealingCutoff (after sequencerGracePeriod) and
+ * purchaseTimeout (after redemptionTimeout). The Deployment output is unchanged.
+ */
+export const rwaFactoryV4Abi = [
+  {
+    type: "function",
+    name: "deploy",
+    inputs: [
+      {
+        name: "config",
+        type: "tuple",
+        components: [
+          { name: "name", type: "string" },
+          { name: "symbol", type: "string" },
+          { name: "decimals", type: "uint8" },
+          { name: "profileDigest", type: "bytes32" },
+          { name: "projectId", type: "bytes32" },
+          { name: "quoteToken", type: "address" },
+          { name: "purchasePricePerWholeToken", type: "uint256" },
+          { name: "redemptionPricePerWholeToken", type: "uint256" },
+          { name: "minPurchaseQuote", type: "uint256" },
+          { name: "strategyKind", type: "uint8" },
+          { name: "priceFeed", type: "address" },
+          { name: "priceMaxAge", type: "uint64" },
+          { name: "purchaseSpreadBps", type: "uint16" },
+          { name: "redemptionSpreadBps", type: "uint16" },
+          { name: "sequencerUptimeFeed", type: "address" },
+          { name: "sequencerGracePeriod", type: "uint64" },
+          { name: "dealingCutoff", type: "uint64" },
+          { name: "redemptionTimeout", type: "uint64" },
+          { name: "purchaseTimeout", type: "uint64" },
           { name: "admin", type: "address" },
           { name: "auditor", type: "address" },
           { name: "complianceOperator", type: "address" },
@@ -649,5 +832,47 @@ export const redemptionEscrowAbi = [
     inputs: [{ name: "id", type: "uint256" }],
     outputs: [],
     stateMutability: "nonpayable",
+  },
+  // rwa-v4: the exact quote funding would pull, or a revert while no round is usable
+  {
+    type: "function",
+    name: "previewFunding",
+    inputs: [{ name: "id", type: "uint256" }],
+    outputs: [{ name: "quoteAmount", type: "uint256" }],
+    stateMutability: "view",
+  },
+] as const satisfies Abi;
+
+/** RedemptionEscrow reverts the console tells apart when funding a forward-priced request */
+export const redemptionEscrowErrorsAbi = [
+  {
+    type: "error",
+    name: "QuoteBelowMin",
+    inputs: [
+      { name: "quoted", type: "uint256" },
+      { name: "minQuoteOut", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "FundingClosed",
+    inputs: [
+      { name: "closedAt", type: "uint64" },
+      { name: "nowTs", type: "uint256" },
+    ],
+  },
+  { type: "error", name: "ZeroQuote", inputs: [] },
+  {
+    type: "error",
+    name: "BeneficiaryNotAllowed",
+    inputs: [{ name: "account", type: "address" }],
+  },
+  {
+    type: "error",
+    name: "InvalidDealingCutoff",
+    inputs: [
+      { name: "dealingCutoff", type: "uint64" },
+      { name: "timeout", type: "uint64" },
+    ],
   },
 ] as const satisfies Abi;

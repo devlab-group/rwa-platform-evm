@@ -116,67 +116,162 @@ func TestVerifyDeploymentV3Failures(t *testing.T) {
 		mutate func(t *testing.T, f *verifyFixture)
 		want   string
 	}{
-		{"no code at the income distributor", fixtureOpts{v3: true}, func(t *testing.T, f *verifyFixture) {
-			delete(f.client.Code, f.incomeAddr)
-		}, "no on-chain code"},
-		{"unexpected income manager", fixtureOpts{v3: true}, func(t *testing.T, f *verifyFixture) {
-			stubRoleHolders(t, f.client, f.incomeAddr, bindings.IncomeManagerRole, f.cfg.IncomeManager, attacker)
-		}, "INCOME_MANAGER_ROLE on incomeDistributor held by unexpected"},
-		{"missing income manager", fixtureOpts{v3: true}, func(t *testing.T, f *verifyFixture) {
-			stubRoleHolders(t, f.client, f.incomeAddr, bindings.IncomeManagerRole)
-		}, "missing required roles"},
-		{"income manager role on the vault", fixtureOpts{v3: true}, func(t *testing.T, f *verifyFixture) {
-			stubRoleHolders(t, f.client, f.vaultAddr, bindings.IncomeManagerRole, attacker)
-		}, "INCOME_MANAGER_ROLE on vault held by unexpected"},
-		{"unexpected admin on the income distributor", fixtureOpts{v3: true}, func(t *testing.T, f *verifyFixture) {
-			stubRoleHolders(t, f.client, f.incomeAddr, bindings.DefaultAdminRole, f.cfg.Admin, attacker)
-		}, "DEFAULT_ADMIN_ROLE on incomeDistributor held by unexpected"},
-		{"income distributor points at another vault", fixtureOpts{v3: true}, func(t *testing.T, f *verifyFixture) {
-			stubFor(t, f.client, f.incomeAddr, bindings.NewIncomeDistributor().ABI, "vault", attacker)
-		}, "incomeDistributor.vault"},
-		{"income distributor points at another token", fixtureOpts{v3: true}, func(t *testing.T, f *verifyFixture) {
-			stubFor(t, f.client, f.incomeAddr, bindings.NewIncomeDistributor().ABI, "token", attacker)
-		}, "incomeDistributor.token"},
-		{"income distributor pays another quote token", fixtureOpts{v3: true}, func(t *testing.T, f *verifyFixture) {
-			stubFor(t, f.client, f.incomeAddr, bindings.NewIncomeDistributor().ABI, "quoteToken", attacker)
-		}, "incomeDistributor.quoteToken"},
-		{"minimum purchase differs from the calldata", fixtureOpts{v3: true}, func(t *testing.T, f *verifyFixture) {
-			stubFor(t, f.client, f.vaultAddr, bindings.NewVault().ABI, "minPurchaseQuote", big.NewInt(1))
-		}, "vault.minPurchaseQuote = 1, want 5000000"},
-		{"rwa-v3 escrow follows a different strategy than the vault", fixtureOpts{v3: true}, func(t *testing.T, f *verifyFixture) {
-			stubFor(t, f.client, f.escrowAddr, bindings.NewRedemptionEscrow().ABI, "strategy", attacker)
-		}, "escrow.strategy"},
-		{"factory retains the income manager role", fixtureOpts{v3: true}, func(t *testing.T, f *verifyFixture) {
-			ac := bindings.NewAccessControl()
-			data, _ := ac.PackHasRole(bindings.IncomeManagerRole, f.factoryAddr)
-			out, _ := ac.ABI.Methods["hasRole"].Outputs.Pack(true)
-			f.client.byContract[f.incomeAddr] = map[string][]byte{common.Bytes2Hex(data): out}
-			stubRoleHolders(t, f.client, f.incomeAddr, bindings.IncomeManagerRole, f.cfg.IncomeManager)
-		}, "INCOME_MANAGER_ROLE on IncomeDistributor"},
-		{"oracle feed differs", fixtureOpts{v3: true, oracle: true}, func(t *testing.T, f *verifyFixture) {
-			stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "feed", attacker)
-		}, "strategy.feed"},
-		{"oracle sequencer feed differs", fixtureOpts{v3: true, oracle: true}, func(t *testing.T, f *verifyFixture) {
-			stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "sequencerUptimeFeed", common.Address{})
-		}, "strategy.sequencerUptimeFeed"},
-		{"oracle max age differs", fixtureOpts{v3: true, oracle: true}, func(t *testing.T, f *verifyFixture) {
-			stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "maxAge", uint64(86400))
-		}, "strategy.maxAge = 86400, want 3600"},
-		{"oracle grace period differs", fixtureOpts{v3: true, oracle: true}, func(t *testing.T, f *verifyFixture) {
-			stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "gracePeriod", uint64(1))
-		}, "strategy.gracePeriod"},
-		{"oracle purchase spread differs", fixtureOpts{v3: true, oracle: true}, func(t *testing.T, f *verifyFixture) {
-			stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "purchaseSpreadBps", uint16(26))
-		}, "strategy.purchaseSpreadBps = 26, want 25"},
-		{"oracle redemption spread differs", fixtureOpts{v3: true, oracle: true}, func(t *testing.T, f *verifyFixture) {
-			stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "redemptionSpreadBps", uint16(41))
-		}, "strategy.redemptionSpreadBps = 41, want 40"},
-		{"oracle quote decimals differ from the quote token", fixtureOpts{v3: true, oracle: true}, func(t *testing.T, f *verifyFixture) {
-			stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "quoteDecimals", uint8(18))
-		}, "strategy.quoteDecimals = 18, want 6"},
-		{"oracle token decimals differ from the profile", fixtureOpts{v3: true, oracle: true}, func(t *testing.T, f *verifyFixture) {
-			stubFor(t, f.client, f.strategyAddr, bindings.NewFixedPriceStrategy().ABI, "tokenDecimals", uint8(8))
-		}, "strategy.tokenDecimals = 8"},
+		{
+			"no code at the income distributor",
+			fixtureOpts{v3: true},
+			func(t *testing.T, f *verifyFixture) {
+				delete(f.client.Code, f.incomeAddr)
+			},
+			"no on-chain code",
+		},
+		{
+			"unexpected income manager",
+			fixtureOpts{v3: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubRoleHolders(t, f.client, f.incomeAddr, bindings.IncomeManagerRole, f.cfg.IncomeManager, attacker)
+			},
+			"INCOME_MANAGER_ROLE on incomeDistributor held by unexpected",
+		},
+		{
+			"missing income manager",
+			fixtureOpts{v3: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubRoleHolders(t, f.client, f.incomeAddr, bindings.IncomeManagerRole)
+			},
+			"missing required roles",
+		},
+		{
+			"income manager role on the vault",
+			fixtureOpts{v3: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubRoleHolders(t, f.client, f.vaultAddr, bindings.IncomeManagerRole, attacker)
+			},
+			"INCOME_MANAGER_ROLE on vault held by unexpected",
+		},
+		{
+			"unexpected admin on the income distributor",
+			fixtureOpts{v3: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubRoleHolders(t, f.client, f.incomeAddr, bindings.DefaultAdminRole, f.cfg.Admin, attacker)
+			},
+			"DEFAULT_ADMIN_ROLE on incomeDistributor held by unexpected",
+		},
+		{
+			"income distributor points at another vault",
+			fixtureOpts{v3: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubFor(t, f.client, f.incomeAddr, bindings.NewIncomeDistributor().ABI, "vault", attacker)
+			},
+			"incomeDistributor.vault",
+		},
+		{
+			"income distributor points at another token",
+			fixtureOpts{v3: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubFor(t, f.client, f.incomeAddr, bindings.NewIncomeDistributor().ABI, "token", attacker)
+			},
+			"incomeDistributor.token",
+		},
+		{
+			"income distributor pays another quote token",
+			fixtureOpts{v3: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubFor(t, f.client, f.incomeAddr, bindings.NewIncomeDistributor().ABI, "quoteToken", attacker)
+			},
+			"incomeDistributor.quoteToken",
+		},
+		{
+			"minimum purchase differs from the calldata",
+			fixtureOpts{v3: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubFor(t, f.client, f.vaultAddr, bindings.NewVault().ABI, "minPurchaseQuote", big.NewInt(1))
+			},
+			"vault.minPurchaseQuote = 1, want 5000000",
+		},
+		{
+			"rwa-v3 escrow follows a different strategy than the vault",
+			fixtureOpts{v3: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubFor(t, f.client, f.escrowAddr, bindings.NewRedemptionEscrow().ABI, "strategy", attacker)
+			},
+			"escrow.strategy",
+		},
+		{
+			"factory retains the income manager role",
+			fixtureOpts{v3: true},
+			func(t *testing.T, f *verifyFixture) {
+				ac := bindings.NewAccessControl()
+				data, _ := ac.PackHasRole(bindings.IncomeManagerRole, f.factoryAddr)
+				out, _ := ac.ABI.Methods["hasRole"].Outputs.Pack(true)
+				f.client.byContract[f.incomeAddr] = map[string][]byte{common.Bytes2Hex(data): out}
+				stubRoleHolders(t, f.client, f.incomeAddr, bindings.IncomeManagerRole, f.cfg.IncomeManager)
+			},
+			"INCOME_MANAGER_ROLE on IncomeDistributor",
+		},
+		{
+			"oracle feed differs",
+			fixtureOpts{v3: true, oracle: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "feed", attacker)
+			},
+			"strategy.feed",
+		},
+		{
+			"oracle sequencer feed differs",
+			fixtureOpts{v3: true, oracle: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "sequencerUptimeFeed", common.Address{})
+			},
+			"strategy.sequencerUptimeFeed",
+		},
+		{
+			"oracle max age differs",
+			fixtureOpts{v3: true, oracle: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "maxAge", uint64(86400))
+			},
+			"strategy.maxAge = 86400, want 3600",
+		},
+		{
+			"oracle grace period differs",
+			fixtureOpts{v3: true, oracle: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "gracePeriod", uint64(1))
+			},
+			"strategy.gracePeriod",
+		},
+		{
+			"oracle purchase spread differs",
+			fixtureOpts{v3: true, oracle: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "purchaseSpreadBps", uint16(26))
+			},
+			"strategy.purchaseSpreadBps = 26, want 25",
+		},
+		{
+			"oracle redemption spread differs",
+			fixtureOpts{v3: true, oracle: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "redemptionSpreadBps", uint16(41))
+			},
+			"strategy.redemptionSpreadBps = 41, want 40",
+		},
+		{
+			"oracle quote decimals differ from the quote token",
+			fixtureOpts{v3: true, oracle: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubFor(t, f.client, f.strategyAddr, bindings.NewOraclePriceStrategy().ABI, "quoteDecimals", uint8(18))
+			},
+			"strategy.quoteDecimals = 18, want 6",
+		},
+		{
+			"oracle token decimals differ from the profile",
+			fixtureOpts{v3: true, oracle: true},
+			func(t *testing.T, f *verifyFixture) {
+				stubFor(t, f.client, f.strategyAddr, bindings.NewFixedPriceStrategy().ABI, "tokenDecimals", uint8(8))
+			},
+			"strategy.tokenDecimals = 8",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -256,8 +351,13 @@ func TestVerifyDeploymentV2IsUnchanged(t *testing.T) {
 func TestVerifyBytecodeIncludesTheIncomeDistributor(t *testing.T) {
 	f := newVerifyFixtureOpts(t, fixtureOpts{v3: true})
 	addrs := models.Addresses{
-		Token: f.tokenAddr.Hex(), Compliance: f.complianceAddr.Hex(), SupplyController: f.controllerAddr.Hex(),
-		Vault: f.vaultAddr.Hex(), RedemptionEscrow: f.escrowAddr.Hex(), Strategy: f.strategyAddr.Hex(), IncomeDistributor: f.incomeAddr.Hex(),
+		Token:             f.tokenAddr.Hex(),
+		Compliance:        f.complianceAddr.Hex(),
+		SupplyController:  f.controllerAddr.Hex(),
+		Vault:             f.vaultAddr.Hex(),
+		RedemptionEscrow:  f.escrowAddr.Hex(),
+		Strategy:          f.strategyAddr.Hex(),
+		IncomeDistributor: f.incomeAddr.Hex(),
 	}
 	ok, err := verifyBytecode(context.Background(), f.client, addrs)
 	if err != nil || !ok {
@@ -489,33 +589,41 @@ func TestCheckConfigDriftV3(t *testing.T) {
 	}{
 		{name: "clean"},
 		{
-			name: "a vault strategy swap the escrow follows is not drift", mutate: func(t *testing.T, c *perContractClient, p *models.Project) {
+			name: "a vault strategy swap the escrow follows is not drift",
+			mutate: func(t *testing.T, c *perContractClient, p *models.Project) {
 				p.Security = &models.SecurityState{Strategy: newStrategy.Hex()}
 				stubView(t, c, common.HexToAddress(p.Addresses.Vault), bindings.NewVault().ABI, "strategy", newStrategy)
 				stubView(t, c, common.HexToAddress(p.Addresses.RedemptionEscrow), bindings.NewRedemptionEscrow().ABI, "strategy", newStrategy)
 			},
 		},
 		{
-			name: "an escrow that no longer follows the vault is drift", drift: true, wantIn: "escrow.strategy",
+			name:   "an escrow that no longer follows the vault is drift",
+			drift:  true,
+			wantIn: "escrow.strategy",
 			mutate: func(t *testing.T, c *perContractClient, p *models.Project) {
 				p.Security = &models.SecurityState{Strategy: newStrategy.Hex()}
 				stubView(t, c, common.HexToAddress(p.Addresses.Vault), bindings.NewVault().ABI, "strategy", newStrategy)
 			},
 		},
 		{
-			name: "a projected minimum purchase change is accepted", mutate: func(t *testing.T, c *perContractClient, p *models.Project) {
+			name: "a projected minimum purchase change is accepted",
+			mutate: func(t *testing.T, c *perContractClient, p *models.Project) {
 				p.Security = &models.SecurityState{MinPurchaseQuote: "7"}
 				stubView(t, c, common.HexToAddress(p.Addresses.Vault), bindings.NewVault().ABI, "minPurchaseQuote", big.NewInt(7))
 			},
 		},
 		{
-			name: "a minimum purchase changed without an event is drift", drift: true, wantIn: "vault.minPurchaseQuote",
+			name:   "a minimum purchase changed without an event is drift",
+			drift:  true,
+			wantIn: "vault.minPurchaseQuote",
 			mutate: func(t *testing.T, c *perContractClient, p *models.Project) {
 				stubView(t, c, common.HexToAddress(p.Addresses.Vault), bindings.NewVault().ABI, "minPurchaseQuote", big.NewInt(7))
 			},
 		},
 		{
-			name: "an income distributor rewired to another vault is drift", drift: true, wantIn: "incomeDistributor.vault",
+			name:   "an income distributor rewired to another vault is drift",
+			drift:  true,
+			wantIn: "incomeDistributor.vault",
 			mutate: func(t *testing.T, c *perContractClient, p *models.Project) {
 				stubView(t, c, common.HexToAddress(p.Addresses.IncomeDistributor), bindings.NewIncomeDistributor().ABI, "vault", newStrategy)
 			},

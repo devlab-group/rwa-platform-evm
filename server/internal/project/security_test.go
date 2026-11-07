@@ -3,6 +3,7 @@ package project
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -41,15 +42,27 @@ var (
 
 func activeProject() *models.Project {
 	return &models.Project{
-		ProjectID: "p1", ChainID: secChainID, Status: models.ProjectStatusActive,
+		ProjectID: "p1",
+		ChainID:   secChainID,
+		Status:    models.ProjectStatusActive,
 		Addresses: models.Addresses{
-			Token: tokenAddr, Compliance: compAddr, SupplyController: supplyAddr,
-			Vault: vaultAddr, RedemptionEscrow: escrowAddr, Strategy: strategyAddr,
-			QuoteToken: addr("0x00000000000000000000000000000000000000ff"),
+			Token:            tokenAddr,
+			Compliance:       compAddr,
+			SupplyController: supplyAddr,
+			Vault:            vaultAddr,
+			RedemptionEscrow: escrowAddr,
+			Strategy:         strategyAddr,
+			QuoteToken:       addr("0x00000000000000000000000000000000000000ff"),
 		},
-		Admin: adminA, ComplianceOperator: compOp, Pricer: pricer, Treasurer: treasurer,
-		RedemptionManager: redemMgr, Auditor: auditorA, Treasury: treasuryA,
-		PurchasePricePerWholeToken: "1000", RedemptionPricePerWholeToken: "900",
+		Admin:                        adminA,
+		ComplianceOperator:           compOp,
+		Pricer:                       pricer,
+		Treasurer:                    treasurer,
+		RedemptionManager:            redemMgr,
+		Auditor:                      auditorA,
+		Treasury:                     treasuryA,
+		PurchasePricePerWholeToken:   "1000",
+		RedemptionPricePerWholeToken: "900",
 	}
 }
 
@@ -62,7 +75,10 @@ func setup(t *testing.T) *repository.Repositories {
 		t.Fatal(err)
 	}
 	if err := repos.IndexerCheckpoints.Set(ctx, &models.IndexerCheckpoint{
-		ChainID: secChainID, Address: indexer.CheckpointAddress, LastBlock: 100, UpdatedAt: time.Now().UTC(),
+		ChainID:   secChainID,
+		Address:   indexer.CheckpointAddress,
+		LastBlock: 100,
+		UpdatedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -75,8 +91,13 @@ func addEvent(t *testing.T, repos *repository.Repositories, address, name string
 	t.Helper()
 	evSeq++
 	e := &models.ChainEvent{
-		ChainID: secChainID, Address: address, TxHash: fmt.Sprintf("0xtx%d", evSeq),
-		LogIndex: logIndex, BlockNumber: block, Name: name, Data: data,
+		ChainID:     secChainID,
+		Address:     address,
+		TxHash:      fmt.Sprintf("0xtx%d", evSeq),
+		LogIndex:    logIndex,
+		BlockNumber: block,
+		Name:        name,
+		Data:        data,
 	}
 	if err := repos.ChainEvents.Create(context.Background(), e); err != nil {
 		t.Fatal(err)
@@ -87,8 +108,14 @@ func addRemovedEvent(t *testing.T, repos *repository.Repositories, address, name
 	t.Helper()
 	evSeq++
 	e := &models.ChainEvent{
-		ChainID: secChainID, Address: address, TxHash: fmt.Sprintf("0xtx%d", evSeq),
-		LogIndex: logIndex, BlockNumber: block, Name: name, Data: data, Removed: true,
+		ChainID:     secChainID,
+		Address:     address,
+		TxHash:      fmt.Sprintf("0xtx%d", evSeq),
+		LogIndex:    logIndex,
+		BlockNumber: block,
+		Name:        name,
+		Data:        data,
+		Removed:     true,
 	}
 	if err := repos.ChainEvents.Create(context.Background(), e); err != nil {
 		t.Fatal(err)
@@ -584,5 +611,123 @@ func TestReconcileSecurityRolesByContractDivergent(t *testing.T) {
 	}
 	if got := s.Roles["DEFAULT_ADMIN_ROLE"]; len(got) != 2 {
 		t.Errorf("union DEFAULT_ADMIN_ROLE = %v, want two", got)
+	}
+}
+
+func delayScheduled(t *testing.T, repos *repository.Repositories, address string, block uint64, logIndex uint, newDelay, effectAt string) {
+	t.Helper()
+	addEvent(t, repos, address, "DefaultAdminDelayChangeScheduled", block, logIndex, map[string]any{"newDelay": newDelay, "effectSchedule": effectAt})
+}
+
+func delayCanceled(t *testing.T, repos *repository.Repositories, address string, block uint64, logIndex uint) {
+	t.Helper()
+	addEvent(t, repos, address, "DefaultAdminDelayChangeCanceled", block, logIndex, map[string]any{})
+}
+
+func wantDelayChanges(t *testing.T, repos *repository.Repositories, want ...models.AdminDelayChange) {
+	t.Helper()
+	if got := reconcile(t, repos).AdminDelayChanges; !slices.Equal(got, want) {
+		t.Fatalf("AdminDelayChanges = %+v, want %+v", got, want)
+	}
+}
+
+func TestReconcileSecurityAdminDelayChange(t *testing.T) {
+	vault := func(newDelay, effectAt uint64) models.AdminDelayChange {
+		return models.AdminDelayChange{Contract: "vault", NewDelay: newDelay, EffectAt: effectAt}
+	}
+	tests := []struct {
+		name string
+		seed func(t *testing.T, repos *repository.Repositories)
+		want []models.AdminDelayChange
+	}{
+		{name: "no events", seed: func(*testing.T, *repository.Repositories) {}},
+		{
+			name: "scheduled",
+			seed: func(t *testing.T, r *repository.Repositories) {
+				delayScheduled(t, r, vaultAddr, 10, 0, "86400", "1800000000")
+			},
+			want: []models.AdminDelayChange{vault(86400, 1800000000)},
+		},
+		{
+			name: "scheduled to no delay",
+			seed: func(t *testing.T, r *repository.Repositories) {
+				delayScheduled(t, r, vaultAddr, 10, 0, "0", "1800000000")
+			},
+			want: []models.AdminDelayChange{vault(0, 1800000000)},
+		},
+		{
+			name: "cancelled",
+			seed: func(t *testing.T, r *repository.Repositories) {
+				delayScheduled(t, r, vaultAddr, 10, 0, "86400", "1800000000")
+				delayCanceled(t, r, vaultAddr, 11, 0)
+			},
+		},
+		{
+			name: "replaced in one transaction",
+			seed: func(t *testing.T, r *repository.Repositories) {
+				delayScheduled(t, r, vaultAddr, 10, 0, "86400", "1800000000")
+				delayCanceled(t, r, vaultAddr, 11, 2)
+				delayScheduled(t, r, vaultAddr, 11, 3, "3600", "1800000500")
+			},
+			want: []models.AdminDelayChange{vault(3600, 1800000500)},
+		},
+		{
+			// OpenZeppelin only cancels a change that has not taken effect, so the first stands
+			name: "a later change cancelled",
+			seed: func(t *testing.T, r *repository.Repositories) {
+				delayScheduled(t, r, vaultAddr, 10, 0, "86400", "1800000000")
+				delayScheduled(t, r, vaultAddr, 20, 0, "3600", "1900000000")
+				delayCanceled(t, r, vaultAddr, 21, 0)
+			},
+			want: []models.AdminDelayChange{vault(86400, 1800000000)},
+		},
+		{
+			name: "cancel rolled back by a reorg",
+			seed: func(t *testing.T, r *repository.Repositories) {
+				delayScheduled(t, r, vaultAddr, 10, 0, "86400", "1800000000")
+				addRemovedEvent(t, r, vaultAddr, "DefaultAdminDelayChangeCanceled", 11, 0, map[string]any{})
+			},
+			want: []models.AdminDelayChange{vault(86400, 1800000000)},
+		},
+		{
+			name: "schedule rolled back by a reorg",
+			seed: func(t *testing.T, r *repository.Repositories) {
+				addRemovedEvent(t, r, vaultAddr, "DefaultAdminDelayChangeScheduled", 10, 0, map[string]any{"newDelay": "86400", "effectSchedule": "1800000000"})
+			},
+		},
+		{
+			name: "contracts keep a stable order",
+			seed: func(t *testing.T, r *repository.Repositories) {
+				delayScheduled(t, r, vaultAddr, 10, 0, "2", "20")
+				delayScheduled(t, r, tokenAddr, 11, 0, "1", "10")
+			},
+			want: []models.AdminDelayChange{{Contract: "token", NewDelay: 1, EffectAt: 10}, {Contract: "vault", NewDelay: 2, EffectAt: 20}},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repos := setup(t)
+			tc.seed(t, repos)
+			wantDelayChanges(t, repos, tc.want...)
+		})
+	}
+}
+
+func TestReconcileSecurityAdminDelayChange_FollowsTheLiveStrategy(t *testing.T) {
+	repos := setup(t)
+	replacement := addr("0x00000000000000000000000000000000000000dd")
+	delayScheduled(t, repos, strategyAddr, 10, 0, "1", "10")
+	delayScheduled(t, repos, replacement, 11, 0, "2", "20")
+	addEvent(t, repos, vaultAddr, "StrategyChanged", 12, 0, map[string]any{"newStrategy": replacement})
+
+	wantDelayChanges(t, repos, models.AdminDelayChange{Contract: "strategy", NewDelay: 2, EffectAt: 20})
+}
+
+func TestReconcileSecurityAdminDelayChange_MalformedEventFailsTheFold(t *testing.T) {
+	repos := setup(t)
+	delayScheduled(t, repos, vaultAddr, 10, 0, "not a number", "1800000000")
+
+	if err := ReconcileSecurity(context.Background(), repos.Projects, repos.ChainEvents, repos.IndexerCheckpoints, secChainID); err == nil {
+		t.Fatal("reconcile accepted a malformed delay")
 	}
 }

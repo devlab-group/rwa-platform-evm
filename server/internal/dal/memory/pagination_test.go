@@ -18,7 +18,9 @@ func TestPurchaseRepositoryListPageWalksAllRecordsOver200(t *testing.T) {
 	const total = 220
 	for i := 0; i < total; i++ {
 		if err := repo.Create(ctx, &models.Purchase{
-			ID: fmt.Sprintf("tx-%04d:0", i), BlockNumber: uint64(i), Buyer: "0xBUYER",
+			ID:          fmt.Sprintf("tx-%04d:0", i),
+			BlockNumber: uint64(i),
+			Buyer:       "0xBUYER",
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -101,7 +103,8 @@ func TestAssetRecordRepositoryListPageWalksAllRecordsOver200(t *testing.T) {
 	base := time.Now().UTC()
 	for i := 0; i < total; i++ {
 		if err := repo.Create(ctx, &models.AssetRecord{
-			RecordID: fmt.Sprintf("REC-%04d", i), CreatedAt: base.Add(time.Duration(i) * time.Millisecond),
+			RecordID:  fmt.Sprintf("REC-%04d", i),
+			CreatedAt: base.Add(time.Duration(i) * time.Millisecond),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -148,7 +151,9 @@ func TestTransactionRepositoryListPageWalksAllRecordsOver200(t *testing.T) {
 	base := time.Now().UTC()
 	for i := 0; i < total; i++ {
 		if err := repo.Create(ctx, &models.Transaction{
-			ID: fmt.Sprintf("tx-%04d", i), From: "0xAAAA", To: "0xBBBB",
+			ID:          fmt.Sprintf("tx-%04d", i),
+			From:        "0xAAAA",
+			To:          "0xBBBB",
 			SubmittedAt: base.Add(time.Duration(i) * time.Millisecond),
 		}); err != nil {
 			t.Fatal(err)
@@ -203,16 +208,20 @@ func TestRedemptionRequestRepositoryListPageFiltersByBeneficiary(t *testing.T) {
 	bob := "0x00000000000000000000000000000000000000B2"
 	for i := 0; i < 12; i++ { // alice: 12 Pending
 		if err := repo.Upsert(ctx, &models.RedemptionRequest{
-			ID: fmt.Sprintf("a-%02d", i), Beneficiary: alice,
-			Status: models.RedemptionPending, CreatedAt: int64(i),
+			ID:          fmt.Sprintf("a-%02d", i),
+			Beneficiary: alice,
+			Status:      models.RedemptionPending,
+			CreatedAt:   int64(i),
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for i := 0; i < 5; i++ { // bob: 5 Funded
 		if err := repo.Upsert(ctx, &models.RedemptionRequest{
-			ID: fmt.Sprintf("b-%02d", i), Beneficiary: bob,
-			Status: models.RedemptionFunded, CreatedAt: int64(100 + i),
+			ID:          fmt.Sprintf("b-%02d", i),
+			Beneficiary: bob,
+			Status:      models.RedemptionFunded,
+			CreatedAt:   int64(100 + i),
 		}); err != nil {
 			t.Fatal(err)
 		}

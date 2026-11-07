@@ -1,8 +1,11 @@
 package assets
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"math/big"
+	"strconv"
 	"strings"
 )
 
@@ -12,19 +15,39 @@ import (
 
 // allowedValidationKeywords are the dialect's validation and applicator keywords
 var allowedValidationKeywords = map[string]bool{
-	"type": true, "properties": true, "required": true, "additionalProperties": true,
-	"items": true, "$ref": true,
-	"enum": true, "const": true,
-	"minLength": true, "maxLength": true, "pattern": true,
-	"minimum": true, "maximum": true, "exclusiveMinimum": true, "exclusiveMaximum": true,
-	"minItems": true, "maxItems": true, "uniqueItems": true,
+	"type":                 true,
+	"properties":           true,
+	"required":             true,
+	"additionalProperties": true,
+	"items":                true,
+	"$ref":                 true,
+	"enum":                 true,
+	"const":                true,
+	"minLength":            true,
+	"maxLength":            true,
+	"pattern":              true,
+	"minimum":              true,
+	"maximum":              true,
+	"exclusiveMinimum":     true,
+	"exclusiveMaximum":     true,
+	"minItems":             true,
+	"maxItems":             true,
+	"uniqueItems":          true,
 }
 
 // allowedAnnotationKeywords are accepted and have no validation effect
 var allowedAnnotationKeywords = map[string]bool{
-	"title": true, "description": true, "default": true, "examples": true,
-	"$comment": true, "$defs": true, "$id": true, "$schema": true,
-	"deprecated": true, "readOnly": true, "writeOnly": true,
+	"title":       true,
+	"description": true,
+	"default":     true,
+	"examples":    true,
+	"$comment":    true,
+	"$defs":       true,
+	"$id":         true,
+	"$schema":     true,
+	"deprecated":  true,
+	"readOnly":    true,
+	"writeOnly":   true,
 }
 
 // enum, const, default and examples hold data, not schemas, so walkSchema never descends
@@ -32,31 +55,78 @@ var allowedAnnotationKeywords = map[string]bool{
 
 // allowedTypeValues are the primitive type names the dialect accepts in "type"
 var allowedTypeValues = map[string]bool{
-	"object": true, "array": true, "string": true, "integer": true,
-	"number": true, "boolean": true, "null": true,
+	"object":  true,
+	"array":   true,
+	"string":  true,
+	"integer": true,
+	"number":  true,
+	"boolean": true,
+	"null":    true,
 }
 
-// maxRefDepth bounds the length of a $ref chain
-const maxRefDepth = 32
+// maxSchemaDepth bounds nesting plus $ref hops; maxSchemaNodes bounds total visits,
+// counting each expansion again. The signer shares these limits so repeated references
+// cannot trigger unbounded expansion in either validator.
+const (
+	maxSchemaDepth = 100
+	maxSchemaNodes = 10000
+)
+
+// lengthKeywords take a non-negative integer written without a fraction or exponent, as
+// the signer reads them; numberKeywords take any number
+var (
+	lengthKeywords = []string{"minLength", "maxLength", "minItems", "maxItems"}
+	numberKeywords = []string{"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"}
+)
 
 // guardAssetSchema checks rwa-profile-assetSchema/1 before compilation: allowed schema
 // keys and type values, plus $ref locality, sole-member placement, resolvability and
 // absence of cycles
 func guardAssetSchema(raw json.RawMessage) error {
-	var root any
-	if err := json.Unmarshal(raw, &root); err != nil {
-		return fmt.Errorf("assetSchema is not valid JSON: %w", err)
+	_, err := prepareAssetSchema(raw)
+	return err
+}
+
+// prepareAssetSchema checks the dialect and removes $schema and $id from schema positions.
+// This keeps the compiler on the fixed draft and resolves local pointers from the document
+// root rather than a subschema's $id.
+func prepareAssetSchema(raw json.RawMessage) (json.RawMessage, error) {
+	// Reject numbers that overflow float64 before canonicalization
+	var probe any
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil, fmt.Errorf("assetSchema is not valid JSON: %w", err)
 	}
-	g := &schemaGuard{root: root}
-	return g.walkSchema(root, "$", nil)
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var root any
+	if err := dec.Decode(&root); err != nil {
+		return nil, fmt.Errorf("assetSchema is not valid JSON: %w", err)
+	}
+	g := &schemaGuard{root: root, visiting: map[string]bool{}}
+	if err := g.walkSchema(root, "$", 0); err != nil {
+		return nil, err
+	}
+	return json.Marshal(root)
 }
 
 // schemaGuard holds the parsed document root, against which $ref pointers resolve
-type schemaGuard struct{ root any }
+type schemaGuard struct {
+	root any
+	// visiting holds the $ref strings on the current path, across $defs as well, so a
+	// definition that refers back to the target being expanded is a cycle
+	visiting map[string]bool
+	nodes    int
+}
 
-// walkSchema checks node at path. refChain tracks references followed on this path;
-// independent walks, including each $defs entry, start with nil.
-func (g *schemaGuard) walkSchema(node any, path string, refChain map[string]bool) error {
+// walkSchema checks node at path, depth schema levels (nesting plus $ref hops) from the root
+func (g *schemaGuard) walkSchema(node any, path string, depth int) error {
+	if depth > maxSchemaDepth {
+		return fmt.Errorf("assetSchema at %s exceeds the maximum nesting/$ref-chain depth of %d", path, maxSchemaDepth)
+	}
+	g.nodes++
+	if g.nodes > maxSchemaNodes {
+		return fmt.Errorf("assetSchema at %s exceeds the maximum node count of %d", path, maxSchemaNodes)
+	}
 	obj, ok := node.(map[string]any)
 	if !ok {
 		return fmt.Errorf("assetSchema at %s must be an object", path)
@@ -76,8 +146,26 @@ func (g *schemaGuard) walkSchema(node any, path string, refChain map[string]bool
 		if !ok || !(ref == "#" || strings.HasPrefix(ref, "#/")) {
 			return fmt.Errorf(`assetSchema $ref at %s must be a local JSON pointer ("#" or "#/...")`, path)
 		}
-		return g.walkRef(ref, path, refChain)
+		// the compiler percent-decodes the fragment, so a pointer is taken literally here
+		// and may not contain '%'
+		if strings.Contains(ref, "%") {
+			return fmt.Errorf("assetSchema $ref at %s must not contain '%%'", path)
+		}
+		if g.visiting[ref] {
+			return fmt.Errorf("assetSchema $ref cycle detected at %s (%s)", path, ref)
+		}
+		target, err := resolvePointer(g.root, ref)
+		if err != nil {
+			return fmt.Errorf("assetSchema $ref %q at %s: %w", ref, path, err)
+		}
+		g.visiting[ref] = true
+		err = g.walkSchema(target, path+"->"+ref, depth+1)
+		delete(g.visiting, ref)
+		return err
 	}
+
+	delete(obj, "$schema")
+	delete(obj, "$id")
 
 	if typeRaw, ok := obj["type"]; ok {
 		if err := validateTypeValue(typeRaw, path); err != nil {
@@ -95,26 +183,47 @@ func (g *schemaGuard) walkSchema(node any, path string, refChain map[string]bool
 			}
 		}
 	}
+	if enumRaw, ok := obj["enum"]; ok {
+		if items, ok := enumRaw.([]any); !ok || len(items) == 0 {
+			return fmt.Errorf("assetSchema enum at %s must be a non-empty array", path)
+		}
+	}
+	for _, kw := range lengthKeywords {
+		if v, ok := obj[kw]; ok {
+			n, isNum := v.(json.Number)
+			if i, err := strconv.Atoi(string(n)); !isNum || err != nil || i < 0 {
+				return fmt.Errorf("assetSchema %s at %s must be a non-negative integer written without a fraction or exponent", kw, path)
+			}
+		}
+	}
+	for _, kw := range numberKeywords {
+		if v, ok := obj[kw]; ok {
+			n, isNum := v.(json.Number)
+			if _, ok := new(big.Rat).SetString(string(n)); !isNum || !ok {
+				return fmt.Errorf("assetSchema %s at %s must be a number", kw, path)
+			}
+		}
+	}
 	if propsRaw, ok := obj["properties"]; ok {
 		props, ok := propsRaw.(map[string]any)
 		if !ok {
 			return fmt.Errorf("assetSchema properties at %s must be an object", path)
 		}
 		for name, sub := range props {
-			if err := g.walkSchema(sub, path+".properties."+name, refChain); err != nil {
+			if err := g.walkSchema(sub, path+".properties."+name, depth+1); err != nil {
 				return err
 			}
 		}
 	}
 	if apRaw, ok := obj["additionalProperties"]; ok {
 		if _, isBool := apRaw.(bool); !isBool {
-			if err := g.walkSchema(apRaw, path+".additionalProperties", refChain); err != nil {
+			if err := g.walkSchema(apRaw, path+".additionalProperties", depth+1); err != nil {
 				return err
 			}
 		}
 	}
 	if itemsRaw, ok := obj["items"]; ok {
-		if err := g.walkSchema(itemsRaw, path+".items", refChain); err != nil {
+		if err := g.walkSchema(itemsRaw, path+".items", depth+1); err != nil {
 			return err
 		}
 	}
@@ -125,33 +234,12 @@ func (g *schemaGuard) walkSchema(node any, path string, refChain map[string]bool
 		}
 		// every $defs entry must satisfy the dialect even when nothing refers to it
 		for name, sub := range defs {
-			if err := g.walkSchema(sub, path+".$defs."+name, nil); err != nil {
+			if err := g.walkSchema(sub, path+".$defs."+name, depth+1); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
-}
-
-// walkRef resolves ref against g.root and checks the target. It rejects a direct
-// or indirect cycle and a chain longer than maxRefDepth.
-func (g *schemaGuard) walkRef(ref, path string, refChain map[string]bool) error {
-	if refChain[ref] {
-		return fmt.Errorf("assetSchema $ref cycle detected at %s (%s)", path, ref)
-	}
-	if len(refChain) >= maxRefDepth {
-		return fmt.Errorf("assetSchema $ref chain exceeds max depth %d at %s", maxRefDepth, path)
-	}
-	target, err := resolvePointer(g.root, ref)
-	if err != nil {
-		return fmt.Errorf("assetSchema $ref %q at %s: %w", ref, path, err)
-	}
-	chain := make(map[string]bool, len(refChain)+1)
-	for k := range refChain {
-		chain[k] = true
-	}
-	chain[ref] = true
-	return g.walkSchema(target, path+"->"+ref, chain)
 }
 
 // resolvePointer resolves a local "#" or "#/a/b/c" JSON pointer against root as

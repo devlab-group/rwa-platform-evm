@@ -35,14 +35,35 @@ func TestDecodeLogSupplyEventsMapEveryField(t *testing.T) {
 		log   types.Log
 		want  map[string]any
 	}{
-		{"Minted", types.Log{Topics: []common.Hash{c.EventID("Minted"), key, digest, addrTopic(vault)}, Data: pack("Minted")},
-			map[string]any{"recordKey": key.Hex(), "metadataDigest": digest.Hex(), "vault": vault.Hex(),
-				"amount": amount.String(), "nonce": nonce.String(), "auditor": auditor.Hex()}},
-		{"Burned", types.Log{Topics: []common.Hash{c.EventID("Burned"), key, digest, addrTopic(vault)}, Data: pack("Burned")},
-			map[string]any{"operationId": key.Hex(), "metadataDigest": digest.Hex(), "vault": vault.Hex(),
-				"amount": amount.String(), "nonce": nonce.String(), "auditor": auditor.Hex()}},
-		{"AuditorChanged", types.Log{Topics: []common.Hash{c.EventID("AuditorChanged"), addrTopic(prev), addrTopic(next), addrTopic(caller)}},
-			map[string]any{"previousAuditor": prev.Hex(), "newAuditor": next.Hex(), "caller": caller.Hex()}},
+		{
+			"Minted",
+			types.Log{Topics: []common.Hash{c.EventID("Minted"), key, digest, addrTopic(vault)}, Data: pack("Minted")},
+			map[string]any{
+				"recordKey":      key.Hex(),
+				"metadataDigest": digest.Hex(),
+				"vault":          vault.Hex(),
+				"amount":         amount.String(),
+				"nonce":          nonce.String(),
+				"auditor":        auditor.Hex(),
+			},
+		},
+		{
+			"Burned",
+			types.Log{Topics: []common.Hash{c.EventID("Burned"), key, digest, addrTopic(vault)}, Data: pack("Burned")},
+			map[string]any{
+				"operationId":    key.Hex(),
+				"metadataDigest": digest.Hex(),
+				"vault":          vault.Hex(),
+				"amount":         amount.String(),
+				"nonce":          nonce.String(),
+				"auditor":        auditor.Hex(),
+			},
+		},
+		{
+			"AuditorChanged",
+			types.Log{Topics: []common.Hash{c.EventID("AuditorChanged"), addrTopic(prev), addrTopic(next), addrTopic(caller)}},
+			map[string]any{"previousAuditor": prev.Hex(), "newAuditor": next.Hex(), "caller": caller.Hex()},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.event, func(t *testing.T) {
