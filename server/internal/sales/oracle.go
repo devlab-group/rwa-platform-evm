@@ -139,14 +139,17 @@ func (s *Service) oracleParams(ctx context.Context, strategy common.Address) (or
 			return oracleParams{}, err
 		}
 	}
-	// Treat a reverted dealingCutoff read as an absent view. Return other errors so a temporary
-	// RPC failure does not cache a missing cutoff.
-	if out, err := s.callOracle(ctx, strategy, "dealingCutoff"); err == nil {
-		var cutoff uint64
-		abi.ConvertType(out[0], &cutoff)
-		p.dealingCutoff = &cutoff
-	} else if !blockchain.IsRevert(err) {
-		return oracleParams{}, fmt.Errorf("sales: strategy.dealingCutoff: %w", err)
+	// An earlier project has no cut-off. For rwa-v4, treat a reverted dealingCutoff read as an
+	// absent view and return other errors so a temporary RPC failure does not cache a missing
+	// cutoff.
+	if s.hasV4Views() {
+		if out, err := s.callOracle(ctx, strategy, "dealingCutoff"); err == nil {
+			var cutoff uint64
+			abi.ConvertType(out[0], &cutoff)
+			p.dealingCutoff = &cutoff
+		} else if !blockchain.IsRevert(err) {
+			return oracleParams{}, fmt.Errorf("sales: strategy.dealingCutoff: %w", err)
+		}
 	}
 	s.oracleCfg.Store(strategy, p)
 	return p, nil

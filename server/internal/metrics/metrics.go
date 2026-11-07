@@ -1,6 +1,7 @@
-// Package metrics defines Prometheus HTTP, inventory, redemption, storage, drift and
-// error metrics. Redemption gauges track conditions checked by
-// internal/alerts.EvaluatePendingRedemptionSLA and EvaluateFundedClaimFailure.
+// Package metrics defines Prometheus HTTP, inventory, redemption, purchase-order, storage,
+// drift and error metrics. Redemption and purchase-order gauges track conditions checked by
+// internal/alerts.EvaluatePendingRedemptionSLA, EvaluateFundedClaimFailure and
+// EvaluatePendingPurchaseSLA.
 //
 // cmd/platform serves the unauthenticated /metrics handler on a separate METRICS_ADDR
 // listener.
@@ -47,6 +48,15 @@ var (
 	RedemptionsFundedUnclaimedCount = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "rwa_redemptions_funded_unclaimed_count",
 		Help: "Number of redemption requests currently Funded but not yet Completed (claimed).",
+	})
+
+	PurchaseOrdersPendingCount = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "rwa_purchase_orders_pending_count",
+		Help: "Number of forward-priced purchase orders currently Pending (requested, not yet settled, cancelled or rejected).",
+	})
+	PurchaseOrdersPendingOldestAgeSeconds = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "rwa_purchase_orders_pending_oldest_age_seconds",
+		Help: "Age of the oldest still-Pending purchase order, in seconds (0 if none are Pending). A growing value means no keeper is settling.",
 	})
 
 	AllowedWallets = promauto.NewGauge(prometheus.GaugeOpts{

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/rwa-platform/server/internal/bindings"
 )
 
 func TestInventoryReportsOpenOrderDeposits(t *testing.T) {
@@ -119,6 +121,46 @@ func TestOracleReadsTheDealingCutoffOnceAndOmitsItForRwaV3(t *testing.T) {
 		info, err := svc.Oracle(context.Background(), oStrategy)
 		if err != nil || info.DealingCutoff == nil || *info.DealingCutoff != 60 {
 			t.Errorf("after recovery: cutoff = %v, err = %v; want 60", info.DealingCutoff, err)
+		}
+	})
+}
+
+// A node that words a revert in a way IsRevert does not recognise would turn the rwa-v4
+// views of an earlier project into hard errors, so the project version decides whether they
+// are read at all
+func TestEarlierProjectsNeverReadTheRwaV4Views(t *testing.T) {
+	// the answers are plain errors, which IsRevert reports as transport failures
+	answers := oracleAnswers()
+	answers[oVault]["pendingPurchaseQuote"] = errors.New("VM execution error")
+	answers[oStrategy]["dealingCutoff"] = errors.New("VM execution error")
+
+	for _, version := range []string{bindings.FactoryVersionV2, bindings.FactoryVersionV3} {
+		t.Run(version, func(t *testing.T) {
+			svc := newOracleService(newScripted(answers)).WithVersion(version)
+			inv, err := svc.GetInventory(context.Background())
+			if err != nil {
+				t.Fatalf("GetInventory: %v", err)
+			}
+			if inv.PendingPurchaseQuote != "" || inv.Inventory != "500" {
+				t.Errorf("inventory = %+v, want the pending deposits omitted and the rest intact", inv)
+			}
+			info, err := svc.Oracle(context.Background(), oStrategy)
+			if err != nil {
+				t.Fatalf("Oracle: %v", err)
+			}
+			if info.DealingCutoff != nil {
+				t.Errorf("DealingCutoff = %d, want none for an earlier project", *info.DealingCutoff)
+			}
+		})
+	}
+
+	t.Run("rwa-v4 still fails on a view that cannot be read", func(t *testing.T) {
+		svc := newOracleService(newScripted(answers)).WithVersion(bindings.FactoryVersionV4)
+		if _, err := svc.GetInventory(context.Background()); err == nil {
+			t.Error("GetInventory hid a failed pendingPurchaseQuote read")
+		}
+		if _, err := svc.Oracle(context.Background(), oStrategy); err == nil {
+			t.Error("Oracle hid a failed dealingCutoff read")
 		}
 	})
 }

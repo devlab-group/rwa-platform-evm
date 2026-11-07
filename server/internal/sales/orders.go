@@ -15,6 +15,10 @@ import (
 // ErrOrdersNotConfigured is returned by the order reads when the service has no order repository
 var ErrOrdersNotConfigured = errors.New("sales: purchase orders are not configured")
 
+// ErrPurchaseTimeoutUnknown is returned by ReconcileOrders when Vault events exist but the
+// purchase timeout is not positive; nothing is written
+var ErrPurchaseTimeoutUnknown = errors.New("sales: purchase timeout unknown, orders not rebuilt")
+
 // BuildOrders derives each models.PurchaseOrder from Vault events sorted by (blockNumber,
 // logIndex). PurchaseRequested resets an order to Pending; the other events follow
 // docs/spec/contracts.md:
@@ -133,6 +137,14 @@ func (s *Service) ReconcileOrders(ctx context.Context, chainEvents repository.Ch
 		all = append(all, evs...)
 	}
 
+	// every order's timeoutAt is createdAt plus the timeout, so rebuilding with none would
+	// publish each open order as already cancellable
+	if purchaseTimeout <= 0 && len(all) > 0 {
+		return ErrPurchaseTimeoutUnknown
+	}
+
+	// Every order is rewritten each tick. Skipping unchanged rows would require pruning
+	// without the generation stamp, which identifies rows retained by this rebuild.
 	gen := time.Now().UnixNano()
 	for _, o := range BuildOrders(all, purchaseTimeout) {
 		o.Generation = gen
@@ -153,6 +165,26 @@ func (s *Service) ListOrdersPage(ctx context.Context, status, address, cursor st
 		return nil, "", ErrOrdersNotConfigured
 	}
 	return s.orders.ListPage(ctx, status, address, cursor, limit)
+}
+
+// PendingOrders returns every Pending purchase order, newest first
+func (s *Service) PendingOrders(ctx context.Context) ([]*models.PurchaseOrder, error) {
+	if s.orders == nil {
+		return nil, nil // no order read model: nothing is pending to report
+	}
+	var out []*models.PurchaseOrder
+	cursor := ""
+	for {
+		page, next, err := s.ListOrdersPage(ctx, string(models.PurchaseOrderPending), "", cursor, 500)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page...)
+		if next == "" {
+			return out, nil
+		}
+		cursor = next
+	}
 }
 
 // GetOrder returns one purchase order by ID

@@ -203,8 +203,10 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Collection(collPurchaseOrders).Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}},
+	// The buyer-filtered public list matches buyerKey exactly and sorts like the unfiltered one
+	_, err = db.Collection(collPurchaseOrders).Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}},
+		{Keys: bson.D{{Key: "buyerKey", Value: 1}, {Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}},
 	})
 	if err != nil {
 		return err

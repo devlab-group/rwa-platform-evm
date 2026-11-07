@@ -37,9 +37,10 @@ func (e chainRevert) ErrorData() interface{} { return e.data }
 type oracleChain struct {
 	blockchain.Client
 	oracleKind bool
-	price      error // nil: a fresh price
-	updatedAt  int64 // 0: a fixed old timestamp
-	feedDown   bool  // the feed itself cannot be read
+	price      error  // nil: a fresh price
+	updatedAt  int64  // 0: a fixed old timestamp
+	feedDown   bool   // the feed itself cannot be read
+	cutoff     uint64 // dealingCutoff(); 0: the strategy has none, as before rwa-v4
 }
 
 func (c oracleChain) CallContract(_ context.Context, msg ethereum.CallMsg, _ *big.Int) ([]byte, error) {
@@ -80,8 +81,11 @@ func (c oracleChain) CallContract(_ context.Context, msg ethereum.CallMsg, _ *bi
 		case "feedDecimals":
 			return m.Outputs.Pack(uint8(8))
 		case "dealingCutoff":
-			// an rwa-v3 strategy has no dealingCutoff()
-			return nil, chainRevert{data: "0x"}
+			if c.cutoff == 0 {
+				// an rwa-v3 strategy has no dealingCutoff()
+				return nil, chainRevert{data: "0x"}
+			}
+			return m.Outputs.Pack(c.cutoff)
 		case "latestPrice":
 			if c.price != nil {
 				return nil, c.price

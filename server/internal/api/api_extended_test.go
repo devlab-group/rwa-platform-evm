@@ -631,7 +631,7 @@ func TestListTransactionsIncludesEventDerived(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := txindex.ReconcileStackTransactions(ctx, env.app.Repos.Transactions, env.app.Repos.ChainEvents, env.app.Repos.IndexerCheckpoints, env.app.ChainID); err != nil {
+	if err := txindex.ReconcileStackTransactions(ctx, env.app.Repos.Transactions, env.app.Repos.ChainEvents, env.app.Repos.IndexerCheckpoints, env.app.ChainID, nil); err != nil {
 		t.Fatalf("ReconcileStackTransactions: %v", err)
 	}
 

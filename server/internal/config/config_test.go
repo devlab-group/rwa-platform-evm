@@ -476,6 +476,7 @@ func TestLoadProductionRejectsNonPositiveDurationsAndLimits(t *testing.T) {
 		"HTTP_IDLE_TIMEOUT":        "0",
 		"PENDING_REDEMPTION_SLA":   "0",
 		"FUNDED_CLAIM_FAILURE_SLA": "0",
+		"PENDING_PURCHASE_SLA":     "0",
 		"TX_LEASE_TTL":             "0",
 		"HTTP_MAX_HEADER_BYTES":    "0",
 		"CHAIN_CONFIRMATIONS":      "0",

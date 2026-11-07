@@ -151,9 +151,10 @@ type Config struct {
 	HTTPIdleTimeout       time.Duration
 	HTTPMaxHeaderBytes    int
 
-	// Alert thresholds for pending-redemption and funded-claim evaluators
+	// Alert thresholds for pending-redemption, funded-claim and pending-purchase-order evaluators
 	PendingRedemptionSLA  time.Duration
 	FundedClaimFailureSLA time.Duration
+	PendingPurchaseSLA    time.Duration
 	// PriceFeedSLA delays StalePrice alerts while a readable feed age is below this threshold;
 	// 0 disables the delay
 	PriceFeedSLA time.Duration
@@ -306,6 +307,7 @@ type fileSchema struct {
 	Alerts struct {
 		PendingRedemptionSLA  string `yaml:"pending_redemption_sla"`
 		FundedClaimFailureSLA string `yaml:"funded_claim_failure_sla"`
+		PendingPurchaseSLA    string `yaml:"pending_purchase_sla"`
 		PriceFeedSLA          string `yaml:"price_feed_sla"`
 	} `yaml:"alerts"`
 
@@ -425,6 +427,7 @@ func (f fileSchema) toEnvMap() map[string]string {
 
 	setStr("PENDING_REDEMPTION_SLA", f.Alerts.PendingRedemptionSLA)
 	setStr("FUNDED_CLAIM_FAILURE_SLA", f.Alerts.FundedClaimFailureSLA)
+	setStr("PENDING_PURCHASE_SLA", f.Alerts.PendingPurchaseSLA)
 	setStr("PRICE_FEED_SLA", f.Alerts.PriceFeedSLA)
 
 	setBool("PRODUCTION_ALLOW_UNBOUNDED_REQUEST_BODY", f.ProductionOverrides.AllowUnboundedRequestBody)
@@ -594,6 +597,12 @@ func load(lookup envLookup) (Config, error) {
 		return Config{}, err
 	}
 	cfg.FundedClaimFailureSLA = fundedSLA
+
+	purchaseSLA, err := getDuration(lookup, "PENDING_PURCHASE_SLA", 24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.PendingPurchaseSLA = purchaseSLA
 
 	if cfg.PriceFeedSLA, err = getDuration(lookup, "PRICE_FEED_SLA", 0); err != nil {
 		return Config{}, err
@@ -905,6 +914,7 @@ func validateProductionBounds(lookup envLookup, cfg Config) error {
 		"HTTP_IDLE_TIMEOUT":        cfg.HTTPIdleTimeout,
 		"PENDING_REDEMPTION_SLA":   cfg.PendingRedemptionSLA,
 		"FUNDED_CLAIM_FAILURE_SLA": cfg.FundedClaimFailureSLA,
+		"PENDING_PURCHASE_SLA":     cfg.PendingPurchaseSLA,
 		"TX_LEASE_TTL":             cfg.TxLeaseTTL,
 	}
 	for name, d := range positiveDurations {

@@ -583,6 +583,8 @@ Scrape `/metrics` on `http.metrics_addr` (§7a). The platform exports:
 - `rwa_sales_inventory_tokens` and `rwa_allowed_wallets`;
 - `rwa_redemptions_pending_count`, `rwa_redemptions_pending_oldest_age_seconds` and
   `rwa_redemptions_funded_unclaimed_count`;
+- `rwa_purchase_orders_pending_count` and `rwa_purchase_orders_pending_oldest_age_seconds`:
+  forward-priced purchase orders waiting to be settled;
 - `rwa_alerts_fired_total{kind}`, `rwa_storage_up` and `rwa_config_drift`;
 - `rwa_idempotency_outbox_errors_total` and `rwa_read_model_reconcile_errors_total`.
 
@@ -596,6 +598,7 @@ audit-log write. Repeated findings are counted on each check rather than dedupli
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | `pending_redemption_sla` | Pending age reaches `alerts.pending_redemption_sla` (default 48h)                                                                                  | 5 minutes                                              |
 | `funded_claim_failure`   | Funded, unclaimed age reaches `alerts.funded_claim_failure_sla` (default 24h), measured from when the server indexed the funding event             | 5 minutes                                              |
+| `pending_purchase_sla`   | A purchase order's Pending age reaches `alerts.pending_purchase_sla` (default 24h): no round has priced it or no keeper has settled it (§4f)       | 5 minutes                                              |
 | `config_drift`           | contract wiring differs from the expected project state (§7a)                                                                                      | 5 minutes                                              |
 | `storage_degraded`       | MongoDB ping fails                                                                                                                                 | 30 seconds, when using MongoDB                         |
 | `kyc_monitoring_hit`     | an accepted Sumsub monitoring decision concerns a projected Allowed wallet, or an Onfido monitor reports changed matches (§4c)                     | accepted Sumsub decisions; each Onfido signal delivery |
@@ -614,7 +617,13 @@ set it to the longest normal gap between updates plus a tolerance: `26h` for a d
 `74h` for one that skips weekends. A stale price then raises `price_feed_stale` on an evaluation
 once the feed reaches that age. With `74h`, a missed weekday update can go unalerted for about
 two days. Other price failures and an unreadable feed age bypass this delay. The setting changes
-alert timing only; new purchases and redemption requests still revert when the feed is stale.
+alert timing only. Instant-price purchases and redemption requests still reject stale feeds;
+forward requests skip `maxAge`.
+
+With `alerts.price_feed_sla` set, the platform compares each nonzero `purchaseTimeout` and
+`redemptionTimeout` with the oracle's `dealingCutoff` plus that SLA, logging each distinct warning
+once per process. This uses the SLA as the expected update gap: a shorter timeout can open
+cancellation before a pricing round is published. Raise the timeout or lower the cutoff.
 
 ## 6. Backup and recovery
 

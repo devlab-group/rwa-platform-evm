@@ -103,6 +103,16 @@ type config struct {
 	replacementStrategy common.Address
 }
 
+// checkCutoff requires the dealing cut-off to be below both timeouts, as Vault.setStrategy and
+// RedemptionEscrow.requestRedemption do on-chain; otherwise the forward-pricing steps would
+// fail with InvalidDealingCutoff instead of a clear message
+func checkCutoff(cutoff, purchaseTimeout, redemptionTimeout int64) error {
+	if cutoff >= purchaseTimeout || cutoff >= redemptionTimeout {
+		return fmt.Errorf("E2E_DEALING_CUTOFF %d must be below PURCHASE_TIMEOUT %d and REDEMPTION_TIMEOUT %d", cutoff, purchaseTimeout, redemptionTimeout)
+	}
+	return nil
+}
+
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -171,6 +181,9 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("invalid E2E_DEALING_CUTOFF")
 	}
 	cfg.dealingCutoff = cutoff.Int64()
+	if err := checkCutoff(cfg.dealingCutoff, cfg.purchaseTimeout, cfg.redeemTimeout); err != nil {
+		return config{}, err
+	}
 
 	cfg.purchasePrice, ok = new(big.Int).SetString(envOr("E2E_PURCHASE_PRICE", "2000000"), 10)
 	if !ok {

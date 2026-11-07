@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -486,6 +487,10 @@ func buildApp(cfg config.Config, addrs models.Addresses, auditor string, repos *
 	if addrs.Vault != "" {
 		app.Sales = sales.New(chainClient, common.HexToAddress(addrs.Vault), common.HexToAddress(addrs.QuoteToken), repos.Purchases).
 			WithOrders(repos.PurchaseOrders)
+		// The project is Active, so it is stored; without its version every view is still tried
+		if p, err := repos.Projects.Get(context.Background()); err == nil {
+			app.Sales.WithVersion(p.Version)
+		}
 	}
 	if addrs.RedemptionEscrow != "" {
 		app.Redemptions = redemption.New(chainClient, common.HexToAddress(addrs.RedemptionEscrow), repos.RedemptionRequests, common.HexToAddress(addrs.Compliance))
@@ -615,7 +620,11 @@ func startBackgroundLoops(ctx context.Context, cfg config.Config, addrs models.A
 
 	if app.Sales != nil && addrs.Vault != "" {
 		go runIndexDependentTicker(ctx, repos, cfg, 15*time.Second, "purchase orders reconcile", func() error {
-			return app.Sales.ReconcileOrders(ctx, repos.ChainEvents, cfg.ChainID, purchaseTimeoutSeconds(ctx, repos))
+			timeout, err := purchaseTimeoutSeconds(ctx, repos)
+			if err != nil {
+				return err // skip this tick: orders rebuilt with an unknown timeout would show it as already passed
+			}
+			return app.Sales.ReconcileOrders(ctx, repos.ChainEvents, cfg.ChainID, timeout)
 		})
 	}
 
@@ -649,7 +658,7 @@ func startBackgroundLoops(ctx context.Context, cfg config.Config, addrs models.A
 	if addrs.Token != "" || addrs.Vault != "" || addrs.RedemptionEscrow != "" ||
 		addrs.SupplyController != "" || addrs.Compliance != "" || addrs.Strategy != "" || addrs.IncomeDistributor != "" {
 		go runIndexDependentTicker(ctx, repos, cfg, 15*time.Second, "stack transactions-reconcile", func() error {
-			return txindex.ReconcileStackTransactions(ctx, repos.Transactions, repos.ChainEvents, repos.IndexerCheckpoints, cfg.ChainID)
+			return txindex.ReconcileStackTransactions(ctx, repos.Transactions, repos.ChainEvents, repos.IndexerCheckpoints, cfg.ChainID, txindex.SenderFromNode(chainClient, cfg.ChainID))
 		})
 	}
 
@@ -717,6 +726,8 @@ func refreshBusinessGauges(ctx context.Context, repos *repository.Repositories, 
 		}
 	}
 
+	refreshPurchaseOrderGauges(ctx, app)
+
 	requests, err := repos.RedemptionRequests.List(ctx, "")
 	if err != nil {
 		log.Printf("platform: business-gauge refresh: listing redemption requests: %v", err)
@@ -741,7 +752,29 @@ func refreshBusinessGauges(ctx context.Context, repos *repository.Repositories, 
 	metrics.RedemptionsFundedUnclaimedCount.Set(float64(fundedUnclaimed))
 }
 
-// evaluateAlerts logs and counts redemption findings and attempts an audit append
+// refreshPurchaseOrderGauges sets the pending purchase-order count and oldest age; a failed
+// read retains the previous values
+func refreshPurchaseOrderGauges(ctx context.Context, app *api.App) {
+	if app.Sales == nil {
+		return
+	}
+	pending, err := app.Sales.PendingOrders(ctx)
+	if err != nil {
+		log.Printf("platform: business-gauge refresh: listing pending purchase orders: %v", err)
+		return
+	}
+	now := time.Now().UTC()
+	oldest := time.Duration(0)
+	for _, o := range pending {
+		if age := now.Sub(time.Unix(o.CreatedAt, 0).UTC()); age > oldest {
+			oldest = age
+		}
+	}
+	metrics.PurchaseOrdersPendingCount.Set(float64(len(pending)))
+	metrics.PurchaseOrdersPendingOldestAgeSeconds.Set(oldest.Seconds())
+}
+
+// evaluateAlerts logs and counts redemption and purchase-order findings and attempts an audit append
 func evaluateAlerts(ctx context.Context, cfg config.Config, repos *repository.Repositories, app *api.App) {
 	// Another COMPLIANCE_ROLE holder can allow wallets past the cap directly
 	if limit := app.Guard.Cap(); limit > 0 {
@@ -754,22 +787,29 @@ func evaluateAlerts(ctx context.Context, cfg config.Config, repos *repository.Re
 	}
 
 	// deferred so it runs after the DB-only checks below: a hung RPC must not hold them back
-	defer evaluateOracleAlert(ctx, app, cfg.PriceFeedSLA)
+	defer evaluateOracleAlert(ctx, repos, app, cfg.PriceFeedSLA)
 
-	requests, err := repos.RedemptionRequests.List(ctx, "")
-	if err != nil {
-		log.Printf("platform: alert evaluation: listing redemption requests: %v", err)
-		return
-	}
 	now := time.Now().UTC()
-	findings := alerts.EvaluatePendingRedemptionSLA(requests, cfg.PendingRedemptionSLA, now)
-	findings = append(findings, alerts.EvaluateFundedClaimFailure(requests, cfg.FundedClaimFailureSLA, now)...)
+	var findings []alerts.Alert
+	if requests, err := repos.RedemptionRequests.List(ctx, ""); err != nil {
+		log.Printf("platform: alert evaluation: listing redemption requests: %v", err)
+	} else {
+		findings = alerts.EvaluatePendingRedemptionSLA(requests, cfg.PendingRedemptionSLA, now)
+		findings = append(findings, alerts.EvaluateFundedClaimFailure(requests, cfg.FundedClaimFailureSLA, now)...)
+	}
+	if app.Sales != nil {
+		if orders, err := app.Sales.PendingOrders(ctx); err != nil {
+			log.Printf("platform: alert evaluation: listing pending purchase orders: %v", err)
+		} else {
+			findings = append(findings, alerts.EvaluatePendingPurchaseSLA(orders, cfg.PendingPurchaseSLA, now)...)
+		}
+	}
 
 	for _, a := range findings {
 		log.Printf("platform: ALERT [%s] %s", a.Kind, a.Message)
 		metrics.AlertsFiredTotal.WithLabelValues(a.Kind).Inc()
 		if app.Audit != nil {
-			_ = app.Audit.Record(ctx, "alerts", "system", "alerts."+a.Kind, a.RedemptionID, map[string]any{
+			_ = app.Audit.Record(ctx, "alerts", "system", "alerts."+a.Kind, cmp.Or(a.RedemptionID, a.OrderID), map[string]any{
 				"message":    a.Message,
 				"since":      a.Since,
 				"ageSeconds": a.Age.Seconds(),
@@ -784,7 +824,7 @@ const oracleAlertTimeout = 10 * time.Second
 // evaluateOracleAlert raises price_feed_stale for strategy price reverts, skipping transport
 // failures and stale prices younger than a positive sla. Only chain reads use oracleAlertTimeout,
 // leaving time for the audit write.
-func evaluateOracleAlert(ctx context.Context, app *api.App, sla time.Duration) {
+func evaluateOracleAlert(ctx context.Context, repos *repository.Repositories, app *api.App, sla time.Duration) {
 	if app.Sales == nil {
 		return
 	}
@@ -794,6 +834,9 @@ func evaluateOracleAlert(ctx context.Context, app *api.App, sla time.Duration) {
 	if err != nil {
 		log.Printf("platform: alert evaluation: reading the oracle strategy: %v", err)
 		return
+	}
+	if info != nil {
+		warnShortTimeouts(ctx, repos, info, sla)
 	}
 	if info == nil || info.Available {
 		return
@@ -808,6 +851,44 @@ func evaluateOracleAlert(ctx context.Context, app *api.App, sla time.Duration) {
 	}
 	app.RaiseAlert(ctx, sales.AlertPriceFeedStale, "system", info.Strategy.Hex(),
 		fmt.Sprintf("OraclePriceStrategy.latestPrice() fails with %s; purchases and redemptions cannot be quoted", info.Error))
+}
+
+// timeoutWarned records each distinct warning so it is logged once per process
+var timeoutWarned sync.Map
+
+// warnShortTimeouts compares project timeouts with dealingCutoff plus alerts.price_feed_sla,
+// using the SLA as the expected update gap. A shorter timeout can let a holder cancel
+// before a pricing round is published.
+func warnShortTimeouts(ctx context.Context, repos *repository.Repositories, info *sales.OracleInfo, sla time.Duration) {
+	if info.DealingCutoff == nil || sla <= 0 {
+		return
+	}
+	p, err := repos.Projects.Get(ctx)
+	if err != nil {
+		return
+	}
+	for _, w := range timeoutMarginWarnings(*info.DealingCutoff, sla, p.PurchaseTimeout, p.RedemptionTimeout) {
+		if _, seen := timeoutWarned.LoadOrStore(w, true); !seen {
+			log.Printf("platform: WARNING %s", w)
+		}
+	}
+}
+
+// timeoutMarginWarnings names each timeout, in seconds, that is not greater than
+// cutoff + sla. A zero timeout is unset and is skipped.
+func timeoutMarginWarnings(cutoff uint64, sla time.Duration, purchaseTimeout, redemptionTimeout int64) []string {
+	need := int64(cutoff) + int64(sla/time.Second)
+	var out []string
+	for _, t := range []struct {
+		name    string
+		timeout int64
+	}{{"purchaseTimeout", purchaseTimeout}, {"redemptionTimeout", redemptionTimeout}} {
+		if t.timeout > 0 && t.timeout <= need {
+			out = append(out, fmt.Sprintf("%s is %ds, not above the oracle's dealingCutoff %ds plus alerts.price_feed_sla %s (%ds): an order can be cancelled before the round that prices it exists",
+				t.name, t.timeout, cutoff, sla, need))
+		}
+	}
+	return out
 }
 
 // rescreenOnSanctionsReload reports listed Allowed holders after a successful file reload
@@ -866,13 +947,14 @@ func redemptionTimeoutSeconds(ctx context.Context, repos *repository.Repositorie
 }
 
 // purchaseTimeoutSeconds is the deployed rwa-v4 Vault.purchaseTimeout, 0 for an earlier
-// project, which has no forward-priced orders to date
-func purchaseTimeoutSeconds(ctx context.Context, repos *repository.Repositories) int64 {
+// project, which has no forward-priced orders to date. It fails when the project cannot be
+// read, so a caller never mistakes an unknown timeout for 0.
+func purchaseTimeoutSeconds(ctx context.Context, repos *repository.Repositories) (int64, error) {
 	p, err := repos.Projects.Get(ctx)
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("read project for the purchase timeout: %w", err)
 	}
-	return p.PurchaseTimeout
+	return p.PurchaseTimeout, nil
 }
 
 func runTicker(ctx context.Context, interval time.Duration, fn func()) {

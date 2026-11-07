@@ -2,7 +2,7 @@ package mongodb
 
 import (
 	"context"
-	"regexp"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -13,8 +13,15 @@ import (
 
 type purchaseOrderRepo struct{ coll *mongo.Collection }
 
+// purchaseOrderDoc stores an order with BuyerKey, its buyer in lowercase. Reads decode into
+// models.PurchaseOrder alone, which ignores the extra field.
+type purchaseOrderDoc struct {
+	models.PurchaseOrder `bson:",inline"`
+	BuyerKey             string `bson:"buyerKey"`
+}
+
 func (r *purchaseOrderRepo) Upsert(ctx context.Context, o *models.PurchaseOrder) error {
-	return upsertByID(ctx, r.coll, o.ID, o)
+	return upsertByID(ctx, r.coll, o.ID, purchaseOrderDoc{PurchaseOrder: *o, BuyerKey: strings.ToLower(o.Buyer)})
 }
 func (r *purchaseOrderRepo) Get(ctx context.Context, id string) (*models.PurchaseOrder, error) {
 	return getByID[models.PurchaseOrder](ctx, r.coll, id)
@@ -31,19 +38,27 @@ func (r *purchaseOrderRepo) DeleteStaleGeneration(ctx context.Context, gen int64
 	return err
 }
 
-// ListPage sorts (createdAt, _id) descending, combining keyset, status and
-// case-insensitive buyer filters with $and, as redemptionRequestRepo.ListPage does
-func (r *purchaseOrderRepo) ListPage(ctx context.Context, status, address, cursor string, limit int) ([]*models.PurchaseOrder, string, error) {
+// purchaseOrderSort is ListPage's order, newest first with ties broken by id
+var purchaseOrderSort = bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}
+
+// purchaseOrderFilter combines the keyset, status and buyer filters with $and. The buyer
+// matches the lowercase buyerKey exactly, so the (buyerKey, createdAt, _id) index serves it
+// and an unauthenticated caller cannot force collection scans.
+func purchaseOrderFilter(status, address, cursor string) bson.M {
 	clauses := bson.A{keysetFilter(cursor, "createdAt")}
 	if status != "" {
 		clauses = append(clauses, bson.M{"status": status})
 	}
 	if address != "" {
-		pattern := "^" + regexp.QuoteMeta(address) + "$"
-		clauses = append(clauses, bson.M{"buyer": bson.M{"$regex": pattern, "$options": "i"}})
+		clauses = append(clauses, bson.M{"buyerKey": strings.ToLower(address)})
 	}
-	items, err := findMany[models.PurchaseOrder](ctx, r.coll, bson.M{"$and": clauses},
-		options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(int64(limit+1)))
+	return bson.M{"$and": clauses}
+}
+
+// ListPage returns one page in purchaseOrderSort order, as redemptionRequestRepo.ListPage does
+func (r *purchaseOrderRepo) ListPage(ctx context.Context, status, address, cursor string, limit int) ([]*models.PurchaseOrder, string, error) {
+	items, err := findMany[models.PurchaseOrder](ctx, r.coll, purchaseOrderFilter(status, address, cursor),
+		options.Find().SetSort(purchaseOrderSort).SetLimit(int64(limit+1)))
 	if err != nil {
 		return nil, "", err
 	}

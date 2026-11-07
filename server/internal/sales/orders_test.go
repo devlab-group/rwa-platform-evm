@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"strconv"
 	"testing"
 	"time"
 
@@ -305,6 +306,34 @@ func TestReconcileOrdersRebuildsAndFollowsAReorg(t *testing.T) {
 	}
 }
 
+func TestReconcileOrdersWithoutATimeoutWritesNothing(t *testing.T) {
+	vault := common.HexToAddress("0x0000000000000000000000000000000000000A")
+	events := memory.NewChainEventRepository()
+	orders := memory.NewPurchaseOrderRepository()
+	svc := New(nil, vault, common.Address{}, memory.NewPurchaseRepository()).WithOrders(orders)
+	ctx := context.Background()
+	seedEvent(t, events, vault, requested("1", 10, 1000))
+	if err := svc.ReconcileOrders(ctx, events, 31337, purchaseTimeout); err != nil {
+		t.Fatal(err)
+	}
+
+	// an unknown timeout must not overwrite the stored timeoutAt with createdAt
+	for _, unknown := range []int64{0, -1} {
+		if err := svc.ReconcileOrders(ctx, events, 31337, unknown); !errors.Is(err, ErrPurchaseTimeoutUnknown) {
+			t.Fatalf("ReconcileOrders(timeout %d) = %v, want ErrPurchaseTimeoutUnknown", unknown, err)
+		}
+	}
+	if o, err := svc.GetOrder(ctx, "1"); err != nil || o.TimeoutAt != 1000+purchaseTimeout {
+		t.Fatalf("order 1 = %+v, %v; want timeoutAt untouched at %d", o, err, 1000+purchaseTimeout)
+	}
+
+	// with no Vault events there is nothing to mis-date, so an earlier project reconciles with 0
+	if err := New(nil, vault, common.Address{}, memory.NewPurchaseRepository()).WithOrders(memory.NewPurchaseOrderRepository()).
+		ReconcileOrders(ctx, memory.NewChainEventRepository(), 31337, 0); err != nil {
+		t.Fatalf("ReconcileOrders without events and timeout: %v", err)
+	}
+}
+
 func TestReconcileOrdersOnlyReadsVaultOrderEvents(t *testing.T) {
 	vault := common.HexToAddress("0x0000000000000000000000000000000000000A")
 	other := common.HexToAddress("0x0000000000000000000000000000000000000B")
@@ -514,5 +543,42 @@ func TestDecodeLogPurchaseEventsRejectTruncatedData(t *testing.T) {
 		if _, _, err := DecodeLog(log); err == nil {
 			t.Errorf("DecodeLog accepted a truncated %s log", name)
 		}
+	}
+}
+
+func TestPendingOrdersWalksEveryPageAndSkipsClosedOrders(t *testing.T) {
+	ctx := context.Background()
+	orders := memory.NewPurchaseOrderRepository()
+	svc := New(nil, common.Address{}, common.Address{}, memory.NewPurchaseRepository()).WithOrders(orders)
+
+	// more than one page of 500, with closed orders mixed in
+	for i := 0; i < 1100; i++ {
+		status := models.PurchaseOrderPending
+		if i%11 == 0 {
+			status = models.PurchaseOrderSettled
+		}
+		if err := orders.Upsert(ctx, &models.PurchaseOrder{ID: strconv.Itoa(i), Status: status, CreatedAt: int64(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := svc.PendingOrders(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, o := range got {
+		if o.Status != models.PurchaseOrderPending || seen[o.ID] {
+			t.Fatalf("order %s (%s) listed wrongly", o.ID, o.Status)
+		}
+		seen[o.ID] = true
+	}
+	if want := 1100 - 100; len(got) != want {
+		t.Errorf("%d pending orders, want %d", len(got), want)
+	}
+
+	// without an order read model there is nothing pending to report
+	if got, err := New(nil, common.Address{}, common.Address{}, memory.NewPurchaseRepository()).PendingOrders(ctx); err != nil || len(got) != 0 {
+		t.Errorf("PendingOrders without a read model = %v, %v; want none", got, err)
 	}
 }

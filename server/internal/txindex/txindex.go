@@ -11,10 +11,14 @@ package txindex
 import (
 	"context"
 	"fmt"
+	"log"
+	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 
+	"github.com/rwa-platform/server/internal/blockchain"
 	"github.com/rwa-platform/server/internal/dal/models"
 	"github.com/rwa-platform/server/internal/dal/repository"
 	"github.com/rwa-platform/server/internal/indexer"
@@ -92,14 +96,60 @@ var actorKeys = []string{"caller", "sender", "funder", "buyer", "account", "bene
 // not charged; maxQuoteAmount is the deposit of a purchase request.
 var valueKeys = []string{"refund", "quoteAmount", "amount", "rwaAmount", "maxQuoteAmount", "total"}
 
+// unnamedSignerEvents need a sender lookup: purchase settlement/rejection, redemption claims,
+// freezes and seizures identify a buyer, beneficiary or holder rather than establishing the
+// caller. That account may also be the signer, but cannot prove it. RedemptionRejected carries
+// its caller and needs no lookup.
+var unnamedSignerEvents = map[string]bool{
+	"PurchaseSettled":     true,
+	"PurchaseRefunded":    true,
+	"PurchaseRejected":    true,
+	"RedemptionCompleted": true,
+	"Frozen":              true,
+	"ForcedTransfer":      true,
+}
+
+// signerUnnamed identifies event groups that need a sender lookup. Purchased alongside
+// settlement names the buyer; a standalone Purchased from buy names its caller.
+func signerUnnamed(live []*models.ChainEvent) bool {
+	for _, e := range live {
+		if unnamedSignerEvents[e.Name] {
+			return true
+		}
+	}
+	return false
+}
+
+// SenderFunc returns the account that signed the transaction with the given hash
+type SenderFunc func(ctx context.Context, txHash string) (string, error)
+
+// SenderFromNode recovers a transaction's signer from the node
+func SenderFromNode(client blockchain.Client, chainID int64) SenderFunc {
+	signer := types.LatestSignerForChainID(big.NewInt(chainID))
+	return func(ctx context.Context, txHash string) (string, error) {
+		tx, _, err := client.TransactionByHash(ctx, common.HexToHash(txHash))
+		if err != nil {
+			return "", err
+		}
+		from, err := types.Sender(signer, tx)
+		if err != nil {
+			return "", err
+		}
+		return from.Hex(), nil
+	}
+}
+
 // ReconcileStackTransactions replays chainID's events, skipping hashes owned by the
 // transaction manager. Each remaining hash with a non-Removed, eligible event gets one
 // confirmed record. Existing event-derived records without live eligible events become
 // TxReorged and remain visible.
 //
+// Transactions identified by signerUnnamed get From from sender. A resolved value is retained
+// on later passes; a missing or failed lookup leaves From empty and can be retried.
+//
 // Repeated calls and pre-deployment calls are safe. ReconciliationRequired returns nil
 // without writes while the indexer needs recovery.
-func ReconcileStackTransactions(ctx context.Context, txs repository.TransactionRepository, chainEvents repository.ChainEventRepository, checkpoints repository.IndexerCheckpointRepository, chainID int64) error {
+func ReconcileStackTransactions(ctx context.Context, txs repository.TransactionRepository, chainEvents repository.ChainEventRepository, checkpoints repository.IndexerCheckpointRepository, chainID int64, sender SenderFunc) error {
 	if cp, err := checkpoints.Get(ctx, chainID, indexer.CheckpointAddress); err == nil {
 		if cp.ReconciliationRequired {
 			return nil // indexer frozen mid-reorg
@@ -143,6 +193,13 @@ func ReconcileStackTransactions(ctx context.Context, txs repository.TransactionR
 		}
 
 		rec := buildEventDerivedTx(chainID, txHash, live, primary, existing, now)
+		if rec.From == "" && sender != nil && signerUnnamed(live) {
+			if from, err := sender(ctx, txHash); err != nil {
+				log.Printf("txindex: sender of %s: %v", txHash, err)
+			} else {
+				rec.From = from
+			}
+		}
 		if existing == nil {
 			if err := txs.Create(ctx, rec); err != nil {
 				return fmt.Errorf("txindex: create event-derived tx %s: %w", txHash, err)
@@ -191,10 +248,10 @@ func pickPrimary(live []*models.ChainEvent) *models.ChainEvent {
 	return best
 }
 
-// buildEventDerivedTx takes Kind (mapped or raw name), From, To and Value from
-// primary's name, actor, emitter and amount. Latest live event supplies
-// BlockNumber/BlockHash; earliest supplies IndexedAt as SubmittedAt. An existing record
-// contributes only pinned SubmittedAt.
+// buildEventDerivedTx takes Kind, To and Value from the primary event's name, emitter and
+// amount. From uses its actor unless a sender lookup is required, in which case a previously
+// resolved From is retained. The latest live event supplies BlockNumber/BlockHash; the earliest
+// supplies SubmittedAt unless an existing record has already pinned it.
 func buildEventDerivedTx(chainID int64, txHash string, live []*models.ChainEvent, primary *models.ChainEvent, existing *models.Transaction, now time.Time) *models.Transaction {
 	earliest, latest := live[0], live[0]
 	for _, e := range live {
@@ -213,12 +270,19 @@ func buildEventDerivedTx(chainID int64, txHash string, live []*models.ChainEvent
 	if existing != nil && !existing.SubmittedAt.IsZero() {
 		submittedAt = existing.SubmittedAt
 	}
+	from := actorFrom(primary.Data)
+	if signerUnnamed(live) {
+		from = ""
+		if existing != nil {
+			from = existing.From // looked up on an earlier pass
+		}
+	}
 	return &models.Transaction{
 		ID:          models.EventDerivedTxIDPrefix + txHash,
 		ChainID:     chainID,
 		TxHash:      txHash,
 		Kind:        kind,
-		From:        actorFrom(primary.Data),
+		From:        from,
 		To:          primary.Address,
 		Value:       valueFrom(primary.Data),
 		Status:      models.TxConfirmed,

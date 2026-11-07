@@ -55,6 +55,8 @@ type Service struct {
 	purchases      repository.PurchaseRepository
 	// orders is the rwa-v4 order read model, set by WithOrders
 	orders repository.PurchaseOrderRepository
+	// version is the project's factory version, set by WithVersion; empty tries every view
+	version string
 
 	// kinds caches StrategyKind answers and oracleCfg the immutable OraclePriceStrategy
 	// views, both by strategy address
@@ -76,6 +78,19 @@ func New(client blockchain.Client, vaultAddr, quoteTokenAddr common.Address, pur
 		quoteTokenAddr: quoteTokenAddr,
 		purchases:      purchases,
 	}
+}
+
+// WithVersion sets the project's factory version and returns s. Views that only exist from
+// rwa-v4 on (pendingPurchaseQuote, dealingCutoff) are then read for rwa-v4 projects alone,
+// so an earlier project never depends on how its node words a revert.
+func (s *Service) WithVersion(version string) *Service {
+	s.version = version
+	return s
+}
+
+// hasV4Views reports whether the Vault and strategies may carry the rwa-v4 views
+func (s *Service) hasV4Views() bool {
+	return s.version == "" || s.version == bindings.FactoryVersionV4
 }
 
 // strategyAddress reads live Vault.strategy so inventory prices follow the contract
@@ -165,9 +180,13 @@ func (s *Service) GetInventory(ctx context.Context) (Inventory, error) {
 	}, nil
 }
 
-// pendingPurchaseQuote omits the field when the Vault view reverts. Other read errors fail the
-// inventory request so a transport failure does not hide reserved deposits.
+// pendingPurchaseQuote omits the field for an earlier project and when the Vault view reverts.
+// Other read errors fail the inventory request so a transport failure does not hide reserved
+// deposits.
 func (s *Service) pendingPurchaseQuote(ctx context.Context) (*big.Int, error) {
+	if !s.hasV4Views() {
+		return nil, nil
+	}
 	data, err := s.vault.PackPendingPurchaseQuote()
 	if err != nil {
 		return nil, err

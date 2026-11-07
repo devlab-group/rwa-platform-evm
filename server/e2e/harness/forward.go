@@ -442,11 +442,12 @@ func forwardPurchase(ctx context.Context, api *apiClient, chain *chainClient, cf
 	if err := expectPurchaseRecorded(api, cfg, investor); err != nil {
 		return err
 	}
-	// a settle that fills emits PurchaseSettled with Purchased and stays a purchase
-	return expectTxKinds(api, investor, map[string]string{
-		receipt.TxHash.Hex():       "purchase_requested",
-		settleReceipt.TxHash.Hex(): "purchase",
-	})
+	if err := expectTxKinds(api, investor, map[string]string{receipt.TxHash.Hex(): "purchase_requested"}); err != nil {
+		return err
+	}
+	// a settle that fills emits PurchaseSettled with Purchased and stays a purchase. The admin
+	// signed it, so it is listed under the admin, not the buyer the events name
+	return expectTxKinds(api, crypto.PubkeyToAddress(adminKey.PublicKey), map[string]string{settleReceipt.TxHash.Hex(): "purchase"})
 }
 
 // expectPurchaseRecorded requires the settled order's fill in the admin purchase history
@@ -713,7 +714,11 @@ func rejectedPurchase(ctx context.Context, api *apiClient, chain *chainClient, c
 	if err := expectPendingDeposits(api, "0"); err != nil {
 		return err
 	}
-	return expectTxKinds(api, investor, map[string]string{receipt.TxHash.Hex(): "purchase_requested", rejectReceipt.TxHash.Hex(): "purchase_rejected"})
+	if err := expectTxKinds(api, investor, map[string]string{receipt.TxHash.Hex(): "purchase_requested"}); err != nil {
+		return err
+	}
+	// the treasurer (here the admin wallet) signed the rejection, so it is listed under that wallet
+	return expectTxKinds(api, crypto.PubkeyToAddress(adminKey.PublicKey), map[string]string{rejectReceipt.TxHash.Hex(): "purchase_rejected"})
 }
 
 // keeperPurchase runs the keeper with its own config and wallet. Before the round exists the

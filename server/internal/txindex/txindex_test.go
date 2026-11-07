@@ -46,9 +46,11 @@ func seedEvent(t *testing.T, repos *repository.Repositories, addr, txHash, name 
 	}
 }
 
-func run(t *testing.T, repos *repository.Repositories) {
+func run(t *testing.T, repos *repository.Repositories) { runWith(t, repos, nil) }
+
+func runWith(t *testing.T, repos *repository.Repositories, sender SenderFunc) {
 	t.Helper()
-	if err := ReconcileStackTransactions(context.Background(), repos.Transactions, repos.ChainEvents, repos.IndexerCheckpoints, txChainID); err != nil {
+	if err := ReconcileStackTransactions(context.Background(), repos.Transactions, repos.ChainEvents, repos.IndexerCheckpoints, txChainID, sender); err != nil {
 		t.Fatalf("ReconcileStackTransactions: %v", err)
 	}
 }

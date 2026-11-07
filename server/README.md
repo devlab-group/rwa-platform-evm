@@ -28,7 +28,7 @@ Shared implementation lives in `internal/`; `cmd/` contains executable entry poi
 | `internal/compliance`                                          | EIP-191 wallet-ownership challenges, authenticated KYC decisions, replay/ownership checks and `ComplianceRegistry.setStatus` submission.                                                                                                                                                                                             |
 | `internal/sales`, `internal/redemption`                        | Live inventory, indexed purchases/redemptions and the rwa-v4 forward-priced purchase orders. Clients quote through `Vault.previewBuy`/`RedemptionEscrow.previewRedeem` (or `quotePurchaseAfter` for an order) and submit wallet transactions, including treasurer funding/withdrawals and manager rejection.                                                                                                           |
 | `internal/income` | Computes holder entitlements, builds OpenZeppelin-compatible Merkle trees and snapshots, and maintains distribution and claim read models for rwa-v3. See [Income distribution](#income-distribution). |
-| `internal/governance`, `internal/strategy`, `internal/txindex` | Decode role/admin-transfer/pause and strategy-price events. `txindex` adds transaction records for indexed wallet activity absent from the server manager, visible in `GET /transactions`.                                                                                                                                           |
+| `internal/governance`, `internal/strategy`, `internal/txindex` | Decode role/admin-transfer/pause and strategy-price events. `txindex` adds transaction records for indexed wallet activity absent from the server manager, visible in `GET /transactions`. A transaction whose events do not name its signer (a keeper's settlement, a treasurer's rejection, anyone's redemption claim, an admin's freeze or seizure) takes its sender from the node, not from the buyer, beneficiary or holder in the event.                                                                                                                                           |
 | `internal/serverwiring`                                        | Shared chain-ID checks, transaction-manager settings and typed event dispatch for platform and opsctl.                                                                                                                                                                                                                               |
 | `internal/shadow`                                              | Runs scripted indexer replay in isolated memory stores, sampling resources and comparing final event/DLQ counts. It constructs no transaction manager or key provider. See `docs/operator/soak-runbook.md`.                                                                                                                          |
 | `internal/ipfs`                                                | Kubo pinning and replication; backups count toward publication after stored content is fetched and rehashed.                                                                                                                                                                                                                         |
@@ -355,7 +355,7 @@ validation.
 | `kyc:`                  | `provider` (`none`), `monitoring_action` (`alert`), `sumsub.*`, `onfido.*`                                                                                                                                                                                                                                         | `none` uses generic HMAC webhooks; `sumsub`/`onfido` require their credentials. See `config.example.yaml`.                                                                                                                                                                                    |
 | `compliance:`           | `max_allowed_wallets` (`0`, no cap), `sanctions_list_file` (empty, off) | Holder cap and sanctions screening on new allows; see below. |
 | `tx:`                   | `coordination_mode` (`in-process`), `lease_ttl` (`30s`)                                                                                                                                                                                                                             | Nonce coordination described under [KeyProvider](#keyprovider-hot-key-backends).                                                                                                                                                                                                              |
-| `alerts:`               | `pending_redemption_sla` (`48h`), `funded_claim_failure_sla` (`24h`), `price_feed_sla` (unset)                                                                                                                                                                                      | See [Observability](#observability).                                                                                                                                                                                                                                                          |
+| `alerts:`               | `pending_redemption_sla` (`48h`), `funded_claim_failure_sla` (`24h`), `pending_purchase_sla` (`24h`), `price_feed_sla` (unset)                                                                                                                                                                                      | See [Observability](#observability).                                                                                                                                                                                                                                                          |
 | `production_overrides:` | `allow_unbounded_request_body`, `allow_disabled_rate_limit`, `allow_unbounded_fees` (all `false`)                                                                                                                                                                                   | Emergency overrides for those controls only.                                                                                                                                                                                                                                                  |
 
 ## Holder cap and sanctions screening
@@ -419,9 +419,12 @@ API. It exposes standard Go metrics and:
 - `rwa_sales_inventory_tokens`: raw Vault inventory divided by 1e18, stored as a float for dashboards.
 - `rwa_redemptions_pending_count`, `rwa_redemptions_pending_oldest_age_seconds` and
   `rwa_redemptions_funded_unclaimed_count`.
+- `rwa_purchase_orders_pending_count` and `rwa_purchase_orders_pending_oldest_age_seconds`:
+  Pending purchase orders. A growing oldest age warrants checking the feed, keeper, pause state
+  and buyer compliance.
 - `rwa_allowed_wallets`: wallets Allowed and unexpired in the investor read model, excluding
   the vault and redemption escrow.
-- `rwa_alerts_fired_total{kind}`: redemption findings and `storage_degraded`, `config_drift`,
+- `rwa_alerts_fired_total{kind}`: redemption and purchase-order findings and `storage_degraded`, `config_drift`,
   `kyc_monitoring_hit`, `holder_cap_reached`, `holder_cap_exceeded`, `sanctions_list_match`,
   `price_feed_stale`;
   persistent conditions count again on later checks.
@@ -431,10 +434,12 @@ API. It exposes standard Go metrics and:
 - `rwa_idempotency_outbox_errors_total{phase}` and
   `rwa_read_model_reconcile_errors_total{reconciler}`: failed reservation writes and reconciler ticks.
 
-`refreshBusinessGauges` reads sales inventory and redemption models every 30 seconds.
-`internal/alerts` evaluates redemption slices every 5 minutes: `EvaluatePendingRedemptionSLA`
-uses on-chain `CreatedAt` against `alerts.pending_redemption_sla`; `EvaluateFundedClaimFailure`
-uses funding-index time `FundedAt` against `alerts.funded_claim_failure_sla`. Findings are logged,
+`refreshBusinessGauges` reads sales inventory, purchase-order and redemption models every 30
+seconds. `internal/alerts` evaluates redemption and purchase-order slices every 5 minutes:
+`EvaluatePendingRedemptionSLA` uses on-chain `CreatedAt` against `alerts.pending_redemption_sla`;
+`EvaluateFundedClaimFailure` uses funding-index time `FundedAt` against
+`alerts.funded_claim_failure_sla`; `EvaluatePendingPurchaseSLA` uses a Pending order's on-chain
+`CreatedAt` against `alerts.pending_purchase_sla`. Findings are logged,
 counted and submitted to the audit log (`category: "alerts"`, `GET /api/v1/audit-logs`); audit
 persistence is best effort.
 
@@ -445,7 +450,9 @@ failures are logged and skipped. The alert uses the strategy address as its audi
 includes the error name in its detail. These failures block latest-price quotes.
 Set `alerts.price_feed_sla` when `maxAge` is shorter than the update interval: stale-price alerts
 then wait until the feed reaches that age. Other price failures and an unreadable feed age bypass
-the delay. The setting changes alert timing only.
+the delay. The setting changes alert timing only. With it set, the platform also compares each
+nonzero `purchaseTimeout` and `redemptionTimeout` with the oracle's `dealingCutoff` plus the SLA,
+logging each distinct warning once per process.
 
 Every 5 minutes, `project.CheckConfigDrift` checks post-adoption wiring without changing Active
 status. Differences raise `config_drift` through logs, metrics and audit attempts. Treasury,
