@@ -79,6 +79,9 @@ func (c oracleChain) CallContract(_ context.Context, msg ethereum.CallMsg, _ *bi
 			return m.Outputs.Pack(uint16(0))
 		case "feedDecimals":
 			return m.Outputs.Pack(uint8(8))
+		case "dealingCutoff":
+			// an rwa-v3 strategy has no dealingCutoff()
+			return nil, chainRevert{data: "0x"}
 		case "latestPrice":
 			if c.price != nil {
 				return nil, c.price
@@ -103,10 +106,17 @@ func TestEvaluateAlerts_PriceFeedStale(t *testing.T) {
 	}{
 		{"fresh oracle price", oracleChain{oracleKind: true}, 0},
 		{"stale oracle price", oracleChain{oracleKind: true, price: staleErr(t)}, 1},
-		{"sequencer down", oracleChain{oracleKind: true, price: func() error {
-			id := bindings.NewOraclePriceStrategy().ABI.Errors["SequencerDown"].ID
-			return chainRevert{data: "0x" + common.Bytes2Hex(id[:4])}
-		}()}, 1},
+		{
+			"sequencer down",
+			oracleChain{
+				oracleKind: true,
+				price: func() error {
+					id := bindings.NewOraclePriceStrategy().ABI.Errors["SequencerDown"].ID
+					return chainRevert{data: "0x" + common.Bytes2Hex(id[:4])}
+				}(),
+			},
+			1,
+		},
 		{"rpc failure while reading the price is skipped", oracleChain{oracleKind: true, price: errors.New("i/o timeout")}, 0},
 		{"revert that is not a strategy error", oracleChain{oracleKind: true, price: chainRevert{data: "0x"}}, 1},
 		{"fixed strategy never alerts", oracleChain{oracleKind: false, price: staleErr(t)}, 0},

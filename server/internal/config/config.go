@@ -699,7 +699,9 @@ func load(lookup envLookup) (Config, error) {
 		return Config{}, fmt.Errorf("config: KYC_PROVIDER must be %q, %q, or %q, got %q", "none", "sumsub", "onfido", cfg.KYCProvider)
 	}
 	for name, v := range map[string]string{
-		"TX_MAX_FEE_PER_GAS_WEI": cfg.MaxFeePerGasWei, "TX_MAX_TIP_PER_GAS_WEI": cfg.MaxTipPerGasWei, "TX_MAX_TOTAL_COST_WEI": cfg.MaxTxTotalCostWei,
+		"TX_MAX_FEE_PER_GAS_WEI": cfg.MaxFeePerGasWei,
+		"TX_MAX_TIP_PER_GAS_WEI": cfg.MaxTipPerGasWei,
+		"TX_MAX_TOTAL_COST_WEI":  cfg.MaxTxTotalCostWei,
 	} {
 		if v == "" {
 			continue
@@ -816,9 +818,19 @@ const MinProductionSecretBytes = 32
 
 // weakProductionSecrets lists placeholders checked case-insensitively, regardless of length
 var weakProductionSecrets = map[string]bool{
-	"a": true, "b": true, "admin": true, "operator": true, "password": true,
-	"changeme": true, "change-me": true, "change_me": true, "secret": true,
-	"test": true, "default": true, "placeholder": true, "example": true,
+	"a":                                true,
+	"b":                                true,
+	"admin":                            true,
+	"operator":                         true,
+	"password":                         true,
+	"changeme":                         true,
+	"change-me":                        true,
+	"change_me":                        true,
+	"secret":                           true,
+	"test":                             true,
+	"default":                          true,
+	"placeholder":                      true,
+	"example":                          true,
 	"00000000000000000000000000000000": true,
 }
 

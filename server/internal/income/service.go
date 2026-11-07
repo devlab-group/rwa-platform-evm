@@ -92,9 +92,16 @@ type Service struct {
 // New constructs a Service; pinner may be nil, which makes Prepare fail with ErrIPFSUnavailable
 func New(chainID int64, repos *repository.Repositories, pinner Pinner, finalityConfirmations uint64) *Service {
 	return &Service{
-		chainID: chainID, projects: repos.Projects, chainEvents: repos.ChainEvents, checkpoints: repos.IndexerCheckpoints,
-		preps: repos.IncomePreparations, dists: repos.IncomeDistributions, claims: repos.IncomeClaims,
-		pinner: pinner, finality: finalityConfirmations, now: func() time.Time { return time.Now().UTC() },
+		chainID:     chainID,
+		projects:    repos.Projects,
+		chainEvents: repos.ChainEvents,
+		checkpoints: repos.IndexerCheckpoints,
+		preps:       repos.IncomePreparations,
+		dists:       repos.IncomeDistributions,
+		claims:      repos.IncomeClaims,
+		pinner:      pinner,
+		finality:    finalityConfirmations,
+		now:         func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -115,7 +122,7 @@ func (s *Service) activeIncomeProject(ctx context.Context) (*models.Project, err
 	if err != nil {
 		return nil, err
 	}
-	if p.Status != models.ProjectStatusActive || p.Version != bindings.FactoryVersionV3 || p.Addresses.IncomeDistributor == "" {
+	if p.Status != models.ProjectStatusActive || !bindings.IsV3OrLater(p.Version) || p.Addresses.IncomeDistributor == "" {
 		return nil, ErrIncomeUnsupported
 	}
 	return p, nil
@@ -156,8 +163,12 @@ func (s *Service) Prepare(ctx context.Context, req PrepareRequest) (*models.Inco
 	a := p.Addresses
 	token, vault, escrow := common.HexToAddress(a.Token), common.HexToAddress(a.Vault), common.HexToAddress(a.RedemptionEscrow)
 	in := EntitlementInput{
-		Vault: vault, Escrow: escrow, RecordBlock: req.RecordBlock, Total: total,
-		RedemptionTimeout: p.RedemptionTimeout, CheckSupply: a.SupplyController != "",
+		Vault:             vault,
+		Escrow:            escrow,
+		RecordBlock:       req.RecordBlock,
+		Total:             total,
+		RedemptionTimeout: p.RedemptionTimeout,
+		CheckSupply:       a.SupplyController != "",
 	}
 	if in.Transfers, err = s.chainEvents.ListByName(ctx, s.chainID, token.Hex(), "Transfer"); err != nil {
 		return nil, fmt.Errorf("income: list Transfer events: %w", err)
@@ -184,8 +195,13 @@ func (s *Service) Prepare(ctx context.Context, req PrepareRequest) (*models.Inco
 		return nil, err
 	}
 	snap, err := BuildSnapshot(SnapshotParams{
-		ChainID: s.chainID, Token: token, IncomeDistributor: common.HexToAddress(a.IncomeDistributor),
-		Quote: common.HexToAddress(a.QuoteToken), RecordBlock: req.RecordBlock, Total: total, Entitlements: ent,
+		ChainID:           s.chainID,
+		Token:             token,
+		IncomeDistributor: common.HexToAddress(a.IncomeDistributor),
+		Quote:             common.HexToAddress(a.QuoteToken),
+		RecordBlock:       req.RecordBlock,
+		Total:             total,
+		Entitlements:      ent,
 	})
 	if err != nil {
 		return nil, err
@@ -223,11 +239,19 @@ func (s *Service) Prepare(ctx context.Context, req PrepareRequest) (*models.Inco
 	}
 
 	prep := &models.IncomePreparation{
-		ID: uuid.NewString(), MerkleRoot: root, Total: total.String(),
-		RecordBlock: req.RecordBlock, ClaimDeadline: req.ClaimDeadline,
-		SnapshotURI: "ipfs://" + snap.CID, CID: snap.CID, SnapshotSha256: sha,
-		EligibleSupply: ent.EligibleSupply.String(), Distributed: ent.Distributed.String(), HolderCount: len(ent.Entries),
-		SnapshotRaw: snap.Canonical, CreatedAt: now,
+		ID:             uuid.NewString(),
+		MerkleRoot:     root,
+		Total:          total.String(),
+		RecordBlock:    req.RecordBlock,
+		ClaimDeadline:  req.ClaimDeadline,
+		SnapshotURI:    "ipfs://" + snap.CID,
+		CID:            snap.CID,
+		SnapshotSha256: sha,
+		EligibleSupply: ent.EligibleSupply.String(),
+		Distributed:    ent.Distributed.String(),
+		HolderCount:    len(ent.Entries),
+		SnapshotRaw:    snap.Canonical,
+		CreatedAt:      now,
 	}
 	err = s.preps.Create(ctx, prep)
 	if errors.Is(err, repository.ErrAlreadyExists) {
@@ -469,10 +493,17 @@ func BuildDistributions(events []*models.ChainEvent) (map[string]*models.IncomeD
 				continue
 			}
 			dists[id] = &models.IncomeDistribution{
-				ID: id, MerkleRoot: strField(e, "merkleRoot"), Total: strField(e, "total"),
-				RecordBlock: block.Uint64(), ClaimDeadline: unixSeconds(deadline), SnapshotURI: strField(e, "snapshotURI"),
-				SnapshotSha256: strField(e, "snapshotSha256"), Claimed: "0", CreateTxHash: e.TxHash,
-				CreatedBlock: e.BlockNumber, CreatedLogIndex: e.LogIndex,
+				ID:              id,
+				MerkleRoot:      strField(e, "merkleRoot"),
+				Total:           strField(e, "total"),
+				RecordBlock:     block.Uint64(),
+				ClaimDeadline:   unixSeconds(deadline),
+				SnapshotURI:     strField(e, "snapshotURI"),
+				SnapshotSha256:  strField(e, "snapshotSha256"),
+				Claimed:         "0",
+				CreateTxHash:    e.TxHash,
+				CreatedBlock:    e.BlockNumber,
+				CreatedLogIndex: e.LogIndex,
 			}
 			claimedSum[id] = new(big.Int)
 		case "IncomeClaimed":
@@ -486,8 +517,12 @@ func BuildDistributions(events []*models.ChainEvent) (map[string]*models.IncomeD
 			d.Claimed = claimedSum[id].String()
 			lower := strings.ToLower(common.HexToAddress(account).Hex())
 			claims = append(claims, &models.IncomeClaim{
-				ID: id + ":" + lower, DistributionID: id, Account: lower, Amount: amount.String(),
-				TxHash: e.TxHash, BlockNumber: e.BlockNumber,
+				ID:             id + ":" + lower,
+				DistributionID: id,
+				Account:        lower,
+				Amount:         amount.String(),
+				TxHash:         e.TxHash,
+				BlockNumber:    e.BlockNumber,
 			})
 		case "UnclaimedReclaimed":
 			if d, ok := dists[id]; ok {

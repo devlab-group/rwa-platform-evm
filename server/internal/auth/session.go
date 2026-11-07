@@ -84,21 +84,24 @@ func RequireWalletSession(sm *SessionManager) gin.HandlerFunc {
 		if sm == nil {
 			// A deployment without a SessionManager disables the route
 			c.AbortWithStatusJSON(http.StatusNotImplemented, gin.H{
-				"code": "not_configured", "message": "wallet sessions are not configured on this server",
+				"code":    "not_configured",
+				"message": "wallet sessions are not configured on this server",
 			})
 			return
 		}
 		token := c.GetHeader(WalletSessionHeader)
 		if token == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"code": "unauthorized", "message": WalletSessionHeader + " header is required",
+				"code":    "unauthorized",
+				"message": WalletSessionHeader + " header is required",
 			})
 			return
 		}
 		address, ok := sm.Validate(c.Request.Context(), token)
 		if !ok {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"code": "unauthorized", "message": "wallet session is missing, invalid, or expired",
+				"code":    "unauthorized",
+				"message": "wallet session is missing, invalid, or expired",
 			})
 			return
 		}

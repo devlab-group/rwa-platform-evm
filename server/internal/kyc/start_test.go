@@ -55,9 +55,16 @@ func fakeProvider(t *testing.T, replies map[string]string, failStatus int) (*htt
 
 func newSumsubForTest(t *testing.T, baseURL string) Provider {
 	t.Helper()
-	p, err := New(Config{Mode: ModeSumsub, Sumsub: SumsubConfig{
-		AppToken: "app-tok", SecretKey: "secret-key", WebhookSecret: "wh", BaseURL: baseURL, LevelName: "lvl-1",
-	}})
+	p, err := New(Config{
+		Mode: ModeSumsub,
+		Sumsub: SumsubConfig{
+			AppToken:      "app-tok",
+			SecretKey:     "secret-key",
+			WebhookSecret: "wh",
+			BaseURL:       baseURL,
+			LevelName:     "lvl-1",
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

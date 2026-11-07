@@ -45,7 +45,9 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 			return "", nil, err
 		}
 		return "ForcedTransfer", map[string]any{
-			"from": ev.From.Hex(), "to": ev.To.Hex(), "amount": ev.Amount.String(),
+			"from":   ev.From.Hex(),
+			"to":     ev.To.Hex(),
+			"amount": ev.Amount.String(),
 		}, nil
 	default:
 		return "unknown", map[string]any{"topic0": log.Topics[0].Hex()}, nil

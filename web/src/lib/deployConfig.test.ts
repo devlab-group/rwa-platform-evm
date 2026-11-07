@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { decodeFunctionData, zeroAddress } from "viem";
-import { rwaFactoryAbi, rwaFactoryV3Abi } from "./abis";
+import { rwaFactoryAbi, rwaFactoryV3Abi, rwaFactoryV4Abi } from "./abis";
 import {
   buildProjectConfigV3,
+  buildProjectConfigV4,
+  dealingCutoffProblem,
   parseFactoryVersion,
   type DeployValuesV3,
+  type DeployValuesV4,
 } from "./deployConfig";
 import { deployCalldata, type ProjectConfigInput } from "./wallet";
+import {
+  V3_ORACLE_DEPLOY_CALLDATA,
+  V4_ORACLE_DEPLOY_CALLDATA,
+} from "../test/deployGoldens";
 
 // Digits only, so the checksummed form viem decodes equals the input
 const A = (n: number) => `0x${String(n).padStart(40, "0")}` as const;
@@ -60,12 +67,13 @@ function build(v: DeployValuesV3) {
 }
 
 describe("parseFactoryVersion", () => {
-  it("accepts only the two supported versions", () => {
+  it("accepts only the three supported versions", () => {
     expect(parseFactoryVersion("rwa-v2")).toBe("rwa-v2");
     expect(parseFactoryVersion("rwa-v3")).toBe("rwa-v3");
+    expect(parseFactoryVersion("rwa-v4")).toBe("rwa-v4");
     expect(parseFactoryVersion("")).toBeNull();
     expect(parseFactoryVersion(undefined)).toBeNull();
-    expect(parseFactoryVersion("rwa-v4")).toBeNull();
+    expect(parseFactoryVersion("rwa-v5")).toBeNull();
   });
 });
 
@@ -233,5 +241,184 @@ describe("deployCalldata", () => {
       data: deployCalldata(built.config),
     });
     expect(args[0]).toEqual(built.config);
+  });
+});
+
+// The same Oracle config as the cast-encoded goldens; every uint64 differs so a swap shows
+const GOLDEN_ORACLE_V3: DeployValuesV3 = {
+  ...ORACLE,
+  sequencerUptimeFeed: A(2000),
+  sequencerGracePeriod: "1800",
+};
+const GOLDEN_ORACLE_V4: DeployValuesV4 = {
+  ...GOLDEN_ORACLE_V3,
+  dealingCutoff: "7200",
+  purchaseTimeout: 1_209_600,
+};
+
+describe("deployCalldata against cast-encoded goldens", () => {
+  it("encodes an rwa-v3 config to the exact bytes of the rwa-v3 factory", () => {
+    const built = build(GOLDEN_ORACLE_V3);
+    if (!("config" in built)) throw new Error(built.error);
+    expect(deployCalldata(built.config)).toBe(V3_ORACLE_DEPLOY_CALLDATA);
+  });
+
+  it("encodes an rwa-v4 config to the exact bytes of the rwa-v4 factory", () => {
+    const built = buildProjectConfigV4(GOLDEN_ORACLE_V4, CTX);
+    if (!("config" in built)) throw new Error(built.error);
+    expect(deployCalldata(built.config)).toBe(V4_ORACLE_DEPLOY_CALLDATA);
+  });
+
+  it("does not let an rwa-v4 config fall through to the rwa-v3 encoding", () => {
+    const built = buildProjectConfigV4(GOLDEN_ORACLE_V4, CTX);
+    if (!("config" in built)) throw new Error(built.error);
+    expect(deployCalldata(built.config).slice(0, 10)).toBe("0x29a5a742");
+    expect(
+      deployCalldata(
+        (build(GOLDEN_ORACLE_V3) as { config: never }).config,
+      ).slice(0, 10),
+    ).toBe("0xc91ac6b4");
+  });
+
+  it("round-trips an rwa-v4 config through the rwa-v4 ABI", () => {
+    const built = buildProjectConfigV4(GOLDEN_ORACLE_V4, CTX);
+    if (!("config" in built)) throw new Error(built.error);
+    const { args } = decodeFunctionData({
+      abi: rwaFactoryV4Abi,
+      data: deployCalldata(built.config),
+    });
+    expect(args[0]).toEqual(built.config);
+  });
+});
+
+const DAY = 86_400;
+const YEAR = 365 * DAY;
+
+function buildV4(patch: Partial<DeployValuesV4>) {
+  return buildProjectConfigV4({ ...GOLDEN_ORACLE_V4, ...patch }, CTX);
+}
+
+describe("buildProjectConfigV4 dealing cut-off", () => {
+  // Both timeouts are 7 days (604800) in these rows, so the ceiling is 604799
+  it.each([
+    ["1 second", "1", true],
+    ["one below both timeouts", "604799", true],
+    ["equal to both timeouts", "604800", false],
+    ["above both timeouts", "604801", false],
+    ["zero", "0", false],
+    ["empty", "", false],
+    ["fractional", "1.5", false],
+    ["negative", "-5", false],
+  ])("cut-off %s", (_name, cutoff, ok) => {
+    const r = buildV4({
+      dealingCutoff: cutoff,
+      redemptionTimeout: 604_800,
+      purchaseTimeout: 604_800,
+    });
+    expect("config" in r).toBe(ok);
+  });
+
+  it("rejects a cut-off that reaches only the purchase timeout", () => {
+    const r = buildV4({
+      dealingCutoff: "200000",
+      redemptionTimeout: 604_800,
+      purchaseTimeout: 200_000,
+    });
+    expect("error" in r && r.error).toMatch(/below both/);
+  });
+
+  it("rejects a cut-off that reaches only the redemption timeout", () => {
+    const r = buildV4({
+      dealingCutoff: "200000",
+      redemptionTimeout: 200_000,
+      purchaseTimeout: 604_800,
+    });
+    expect("error" in r && r.error).toMatch(/below both/);
+  });
+
+  it("sends a zero cut-off for a Fixed project, ignoring a typed one", () => {
+    const r = buildV4({
+      ...FIXED,
+      dealingCutoff: "999",
+      purchaseTimeout: 604_800,
+    });
+    if (!("config" in r)) throw new Error(r.error);
+    expect(r.config.dealingCutoff).toBe(0n);
+  });
+
+  it("does not require a cut-off for a Fixed project", () => {
+    const r = buildV4({
+      ...FIXED,
+      dealingCutoff: "",
+      purchaseTimeout: 604_800,
+    });
+    expect("config" in r).toBe(true);
+  });
+});
+
+describe("buildProjectConfigV4 timeouts", () => {
+  it.each([
+    ["1 day", DAY, true],
+    ["one second under 1 day", DAY - 1, false],
+    ["365 days", YEAR, true],
+    ["one second over 365 days", YEAR + 1, false],
+    ["fractional seconds", 90_000.5, false],
+    ["zero", 0, false],
+  ])("purchase timeout %s", (_name, seconds, ok) => {
+    // A cut-off of 3600 stays below every timeout in range
+    const r = buildV4({ purchaseTimeout: seconds, dealingCutoff: "3600" });
+    expect("config" in r).toBe(ok);
+  });
+
+  it.each([
+    ["1 day", DAY, true],
+    ["one second under 1 day", DAY - 1, false],
+    ["365 days", YEAR, true],
+    ["one second over 365 days", YEAR + 1, false],
+  ])("redemption timeout %s", (_name, seconds, ok) => {
+    const r = buildV4({ redemptionTimeout: seconds, dealingCutoff: "3600" });
+    expect("config" in r).toBe(ok);
+  });
+
+  it("applies the purchase timeout bound to a Fixed project too", () => {
+    const r = buildV4({ ...FIXED, purchaseTimeout: DAY - 1 });
+    expect("error" in r && r.error).toMatch(/Purchase timeout/);
+  });
+
+  it("carries both timeouts into the config as given", () => {
+    const r = buildV4({ redemptionTimeout: 300_000, purchaseTimeout: 400_000 });
+    if (!("config" in r)) throw new Error(r.error);
+    expect(r.config).toMatchObject({
+      redemptionTimeout: 300_000n,
+      purchaseTimeout: 400_000n,
+    });
+  });
+});
+
+describe("buildProjectConfigV4 keeps the rwa-v3 checks", () => {
+  it.each([
+    ["no income manager", { incomeManager: "" }, /Income manager/],
+    ["no price feed", { priceFeed: "" }, /Price feed/],
+    ["purchase spread over 10000", { purchaseSpreadBps: "10001" }, /spread/],
+  ])("rejects %s", (_name, patch, message) => {
+    const r = buildV4(patch);
+    expect("error" in r && r.error).toMatch(message);
+  });
+});
+
+describe("dealingCutoffProblem", () => {
+  it("accepts a cut-off one second below the shorter timeout", () => {
+    expect(dealingCutoffProblem(99_999n, 100_000, 200_000)).toBeNull();
+    expect(dealingCutoffProblem(99_999n, 200_000, 100_000)).toBeNull();
+  });
+
+  it("names the cut-off when it is not above zero", () => {
+    expect(dealingCutoffProblem(0n, 100_000, 200_000)).toMatch(/above 0/);
+  });
+
+  it("names both timeouts when the cut-off reaches one", () => {
+    expect(dealingCutoffProblem(100_000n, 100_000, 200_000)).toMatch(
+      /redemption timeout \(100000 s\).*purchase timeout \(200000 s\)/,
+    );
   });
 });

@@ -9,7 +9,14 @@ type RedemptionResponse struct {
 	ID          string `json:"id"`
 	Beneficiary string `json:"beneficiary"`
 	RWAAmount   string `json:"rwaAmount"`
+	// QuoteAmount is "0" on a Pending rwa-v4 forward request, which funding prices
 	QuoteAmount string `json:"quoteAmount"`
+	// Strategy, BaseRound, MinQuoteOut and PricedRound describe an rwa-v4 forward request and
+	// are omitted otherwise; PricedRound is omitted until the request is funded
+	Strategy    string `json:"strategy,omitempty"`
+	BaseRound   string `json:"baseRound,omitempty"`
+	MinQuoteOut string `json:"minQuoteOut,omitempty"`
+	PricedRound string `json:"pricedRound,omitempty"`
 	Status      string `json:"status"`
 	Claimable   bool   `json:"claimable"`
 	CreatedAt   int64  `json:"createdAt"`
@@ -27,8 +34,19 @@ type RedemptionResponse struct {
 // live chain read.
 func ToRedemptionResponse(r *models.RedemptionRequest, claimable bool, confirmations uint64, beneficiaryAllowed bool) RedemptionResponse {
 	return RedemptionResponse{
-		ID: r.ID, Beneficiary: r.Beneficiary, RWAAmount: r.RWAAmount, QuoteAmount: r.QuoteAmount,
-		Status: string(r.Status), CreatedAt: r.CreatedAt, TimeoutAt: r.TimeoutAt,
-		Claimable: claimable, Confirmations: confirmations, BeneficiaryAllowed: beneficiaryAllowed,
+		ID:                 r.ID,
+		Beneficiary:        r.Beneficiary,
+		RWAAmount:          r.RWAAmount,
+		QuoteAmount:        r.QuoteAmount,
+		Strategy:           r.Strategy,
+		BaseRound:          r.BaseRound,
+		MinQuoteOut:        r.MinQuoteOut,
+		PricedRound:        r.PricedRound,
+		Status:             string(r.Status),
+		CreatedAt:          r.CreatedAt,
+		TimeoutAt:          r.TimeoutAt,
+		Claimable:          claimable,
+		Confirmations:      confirmations,
+		BeneficiaryAllowed: beneficiaryAllowed,
 	}
 }

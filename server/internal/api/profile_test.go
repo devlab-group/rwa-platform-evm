@@ -72,8 +72,12 @@ func TestGetProfileNotFound(t *testing.T) {
 	adminAddr := crypto.PubkeyToAddress(adminKey.PublicKey)
 	jwtSecret := []byte("test-jwt-secret-that-is-at-least-32-bytes-long")
 	app := &App{
-		Repos: repos, ChainID: 31337, Audit: auditlog.New(repos.AuditLogs),
-		AdminAddress: adminAddr.Hex(), JWTSecret: jwtSecret, JWTTTL: time.Hour,
+		Repos:        repos,
+		ChainID:      31337,
+		Audit:        auditlog.New(repos.AuditLogs),
+		AdminAddress: adminAddr.Hex(),
+		JWTSecret:    jwtSecret,
+		JWTTTL:       time.Hour,
 	}
 	router := NewRouter(app)
 	token, _, err := auth.IssueAdminJWT(jwtSecret, adminAddr.Hex(), time.Hour)

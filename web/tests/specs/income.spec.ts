@@ -48,7 +48,7 @@ test.describe("Income distribution", () => {
   }) => {
     api.project.version = "rwa-v2";
     await new AdminIncomePage(page).goto();
-    await expect(page.getByText(/needs an rwa-v3 project/)).toBeVisible();
+    await expect(page.getByText(/needs an rwa-v3 or later project/)).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Prepare distribution" }),
     ).toHaveCount(0);

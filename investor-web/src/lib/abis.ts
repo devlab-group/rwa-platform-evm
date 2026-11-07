@@ -6,6 +6,9 @@ import type { Abi } from "viem";
  * Vault.buy pulls quote tokens after checking maxQuoteAmount; approve Vault first.
  * Caller and recipient must be Allowed. tokenAmount uses RWA minimal units; quotes use
  * quote-token minimal units. previewBuy supplies the price used for the slippage ceiling.
+ * On forward-priced projects buy reverts; requestPurchase pulls maxQuoteAmount as a deposit,
+ * settlePurchase is permissionless once a round prices the order, and only the buyer can
+ * cancelPurchase after the timeout when no usable round exists.
  */
 export const vaultAbi = [
   {
@@ -26,6 +29,32 @@ export const vaultAbi = [
     inputs: [{ name: "tokenAmount", type: "uint256" }],
     outputs: [{ name: "quoteAmount", type: "uint256" }],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "requestPurchase",
+    inputs: [
+      { name: "tokenAmount", type: "uint256" },
+      { name: "maxQuoteAmount", type: "uint256" },
+      { name: "recipient", type: "address" },
+      { name: "deadline", type: "uint64" },
+    ],
+    outputs: [{ name: "id", type: "uint256" }],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "settlePurchase",
+    inputs: [{ name: "id", type: "uint256" }],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "cancelPurchase",
+    inputs: [{ name: "id", type: "uint256" }],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
 ] as const satisfies Abi;
 
@@ -93,7 +122,10 @@ export const tokenErrorsAbi = [
   },
 ] as const satisfies Abi;
 
-/** Vault buy error for a purchase quote under the project minimum (rwa-v3) */
+/**
+ * Vault errors decoded into readable messages: the purchase minimum (rwa-v3) and the
+ * forward-order errors (rwa-v4)
+ */
 export const vaultErrorsAbi = [
   {
     type: "error",
@@ -101,6 +133,43 @@ export const vaultErrorsAbi = [
     inputs: [
       { name: "quoted", type: "uint256" },
       { name: "minimum", type: "uint256" },
+    ],
+  },
+  { type: "error", name: "ProjectPaused", inputs: [] },
+  { type: "error", name: "ForwardPriced", inputs: [] },
+  { type: "error", name: "NotForwardPriced", inputs: [] },
+  {
+    type: "error",
+    name: "NotPending",
+    inputs: [{ name: "id", type: "uint256" }],
+  },
+  {
+    type: "error",
+    name: "NotBuyer",
+    inputs: [
+      { name: "caller", type: "address" },
+      { name: "buyer", type: "address" },
+    ],
+  },
+  {
+    type: "error",
+    name: "BuyerNotAllowed",
+    inputs: [{ name: "account", type: "address" }],
+  },
+  {
+    type: "error",
+    name: "TimeoutNotReached",
+    inputs: [
+      { name: "availableAt", type: "uint64" },
+      { name: "nowTs", type: "uint256" },
+    ],
+  },
+  {
+    type: "error",
+    name: "RoundAvailable",
+    inputs: [
+      { name: "id", type: "uint256" },
+      { name: "roundId", type: "uint80" },
     ],
   },
 ] as const satisfies Abi;
@@ -139,6 +208,32 @@ export const oracleErrorsAbi = [
       { name: "expected", type: "uint8" },
       { name: "actual", type: "uint8" },
     ],
+  },
+] as const satisfies Abi;
+
+/**
+ * Read the order's stored strategy for the first round published at least the dealing cutoff
+ * after the order; RoundNotAvailable covers missing or unreadable rounds
+ */
+export const oracleForwardAbi = [
+  {
+    type: "function",
+    name: "quotePurchaseAfter",
+    inputs: [
+      { name: "tokenAmount", type: "uint256" },
+      { name: "baseRound", type: "uint80" },
+      { name: "orderTime", type: "uint64" },
+    ],
+    outputs: [
+      { name: "quoteAmount", type: "uint256" },
+      { name: "roundId", type: "uint80" },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "error",
+    name: "RoundNotAvailable",
+    inputs: [{ name: "roundId", type: "uint80" }],
   },
 ] as const satisfies Abi;
 

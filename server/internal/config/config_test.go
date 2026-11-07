@@ -161,12 +161,23 @@ func TestLoadInvalid(t *testing.T) {
 		"bad price feed sla":      {"PRICE_FEED_SLA": "not-a-duration"},
 		"negative price feed sla": {"PRICE_FEED_SLA": "-1h"},
 		"bad kyc provider":        {"KYC_PROVIDER": "jumio"},
-		"sumsub missing app token": {"KYC_PROVIDER": "sumsub",
-			"KYC_SUMSUB_SECRET_KEY": "s", "KYC_SUMSUB_WEBHOOK_SECRET": "w"},
-		"onfido missing workflow": {"KYC_PROVIDER": "onfido",
-			"KYC_ONFIDO_API_TOKEN": "t", "KYC_ONFIDO_WEBHOOK_TOKEN": "w"},
-		"onfido bad region": {"KYC_PROVIDER": "onfido", "KYC_ONFIDO_API_TOKEN": "t",
-			"KYC_ONFIDO_WEBHOOK_TOKEN": "w", "KYC_ONFIDO_WORKFLOW_ID": "wf", "KYC_ONFIDO_REGION": "antarctica"},
+		"sumsub missing app token": {
+			"KYC_PROVIDER":              "sumsub",
+			"KYC_SUMSUB_SECRET_KEY":     "s",
+			"KYC_SUMSUB_WEBHOOK_SECRET": "w",
+		},
+		"onfido missing workflow": {
+			"KYC_PROVIDER":             "onfido",
+			"KYC_ONFIDO_API_TOKEN":     "t",
+			"KYC_ONFIDO_WEBHOOK_TOKEN": "w",
+		},
+		"onfido bad region": {
+			"KYC_PROVIDER":             "onfido",
+			"KYC_ONFIDO_API_TOKEN":     "t",
+			"KYC_ONFIDO_WEBHOOK_TOKEN": "w",
+			"KYC_ONFIDO_WORKFLOW_ID":   "wf",
+			"KYC_ONFIDO_REGION":        "antarctica",
+		},
 	}
 	for name, env := range tests {
 		t.Run(name, func(t *testing.T) {

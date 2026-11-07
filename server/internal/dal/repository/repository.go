@@ -235,6 +235,24 @@ type RedemptionRequestRepository interface {
 	ListPage(ctx context.Context, status, address, cursor string, limit int) (items []*models.RedemptionRequest, nextCursor string, err error)
 }
 
+// PurchaseOrderRepository persists the rwa-v4 purchase-order read model. Status must only
+// be set from reconstructed chain events.
+type PurchaseOrderRepository interface {
+	// Upsert creates or replaces o.ID; sales.Service.ReconcileOrders stamps the rebuild
+	// Generation first
+	Upsert(ctx context.Context, o *models.PurchaseOrder) error
+	Get(ctx context.Context, id string) (*models.PurchaseOrder, error)
+	// DeleteAll removes every entry, for maintenance run with the server stopped, such as
+	// cmd/reindex. See PurchaseRepository.DeleteAll.
+	DeleteAll(ctx context.Context) error
+	// DeleteStaleGeneration removes every order whose Generation is not gen. See
+	// PurchaseRepository.DeleteStaleGeneration.
+	DeleteStaleGeneration(ctx context.Context, gen int64) error
+	// ListPage follows RedemptionRequestRepository.ListPage with newest CreatedAt first,
+	// optional exact status, and case-insensitive buyer address filtering
+	ListPage(ctx context.Context, status, address, cursor string, limit int) (items []*models.PurchaseOrder, nextCursor string, err error)
+}
+
 // IncomePreparationRepository stores rwa-v3 snapshots. Prepare reuses snapshots, updating
 // only the deadline before indexed distribution; List returns all rows.
 type IncomePreparationRepository interface {
@@ -440,6 +458,7 @@ type Repositories struct {
 	Transactions         TransactionRepository
 	ChainEvents          ChainEventRepository
 	Purchases            PurchaseRepository
+	PurchaseOrders       PurchaseOrderRepository
 	RedemptionRequests   RedemptionRequestRepository
 	IncomePreparations   IncomePreparationRepository
 	IncomeDistributions  IncomeDistributionRepository

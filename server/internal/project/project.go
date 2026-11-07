@@ -52,8 +52,12 @@ type Service struct {
 // zero disables the binding (see adminBindingError).
 func New(client blockchain.Client, factoryAddr common.Address, repo repository.ProjectRepository, chainID int64, adminAddress common.Address) *Service {
 	return &Service{
-		client: client, factory: bindings.NewFactory(), factoryAddr: factoryAddr,
-		repo: repo, chainID: chainID, adminAddress: adminAddress,
+		client:       client,
+		factory:      bindings.NewFactory(),
+		factoryAddr:  factoryAddr,
+		repo:         repo,
+		chainID:      chainID,
+		adminAddress: adminAddress,
 	}
 }
 
@@ -100,7 +104,11 @@ func (s *Service) GetProject(ctx context.Context) (*models.Project, error) {
 
 // SupportedFactoryVersions is the set of RWAFactory.version() strings that this
 // server's verification logic supports
-var SupportedFactoryVersions = map[string]bool{bindings.FactoryVersionV2: true, bindings.FactoryVersionV3: true}
+var SupportedFactoryVersions = map[string]bool{
+	bindings.FactoryVersionV2: true,
+	bindings.FactoryVersionV3: true,
+	bindings.FactoryVersionV4: true,
+}
 
 // ReconcileDeployment repeatedly adopts and verifies the newest authorized
 // ProjectDeployed event from the configured factory. Its projectId must equal keccak256
@@ -277,10 +285,15 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 
 	now := time.Now().UTC()
 	p := &models.Project{
-		ProjectID: profile.ProjectID, ChainID: s.chainID, ProfileDigest: profile.Digest,
-		TokenUnit: profile.TokenUnit, TokenDecimals: profile.TokenDecimals,
-		DeployTxHash: txHash.Hex(),
-		Status:       models.ProjectStatusVerifying, CreatedAt: now, UpdatedAt: now,
+		ProjectID:     profile.ProjectID,
+		ChainID:       s.chainID,
+		ProfileDigest: profile.Digest,
+		TokenUnit:     profile.TokenUnit,
+		TokenDecimals: profile.TokenDecimals,
+		DeployTxHash:  txHash.Hex(),
+		Status:        models.ProjectStatusVerifying,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 	if existing, gerr := s.repo.Get(ctx); gerr == nil && !existing.CreatedAt.IsZero() {
 		p.CreatedAt = existing.CreatedAt
@@ -334,7 +347,7 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 	if err != nil {
 		return s.markVerificationFailed(ctx, p, "deploy transaction calldata could not be decoded to an RWAFactory.deploy(ProjectConfig): "+err.Error())
 	}
-	if cfg.Version != deployed.Version || cfg.Version != deployed.Layout {
+	if cfg.Version != deployed.Version || bindings.ProjectDeployedLayout(cfg.Version) != deployed.Layout {
 		return s.markVerificationFailed(ctx, p, fmt.Sprintf("deploy calldata is %s, the ProjectDeployed event uses the %s layout and reports version %q", cfg.Version, deployed.Layout, deployed.Version))
 	}
 	// Check the signed profile identity and decimals against the stored profile
@@ -355,12 +368,15 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 	applyConfig(p, cfg)
 
 	p.Addresses = models.Addresses{
-		Token: deployed.Token.Hex(), Compliance: deployed.Compliance.Hex(),
-		SupplyController: deployed.SupplyController.Hex(), Vault: deployed.Vault.Hex(),
-		RedemptionEscrow: deployed.RedemptionEscrow.Hex(), Strategy: deployed.Strategy.Hex(),
-		QuoteToken: cfg.QuoteToken.Hex(),
+		Token:            deployed.Token.Hex(),
+		Compliance:       deployed.Compliance.Hex(),
+		SupplyController: deployed.SupplyController.Hex(),
+		Vault:            deployed.Vault.Hex(),
+		RedemptionEscrow: deployed.RedemptionEscrow.Hex(),
+		Strategy:         deployed.Strategy.Hex(),
+		QuoteToken:       cfg.QuoteToken.Hex(),
 	}
-	if deployed.Version == bindings.FactoryVersionV3 {
+	if bindings.IsV3OrLater(deployed.Version) {
 		p.Addresses.IncomeDistributor = deployed.IncomeDistributor.Hex()
 	}
 	p.Version = deployed.Version
@@ -444,8 +460,9 @@ func (s *Service) VerifyDeployment(ctx context.Context, txHash common.Hash, prof
 }
 
 // applyConfig copies signed roles, treasury, auditor, quote token, prices, timeout and
-// the rwa-v3 minimum purchase, income manager and strategy configuration onto p for
-// verifyRoles and verifyImmutableConfig. An Oracle strategy has no stored prices.
+// the rwa-v3 minimum purchase, income manager and strategy configuration, and the rwa-v4
+// purchase timeout and dealing cut-off, onto p for verifyRoles and verifyImmutableConfig.
+// An Oracle strategy has no stored prices.
 func applyConfig(p *models.Project, cfg bindings.DeployCall) {
 	p.Admin = cfg.Admin.Hex()
 	p.Auditor = cfg.Auditor.Hex()
@@ -457,7 +474,10 @@ func applyConfig(p *models.Project, cfg bindings.DeployCall) {
 	p.QuoteToken = cfg.QuoteToken.Hex()
 	p.RedemptionTimeout = int64(cfg.RedemptionTimeout)
 	p.StrategyKind = models.StrategyKindFixed
-	if cfg.Version == bindings.FactoryVersionV3 {
+	if cfg.Version == bindings.FactoryVersionV4 {
+		p.PurchaseTimeout = int64(cfg.PurchaseTimeout)
+	}
+	if bindings.IsV3OrLater(cfg.Version) {
 		p.IncomeManager = cfg.IncomeManager.Hex()
 		p.MinPurchaseQuote = "0"
 		if cfg.MinPurchaseQuote != nil {
@@ -466,9 +486,13 @@ func applyConfig(p *models.Project, cfg bindings.DeployCall) {
 		if cfg.StrategyKind == bindings.StrategyKindOracle {
 			p.StrategyKind = models.StrategyKindOracle
 			p.Oracle = &models.OracleConfig{
-				Feed: cfg.PriceFeed.Hex(), MaxAge: cfg.PriceMaxAge,
-				PurchaseSpreadBps: cfg.PurchaseSpreadBps, RedemptionSpreadBps: cfg.RedemptionSpreadBps,
-				SequencerUptimeFeed: cfg.SequencerUptimeFeed.Hex(), GracePeriod: cfg.SequencerGracePeriod,
+				Feed:                cfg.PriceFeed.Hex(),
+				MaxAge:              cfg.PriceMaxAge,
+				PurchaseSpreadBps:   cfg.PurchaseSpreadBps,
+				RedemptionSpreadBps: cfg.RedemptionSpreadBps,
+				SequencerUptimeFeed: cfg.SequencerUptimeFeed.Hex(),
+				GracePeriod:         cfg.SequencerGracePeriod,
+				DealingCutoff:       cfg.DealingCutoff,
 			}
 			return
 		}

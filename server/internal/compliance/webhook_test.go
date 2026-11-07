@@ -31,7 +31,10 @@ func sign(payload []byte, secret string) string {
 // case-specific value
 func validPayload(eventID, address, status string) WebhookPayload {
 	return WebhookPayload{
-		EventID: eventID, Address: address, Provider: "test-provider", Status: status,
+		EventID:    eventID,
+		Address:    address,
+		Provider:   "test-provider",
+		Status:     status,
 		OccurredAt: time.Now().UTC().Unix(),
 	}
 }

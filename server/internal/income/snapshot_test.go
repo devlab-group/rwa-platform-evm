@@ -29,8 +29,11 @@ var (
 
 func transferEv(block uint64, idx uint, from, to common.Address, value string) *models.ChainEvent {
 	return &models.ChainEvent{
-		Name: "Transfer", BlockNumber: block, LogIndex: idx, TxHash: fmt.Sprintf("0xtx%d_%d", block, idx),
-		Data: map[string]any{"from": from.Hex(), "to": to.Hex(), "value": value},
+		Name:        "Transfer",
+		BlockNumber: block,
+		LogIndex:    idx,
+		TxHash:      fmt.Sprintf("0xtx%d_%d", block, idx),
+		Data:        map[string]any{"from": from.Hex(), "to": to.Hex(), "value": value},
 	}
 }
 
@@ -40,7 +43,11 @@ func redemptionEv(name string, block uint64, idx uint, data map[string]any) *mod
 
 func requested(block uint64, id string, beneficiary common.Address, rwa string) *models.ChainEvent {
 	return redemptionEv("RedemptionRequested", block, 5, map[string]any{
-		"id": id, "beneficiary": beneficiary.Hex(), "rwaAmount": rwa, "quoteAmount": "1", "createdAt": int64(1000),
+		"id":          id,
+		"beneficiary": beneficiary.Hex(),
+		"rwaAmount":   rwa,
+		"quoteAmount": "1",
+		"createdAt":   int64(1000),
 	})
 }
 
@@ -83,95 +90,199 @@ func TestComputeEntitlements(t *testing.T) {
 			in:   EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 10, Total: big.NewInt(1000), Transfers: baseTransfers()},
 			want: map[common.Address][2]string{alice: {"300", "750"}, bob: {"100", "250"}},
 			// 400 eligible, so 1000 * 300 / 400 and 1000 * 100 / 400
-			eligble: "400", dist: "1000",
+			eligble: "400",
+			dist:    "1000",
 		},
 		{
-			name: "record block is inclusive and later transfers are ignored",
-			in:   EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 20, Total: big.NewInt(400), Transfers: baseTransfers()},
-			want: map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}}, eligble: "400", dist: "400",
+			name:    "record block is inclusive and later transfers are ignored",
+			in:      EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 20, Total: big.NewInt(400), Transfers: baseTransfers()},
+			want:    map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}},
+			eligble: "400",
+			dist:    "400",
 		},
 		{
-			name: "block just below a transfer leaves it out",
-			in:   EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 19, Total: big.NewInt(400), Transfers: baseTransfers()},
-			want: map[common.Address][2]string{alice: {"300", "300"}, bob: {"100", "100"}}, eligble: "400", dist: "400",
+			name:    "block just below a transfer leaves it out",
+			in:      EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 19, Total: big.NewInt(400), Transfers: baseTransfers()},
+			want:    map[common.Address][2]string{alice: {"300", "300"}, bob: {"100", "100"}},
+			eligble: "400",
+			dist:    "400",
 		},
 		{
 			name: "removed events are ignored",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 30, Total: big.NewInt(400), Transfers: append(baseTransfers(),
-				&models.ChainEvent{Name: "Transfer", BlockNumber: 7, Removed: true, Data: map[string]any{"from": vaultA.Hex(), "to": carol.Hex(), "value": "100"}})},
-			want: map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}}, eligble: "400", dist: "400",
+			in: EntitlementInput{
+				Vault:       vaultA,
+				Escrow:      escrowA,
+				RecordBlock: 30,
+				Total:       big.NewInt(400),
+				Transfers: append(baseTransfers(),
+					&models.ChainEvent{Name: "Transfer", BlockNumber: 7, Removed: true, Data: map[string]any{"from": vaultA.Hex(), "to": carol.Hex(), "value": "100"}}),
+			},
+			want:    map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}},
+			eligble: "400",
+			dist:    "400",
 		},
 		{
 			// transferFrom(a, b, 0) needs no balance or allowance, so anyone can emit one from a
 			// never-funded address, the escrow before its first redemption included
 			name: "zero-value transfers from never-funded addresses move nothing",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 30, Total: big.NewInt(400), Transfers: append(baseTransfers(),
-				transferEv(21, 0, common.HexToAddress("0x00000000000000000000000000000000000000d4"), bob, "0"),
-				transferEv(22, 0, escrowA, alice, "0"),
-				transferEv(23, 0, carol, common.HexToAddress("0x00000000000000000000000000000000000000e5"), "0"))},
-			want: map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}}, eligble: "400", dist: "400",
+			in: EntitlementInput{
+				Vault:       vaultA,
+				Escrow:      escrowA,
+				RecordBlock: 30,
+				Total:       big.NewInt(400),
+				Transfers: append(baseTransfers(),
+					transferEv(21, 0, common.HexToAddress("0x00000000000000000000000000000000000000d4"), bob, "0"),
+					transferEv(22, 0, escrowA, alice, "0"),
+					transferEv(23, 0, carol, common.HexToAddress("0x00000000000000000000000000000000000000e5"), "0")),
+			},
+			want:    map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}},
+			eligble: "400",
+			dist:    "400",
 		},
 		{
 			name: "pending redemption credits the beneficiary for escrowed RWA",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 30, Total: big.NewInt(400), RedemptionTimeout: 100,
-				Transfers:        append(baseTransfers(), transferEv(25, 0, alice, escrowA, "100")),
-				RedemptionEvents: []*models.ChainEvent{requested(25, "1", alice, "100")}},
-			want: map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}}, eligble: "400", dist: "400",
+			in: EntitlementInput{
+				Vault:             vaultA,
+				Escrow:            escrowA,
+				RecordBlock:       30,
+				Total:             big.NewInt(400),
+				RedemptionTimeout: 100,
+				Transfers:         append(baseTransfers(), transferEv(25, 0, alice, escrowA, "100")),
+				RedemptionEvents:  []*models.ChainEvent{requested(25, "1", alice, "100")},
+			},
+			want:    map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}},
+			eligble: "400",
+			dist:    "400",
 		},
 		{
 			name: "funded redemption still counts",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 30, Total: big.NewInt(400), RedemptionTimeout: 100,
-				Transfers: append(baseTransfers(), transferEv(25, 0, alice, escrowA, "100")),
-				RedemptionEvents: []*models.ChainEvent{requested(25, "1", alice, "100"),
-					redemptionEv("RedemptionFunded", 26, 0, map[string]any{"id": "1", "funder": bob.Hex(), "quoteAmount": "1"})}},
-			want: map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}}, eligble: "400", dist: "400",
+			in: EntitlementInput{
+				Vault:             vaultA,
+				Escrow:            escrowA,
+				RecordBlock:       30,
+				Total:             big.NewInt(400),
+				RedemptionTimeout: 100,
+				Transfers:         append(baseTransfers(), transferEv(25, 0, alice, escrowA, "100")),
+				RedemptionEvents: []*models.ChainEvent{
+					requested(25, "1", alice, "100"),
+					redemptionEv("RedemptionFunded", 26, 0, map[string]any{"id": "1", "funder": bob.Hex(), "quoteAmount": "1"}),
+				},
+			},
+			want:    map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}},
+			eligble: "400",
+			dist:    "400",
 		},
 		{
 			name: "completed redemption returns RWA to the vault and is excluded",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 30, Total: big.NewInt(300), RedemptionTimeout: 100,
-				Transfers: append(baseTransfers(), transferEv(25, 0, alice, escrowA, "100"), transferEv(27, 0, escrowA, vaultA, "100")),
-				RedemptionEvents: []*models.ChainEvent{requested(25, "1", alice, "100"),
+			in: EntitlementInput{
+				Vault:             vaultA,
+				Escrow:            escrowA,
+				RecordBlock:       30,
+				Total:             big.NewInt(300),
+				RedemptionTimeout: 100,
+				Transfers:         append(baseTransfers(), transferEv(25, 0, alice, escrowA, "100"), transferEv(27, 0, escrowA, vaultA, "100")),
+				RedemptionEvents: []*models.ChainEvent{
+					requested(25, "1", alice, "100"),
 					redemptionEv("RedemptionFunded", 26, 0, map[string]any{"id": "1", "funder": bob.Hex(), "quoteAmount": "1"}),
-					redemptionEv("RedemptionCompleted", 27, 1, map[string]any{"id": "1", "beneficiary": alice.Hex(), "rwaAmount": "100", "quoteAmount": "1"})}},
-			want: map[common.Address][2]string{alice: {"150", "150"}, bob: {"100", "100"}, carol: {"50", "50"}}, eligble: "300", dist: "300",
+					redemptionEv("RedemptionCompleted", 27, 1, map[string]any{"id": "1", "beneficiary": alice.Hex(), "rwaAmount": "100", "quoteAmount": "1"}),
+				},
+			},
+			want:    map[common.Address][2]string{alice: {"150", "150"}, bob: {"100", "100"}, carol: {"50", "50"}},
+			eligble: "300",
+			dist:    "300",
 		},
 		{
 			name: "cancelled redemption is counted through the returned balance, not twice",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 30, Total: big.NewInt(400), RedemptionTimeout: 100,
-				Transfers: append(baseTransfers(), transferEv(25, 0, alice, escrowA, "100"), transferEv(28, 0, escrowA, alice, "100")),
-				RedemptionEvents: []*models.ChainEvent{requested(25, "1", alice, "100"),
-					redemptionEv("RedemptionCancelled", 28, 1, map[string]any{"id": "1", "beneficiary": alice.Hex()})}},
-			want: map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}}, eligble: "400", dist: "400",
+			in: EntitlementInput{
+				Vault:             vaultA,
+				Escrow:            escrowA,
+				RecordBlock:       30,
+				Total:             big.NewInt(400),
+				RedemptionTimeout: 100,
+				Transfers:         append(baseTransfers(), transferEv(25, 0, alice, escrowA, "100"), transferEv(28, 0, escrowA, alice, "100")),
+				RedemptionEvents: []*models.ChainEvent{
+					requested(25, "1", alice, "100"),
+					redemptionEv("RedemptionCancelled", 28, 1, map[string]any{"id": "1", "beneficiary": alice.Hex()}),
+				},
+			},
+			want:    map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}},
+			eligble: "400",
+			dist:    "400",
 		},
 		{
 			name: "redemption requested after the record block is not attributed",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 24, Total: big.NewInt(400), RedemptionTimeout: 100,
-				Transfers:        append(baseTransfers(), transferEv(25, 0, alice, escrowA, "100")),
-				RedemptionEvents: []*models.ChainEvent{requested(25, "1", alice, "100")}},
-			want: map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}}, eligble: "400", dist: "400",
+			in: EntitlementInput{
+				Vault:             vaultA,
+				Escrow:            escrowA,
+				RecordBlock:       24,
+				Total:             big.NewInt(400),
+				RedemptionTimeout: 100,
+				Transfers:         append(baseTransfers(), transferEv(25, 0, alice, escrowA, "100")),
+				RedemptionEvents:  []*models.ChainEvent{requested(25, "1", alice, "100")},
+			},
+			want:    map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}, carol: {"50", "50"}},
+			eligble: "400",
+			dist:    "400",
 		},
 		{
 			name: "donation to the escrow is not attributed to anyone",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 30, Total: big.NewInt(350),
-				Transfers: append(baseTransfers(), transferEv(25, 0, carol, escrowA, "50"))},
-			want: map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}}, eligble: "350", dist: "350",
+			in: EntitlementInput{
+				Vault:       vaultA,
+				Escrow:      escrowA,
+				RecordBlock: 30,
+				Total:       big.NewInt(350),
+				Transfers:   append(baseTransfers(), transferEv(25, 0, carol, escrowA, "50")),
+			},
+			want:    map[common.Address][2]string{alice: {"250", "250"}, bob: {"100", "100"}},
+			eligble: "350",
+			dist:    "350",
 		},
 		{
 			name: "rounding dust stays out of the entries",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 10, Total: big.NewInt(10), Transfers: []*models.ChainEvent{
-				transferEv(1, 0, zeroA, alice, "1"), transferEv(1, 1, zeroA, bob, "1"), transferEv(1, 2, zeroA, carol, "1")}},
-			want: map[common.Address][2]string{alice: {"1", "3"}, bob: {"1", "3"}, carol: {"1", "3"}}, eligble: "3", dist: "9",
+			in: EntitlementInput{
+				Vault:       vaultA,
+				Escrow:      escrowA,
+				RecordBlock: 10,
+				Total:       big.NewInt(10),
+				Transfers: []*models.ChainEvent{
+					transferEv(1, 0, zeroA, alice, "1"),
+					transferEv(1, 1, zeroA, bob, "1"),
+					transferEv(1, 2, zeroA, carol, "1"),
+				},
+			},
+			want:    map[common.Address][2]string{alice: {"1", "3"}, bob: {"1", "3"}, carol: {"1", "3"}},
+			eligble: "3",
+			dist:    "9",
 		},
 		{
 			name: "zero amounts are dropped but their balance stays in the denominator",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 10, Total: big.NewInt(10), Transfers: []*models.ChainEvent{
-				transferEv(1, 0, zeroA, alice, "1000"), transferEv(1, 1, zeroA, bob, "1")}},
-			want: map[common.Address][2]string{alice: {"1000", "9"}}, eligble: "1001", dist: "9",
+			in: EntitlementInput{
+				Vault:       vaultA,
+				Escrow:      escrowA,
+				RecordBlock: 10,
+				Total:       big.NewInt(10),
+				Transfers: []*models.ChainEvent{
+					transferEv(1, 0, zeroA, alice, "1000"),
+					transferEv(1, 1, zeroA, bob, "1"),
+				},
+			},
+			want:    map[common.Address][2]string{alice: {"1000", "9"}},
+			eligble: "1001",
+			dist:    "9",
 		},
 		{
 			name: "every amount rounds to zero",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 10, Total: big.NewInt(2), Transfers: []*models.ChainEvent{
-				transferEv(1, 0, zeroA, alice, "1"), transferEv(1, 1, zeroA, bob, "1"), transferEv(1, 2, zeroA, carol, "1")}},
+			in: EntitlementInput{
+				Vault:       vaultA,
+				Escrow:      escrowA,
+				RecordBlock: 10,
+				Total:       big.NewInt(2),
+				Transfers: []*models.ChainEvent{
+					transferEv(1, 0, zeroA, alice, "1"),
+					transferEv(1, 1, zeroA, bob, "1"),
+					transferEv(1, 2, zeroA, carol, "1"),
+				},
+			},
 			wantErr: ErrNoEligibleHolders,
 		},
 		{
@@ -186,24 +297,50 @@ func TestComputeEntitlements(t *testing.T) {
 		},
 		{
 			name: "a sender with no replayed balance means the history is incomplete",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 10, Total: big.NewInt(10),
-				Transfers: []*models.ChainEvent{transferEv(5, 0, alice, bob, "1")}},
+			in: EntitlementInput{
+				Vault:       vaultA,
+				Escrow:      escrowA,
+				RecordBlock: 10,
+				Total:       big.NewInt(10),
+				Transfers:   []*models.ChainEvent{transferEv(5, 0, alice, bob, "1")},
+			},
 			wantErr: ErrIncompleteHistory,
 		},
 		{
 			name: "burned RWA leaves the supply",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 10, Total: big.NewInt(100), Transfers: []*models.ChainEvent{
-				transferEv(1, 0, zeroA, alice, "10"), transferEv(2, 0, alice, zeroA, "4"), transferEv(3, 0, zeroA, bob, "6")}},
-			want: map[common.Address][2]string{alice: {"6", "50"}, bob: {"6", "50"}}, eligble: "12", dist: "100",
+			in: EntitlementInput{
+				Vault:       vaultA,
+				Escrow:      escrowA,
+				RecordBlock: 10,
+				Total:       big.NewInt(100),
+				Transfers: []*models.ChainEvent{
+					transferEv(1, 0, zeroA, alice, "10"),
+					transferEv(2, 0, alice, zeroA, "4"),
+					transferEv(3, 0, zeroA, bob, "6"),
+				},
+			},
+			want:    map[common.Address][2]string{alice: {"6", "50"}, bob: {"6", "50"}},
+			eligble: "12",
+			dist:    "100",
 		},
 		{
 			name: "huge balances keep full precision",
-			in: EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 10, Total: ten("1000000000000000000000000000000"), Transfers: []*models.ChainEvent{
-				transferEv(1, 0, zeroA, alice, "300000000000000000000000000001"), transferEv(1, 1, zeroA, bob, "700000000000000000000000000001")}},
+			in: EntitlementInput{
+				Vault:       vaultA,
+				Escrow:      escrowA,
+				RecordBlock: 10,
+				Total:       ten("1000000000000000000000000000000"),
+				Transfers: []*models.ChainEvent{
+					transferEv(1, 0, zeroA, alice, "300000000000000000000000000001"),
+					transferEv(1, 1, zeroA, bob, "700000000000000000000000000001"),
+				},
+			},
 			want: map[common.Address][2]string{
 				alice: {"300000000000000000000000000001", "300000000000000000000000000000"},
-				bob:   {"700000000000000000000000000001", "699999999999999999999999999999"}},
-			eligble: "1000000000000000000000000000002", dist: "999999999999999999999999999999",
+				bob:   {"700000000000000000000000000001", "699999999999999999999999999999"},
+			},
+			eligble: "1000000000000000000000000000002",
+			dist:    "999999999999999999999999999999",
 		},
 	}
 	for _, tc := range cases {
@@ -249,9 +386,18 @@ func equalAmounts(a, b map[common.Address][2]string) bool {
 }
 
 func TestComputeEntitlementsSupplyCrossCheck(t *testing.T) {
-	in := EntitlementInput{Vault: vaultA, Escrow: escrowA, RecordBlock: 10, Total: big.NewInt(100), Transfers: []*models.ChainEvent{
-		transferEv(1, 0, zeroA, vaultA, "1000"), transferEv(2, 0, vaultA, alice, "10"), transferEv(3, 0, alice, zeroA, "4")},
-		CheckSupply: true}
+	in := EntitlementInput{
+		Vault:       vaultA,
+		Escrow:      escrowA,
+		RecordBlock: 10,
+		Total:       big.NewInt(100),
+		Transfers: []*models.ChainEvent{
+			transferEv(1, 0, zeroA, vaultA, "1000"),
+			transferEv(2, 0, vaultA, alice, "10"),
+			transferEv(3, 0, alice, zeroA, "4"),
+		},
+		CheckSupply: true,
+	}
 
 	// replayed supply is 996: minted 1000, burned 4
 	in.Minted, in.Burned = []*models.ChainEvent{supplyEv("Minted", 1, "1000")}, []*models.ChainEvent{supplyEv("Burned", 3, "4")}
@@ -281,10 +427,13 @@ func TestComputeEntitlementsSupplyCrossCheck(t *testing.T) {
 func snapshotParams(t *testing.T, ent *Entitlements) SnapshotParams {
 	t.Helper()
 	return SnapshotParams{
-		ChainID: 31337, Token: common.HexToAddress("0x000000000000000000000000000000000000b001"),
+		ChainID:           31337,
+		Token:             common.HexToAddress("0x000000000000000000000000000000000000b001"),
 		IncomeDistributor: common.HexToAddress("0x000000000000000000000000000000000000b007"),
 		Quote:             common.HexToAddress("0x000000000000000000000000000000000000aa01"),
-		RecordBlock:       10, Total: big.NewInt(1000), Entitlements: ent,
+		RecordBlock:       10,
+		Total:             big.NewInt(1000),
+		Entitlements:      ent,
 	}
 }
 

@@ -60,7 +60,11 @@ type ChallengeService struct {
 // VerifyOwnership is unused.
 func NewChallengeService(repo repository.WalletChallengeRepository, investors repository.InvestorRepository, ttl time.Duration, domainName string) *ChallengeService {
 	return &ChallengeService{
-		repo: repo, investors: investors, ttl: ttl, domain: domainName, now: time.Now,
+		repo:                          repo,
+		investors:                     investors,
+		ttl:                           ttl,
+		domain:                        domainName,
+		now:                           time.Now,
 		MaxActiveChallengesPerAddress: DefaultMaxActiveChallengesPerAddress,
 	}
 }
@@ -97,8 +101,13 @@ func (s *ChallengeService) Create(ctx context.Context, address string) (*models.
 	)
 
 	c := &models.WalletChallenge{
-		ID: nonce, Address: addr.Hex(), Nonce: nonce, Message: message,
-		ExpiresAt: expiresAt, Used: false, CreatedAt: now,
+		ID:        nonce,
+		Address:   addr.Hex(),
+		Nonce:     nonce,
+		Message:   message,
+		ExpiresAt: expiresAt,
+		Used:      false,
+		CreatedAt: now,
 	}
 	if err := s.repo.Create(ctx, c); err != nil {
 		return nil, err

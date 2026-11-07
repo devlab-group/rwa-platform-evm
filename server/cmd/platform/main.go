@@ -110,10 +110,13 @@ func main() {
 
 	// Apply timeouts and header bounds to limit slow-client resource use
 	srv := &http.Server{
-		Addr: cfg.HTTPAddr, Handler: handler,
-		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout, ReadTimeout: cfg.HTTPReadTimeout,
-		WriteTimeout: cfg.HTTPWriteTimeout, IdleTimeout: cfg.HTTPIdleTimeout,
-		MaxHeaderBytes: cfg.HTTPMaxHeaderBytes,
+		Addr:              cfg.HTTPAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
+		ReadTimeout:       cfg.HTTPReadTimeout,
+		WriteTimeout:      cfg.HTTPWriteTimeout,
+		IdleTimeout:       cfg.HTTPIdleTimeout,
+		MaxHeaderBytes:    cfg.HTTPMaxHeaderBytes,
 	}
 
 	var metricsSrv *http.Server
@@ -122,10 +125,13 @@ func main() {
 		metricsMux := http.NewServeMux()
 		metricsMux.Handle("/metrics", metrics.Handler())
 		metricsSrv = &http.Server{
-			Addr: cfg.MetricsAddr, Handler: metricsMux,
-			ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout, ReadTimeout: cfg.HTTPReadTimeout,
-			WriteTimeout: cfg.HTTPWriteTimeout, IdleTimeout: cfg.HTTPIdleTimeout,
-			MaxHeaderBytes: cfg.HTTPMaxHeaderBytes,
+			Addr:              cfg.MetricsAddr,
+			Handler:           metricsMux,
+			ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
+			ReadTimeout:       cfg.HTTPReadTimeout,
+			WriteTimeout:      cfg.HTTPWriteTimeout,
+			IdleTimeout:       cfg.HTTPIdleTimeout,
+			MaxHeaderBytes:    cfg.HTTPMaxHeaderBytes,
 		}
 		go func() {
 			log.Printf("platform: metrics listening on %s", cfg.MetricsAddr)
@@ -307,9 +313,13 @@ func connectChain(ctx context.Context, cfg config.Config) *blockchain.RPCClient 
 // optional keys return nil for callers to handle
 func loadSigner(role, rawHex string, cfg config.Config) keys.Provider {
 	provider, err := keys.Load(role, keys.Config{
-		Mode: keys.Mode(cfg.KeyProviderMode), RawHexKey: rawHex,
-		KeystoreDir: cfg.KeystoreDir, PasswordFile: cfg.KeystorePasswordFile,
-		VaultAddr: cfg.VaultAddr, VaultToken: cfg.VaultToken, VaultKeyPrefix: cfg.VaultKeyPrefix,
+		Mode:           keys.Mode(cfg.KeyProviderMode),
+		RawHexKey:      rawHex,
+		KeystoreDir:    cfg.KeystoreDir,
+		PasswordFile:   cfg.KeystorePasswordFile,
+		VaultAddr:      cfg.VaultAddr,
+		VaultToken:     cfg.VaultToken,
+		VaultKeyPrefix: cfg.VaultKeyPrefix,
 		KMSMockSeedHex: cfg.KMSMockSeedHex,
 	})
 	if err != nil {
@@ -418,8 +428,10 @@ func buildApp(cfg config.Config, addrs models.Addresses, auditor string, repos *
 	auditorAddr := common.HexToAddress(auditor)
 	if addrs.SupplyController != "" {
 		domainCfg := eip712.Domain{
-			Name: "RWA-Supply-Attestation", Version: "1",
-			ChainID: big.NewInt(cfg.ChainID), VerifyingContract: common.HexToAddress(addrs.SupplyController),
+			Name:              "RWA-Supply-Attestation",
+			Version:           "1",
+			ChainID:           big.NewInt(cfg.ChainID),
+			VerifyingContract: common.HexToAddress(addrs.SupplyController),
 		}
 		app.Records = assets.NewRecordService(
 			repos.AssetRecords, repos.AuditPackages, repos.Attestations, publisher,
@@ -446,12 +458,18 @@ func buildApp(cfg config.Config, addrs models.Addresses, auditor string, repos *
 		Mode:              kyc.Mode(cfg.KYCProvider),
 		GenericHMACSecret: cfg.KYCWebhookHMACSecret,
 		Sumsub: kyc.SumsubConfig{
-			AppToken: cfg.KYCSumsubAppToken, SecretKey: cfg.KYCSumsubSecretKey,
-			WebhookSecret: cfg.KYCSumsubWebhookSecret, BaseURL: cfg.KYCSumsubBaseURL, LevelName: cfg.KYCSumsubLevelName,
+			AppToken:      cfg.KYCSumsubAppToken,
+			SecretKey:     cfg.KYCSumsubSecretKey,
+			WebhookSecret: cfg.KYCSumsubWebhookSecret,
+			BaseURL:       cfg.KYCSumsubBaseURL,
+			LevelName:     cfg.KYCSumsubLevelName,
 		},
 		Onfido: kyc.OnfidoConfig{
-			APIToken: cfg.KYCOnfidoAPIToken, WebhookToken: cfg.KYCOnfidoWebhookToken,
-			Region: cfg.KYCOnfidoRegion, WorkflowID: cfg.KYCOnfidoWorkflowID, Referrer: cfg.KYCOnfidoReferrer,
+			APIToken:     cfg.KYCOnfidoAPIToken,
+			WebhookToken: cfg.KYCOnfidoWebhookToken,
+			Region:       cfg.KYCOnfidoRegion,
+			WorkflowID:   cfg.KYCOnfidoWorkflowID,
+			Referrer:     cfg.KYCOnfidoReferrer,
 		},
 	})
 	if kerr != nil {
@@ -466,7 +484,8 @@ func buildApp(cfg config.Config, addrs models.Addresses, auditor string, repos *
 	}
 
 	if addrs.Vault != "" {
-		app.Sales = sales.New(chainClient, common.HexToAddress(addrs.Vault), common.HexToAddress(addrs.QuoteToken), repos.Purchases)
+		app.Sales = sales.New(chainClient, common.HexToAddress(addrs.Vault), common.HexToAddress(addrs.QuoteToken), repos.Purchases).
+			WithOrders(repos.PurchaseOrders)
 	}
 	if addrs.RedemptionEscrow != "" {
 		app.Redemptions = redemption.New(chainClient, common.HexToAddress(addrs.RedemptionEscrow), repos.RedemptionRequests, common.HexToAddress(addrs.Compliance))
@@ -591,6 +610,12 @@ func startBackgroundLoops(ctx context.Context, cfg config.Config, addrs models.A
 	if app.Sales != nil && addrs.Vault != "" {
 		go runIndexDependentTicker(ctx, repos, cfg, 15*time.Second, "sales reconcile", func() error {
 			return app.Sales.Reconcile(ctx, repos.ChainEvents, cfg.ChainID)
+		})
+	}
+
+	if app.Sales != nil && addrs.Vault != "" {
+		go runIndexDependentTicker(ctx, repos, cfg, 15*time.Second, "purchase orders reconcile", func() error {
+			return app.Sales.ReconcileOrders(ctx, repos.ChainEvents, cfg.ChainID, purchaseTimeoutSeconds(ctx, repos))
 		})
 	}
 
@@ -745,7 +770,9 @@ func evaluateAlerts(ctx context.Context, cfg config.Config, repos *repository.Re
 		metrics.AlertsFiredTotal.WithLabelValues(a.Kind).Inc()
 		if app.Audit != nil {
 			_ = app.Audit.Record(ctx, "alerts", "system", "alerts."+a.Kind, a.RedemptionID, map[string]any{
-				"message": a.Message, "since": a.Since, "ageSeconds": a.Age.Seconds(),
+				"message":    a.Message,
+				"since":      a.Since,
+				"ageSeconds": a.Age.Seconds(),
 			})
 		}
 	}
@@ -836,6 +863,16 @@ func redemptionTimeoutSeconds(ctx context.Context, repos *repository.Repositorie
 		return defaultTimeout
 	}
 	return p.RedemptionTimeout
+}
+
+// purchaseTimeoutSeconds is the deployed rwa-v4 Vault.purchaseTimeout, 0 for an earlier
+// project, which has no forward-priced orders to date
+func purchaseTimeoutSeconds(ctx context.Context, repos *repository.Repositories) int64 {
+	p, err := repos.Projects.Get(ctx)
+	if err != nil {
+		return 0
+	}
+	return p.PurchaseTimeout
 }
 
 func runTicker(ctx context.Context, interval time.Duration, fn func()) {

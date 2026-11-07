@@ -95,8 +95,13 @@ func TestRawKeyProviderSignsAndRecovers(t *testing.T) {
 	chainID := big.NewInt(31337)
 	to := common.HexToAddress("0x00000000000000000000000000000000000042")
 	tx := types.NewTx(&types.DynamicFeeTx{
-		ChainID: chainID, Nonce: 0, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
-		Gas: 21000, To: &to, Value: big.NewInt(0),
+		ChainID:   chainID,
+		Nonce:     0,
+		GasTipCap: big.NewInt(1),
+		GasFeeCap: big.NewInt(2),
+		Gas:       21000,
+		To:        &to,
+		Value:     big.NewInt(0),
 	})
 	signed, err := p.SignTx(context.Background(), tx, chainID)
 	if err != nil {

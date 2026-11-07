@@ -5,9 +5,13 @@ import {
   erc7943Abi,
   incomeDistributorAbi,
   incomeDistributorErrorsAbi,
+  oracleStrategyAbi,
   oracleStrategyErrorsAbi,
+  redemptionEscrowAbi,
+  redemptionEscrowErrorsAbi,
   rwaFactoryAbi,
   rwaFactoryV3Abi,
+  rwaFactoryV4Abi,
   supplyControllerAbi,
   vaultAbi,
   vaultErrorsAbi,
@@ -125,10 +129,13 @@ describe.skipIf(!FORGE_BUILT && !process.env.CI)(
   "pinned ABIs match the forge artifacts",
   () => {
     const cases = [
-      ["RWAFactory", rwaFactoryV3Abi],
+      ["RWAFactory", rwaFactoryV4Abi],
       ["Vault", vaultAbi],
       ["Vault", vaultErrorsAbi],
       ["OraclePriceStrategy", oracleStrategyErrorsAbi],
+      ["OraclePriceStrategy", oracleStrategyAbi],
+      ["RedemptionEscrow", redemptionEscrowAbi],
+      ["RedemptionEscrow", redemptionEscrowErrorsAbi],
       ["IncomeDistributor", incomeDistributorAbi],
       ["IncomeDistributor", incomeDistributorErrorsAbi],
     ] as const;
@@ -169,3 +176,85 @@ describe.skipIf(!FORGE_BUILT && !process.env.CI)(
     });
   },
 );
+
+// Selector fixtures from Foundry's `cast sig` check function/error names and parameter types
+// without requiring forge artifacts
+describe("rwa-v4 pinned fragments", () => {
+  const v3 = rwaFactoryV3Abi[0].inputs[0].components.map((c) => c.name);
+  const v4 = rwaFactoryV4Abi[0].inputs[0].components.map((c) => c.name);
+
+  it("places dealingCutoff after sequencerGracePeriod and purchaseTimeout after redemptionTimeout", () => {
+    const expected: string[] = [...v3];
+    expected.splice(expected.indexOf("redemptionTimeout"), 0, "dealingCutoff");
+    expected.splice(
+      expected.indexOf("redemptionTimeout") + 1,
+      0,
+      "purchaseTimeout",
+    );
+    expect(v4).toEqual(expected);
+    expect(v4.indexOf("dealingCutoff")).toBe(
+      v4.indexOf("sequencerGracePeriod") + 1,
+    );
+    expect(v4.indexOf("purchaseTimeout")).toBe(
+      v4.indexOf("redemptionTimeout") + 1,
+    );
+  });
+
+  it.each([
+    ["rwa-v3 deploy", rwaFactoryV3Abi[0], "0xc91ac6b4"],
+    ["rwa-v4 deploy", rwaFactoryV4Abi[0], "0x29a5a742"],
+    [
+      "Vault.settlePurchase",
+      vaultAbi.find((e) => e.name === "settlePurchase")!,
+      "0x0a58ebd9",
+    ],
+    [
+      "Vault.rejectPurchase",
+      vaultAbi.find((e) => e.name === "rejectPurchase")!,
+      "0x3b5342c3",
+    ],
+    [
+      "Vault.pendingPurchaseQuote",
+      vaultAbi.find((e) => e.name === "pendingPurchaseQuote")!,
+      "0xa29f0b97",
+    ],
+    [
+      "RedemptionEscrow.previewFunding",
+      redemptionEscrowAbi.find((e) => e.name === "previewFunding")!,
+      "0xd1f3d131",
+    ],
+    [
+      "OraclePriceStrategy.quotePurchaseAfter",
+      oracleStrategyAbi[0],
+      "0x4e0d72b1",
+    ],
+  ])("%s has the pinned selector", (_name, fragment, selector) => {
+    expect(
+      toFunctionSelector(fragment as Parameters<typeof toFunctionSelector>[0]),
+    ).toBe(selector);
+  });
+
+  it.each([
+    ["RoundNotAvailable", oracleStrategyErrorsAbi, "0xca5aaa2c"],
+    ["NoRoundHistory", oracleStrategyErrorsAbi, "0xb4e3282a"],
+    ["QuoteBelowMin", redemptionEscrowErrorsAbi, "0x2607e419"],
+    ["FundingClosed", redemptionEscrowErrorsAbi, "0xbb24ecaf"],
+    ["ZeroQuote", redemptionEscrowErrorsAbi, "0x69f8a2c0"],
+    ["ProjectNotPaused", vaultErrorsAbi, "0x227aaa58"],
+    ["ForwardPriced", vaultErrorsAbi, "0xf21ff320"],
+    ["RoundAvailable", vaultErrorsAbi, "0x665ceca4"],
+    ["InsufficientProceeds", vaultErrorsAbi, "0x7b268179"],
+  ])("error %s has the pinned selector", (name, abi, selector) => {
+    const fragment = (
+      abi as readonly {
+        type: string;
+        name: string;
+        inputs: readonly { type: string }[];
+      }[]
+    ).find((e) => e.type === "error" && e.name === name);
+    expect(fragment, `${name} missing`).toBeDefined();
+    // An error selector hashes name(types), like a function's
+    const signature = `${name}(${fragment!.inputs.map((i) => i.type).join(",")})`;
+    expect(toFunctionSelector(signature)).toBe(selector);
+  });
+});

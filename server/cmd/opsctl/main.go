@@ -82,8 +82,11 @@ func run(args []string) int {
 	defer closeRepos()
 
 	o := opsCtx{
-		ctx: ctx, repos: repos, audit: auditlog.New(repos.AuditLogs),
-		actor: auditActor(*actorFlag), out: os.Stdout,
+		ctx:   ctx,
+		repos: repos,
+		audit: auditlog.New(repos.AuditLogs),
+		actor: auditActor(*actorFlag),
+		out:   os.Stdout,
 	}
 
 	if err := dispatch(o, cfg, group, action, rest); err != nil {
@@ -183,9 +186,13 @@ func loadRoleSigner(role string, cfg config.Config) (keys.Provider, error) {
 		return nil, fmt.Errorf("unknown --role %q (want compliance)", role)
 	}
 	return keys.Load(role, keys.Config{
-		Mode: keys.Mode(cfg.KeyProviderMode), RawHexKey: rawHex,
-		KeystoreDir: cfg.KeystoreDir, PasswordFile: cfg.KeystorePasswordFile,
-		VaultAddr: cfg.VaultAddr, VaultToken: cfg.VaultToken, VaultKeyPrefix: cfg.VaultKeyPrefix,
+		Mode:           keys.Mode(cfg.KeyProviderMode),
+		RawHexKey:      rawHex,
+		KeystoreDir:    cfg.KeystoreDir,
+		PasswordFile:   cfg.KeystorePasswordFile,
+		VaultAddr:      cfg.VaultAddr,
+		VaultToken:     cfg.VaultToken,
+		VaultKeyPrefix: cfg.VaultKeyPrefix,
 		KMSMockSeedHex: cfg.KMSMockSeedHex,
 	})
 }

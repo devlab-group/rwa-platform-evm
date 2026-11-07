@@ -19,8 +19,10 @@ const redemptionEscrowABIJSON = `[
   {"type":"function","name":"getRedemption","stateMutability":"view","inputs":[{"name":"id","type":"uint256"}],
     "outputs":[{"name":"","type":"tuple","components":[
       {"name":"beneficiary","type":"address"},{"name":"rwaAmount","type":"uint256"},
-      {"name":"quoteAmount","type":"uint256"},{"name":"createdAt","type":"uint64"},{"name":"status","type":"uint8"}]}]},
+      {"name":"quoteAmount","type":"uint256"},{"name":"createdAt","type":"uint64"},{"name":"status","type":"uint8"},
+      {"name":"strategy","type":"address"},{"name":"baseRound","type":"uint80"},{"name":"minQuoteOut","type":"uint256"}]}]},
   {"type":"function","name":"previewRedeem","stateMutability":"view","inputs":[{"name":"rwaAmount","type":"uint256"}],"outputs":[{"name":"quoteAmount","type":"uint256"}]},
+  {"type":"function","name":"previewFunding","stateMutability":"view","inputs":[{"name":"id","type":"uint256"}],"outputs":[{"name":"quoteAmount","type":"uint256"}]},
   {"type":"function","name":"redemptionTimeout","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint64"}]},
   {"type":"function","name":"nextId","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint256"}]},
   {"type":"function","name":"token","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"address"}]},
@@ -31,6 +33,12 @@ const redemptionEscrowABIJSON = `[
     {"name":"id","type":"uint256","indexed":true},{"name":"beneficiary","type":"address","indexed":true},
     {"name":"rwaAmount","type":"uint256","indexed":false},{"name":"quoteAmount","type":"uint256","indexed":false},
     {"name":"createdAt","type":"uint64","indexed":false}]},
+  {"type":"event","name":"RedemptionForwardPriced","anonymous":false,"inputs":[
+    {"name":"id","type":"uint256","indexed":true},{"name":"strategy","type":"address","indexed":true},
+    {"name":"baseRound","type":"uint80","indexed":false},{"name":"minQuoteOut","type":"uint256","indexed":false}]},
+  {"type":"event","name":"RedemptionPriced","anonymous":false,"inputs":[
+    {"name":"id","type":"uint256","indexed":true},{"name":"roundId","type":"uint80","indexed":false},
+    {"name":"quoteAmount","type":"uint256","indexed":false}]},
   {"type":"event","name":"RedemptionFunded","anonymous":false,"inputs":[
     {"name":"id","type":"uint256","indexed":true},{"name":"funder","type":"address","indexed":true},
     {"name":"quoteAmount","type":"uint256","indexed":false}]},
@@ -52,18 +60,41 @@ func NewRedemptionEscrow() RedemptionEscrow {
 	return RedemptionEscrow{ABI: mustABI(redemptionEscrowABIJSON)}
 }
 
-// RedemptionRequestTuple mirrors IRedemptionEscrow.RedemptionRequest.
+// RedemptionRequestTuple mirrors IRedemptionEscrow.RedemptionRequest. Strategy, BaseRound and
+// MinQuoteOut are the rwa-v4 forward-pricing fields, zero for a request priced at request time.
 type RedemptionRequestTuple struct {
 	Beneficiary common.Address `abi:"beneficiary"`
 	RWAAmount   *big.Int       `abi:"rwaAmount"`
 	QuoteAmount *big.Int       `abi:"quoteAmount"`
 	CreatedAt   uint64         `abi:"createdAt"`
 	Status      uint8          `abi:"status"`
+	Strategy    common.Address `abi:"strategy"`
+	BaseRound   *big.Int       `abi:"baseRound"`
+	MinQuoteOut *big.Int       `abi:"minQuoteOut"`
 }
 
 // PackRequestRedemption builds calldata for requestRedemption(uint256,uint256,uint64).
 func (r RedemptionEscrow) PackRequestRedemption(rwaAmount, minQuoteOut *big.Int, deadline uint64) ([]byte, error) {
 	return r.ABI.Pack("requestRedemption", rwaAmount, minQuoteOut, deadline)
+}
+
+// PackFundRedemption builds calldata for fundRedemption(uint256)
+func (r RedemptionEscrow) PackFundRedemption(id *big.Int) ([]byte, error) {
+	return r.ABI.Pack("fundRedemption", id)
+}
+
+// PackPreviewFunding builds calldata for previewFunding(uint256)
+func (r RedemptionEscrow) PackPreviewFunding(id *big.Int) ([]byte, error) {
+	return r.ABI.Pack("previewFunding", id)
+}
+
+// UnpackPreviewFunding decodes the return value of previewFunding
+func (r RedemptionEscrow) UnpackPreviewFunding(data []byte) (*big.Int, error) {
+	out, err := r.ABI.Unpack("previewFunding", data)
+	if err != nil {
+		return nil, err
+	}
+	return abi.ConvertType(out[0], new(big.Int)).(*big.Int), nil
 }
 
 // PackClaimRedemption builds calldata for claimRedemption(uint256).
@@ -130,6 +161,56 @@ func (r RedemptionEscrow) UnpackRedemptionRequested(data []byte, topics []common
 	if len(topics) >= 3 {
 		ev.ID = topics[1].Big()
 		ev.Beneficiary = common.HexToAddress(topics[2].Hex())
+	}
+	return ev, nil
+}
+
+// RedemptionForwardPricedEvent mirrors the RedemptionForwardPriced event: a request whose
+// quote is set at funding. BaseRound is the feed's uint80 round id at request time.
+type RedemptionForwardPricedEvent struct {
+	ID          *big.Int
+	Strategy    common.Address
+	BaseRound   *big.Int
+	MinQuoteOut *big.Int
+}
+
+// UnpackRedemptionForwardPriced decodes a RedemptionForwardPriced log
+func (r RedemptionEscrow) UnpackRedemptionForwardPriced(data []byte, topics []common.Hash) (RedemptionForwardPricedEvent, error) {
+	var partial struct {
+		BaseRound   *big.Int
+		MinQuoteOut *big.Int
+	}
+	if err := r.ABI.UnpackIntoInterface(&partial, "RedemptionForwardPriced", data); err != nil {
+		return RedemptionForwardPricedEvent{}, err
+	}
+	ev := RedemptionForwardPricedEvent{BaseRound: partial.BaseRound, MinQuoteOut: partial.MinQuoteOut}
+	if len(topics) >= 3 {
+		ev.ID = topics[1].Big()
+		ev.Strategy = common.HexToAddress(topics[2].Hex())
+	}
+	return ev, nil
+}
+
+// RedemptionPricedEvent mirrors the RedemptionPriced event: the round that priced a forward
+// request and the quote it fixed
+type RedemptionPricedEvent struct {
+	ID          *big.Int
+	RoundID     *big.Int
+	QuoteAmount *big.Int
+}
+
+// UnpackRedemptionPriced decodes a RedemptionPriced log
+func (r RedemptionEscrow) UnpackRedemptionPriced(data []byte, topics []common.Hash) (RedemptionPricedEvent, error) {
+	var partial struct {
+		RoundId     *big.Int
+		QuoteAmount *big.Int
+	}
+	if err := r.ABI.UnpackIntoInterface(&partial, "RedemptionPriced", data); err != nil {
+		return RedemptionPricedEvent{}, err
+	}
+	ev := RedemptionPricedEvent{RoundID: partial.RoundId, QuoteAmount: partial.QuoteAmount}
+	if len(topics) >= 2 {
+		ev.ID = topics[1].Big()
 	}
 	return ev, nil
 }

@@ -1,8 +1,18 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { decodeFunctionData } from "viem";
 import { InventorySales } from "./InventorySales";
+import { vaultAbi } from "../../lib/abis";
 import { api } from "../../lib/client";
-import { readPreviewBuy, sendWithdrawProceeds } from "../../lib/wallet";
+import { exportSafeBatch } from "../../lib/safeBatch";
+import {
+  readOrderPricing,
+  readPreviewBuy,
+  sendRejectPurchase,
+  sendSettlePurchase,
+  sendWithdrawProceeds,
+  type OrderPricing,
+} from "../../lib/wallet";
 import { installFakeWallet, renderWithWallet } from "../../test/walletHarness";
 
 // The role-bearing fake wallet enables direct withdrawal; contracts enforce TREASURER_ROLE
@@ -19,8 +29,16 @@ vi.mock("../../lib/client", async (importOriginal) => {
       getProject: vi.fn(),
       getInventory: vi.fn(),
       listPurchases: vi.fn(),
+      listPurchaseOrders: vi.fn(),
+      getPurchaseOrder: vi.fn(),
     },
   };
+});
+
+// Spy on the Safe batch export without downloading a browser file
+vi.mock("../../lib/safeBatch", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/safeBatch")>();
+  return { ...actual, exportSafeBatch: vi.fn(() => "Saved batch.") };
 });
 
 // Stub 18-decimal quote data versus 6-decimal RWA, previews and writes to check conversions without
@@ -31,6 +49,9 @@ vi.mock("../../lib/wallet", async (importOriginal) => {
     ...actual,
     readErc20Decimals: vi.fn().mockResolvedValue(18),
     readPreviewBuy: vi.fn().mockResolvedValue(2000000n),
+    readOrderPricing: vi.fn(),
+    sendSettlePurchase: vi.fn(),
+    sendRejectPurchase: vi.fn(),
     sendWithdrawProceeds: vi.fn().mockResolvedValue("0xhash"),
     waitForTxReceipt: vi.fn().mockResolvedValue(undefined),
   };
@@ -166,5 +187,555 @@ describe("InventorySales amount conversion", () => {
 
     await screen.findByText("Purchase price");
     expect(screen.queryByText("Price status")).toBeNull();
+  });
+});
+
+// rwa-v4 projects: the Vault holds buyers' deposits until forward-priced orders settle
+describe("InventorySales on a forward-priced project", () => {
+  const VAULT = PROJECT.addresses.vault;
+  const STRATEGY = "0x0000000000000000000000000000000000000060";
+  const SAFE = "0x00000000000000000000000000000000000000f1";
+  const FORWARD_PROJECT = {
+    ...PROJECT,
+    version: "rwa-v4",
+    forwardPriced: true,
+    paused: false,
+    quoteDecimals: 18,
+    oracle: { dealingCutoff: 7200 },
+  };
+  const ORDER = {
+    id: "5",
+    buyer: "0x00000000000000000000000000000000000000b1",
+    recipient: "0x00000000000000000000000000000000000000b2",
+    tokenAmount: "3000000",
+    maxQuoteAmount: "4000000000000000000",
+    strategy: STRATEGY,
+    baseRound: "40",
+    status: "Pending" as const,
+    createdAt: 1_800_000_000,
+    timeoutAt: 1_800_604_800,
+    requestTxHash: "0xreq",
+  };
+  const priced: OrderPricing = {
+    state: "priced",
+    quoteAmount: 2_500_000_000_000_000_000n,
+    roundId: 42n,
+  };
+  let wallet: ReturnType<typeof installFakeWallet>;
+
+  beforeEach(() => {
+    wallet = installFakeWallet({ account: CONNECTED, chainId: 31337 });
+    vi.mocked(api.getProject)
+      .mockReset()
+      .mockResolvedValue(FORWARD_PROJECT as never);
+    vi.mocked(api.getInventory).mockReset().mockResolvedValue({});
+    vi.mocked(api.listPurchases).mockReset().mockResolvedValue({ items: [] });
+    vi.mocked(api.listPurchaseOrders)
+      .mockReset()
+      .mockResolvedValue({ items: [ORDER] });
+    vi.mocked(api.getPurchaseOrder).mockReset().mockResolvedValue(ORDER);
+    vi.mocked(readOrderPricing).mockReset().mockResolvedValue(priced);
+    vi.mocked(sendSettlePurchase).mockReset().mockResolvedValue("0xsettle");
+    vi.mocked(sendRejectPurchase).mockReset().mockResolvedValue("0xreject");
+    vi.mocked(sendWithdrawProceeds).mockReset().mockResolvedValue("0xhash");
+    vi.mocked(exportSafeBatch).mockClear();
+  });
+
+  afterEach(() => {
+    wallet.uninstall();
+  });
+
+  async function openOrder(order = ORDER) {
+    vi.mocked(api.listPurchaseOrders).mockResolvedValue({ items: [order] });
+    vi.mocked(api.getPurchaseOrder).mockResolvedValue(order);
+    renderWithWallet(<InventorySales />, { connected: true });
+    fireEvent.click(await screen.findByRole("button", { name: "Manage" }));
+    await screen.findByRole("heading", { name: `Order ${order.id}` });
+  }
+
+  describe("withdrawal bound", () => {
+    // 5 whole quote tokens in the Vault, 2 held for open orders: 3 can leave
+    beforeEach(() => {
+      vi.mocked(api.getInventory).mockResolvedValue({
+        quoteBalance: "5000000000000000000",
+        pendingPurchaseQuote: "2000000000000000000",
+      });
+    });
+
+    const type = (value: string) =>
+      fireEvent.change(
+        screen.getByLabelText("Amount (whole quote-token units)"),
+        {
+          target: { value },
+        },
+      );
+
+    it("shows the balance, the held deposits and what is withdrawable", async () => {
+      renderWithWallet(<InventorySales />, { connected: true });
+      await screen.findByText("Held for open purchase orders");
+      const inventory = screen
+        .getByText("Withdrawable")
+        .closest("dl") as HTMLElement;
+      expect(
+        within(inventory).getByText("Quote balance").nextSibling,
+      ).toHaveTextContent("5");
+      expect(
+        within(inventory).getByText("Held for open purchase orders")
+          .nextSibling,
+      ).toHaveTextContent("2");
+      expect(
+        within(inventory).getByText("Withdrawable").nextSibling,
+      ).toHaveTextContent("3");
+      expect(
+        await screen.findByText(
+          /Available in vault: 3 \(balance 5 minus 2 held for open purchase orders\)/,
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("blocks an amount above balance minus deposits, even though it is below the balance", async () => {
+      renderWithWallet(<InventorySales />, { connected: true });
+      await screen.findByText("Held for open purchase orders");
+      type("3.000000000000000001");
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Withdraw" })).toBeDisabled(),
+      );
+      expect(
+        screen.getByText(/exceeds the vault's available quote balance/i),
+      ).toBeInTheDocument();
+      expect(sendWithdrawProceeds).not.toHaveBeenCalled();
+    });
+
+    it("allows exactly the withdrawable amount and sends it", async () => {
+      renderWithWallet(<InventorySales />, { connected: true });
+      await screen.findByText("Held for open purchase orders");
+      type("3");
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Withdraw" })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Withdraw" }));
+      await waitFor(() =>
+        expect(sendWithdrawProceeds).toHaveBeenCalledWith(
+          31337,
+          CONNECTED,
+          VAULT,
+          3_000_000_000_000_000_000n,
+        ),
+      );
+    });
+
+    it("bounds by the whole balance on a Vault that reports no held deposits", async () => {
+      vi.mocked(api.getInventory).mockResolvedValue({
+        quoteBalance: "5000000000000000000",
+      });
+      renderWithWallet(<InventorySales />, { connected: true });
+      await screen.findByText("Quote balance");
+      expect(screen.queryByText("Withdrawable")).toBeNull();
+      type("5");
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Withdraw" })).toBeEnabled(),
+      );
+    });
+  });
+
+  describe("no Vault.buy on a forward-priced project", () => {
+    it("labels the quote preview and the prices as indicative, and explains orders", async () => {
+      vi.mocked(api.getInventory).mockResolvedValue({
+        purchasePrice: "1000000",
+        redemptionPrice: "950000",
+      });
+      renderWithWallet(<InventorySales />, { connected: true });
+
+      expect(
+        await screen.findByRole("heading", {
+          name: "Indicative purchase quote",
+        }),
+      ).toBeInTheDocument();
+      expect(screen.getByText(/Vault\.buy is disabled/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/published at least 7200 s after the order/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Latest purchase price (indicative)"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Latest redemption price (indicative)"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "Purchase quote preview" }),
+      ).toBeNull();
+    });
+
+    it("says orders are still accepted while the feed is unavailable", async () => {
+      vi.mocked(api.getInventory).mockResolvedValue({
+        priceError: "StalePrice",
+      });
+      renderWithWallet(<InventorySales />, { connected: true });
+      expect(
+        await screen.findByText(
+          /orders and redemption requests are still accepted and price at a later round/,
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("keeps the instant wording on a project that is not forward priced", async () => {
+      vi.mocked(api.getProject).mockResolvedValue({
+        ...PROJECT,
+        version: "rwa-v3",
+      } as never);
+      vi.mocked(api.getInventory).mockResolvedValue({
+        purchasePrice: "1",
+        priceError: "StalePrice",
+      });
+      renderWithWallet(<InventorySales />, { connected: true });
+
+      expect(
+        await screen.findByRole("heading", { name: "Purchase quote preview" }),
+      ).toBeInTheDocument();
+      expect(screen.getByText("Purchase price")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          /Purchases and redemption requests revert until the feed recovers/,
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/Vault\.buy is disabled/)).toBeNull();
+    });
+  });
+
+  describe("purchase orders table", () => {
+    it("is absent, and not requested, on a project that is neither rwa-v4 nor forward priced", async () => {
+      vi.mocked(api.getProject).mockResolvedValue({
+        ...PROJECT,
+        version: "rwa-v3",
+      } as never);
+      renderWithWallet(<InventorySales />, { connected: true });
+      await screen.findByRole("heading", { name: "Purchase history" });
+      expect(
+        screen.queryByRole("heading", { name: "Purchase orders" }),
+      ).toBeNull();
+      expect(api.listPurchaseOrders).not.toHaveBeenCalled();
+    });
+
+    it("still lists orders on an rwa-v4 project whose strategy is no longer forward priced", async () => {
+      vi.mocked(api.getProject).mockResolvedValue({
+        ...FORWARD_PROJECT,
+        forwardPriced: false,
+      } as never);
+      renderWithWallet(<InventorySales />, { connected: true });
+      expect(
+        await screen.findByRole("heading", { name: "Purchase orders" }),
+      ).toBeInTheDocument();
+      expect(await screen.findByText("5")).toBeInTheDocument();
+    });
+
+    it("filters by status through the API", async () => {
+      renderWithWallet(<InventorySales />, { connected: true });
+      await screen.findByText("5");
+      expect(api.listPurchaseOrders).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: undefined }),
+      );
+
+      fireEvent.change(screen.getByLabelText("Filter orders by status"), {
+        target: { value: "Refunded" },
+      });
+      await waitFor(() =>
+        expect(api.listPurchaseOrders).toHaveBeenLastCalledWith(
+          expect.objectContaining({ status: "Refunded" }),
+        ),
+      );
+    });
+
+    it("loads the next page with the cursor from the previous one", async () => {
+      vi.mocked(api.listPurchaseOrders)
+        .mockResolvedValueOnce({
+          items: [ORDER],
+          totalCount: 2,
+          nextCursor: "cursor-2",
+        })
+        .mockResolvedValueOnce({
+          items: [{ ...ORDER, id: "6" }],
+          totalCount: 2,
+        });
+      renderWithWallet(<InventorySales />, { connected: true });
+      await screen.findByText(/Showing 1 of 2/);
+
+      fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+
+      expect(await screen.findByText("6")).toBeInTheDocument();
+      expect(api.listPurchaseOrders).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cursor: "cursor-2" }),
+      );
+      expect(screen.getByText("5")).toBeInTheDocument();
+    });
+
+    it("prices a Pending order on the order's own strategy from its base round and creation time", async () => {
+      renderWithWallet(<InventorySales />, { connected: true });
+      const row = (await screen.findByText("5")).closest("tr") as HTMLElement;
+
+      expect(await within(row).findByText("2.5")).toBeInTheDocument();
+      expect(readOrderPricing).toHaveBeenCalledWith(
+        31337,
+        STRATEGY,
+        3_000_000n,
+        40n,
+        1_800_000_000n,
+      );
+    });
+
+    it("shows a Pending order as waiting while no round has landed", async () => {
+      vi.mocked(readOrderPricing).mockResolvedValue({ state: "waiting" });
+      renderWithWallet(<InventorySales />, { connected: true });
+      expect(
+        await screen.findByText("Waiting for a round"),
+      ).toBeInTheDocument();
+    });
+
+    it("shows the priced round and the refund of a closed order", async () => {
+      vi.mocked(api.listPurchaseOrders).mockResolvedValue({
+        items: [
+          {
+            ...ORDER,
+            status: "Refunded" as const,
+            pricedRound: "42",
+            quoteAmount: "5000000000000000000",
+            refund: "4000000000000000000",
+          },
+        ],
+      });
+      renderWithWallet(<InventorySales />, { connected: true });
+      const row = (await screen.findByText("5")).closest("tr") as HTMLElement;
+      expect(row).toHaveTextContent("Round 42, refund 4");
+      expect(readOrderPricing).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("settle", () => {
+    it("settles from a wallet that holds no role, and refreshes the list", async () => {
+      vi.mocked(api.getProject).mockResolvedValue({
+        ...FORWARD_PROJECT,
+        roles: {
+          TREASURER_ROLE: ["0x9999999999999999999999999999999999999999"],
+        },
+      } as never);
+      await openOrder();
+      expect(
+        await screen.findByText(/Priced at round 42: 2.5/),
+      ).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Settle order" }));
+
+      expect(
+        await screen.findByText(/Settlement confirmed/),
+      ).toBeInTheDocument();
+      expect(sendSettlePurchase).toHaveBeenCalledWith(
+        31337,
+        CONNECTED,
+        VAULT,
+        5n,
+      );
+      await waitFor(() =>
+        expect(api.listPurchaseOrders).toHaveBeenCalledTimes(2),
+      );
+    });
+
+    it("is refused while the project is paused", async () => {
+      vi.mocked(api.getProject).mockResolvedValue({
+        ...FORWARD_PROJECT,
+        paused: true,
+      } as never);
+      await openOrder();
+      await screen.findByText(/Priced at round 42/);
+      const button = screen.getByRole("button", { name: "Settle order" });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute(
+        "title",
+        expect.stringMatching(/refused while the project is paused/),
+      );
+    });
+
+    it("waits while no round has landed", async () => {
+      vi.mocked(readOrderPricing).mockResolvedValue({ state: "waiting" });
+      await openOrder();
+      await screen.findByText(/Waiting for a price round/);
+      expect(
+        screen.getByRole("button", { name: "Settle order" }),
+      ).toBeDisabled();
+      expect(sendSettlePurchase).not.toHaveBeenCalled();
+    });
+
+    it("shows the failure and no success when the settlement reverts", async () => {
+      vi.mocked(sendSettlePurchase).mockRejectedValue(
+        new Error("Transaction simulation failed: InvalidPrice."),
+      );
+      await openOrder();
+      await screen.findByText(/Priced at round 42/);
+      fireEvent.click(screen.getByRole("button", { name: "Settle order" }));
+      expect(
+        await screen.findByText(/Transaction simulation failed: InvalidPrice/),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/Settlement confirmed/)).toBeNull();
+    });
+
+    it("offers no actions on a closed order and shows its round, quote and refund", async () => {
+      await openOrder({
+        ...ORDER,
+        status: "Settled" as const,
+        pricedRound: "42",
+        quoteAmount: "2500000000000000000",
+        refund: "1500000000000000000",
+      } as never);
+      expect(screen.queryByRole("button", { name: "Settle order" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Reject order" })).toBeNull();
+      const detail = screen
+        .getByRole("heading", { name: "Order 5" })
+        .closest("section") as HTMLElement;
+      expect(
+        within(detail).getByText("Priced at round").nextSibling,
+      ).toHaveTextContent("42");
+      expect(
+        within(detail).getByText("Quote at that round").nextSibling,
+      ).toHaveTextContent("2.5");
+      expect(
+        within(detail).getByText("Refunded to buyer").nextSibling,
+      ).toHaveTextContent("1.5");
+    });
+  });
+
+  describe("reject", () => {
+    it("is not offered while the project is unpaused, and the note says why", async () => {
+      await openOrder();
+      expect(screen.queryByRole("button", { name: "Reject order" })).toBeNull();
+      expect(
+        screen.getByText(/rejected only while the project is paused/),
+      ).toBeInTheDocument();
+    });
+
+    it("is offered while paused to a treasurer, with a note that the whole deposit returns", async () => {
+      vi.mocked(api.getProject).mockResolvedValue({
+        ...FORWARD_PROJECT,
+        paused: true,
+      } as never);
+      await openOrder();
+      expect(
+        await screen.findByRole("button", { name: "Reject order" }),
+      ).toBeEnabled();
+      expect(
+        screen.getByText(
+          /returns the buyer's whole deposit of 4 and closes the order as Rejected/,
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("sends rejectPurchase for the order from the treasurer's wallet", async () => {
+      vi.mocked(api.getProject).mockResolvedValue({
+        ...FORWARD_PROJECT,
+        paused: true,
+      } as never);
+      await openOrder();
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Reject order" }),
+      );
+
+      expect(await screen.findByText(/Order rejected/)).toBeInTheDocument();
+      expect(sendRejectPurchase).toHaveBeenCalledWith(
+        31337,
+        CONNECTED,
+        VAULT,
+        5n,
+      );
+      expect(sendSettlePurchase).not.toHaveBeenCalled();
+    });
+
+    it("is hidden from a wallet without TREASURER_ROLE on the Vault, even while paused", async () => {
+      vi.mocked(api.getProject).mockResolvedValue({
+        ...FORWARD_PROJECT,
+        paused: true,
+        roles: {
+          TREASURER_ROLE: ["0x9999999999999999999999999999999999999999"],
+        },
+      } as never);
+      await openOrder();
+      expect(
+        await screen.findByText(/reject purchase orders/),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Reject order" })).toBeNull();
+      expect(sendRejectPurchase).not.toHaveBeenCalled();
+    });
+
+    it("is hidden from a wallet that holds TREASURER_ROLE only on the escrow", async () => {
+      vi.mocked(api.getProject).mockResolvedValue({
+        ...FORWARD_PROJECT,
+        paused: true,
+        rolesByContract: {
+          vault: {
+            TREASURER_ROLE: ["0x9999999999999999999999999999999999999999"],
+          },
+          redemptionEscrow: { TREASURER_ROLE: [CONNECTED] },
+        },
+      } as never);
+      await openOrder();
+      expect(
+        await screen.findByText(/reject purchase orders/),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Reject order" })).toBeNull();
+      expect(sendRejectPurchase).not.toHaveBeenCalled();
+    });
+
+    it("exports a rejectPurchase batch for a Safe holding the role, and broadcasts nothing", async () => {
+      vi.mocked(api.getProject).mockResolvedValue({
+        ...FORWARD_PROJECT,
+        paused: true,
+        roles: { TREASURER_ROLE: [SAFE] },
+      } as never);
+      await openOrder();
+      // The withdrawal card has its own Safe picker, so scope to the order card
+      const card = screen
+        .getByRole("heading", { name: "Order 5" })
+        .closest("section") as HTMLElement;
+      fireEvent.change(await within(card).findByLabelText(/Save a Safe/), {
+        target: { value: SAFE },
+      });
+      fireEvent.click(
+        await within(card).findByRole("button", {
+          name: "Save rejection batch",
+        }),
+      );
+
+      expect(await screen.findByText("Saved batch.")).toBeInTheDocument();
+      const [chainId, safe, name, calls] =
+        vi.mocked(exportSafeBatch).mock.calls[0];
+      expect([chainId, safe, name]).toEqual([
+        31337,
+        SAFE,
+        "Reject purchase order",
+      ]);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].to.toLowerCase()).toBe(VAULT);
+      expect(
+        decodeFunctionData({ abi: vaultAbi, data: calls[0].data }),
+      ).toEqual({
+        functionName: "rejectPurchase",
+        args: [5n],
+      });
+      expect(sendRejectPurchase).not.toHaveBeenCalled();
+    });
+
+    it("shows the failure and no success when the rejection reverts", async () => {
+      vi.mocked(api.getProject).mockResolvedValue({
+        ...FORWARD_PROJECT,
+        paused: true,
+      } as never);
+      vi.mocked(sendRejectPurchase).mockRejectedValue(
+        new Error("Transaction simulation failed: BuyerNotAllowed."),
+      );
+      await openOrder();
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Reject order" }),
+      );
+      expect(await screen.findByText(/BuyerNotAllowed/)).toBeInTheDocument();
+      expect(screen.queryByText(/Order rejected/)).toBeNull();
+    });
   });
 });

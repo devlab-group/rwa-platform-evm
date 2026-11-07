@@ -20,6 +20,9 @@ import (
 type Inventory struct {
 	Inventory    string `json:"inventory"`
 	QuoteBalance string `json:"quoteBalance"`
+	// PendingPurchaseQuote is the rwa-v4 total of open order deposits, included in
+	// QuoteBalance and excluded from withdrawProceeds; omitted for earlier Vaults
+	PendingPurchaseQuote string `json:"pendingPurchaseQuote,omitempty"`
 	// PurchasePrice and RedemptionPrice are omitted when an Oracle strategy's read fails;
 	// PriceError then names why
 	PurchasePrice   string `json:"purchasePrice,omitempty"`
@@ -50,6 +53,8 @@ type Service struct {
 	vaultAddr      common.Address
 	quoteTokenAddr common.Address
 	purchases      repository.PurchaseRepository
+	// orders is the rwa-v4 order read model, set by WithOrders
+	orders repository.PurchaseOrderRepository
 
 	// kinds caches StrategyKind answers and oracleCfg the immutable OraclePriceStrategy
 	// views, both by strategy address
@@ -61,11 +66,15 @@ type Service struct {
 // unused. strategyAddress resolves the strategy live.
 func New(client blockchain.Client, vaultAddr, quoteTokenAddr common.Address, purchases repository.PurchaseRepository) *Service {
 	return &Service{
-		client: client,
-		vault:  bindings.NewVault(), erc20: bindings.NewERC20(), strategy: bindings.NewFixedPriceStrategy(),
-		oracle: bindings.NewOraclePriceStrategy(), aggregator: bindings.NewAggregatorV3(),
-		vaultAddr: vaultAddr, quoteTokenAddr: quoteTokenAddr,
-		purchases: purchases,
+		client:         client,
+		vault:          bindings.NewVault(),
+		erc20:          bindings.NewERC20(),
+		strategy:       bindings.NewFixedPriceStrategy(),
+		oracle:         bindings.NewOraclePriceStrategy(),
+		aggregator:     bindings.NewAggregatorV3(),
+		vaultAddr:      vaultAddr,
+		quoteTokenAddr: quoteTokenAddr,
+		purchases:      purchases,
 	}
 }
 
@@ -114,13 +123,22 @@ func (s *Service) GetInventory(ctx context.Context) (Inventory, error) {
 		return Inventory{}, err
 	}
 
+	pending, err := s.pendingPurchaseQuote(ctx)
+	if err != nil {
+		return Inventory{}, err
+	}
+	pendingStr := ""
+	if pending != nil {
+		pendingStr = pending.String()
+	}
+
 	strategyAddr, err := s.strategyAddress(ctx)
 	if err != nil {
 		return Inventory{}, err
 	}
 	if s.StrategyKind(ctx, strategyAddr) == KindOracle {
 		prices := s.OraclePrices(ctx, strategyAddr)
-		inv := Inventory{Inventory: inventory.String(), QuoteBalance: quoteBalance.String(), PriceError: prices.Error}
+		inv := Inventory{Inventory: inventory.String(), QuoteBalance: quoteBalance.String(), PendingPurchaseQuote: pendingStr, PriceError: prices.Error}
 		if prices.Purchase != nil {
 			inv.PurchasePrice = prices.Purchase.String()
 		}
@@ -139,11 +157,29 @@ func (s *Service) GetInventory(ctx context.Context) (Inventory, error) {
 	}
 
 	return Inventory{
-		Inventory:       inventory.String(),
-		QuoteBalance:    quoteBalance.String(),
-		PurchasePrice:   purchasePrice.String(),
-		RedemptionPrice: redemptionPrice.String(),
+		Inventory:            inventory.String(),
+		QuoteBalance:         quoteBalance.String(),
+		PendingPurchaseQuote: pendingStr,
+		PurchasePrice:        purchasePrice.String(),
+		RedemptionPrice:      redemptionPrice.String(),
 	}, nil
+}
+
+// pendingPurchaseQuote omits the field when the Vault view reverts. Other read errors fail the
+// inventory request so a transport failure does not hide reserved deposits.
+func (s *Service) pendingPurchaseQuote(ctx context.Context) (*big.Int, error) {
+	data, err := s.vault.PackPendingPurchaseQuote()
+	if err != nil {
+		return nil, err
+	}
+	out, err := blockchain.Call(ctx, s.client, s.vaultAddr, data)
+	if err != nil {
+		if blockchain.IsRevert(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("sales: Vault.pendingPurchaseQuote: %w", err)
+	}
+	return s.vault.UnpackPendingPurchaseQuote(out)
 }
 
 func (s *Service) readStrategyPrice(ctx context.Context, strategyAddr common.Address, method string) (*big.Int, error) {
@@ -178,9 +214,13 @@ func (s *Service) ListPurchases(ctx context.Context, currentBlock uint64, cursor
 	out := make([]PurchaseView, len(items))
 	for i, p := range items {
 		out[i] = PurchaseView{
-			TxHash: p.TxHash, Buyer: p.Buyer, Recipient: p.Recipient,
-			TokenAmount: p.TokenAmount, QuoteAmount: p.QuoteAmount,
-			BlockNumber: p.BlockNumber, Confirmations: confirmationsOf(currentBlock, p.BlockNumber),
+			TxHash:        p.TxHash,
+			Buyer:         p.Buyer,
+			Recipient:     p.Recipient,
+			TokenAmount:   p.TokenAmount,
+			QuoteAmount:   p.QuoteAmount,
+			BlockNumber:   p.BlockNumber,
+			Confirmations: confirmationsOf(currentBlock, p.BlockNumber),
 		}
 	}
 	return out, next, nil

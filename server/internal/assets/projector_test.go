@@ -17,8 +17,11 @@ func TestReconcileMintedFlipsMatchingRecord(t *testing.T) {
 	ctx := context.Background()
 
 	rec := &models.AssetRecord{
-		RecordID: "GOLD-1", Status: models.RecordStatusSigned, RecordKey: "0xrecordkey1",
-		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		RecordID:  "GOLD-1",
+		Status:    models.RecordStatusSigned,
+		RecordKey: "0xrecordkey1",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 	if err := records.Create(ctx, rec); err != nil {
 		t.Fatal(err)
@@ -26,8 +29,13 @@ func TestReconcileMintedFlipsMatchingRecord(t *testing.T) {
 
 	controllerAddr := "0x0000000000000000000000000000000000C0DE"
 	if err := events.Create(ctx, &models.ChainEvent{
-		ChainID: 31337, Address: controllerAddr, Name: "Minted", TxHash: "0xmint1", LogIndex: 0, BlockNumber: 10,
-		Data: map[string]any{"recordKey": "0xrecordkey1", "amount": "1000"},
+		ChainID:     31337,
+		Address:     controllerAddr,
+		Name:        "Minted",
+		TxHash:      "0xmint1",
+		LogIndex:    0,
+		BlockNumber: 10,
+		Data:        map[string]any{"recordKey": "0xrecordkey1", "amount": "1000"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -60,8 +68,13 @@ func TestReconcileMintedIgnoresNonMatchingRecords(t *testing.T) {
 	}
 	controllerAddr := "0x0000000000000000000000000000000000C0DE"
 	if err := events.Create(ctx, &models.ChainEvent{
-		ChainID: 31337, Address: controllerAddr, Name: "Minted", TxHash: "0xmint2", LogIndex: 0, BlockNumber: 10,
-		Data: map[string]any{"recordKey": "0xrecordkey-unrelated", "amount": "1000"},
+		ChainID:     31337,
+		Address:     controllerAddr,
+		Name:        "Minted",
+		TxHash:      "0xmint2",
+		LogIndex:    0,
+		BlockNumber: 10,
+		Data:        map[string]any{"recordKey": "0xrecordkey-unrelated", "amount": "1000"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -88,15 +101,23 @@ func TestReconcileMintedDemotesOrphanedMint(t *testing.T) {
 	controllerAddr := "0x0000000000000000000000000000000000C0DE"
 
 	rec := &models.AssetRecord{
-		RecordID: "GOLD-4", Status: models.RecordStatusSigned, RecordKey: "0xrecordkey4",
-		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		RecordID:  "GOLD-4",
+		Status:    models.RecordStatusSigned,
+		RecordKey: "0xrecordkey4",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 	if err := records.Create(ctx, rec); err != nil {
 		t.Fatal(err)
 	}
 	if err := events.Create(ctx, &models.ChainEvent{
-		ChainID: 31337, Address: controllerAddr, Name: "Minted", TxHash: "0xmint4", LogIndex: 0, BlockNumber: 10,
-		Data: map[string]any{"recordKey": "0xrecordkey4", "amount": "1000"},
+		ChainID:     31337,
+		Address:     controllerAddr,
+		Name:        "Minted",
+		TxHash:      "0xmint4",
+		LogIndex:    0,
+		BlockNumber: 10,
+		Data:        map[string]any{"recordKey": "0xrecordkey4", "amount": "1000"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -169,8 +190,13 @@ func TestReconcileMintedIsIdempotent(t *testing.T) {
 	}
 	controllerAddr := "0x0000000000000000000000000000000000C0DE"
 	if err := events.Create(ctx, &models.ChainEvent{
-		ChainID: 31337, Address: controllerAddr, Name: "Minted", TxHash: "0xmint3", LogIndex: 0, BlockNumber: 10,
-		Data: map[string]any{"recordKey": "0xrk3", "amount": "1000"},
+		ChainID:     31337,
+		Address:     controllerAddr,
+		Name:        "Minted",
+		TxHash:      "0xmint3",
+		LogIndex:    0,
+		BlockNumber: 10,
+		Data:        map[string]any{"recordKey": "0xrk3", "amount": "1000"},
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -204,8 +230,13 @@ func TestReconcileAuditorRestoresBaselineWhenOnlyRotationIsRolledBack(t *testing
 
 	// the rotation happens on-chain
 	if err := events.Create(ctx, &models.ChainEvent{
-		ChainID: 31337, Address: controllerAddr, Name: "AuditorChanged", TxHash: "0xrotate1", LogIndex: 0, BlockNumber: 10,
-		Data: map[string]any{"newAuditor": rotated.Hex()},
+		ChainID:     31337,
+		Address:     controllerAddr,
+		Name:        "AuditorChanged",
+		TxHash:      "0xrotate1",
+		LogIndex:    0,
+		BlockNumber: 10,
+		Data:        map[string]any{"newAuditor": rotated.Hex()},
 	}); err != nil {
 		t.Fatal(err)
 	}

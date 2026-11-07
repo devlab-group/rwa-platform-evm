@@ -1,4 +1,6 @@
 import type { Locator, Page } from "@playwright/test";
+import type { MockState } from "./mock-api";
+import { MOCK_WALLET_ADDRESS } from "./mock-wallet";
 
 /**
  * Scope page-object queries to each card section's <h2>. Button labels repeat across
@@ -7,4 +9,31 @@ import type { Locator, Page } from "@playwright/test";
  */
 export function sectionByHeading(page: Page, heading: string): Locator {
   return page.locator("section.card", { has: page.getByRole("heading", { name: heading, exact: true }) });
+}
+
+/** Turns the mocked project into an rwa-v4 oracle project whose orders are priced at a later round */
+export function makeForward(api: MockState): void {
+  api.project.strategyKind = "Oracle";
+  api.project.forwardPriced = true;
+  api.project.quoteDecimals = 6;
+  api.project.oracle = {
+    feed: `0x${"12".repeat(20)}`,
+    maxAge: 3600,
+    purchaseSpreadBps: 0,
+    redemptionSpreadBps: 0,
+    feedDecimals: 8,
+    dealingCutoff: 7200,
+    available: true,
+    updatedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+/** Lists the mock wallet as an Allowed investor in the compliance registry */
+export function allowTheWallet(api: MockState): void {
+  api.wallets.push({
+    address: MOCK_WALLET_ADDRESS,
+    status: "Allowed",
+    validUntil: 4102444800,
+    ownershipVerified: true,
+  });
 }

@@ -53,9 +53,14 @@ func (app *App) createProfile(c *gin.Context) {
 	}
 
 	err = app.Repos.AssetProfiles.Create(c.Request.Context(), &models.AssetProfile{
-		ProjectID: profile.ProjectID, ProfileRaw: raw, Digest: result.ProfileDigest, CID: result.CID,
-		TokenDecimals: profile.TokenDecimals, TokenUnit: profile.TokenUnit, RecordIDLabel: profile.RecordIDLabel,
-		CreatedAt: time.Now().UTC(),
+		ProjectID:     profile.ProjectID,
+		ProfileRaw:    raw,
+		Digest:        result.ProfileDigest,
+		CID:           result.CID,
+		TokenDecimals: profile.TokenDecimals,
+		TokenUnit:     profile.TokenUnit,
+		RecordIDLabel: profile.RecordIDLabel,
+		CreatedAt:     time.Now().UTC(),
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrAlreadyExists) {
@@ -172,7 +177,10 @@ func (app *App) createRecord(c *gin.Context) {
 		return
 	}
 	rec, err := app.Records.CreateRecord(c.Request.Context(), profile, projectID, assets.CreateRecordRequest{
-		RecordID: body.RecordID, Asset: body.Asset, Amount: body.Amount, Proofs: body.Proofs,
+		RecordID: body.RecordID,
+		Asset:    body.Asset,
+		Amount:   body.Amount,
+		Proofs:   body.Proofs,
 	})
 	if err != nil {
 		app.recordAuditResult(c.Request.Context(), intentID, "assets", actor, "assets.createRecord", body.RecordID, false, map[string]any{"error": err.Error()})

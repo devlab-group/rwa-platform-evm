@@ -88,6 +88,58 @@ test("/admin/security with an rwa-v3 oracle project has no axe violations", asyn
   await expectNoAxeViolations(page);
 });
 
+test("/admin/inventory-sales with an rwa-v4 forward-priced project and an open order has no axe violations", async ({
+  page,
+  api,
+}) => {
+  api.project.version = "rwa-v4";
+  api.project.forwardPriced = true;
+  api.project.paused = true;
+  api.inventory.pendingPurchaseQuote = "2000000";
+  api.purchaseOrders.push({
+    id: "5",
+    buyer: `0x${"b1".repeat(20)}`,
+    recipient: `0x${"b2".repeat(20)}`,
+    tokenAmount: "3000000000000000000",
+    maxQuoteAmount: "4000000",
+    strategy: `0x${"77".repeat(20)}`,
+    baseRound: "40",
+    status: "Pending",
+    createdAt: Math.floor(Date.now() / 1000) - 600,
+    timeoutAt: Math.floor(Date.now() / 1000) + 600_000,
+    requestTxHash: `0x${"ab".repeat(32)}`,
+  });
+  await page.goto("/admin/inventory-sales");
+  await expect(page.getByRole("heading", { name: "Purchase orders" })).toBeVisible();
+  await page.getByRole("button", { name: "Manage" }).click();
+  await expect(page.getByRole("heading", { name: "Order 5" })).toBeVisible();
+  await expect(page.getByText("Loading…")).toHaveCount(0);
+  await expectNoAxeViolations(page);
+});
+
+test("/admin/redemptions with a forward-priced request open has no axe violations", async ({ page, api }) => {
+  api.redemptions.push({
+    id: "8",
+    beneficiary: "0x1234561234561234561234561234561234561234",
+    rwaAmount: "500000000000000000",
+    quoteAmount: "0",
+    strategy: `0x${"77".repeat(20)}`,
+    baseRound: "40",
+    minQuoteOut: "400000",
+    status: "Pending",
+    claimable: false,
+    createdAt: Math.floor(Date.now() / 1000),
+    timeoutAt: Math.floor(Date.now() / 1000) + 3600,
+    beneficiaryAllowed: true,
+    confirmations: 3,
+  });
+  await page.goto("/admin/redemptions");
+  await page.getByRole("button", { name: "Manage" }).click();
+  await expect(page.getByRole("heading", { name: "Redemption 8" })).toBeVisible();
+  await expect(page.getByText("Loading…")).toHaveCount(0);
+  await expectNoAxeViolations(page);
+});
+
 test.describe("signed-out", () => {
   test.use({ skipAuthBootstrap: true });
 

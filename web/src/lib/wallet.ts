@@ -17,13 +17,16 @@ import {
   erc7943Abi,
   incomeDistributorAbi,
   incomeDistributorErrorsAbi,
+  oracleStrategyAbi,
   oracleStrategyErrorsAbi,
   rwaTokenErrorsAbi,
   fixedPriceStrategyAbi,
   pausableAbi,
   redemptionEscrowAbi,
+  redemptionEscrowErrorsAbi,
   rwaFactoryAbi,
   rwaFactoryV3Abi,
+  rwaFactoryV4Abi,
   supplyControllerAbi,
   supplyControllerErrorsAbi,
   vaultAbi,
@@ -223,6 +226,95 @@ export async function readPreviewBuy(
   });
 }
 
+/** What RedemptionEscrow.previewFunding says about a Pending request, by the reason it can or cannot be funded now */
+export type FundingPreview =
+  | { state: "priced"; amount: bigint }
+  /** No round past the dealing cut-off has landed yet */
+  | { state: "waiting" }
+  | { state: "belowMin"; quoted: bigint; minQuoteOut: bigint }
+  /** The redemption timeout was reached, so only the holder can still act */
+  | { state: "closed" }
+  /** Any other revert, with the decoded message */
+  | { state: "blocked"; message: string };
+
+/**
+ * Read the quote funding would pull. Revert data maps to a funding state; missing wallets,
+ * wrong chains and read failures without revert data throw.
+ */
+export async function readFundingPreview(
+  expectedChainId: number,
+  escrow: Address,
+  id: bigint,
+): Promise<FundingPreview> {
+  const provider = getInjectedProvider();
+  if (!provider) throw new Error("No injected wallet found.");
+  await assertChain(provider, expectedChainId);
+  const client = createPublicClient({ transport: custom(provider) });
+  try {
+    const amount = await client.readContract({
+      address: escrow,
+      abi: redemptionEscrowAbi,
+      functionName: "previewFunding",
+      args: [id],
+    });
+    return { state: "priced", amount };
+  } catch (err) {
+    const decoded = decodeRevert(err);
+    switch (decoded?.errorName) {
+      case "RoundNotAvailable":
+        return { state: "waiting" };
+      case "QuoteBelowMin":
+        return {
+          state: "belowMin",
+          quoted: decoded.args?.[0] as bigint,
+          minQuoteOut: decoded.args?.[1] as bigint,
+        };
+      case "FundingClosed":
+        return { state: "closed" };
+      default:
+        if (!decoded && !revertData(err)) throw err;
+        return { state: "blocked", message: describeWalletError(err) };
+    }
+  }
+}
+
+/** The price an rwa-v4 order would settle at, or why it cannot settle yet */
+export type OrderPricing =
+  | { state: "priced"; quoteAmount: bigint; roundId: bigint }
+  | { state: "waiting" }
+  | { state: "blocked"; message: string };
+
+/**
+ * Read quotePurchaseAfter on the order's stored strategy. Revert data maps to pricing states;
+ * missing wallets, wrong chains and read failures without revert data throw.
+ */
+export async function readOrderPricing(
+  expectedChainId: number,
+  strategy: Address,
+  tokenAmount: bigint,
+  baseRound: bigint,
+  createdAt: bigint,
+): Promise<OrderPricing> {
+  const provider = getInjectedProvider();
+  if (!provider) throw new Error("No injected wallet found.");
+  await assertChain(provider, expectedChainId);
+  const client = createPublicClient({ transport: custom(provider) });
+  try {
+    const [quoteAmount, roundId] = await client.readContract({
+      address: strategy,
+      abi: oracleStrategyAbi,
+      functionName: "quotePurchaseAfter",
+      args: [tokenAmount, baseRound, createdAt],
+    });
+    return { state: "priced", quoteAmount, roundId: BigInt(roundId) };
+  } catch (err) {
+    const decoded = decodeRevert(err);
+    if (decoded?.errorName === "RoundNotAvailable") return { state: "waiting" };
+    if (!decoded && !revertData(err)) throw err;
+    return { state: "blocked", message: describeWalletError(err) };
+  }
+}
+
 /**
  * Id of an on-chain distribution that already uses this snapshot, or null. The contract accepts
  * the same root again and each creation pays it in full, so the console checks before sending.
@@ -301,6 +393,7 @@ function decodeRevert(
         ...rwaTokenErrorsAbi,
         ...supplyControllerErrorsAbi,
         ...vaultErrorsAbi,
+        ...redemptionEscrowErrorsAbi,
         ...oracleStrategyErrorsAbi,
         ...incomeDistributorErrorsAbi,
       ],
@@ -311,7 +404,7 @@ function decodeRevert(
   }
 }
 
-// Search data on the error and cause chain, examining up to six objects
+// Search data (or raw) on the error and cause chain, examining up to six objects
 function revertData(err: unknown): Hex | undefined {
   let current: unknown = err;
   for (let depth = 0; current && depth < 6; depth++) {
@@ -319,6 +412,10 @@ function revertData(err: unknown): Hex | undefined {
     // MetaMask nests the revert data one level down: { data: { data: "0x..." } }
     if (candidate && typeof candidate === "object") {
       candidate = (candidate as { data?: unknown }).data;
+    }
+    // viem's ContractFunctionRevertedError, thrown by readContract, keeps the bytes in raw
+    if (typeof candidate !== "string") {
+      candidate = (current as { raw?: unknown }).raw;
     }
     if (
       typeof candidate === "string" &&
@@ -410,6 +507,32 @@ function explainTokenError(
       return "The unclaimed remainder of this distribution was already reclaimed.";
     case "QuoteDeltaMismatch":
       return "The quote token moved a different amount than requested (fee-on-transfer token?). Nothing was changed.";
+    case "ForwardPriced":
+      return "This project prices orders at a later feed round, so Vault.buy is disabled. Request an order instead.";
+    case "NotForwardPriced":
+      return "This project's strategy prices instantly, so there are no forward orders. Use a direct buy.";
+    case "ProjectNotPaused":
+      return "A purchase order can be rejected only while the project is paused. Pause it first.";
+    case "NotPending":
+      return `Request ${String(first)} is no longer Pending, so it cannot be changed.`;
+    case "BuyerNotAllowed":
+      return `${first} is not Allowed in the compliance registry; their order cannot be settled or rejected until they are.`;
+    case "RoundAvailable":
+      return `Order ${String(first)} already has a usable price round, so it cannot be cancelled.`;
+    case "InsufficientProceeds":
+      return `Only ${String(args?.[1])} (quote-token minimal units) can be withdrawn; open purchase deposits stay in the Vault. Requested ${String(first)}.`;
+    case "RoundNotAvailable":
+      return "No feed round has landed yet that can price this order, at least the dealing cut-off after it was placed. Try again after the next feed update.";
+    case "NoRoundHistory":
+      return "The price feed does not keep round history, so forward pricing cannot work with it.";
+    case "QuoteBelowMin":
+      return `The quote ${String(first)} is below the holder's minimum of ${String(args?.[1])} (quote-token minimal units). Reject the request, or the holder can cancel after the timeout.`;
+    case "FundingClosed":
+      return "Funding closed when the redemption timeout was reached. The holder can cancel and recover their RWA.";
+    case "ZeroQuote":
+      return "The priced quote is zero, so the request cannot be funded.";
+    case "BeneficiaryNotAllowed":
+      return `${first} is not Allowed in the compliance registry; restore their status before funding.`;
     default:
       return undefined;
   }
@@ -763,6 +886,50 @@ export function withdrawProceedsCall(
   };
 }
 
+/** Encodes the permissionless Vault.settlePurchase(id) */
+export function settlePurchaseCall(vault: Address, id: bigint): ContractCall {
+  return {
+    to: vault,
+    data: encodeFunctionData({
+      abi: vaultAbi,
+      functionName: "settlePurchase",
+      args: [id],
+    }),
+  };
+}
+
+/** Submits settlePurchase; any wallet may call it, and the Vault refuses while paused */
+export async function sendSettlePurchase(
+  expectedChainId: number,
+  from: Address,
+  vault: Address,
+  id: bigint,
+): Promise<Hex> {
+  return sendCall(expectedChainId, from, settlePurchaseCall(vault, id));
+}
+
+/** Encodes Vault.rejectPurchase(id), which returns the order's whole deposit */
+export function rejectPurchaseCall(vault: Address, id: bigint): ContractCall {
+  return {
+    to: vault,
+    data: encodeFunctionData({
+      abi: vaultAbi,
+      functionName: "rejectPurchase",
+      args: [id],
+    }),
+  };
+}
+
+/** Submits TREASURER_ROLE rejection of a Pending order; the Vault allows it only while paused */
+export async function sendRejectPurchase(
+  expectedChainId: number,
+  from: Address,
+  vault: Address,
+  id: bigint,
+): Promise<Hex> {
+  return sendCall(expectedChainId, from, rejectPurchaseCall(vault, id));
+}
+
 /** Submits TREASURER_ROLE funding after the treasurer approves the recorded quote amount */
 export async function sendFundRedemption(
   expectedChainId: number,
@@ -879,10 +1046,26 @@ export interface ProjectConfigV3Input {
   adminTransferDelay: number;
 }
 
-/** Encodes RWAFactory.deploy; the rwa-v3 ABI is chosen by the config's strategyKind field */
+/**
+ * rwa-v4 ProjectConfig: the rwa-v3 fields plus dealingCutoff (positive for Oracle, zero for Fixed)
+ * and purchaseTimeout, both in seconds
+ */
+export interface ProjectConfigV4Input extends ProjectConfigV3Input {
+  dealingCutoff: bigint;
+  purchaseTimeout: bigint;
+}
+
+/** Encodes RWAFactory.deploy; the ABI is chosen by the config's fields: purchaseTimeout, then strategyKind */
 export function deployCalldata(
-  config: ProjectConfigInput | ProjectConfigV3Input,
+  config: ProjectConfigInput | ProjectConfigV3Input | ProjectConfigV4Input,
 ): Hex {
+  if ("purchaseTimeout" in config) {
+    return encodeFunctionData({
+      abi: rwaFactoryV4Abi,
+      functionName: "deploy",
+      args: [config],
+    });
+  }
   if ("strategyKind" in config) {
     return encodeFunctionData({
       abi: rwaFactoryV3Abi,
@@ -905,7 +1088,7 @@ export async function sendDeployProject(
   expectedChainId: number,
   from: Address,
   factoryAddress: Address,
-  config: ProjectConfigInput | ProjectConfigV3Input,
+  config: ProjectConfigInput | ProjectConfigV3Input | ProjectConfigV4Input,
 ): Promise<Hex> {
   return sendWrite(
     expectedChainId,

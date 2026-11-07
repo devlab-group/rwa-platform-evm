@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -93,6 +95,10 @@ type Indexer struct {
 	// sleep waits out the retry backoff; tests replace it (see withSleepFunc) so
 	// retries run instantly
 	sleep func(time.Duration)
+	// backfillAddrs and backfillNext retain progress between polls. A failed chunk resumes
+	// on the next poll; a restart rescans from the start block and skips stored events.
+	backfillAddrs []common.Address
+	backfillNext  uint64
 }
 
 // Option configures optional Indexer behavior.
@@ -159,9 +165,15 @@ func New(source ChainSource, checkpoints repository.IndexerCheckpointRepository,
 		decode = defaultDecode
 	}
 	idx := &Indexer{
-		source: source, checkpoints: checkpoints, events: events,
-		chainID: chainID, addresses: addresses, decode: decode, startBlock: startBlock,
-		rollbackWindow: DefaultRollbackWindow, maxHistory: DefaultMaxRetainedHistory,
+		source:            source,
+		checkpoints:       checkpoints,
+		events:            events,
+		chainID:           chainID,
+		addresses:         addresses,
+		decode:            decode,
+		startBlock:        startBlock,
+		rollbackWindow:    DefaultRollbackWindow,
+		maxHistory:        DefaultMaxRetainedHistory,
 		maxAutoReorgDepth: DefaultMaxAutoReorgDepth,
 		maxLogRange:       DefaultMaxLogRange,
 		maxRangeRetries:   DefaultMaxRangeRetries,
@@ -181,9 +193,10 @@ func defaultDecode(log types.Log) (string, map[string]any, error) {
 	return name, map[string]any{"data": "0x" + common.Bytes2Hex(log.Data)}, nil
 }
 
-// Poll checks checkpoint hash/head regression for reorgs, then scans toward the
-// observed head in bounded chunks. Duplicate events are skipped, allowing repeated
-// timer calls.
+// Poll checks the checkpoint hash and head regression for reorgs, backfills newly watched
+// addresses, then scans toward the observed head in bounded chunks. After a backfill error,
+// it attempts the forward scan and returns any failures; checkpoint-version conflicts
+// instead stop the poll cleanly. Stored events are skipped, allowing repeated timer calls.
 // A checkpoint flagged ReconciliationRequired returns ErrReconciliationRequired before
 // chain reads; ResetToTrustedCheckpoint clears the pause.
 func (idx *Indexer) Poll(ctx context.Context) error {
@@ -234,10 +247,18 @@ func (idx *Indexer) Poll(ctx context.Context) error {
 		}
 	}
 
+	var backfillErr error
+	if existed {
+		backfillErr = idx.backfill(ctx, cp)
+		if errors.Is(backfillErr, errCheckpointVersionConflict) {
+			return nil
+		}
+	}
+
 	// Persist a fresh baseline even without new scan work, giving later polls a checkpoint
 	// hash to compare
 	if existed && currentBlock <= cp.LastBlock {
-		return nil
+		return backfillErr
 	}
 
 	fromBlock := cp.LastBlock + 1
@@ -253,22 +274,116 @@ func (idx *Indexer) Poll(ctx context.Context) error {
 	// canonical hashes, retrying mismatches before ingestion. Chunking bounds memory and
 	// lets backfills resume after the last committed chunk.
 	for fromBlock <= currentBlock {
-		chunkTo := currentBlock
-		if idx.maxLogRange > 0 && fromBlock+idx.maxLogRange-1 < currentBlock {
-			chunkTo = fromBlock + idx.maxLogRange - 1
-		}
-		nextFrom, err := idx.scanAndCommitChunk(ctx, fromBlock, chunkTo, currentBlock, cp)
+		nextFrom, err := idx.scanAndCommitChunk(ctx, fromBlock, idx.chunkEnd(fromBlock, currentBlock), currentBlock, cp)
 		if err != nil {
 			// Stop after a checkpoint-version conflict; the next Poll reads the winning
 			// replica's progress
 			if errors.Is(err, errCheckpointVersionConflict) {
 				return nil
 			}
-			return err
+			return errors.Join(backfillErr, err)
 		}
 		fromBlock = nextFrom
 	}
+	return backfillErr
+}
+
+// chunkEnd caps the scan at maxLogRange blocks, or uses head when the limit is zero
+func (idx *Indexer) chunkEnd(from, head uint64) uint64 {
+	if idx.maxLogRange > 0 && from+idx.maxLogRange-1 < head {
+		return from + idx.maxLogRange - 1
+	}
+	return head
+}
+
+// backfill indexes addresses missing from cp.Watched from the start block through
+// cp.LastBlock, then records the current watch set. It preserves the checkpoint height
+// for reorg checks. A rollback deletes backfilled events above the common ancestor;
+// the forward scan replays that range for the full watch set.
+func (idx *Indexer) backfill(ctx context.Context, cp *models.IndexerCheckpoint) error {
+	if slices.Equal(cp.Watched, idx.addressStrings()) {
+		return nil
+	}
+	var added []common.Address
+	for _, addr := range idx.addresses {
+		if !slices.Contains(cp.Watched, addr.Hex()) {
+			added = append(added, addr)
+		}
+	}
+	if !slices.Equal(added, idx.backfillAddrs) {
+		log.Printf("indexer: backfilling %d address(es) from block %d to %d", len(added), idx.startBlock, cp.LastBlock)
+		idx.backfillAddrs, idx.backfillNext = added, idx.startBlock
+	}
+	for len(added) > 0 && idx.backfillNext <= cp.LastBlock {
+		next, err := idx.backfillChunk(ctx, added, idx.backfillNext, idx.chunkEnd(idx.backfillNext, cp.LastBlock))
+		if err != nil {
+			return err
+		}
+		idx.backfillNext = next
+	}
+	return idx.commitWatched(ctx, cp)
+}
+
+// backfillChunk scans within [from,to], stores the logs and returns the next block to scan
+func (idx *Indexer) backfillChunk(ctx context.Context, addresses []common.Address, from, to uint64) (uint64, error) {
+	logs, actualTo, err := idx.scanChunk(ctx, addresses, from, to)
+	if err != nil {
+		return 0, err
+	}
+	header, err := idx.source.HeaderByNumber(ctx, new(big.Int).SetUint64(actualTo))
+	if err != nil {
+		return 0, fmt.Errorf("indexer: fetch backfill header at %d: %w", actualTo, err)
+	}
+	validated, _, ok, err := idx.validateLogsAgainstCanonical(ctx, logs, actualTo, header.Hash())
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return 0, fmt.Errorf("indexer: backfill [%d,%d] raced a reorg", from, actualTo)
+	}
+	events, err := idx.prepareChunkEvents(ctx, validated)
+	if err != nil {
+		return 0, err
+	}
+	for _, e := range events {
+		if err := idx.events.Create(ctx, e); err != nil {
+			return 0, fmt.Errorf("indexer: persist backfilled event: %w", err)
+		}
+	}
+	return actualTo + 1, nil
+}
+
+// commitWatched records the watch set, checking cp.Version when a chunk committer is configured
+func (idx *Indexer) commitWatched(ctx context.Context, cp *models.IndexerCheckpoint) error {
+	newCp := *cp
+	newCp.Watched = idx.addressStrings()
+	newCp.UpdatedAt = time.Now().UTC()
+	if idx.chunks != nil {
+		committed, err := idx.chunks.CommitChunk(ctx, repository.ChunkCommit{
+			ChainID:                   idx.chainID,
+			Checkpoint:                &newCp,
+			ExpectedCheckpointVersion: cp.Version,
+		})
+		if err != nil {
+			return err
+		}
+		if !committed {
+			return errCheckpointVersionConflict
+		}
+		cp.Version++
+	} else if err := idx.checkpoints.Set(ctx, &newCp); err != nil {
+		return err
+	}
+	cp.Watched, cp.UpdatedAt = newCp.Watched, newCp.UpdatedAt
 	return nil
+}
+
+func (idx *Indexer) addressStrings() []string {
+	out := make([]string, 0, len(idx.addresses))
+	for _, addr := range idx.addresses {
+		out = append(out, addr.Hex())
+	}
+	return out
 }
 
 // errCheckpointVersionConflict marks a lost commit/rewind race. Poll treats it as a
@@ -288,7 +403,7 @@ func (idx *Indexer) scanAndCommitChunk(ctx context.Context, from, wantTo, curren
 			return 0, fmt.Errorf("indexer: fetch chunk boundary header at %d: %w", wantTo, err)
 		}
 
-		logs, actualTo, err := idx.scanChunk(ctx, from, wantTo)
+		logs, actualTo, err := idx.scanChunk(ctx, idx.addresses, from, wantTo)
 		if err != nil {
 			return 0, err
 		}
@@ -406,14 +521,22 @@ func (idx *Indexer) commitChunk(ctx context.Context, from, to, currentBlock uint
 	}
 
 	newCp := &models.IndexerCheckpoint{
-		ChainID: idx.chainID, Address: CheckpointAddress,
-		LastBlock: to, LastBlockHash: toHash, UpdatedAt: time.Now().UTC(),
+		ChainID:       idx.chainID,
+		Address:       CheckpointAddress,
+		LastBlock:     to,
+		LastBlockHash: toHash,
+		UpdatedAt:     time.Now().UTC(),
+		Watched:       cp.Watched,
 	}
 
 	if idx.chunks != nil {
 		committed, err := idx.chunks.CommitChunk(ctx, repository.ChunkCommit{
-			ChainID: idx.chainID, Events: events, BlockHashes: blockHashes, PruneBlockHashesBefore: pruneBefore,
-			Checkpoint: newCp, ExpectedCheckpointVersion: cp.Version,
+			ChainID:                   idx.chainID,
+			Events:                    events,
+			BlockHashes:               blockHashes,
+			PruneBlockHashesBefore:    pruneBefore,
+			Checkpoint:                newCp,
+			ExpectedCheckpointVersion: cp.Version,
 		})
 		if err != nil {
 			return err
@@ -481,15 +604,16 @@ func (idx *Indexer) prepareChunkEvents(ctx context.Context, logs []types.Log) ([
 	return events, nil
 }
 
-// scanChunk retries FilterLogs for [from,to], returning logs and the actual upper bound
-// after any size/timeout shrink
-func (idx *Indexer) scanChunk(ctx context.Context, from, to uint64) ([]types.Log, uint64, error) {
+// scanChunk retries FilterLogs over addresses for [from,to], returning logs and the actual
+// upper bound after any size/timeout shrink. addresses must not be empty: an empty filter
+// matches every contract on the chain.
+func (idx *Indexer) scanChunk(ctx context.Context, addresses []common.Address, from, to uint64) ([]types.Log, uint64, error) {
 	backoff := initialRangeBackoff
 	for attempt := 1; ; attempt++ {
 		logs, err := idx.source.FilterLogs(ctx, ethereum.FilterQuery{
 			FromBlock: new(big.Int).SetUint64(from),
 			ToBlock:   new(big.Int).SetUint64(to),
-			Addresses: idx.addresses,
+			Addresses: addresses,
 		})
 		if err == nil {
 			return logs, to, nil
@@ -574,16 +698,22 @@ func (idx *Indexer) loadCheckpoint(ctx context.Context) (*models.IndexerCheckpoi
 	if err != repository.ErrNotFound {
 		return nil, false, fmt.Errorf("indexer: load checkpoint: %w", err)
 	}
-	return &models.IndexerCheckpoint{ChainID: idx.chainID, Address: CheckpointAddress, LastBlock: idx.startBlock}, false, nil
+	return &models.IndexerCheckpoint{ChainID: idx.chainID, Address: CheckpointAddress, LastBlock: idx.startBlock, Watched: idx.addressStrings()}, false, nil
 }
 
 // buildEvent constructs the ChainEvent for a decoded log, for prepareChunkEvents
 // and RetryDeadLetter
 func buildEvent(chainID int64, log types.Log, name string, data map[string]any) *models.ChainEvent {
 	return &models.ChainEvent{
-		ChainID: chainID, Address: log.Address.Hex(), TxHash: log.TxHash.Hex(), LogIndex: log.Index,
-		BlockNumber: log.BlockNumber, BlockHash: log.BlockHash.Hex(), Name: name, Data: data,
-		IndexedAt: time.Now().UTC(),
+		ChainID:     chainID,
+		Address:     log.Address.Hex(),
+		TxHash:      log.TxHash.Hex(),
+		LogIndex:    log.Index,
+		BlockNumber: log.BlockNumber,
+		BlockHash:   log.BlockHash.Hex(),
+		Name:        name,
+		Data:        data,
+		IndexedAt:   time.Now().UTC(),
 	}
 }
 
@@ -619,11 +749,18 @@ func (idx *Indexer) recordDeadLetter(ctx context.Context, log types.Log, cause e
 	}
 	now := time.Now().UTC()
 	entry := &models.DeadLetterEntry{
-		ID: deadLetterID(idx.chainID, log), ChainID: idx.chainID,
-		BlockNumber: log.BlockNumber, BlockHash: log.BlockHash.Hex(),
-		TxHash: log.TxHash.Hex(), LogIndex: log.Index, EventSignature: sig,
-		ErrorCategory: models.DLQErrorDecode, ErrorMessage: cause.Error(),
-		FirstFailedAt: now, LastFailedAt: now, SourceData: raw,
+		ID:             deadLetterID(idx.chainID, log),
+		ChainID:        idx.chainID,
+		BlockNumber:    log.BlockNumber,
+		BlockHash:      log.BlockHash.Hex(),
+		TxHash:         log.TxHash.Hex(),
+		LogIndex:       log.Index,
+		EventSignature: sig,
+		ErrorCategory:  models.DLQErrorDecode,
+		ErrorMessage:   cause.Error(),
+		FirstFailedAt:  now,
+		LastFailedAt:   now,
+		SourceData:     raw,
 	}
 	if err := idx.dlq.Record(ctx, entry); err != nil {
 		return fmt.Errorf("indexer: record DLQ entry for log %s#%d: %w", log.TxHash.Hex(), log.Index, err)
@@ -656,11 +793,16 @@ func (idx *Indexer) RetryDeadLetter(ctx context.Context, id string) error {
 	}
 	if header.Hash() != log.BlockHash {
 		if err := idx.dlq.Record(ctx, &models.DeadLetterEntry{
-			ID: entry.ID, ChainID: entry.ChainID, BlockNumber: entry.BlockNumber, BlockHash: entry.BlockHash,
-			TxHash: entry.TxHash, LogIndex: entry.LogIndex, EventSignature: entry.EventSignature,
-			ErrorCategory: models.DLQErrorOrphaned,
-			ErrorMessage:  fmt.Sprintf("block %d is no longer canonical (retained hash %s, current %s); dismissed without ingesting", log.BlockNumber, log.BlockHash.Hex(), header.Hash().Hex()),
-			SourceData:    entry.SourceData,
+			ID:             entry.ID,
+			ChainID:        entry.ChainID,
+			BlockNumber:    entry.BlockNumber,
+			BlockHash:      entry.BlockHash,
+			TxHash:         entry.TxHash,
+			LogIndex:       entry.LogIndex,
+			EventSignature: entry.EventSignature,
+			ErrorCategory:  models.DLQErrorOrphaned,
+			ErrorMessage:   fmt.Sprintf("block %d is no longer canonical (retained hash %s, current %s); dismissed without ingesting", log.BlockNumber, log.BlockHash.Hex(), header.Hash().Hex()),
+			SourceData:     entry.SourceData,
 		}); err != nil {
 			return fmt.Errorf("indexer: DLQ entry %s: record orphan dismissal: %w", id, err)
 		}
@@ -703,8 +845,12 @@ func (idx *Indexer) rollback(ctx context.Context, cp *models.IndexerCheckpoint, 
 		return nil, err
 	}
 	newCp := &models.IndexerCheckpoint{
-		ChainID: idx.chainID, Address: CheckpointAddress,
-		LastBlock: ancestor, LastBlockHash: ancestorHash, UpdatedAt: time.Now().UTC(),
+		ChainID:       idx.chainID,
+		Address:       CheckpointAddress,
+		LastBlock:     ancestor,
+		LastBlockHash: ancestorHash,
+		UpdatedAt:     time.Now().UTC(),
+		Watched:       cp.Watched,
 	}
 	return idx.rewind(ctx, cp, newCp, ancestor+1, "rollback")
 }
@@ -718,13 +864,12 @@ func (idx *Indexer) rewind(ctx context.Context, cp, newCp *models.IndexerCheckpo
 		if cp != nil {
 			expected = cp.Version
 		}
-		addrs := make([]string, 0, len(idx.addresses))
-		for _, addr := range idx.addresses {
-			addrs = append(addrs, addr.Hex())
-		}
 		committed, err := idx.chunks.RewindChunk(ctx, repository.ChunkRewind{
-			ChainID: idx.chainID, Addresses: addrs, DeleteFromBlock: deleteFrom,
-			Checkpoint: newCp, ExpectedCheckpointVersion: expected,
+			ChainID:                   idx.chainID,
+			Addresses:                 idx.addressStrings(),
+			DeleteFromBlock:           deleteFrom,
+			Checkpoint:                newCp,
+			ExpectedCheckpointVersion: expected,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("indexer: %s rewind: %w", what, err)
@@ -848,8 +993,14 @@ func (idx *Indexer) ResetToTrustedCheckpoint(ctx context.Context, trustedBlock u
 		return fmt.Errorf("indexer: read checkpoint before reset: %w", err)
 	}
 	newCp := &models.IndexerCheckpoint{
-		ChainID: idx.chainID, Address: CheckpointAddress,
-		LastBlock: trustedBlock, LastBlockHash: hash, UpdatedAt: time.Now().UTC(),
+		ChainID:       idx.chainID,
+		Address:       CheckpointAddress,
+		LastBlock:     trustedBlock,
+		LastBlockHash: hash,
+		UpdatedAt:     time.Now().UTC(),
+	}
+	if cur != nil {
+		newCp.Watched = cur.Watched
 	}
 	if _, err := idx.rewind(ctx, cur, newCp, trustedBlock+1, "reset"); err != nil {
 		if errors.Is(err, errCheckpointVersionConflict) {

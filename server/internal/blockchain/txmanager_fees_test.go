@@ -231,7 +231,9 @@ func confirmedWithBlockHash(t *testing.T) (*FakeClient, *memory.TransactionRepos
 	header := &types.Header{Number: minedAt, Extra: []byte("canonical")}
 	client.SetHeader(minedAt.Uint64(), header)
 	client.SetReceipt(common.HexToHash(rec.TxHash), &types.Receipt{
-		Status: types.ReceiptStatusSuccessful, BlockNumber: minedAt, BlockHash: header.Hash(),
+		Status:      types.ReceiptStatusSuccessful,
+		BlockNumber: minedAt,
+		BlockHash:   header.Hash(),
 	})
 	return client, repo, rec, mk
 }

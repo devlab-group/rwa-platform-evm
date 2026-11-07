@@ -86,7 +86,10 @@ func TestLegalFields(t *testing.T) {
 	}
 	const sum = "a4244f1bab68afd39467ad8bfa7904024342d9758de5e7b0af41819a02347cbe"
 	got := legalFields(&profile.Legal{
-		Wrapper: "share", IssuerLEI: "5493000EXAMPLE0LEI67", HolderRights: "rights", MaturityDate: "2030-12-31",
+		Wrapper:         "share",
+		IssuerLEI:       "5493000EXAMPLE0LEI67",
+		HolderRights:    "rights",
+		MaturityDate:    "2030-12-31",
 		RedemptionTerms: &profile.DocRef{URI: "https://a/t", SHA256: sum},
 		Rating:          &profile.Rating{Provider: "P", Grade: "AA", Ref: profile.DocRef{URI: "https://a/r", SHA256: sum}},
 	})

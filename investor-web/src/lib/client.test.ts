@@ -76,6 +76,18 @@ describe("api request building", () => {
     await api.listRedemptions({ address: ADDRESS, limit: 25 });
     expect(sent().url).toBe(`/api/v1/redemptions?address=${ADDRESS}&limit=25`);
   });
+
+  it("lists a buyer's purchase orders from the orders endpoint", async () => {
+    fetchMock.mockResolvedValue(json([]));
+    await api.listPurchaseOrders({
+      address: ADDRESS,
+      status: "Pending",
+      cursor: "c1",
+    });
+    expect(sent().url).toBe(
+      `/api/v1/sales/orders?status=Pending&address=${ADDRESS}&cursor=c1`,
+    );
+  });
 });
 
 describe("api responses", () => {

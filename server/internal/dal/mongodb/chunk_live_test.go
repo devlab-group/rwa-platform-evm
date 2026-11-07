@@ -2,6 +2,7 @@ package mongodb
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -33,16 +34,23 @@ func liveChunkRepo(t *testing.T) (*chainChunkRepo, *mongo.Database) {
 		t.Fatalf("EnsureIndexes: %v", err)
 	}
 	repo := &chainChunkRepo{
-		db: db, events: db.Collection(collChainEvents),
-		blockHashes: db.Collection(collIndexerBlockHashes), checkpoints: db.Collection(collIndexerCheckpoints),
+		db:          db,
+		events:      db.Collection(collChainEvents),
+		blockHashes: db.Collection(collIndexerBlockHashes),
+		checkpoints: db.Collection(collIndexerCheckpoints),
 	}
 	return repo, db
 }
 
 func chunkEvent(addr string, block uint64, name string) *models.ChainEvent {
 	return &models.ChainEvent{
-		ChainID: chunkChain, Address: addr, TxHash: "0xtx" + name + string(rune('a'+block%26)), LogIndex: uint(block),
-		BlockNumber: block, Name: name, Data: map[string]any{"n": int64(block)},
+		ChainID:     chunkChain,
+		Address:     addr,
+		TxHash:      "0xtx" + name + string(rune('a'+block%26)),
+		LogIndex:    uint(block),
+		BlockNumber: block,
+		Name:        name,
+		Data:        map[string]any{"n": int64(block)},
 	}
 }
 
@@ -113,14 +121,53 @@ func TestLiveCommitChunk_ReingestedEventIsSkippedWithoutFailingTheChunk(t *testi
 	}
 	dup := *ev
 	ok, err := r.CommitChunk(ctx, repository.ChunkCommit{
-		ChainID: chunkChain, Events: []*models.ChainEvent{&dup, chunkEvent(addr, 11, "Transfer")},
-		Checkpoint: checkpointAt(addr, 11), ExpectedCheckpointVersion: 1,
+		ChainID:                   chunkChain,
+		Events:                    []*models.ChainEvent{&dup, chunkEvent(addr, 11, "Transfer")},
+		Checkpoint:                checkpointAt(addr, 11),
+		ExpectedCheckpointVersion: 1,
 	})
 	if err != nil || !ok {
 		t.Fatalf("CommitChunk with a duplicate = %v, %v, want committed", ok, err)
 	}
 	if n := countDocs(t, r.events, bson.M{"address": addr}); n != 2 {
 		t.Errorf("events stored = %d, want 2 (the duplicate stored once)", n)
+	}
+}
+
+// A completed backfill records Watched with an empty commit; later chunk commits and
+// rewinds must preserve that set
+func TestLiveCheckpoint_WatchedSurvivesAnEmptyCommitAndARewind(t *testing.T) {
+	r, db := liveChunkRepo(t)
+	ctx := context.Background()
+	addr := "ALL-watched-" + t.Name()
+	checkpoints := db.Collection(collIndexerCheckpoints)
+	t.Cleanup(func() { _, _ = checkpoints.DeleteMany(ctx, bson.M{"chainId": chunkChain, "address": addr}) })
+	repo := &indexerCheckpointRepo{coll: checkpoints}
+	watched := []string{"0xA", "0xB"}
+
+	cp := checkpointAt(addr, 10)
+	cp.Watched = watched
+	if ok, err := r.CommitChunk(ctx, repository.ChunkCommit{ChainID: chunkChain, Checkpoint: cp}); err != nil || !ok {
+		t.Fatalf("CommitChunk = %v, %v", ok, err)
+	}
+	got, err := repo.Get(ctx, chunkChain, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.Watched, watched) {
+		t.Fatalf("Watched after commit = %v, want %v", got.Watched, watched)
+	}
+
+	back := checkpointAt(addr, 5)
+	back.Watched = watched
+	if ok, err := r.RewindChunk(ctx, repository.ChunkRewind{ChainID: chunkChain, DeleteFromBlock: 6, Checkpoint: back, ExpectedCheckpointVersion: 1}); err != nil || !ok {
+		t.Fatalf("RewindChunk = %v, %v", ok, err)
+	}
+	if got, err = repo.Get(ctx, chunkChain, addr); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.Watched, watched) {
+		t.Fatalf("Watched after rewind = %v, want %v", got.Watched, watched)
 	}
 }
 
@@ -165,8 +212,10 @@ func TestLiveCommitChunk_StaleWriterIsRejectedAndWritesNothing(t *testing.T) {
 	const addr = "0xA"
 	winner := repository.ChunkCommit{ChainID: chunkChain, Events: []*models.ChainEvent{chunkEvent(addr, 10, "Transfer")}, Checkpoint: checkpointAt(addr, 10)}
 	loser := repository.ChunkCommit{
-		ChainID: chunkChain, Events: []*models.ChainEvent{chunkEvent(addr, 10, "Other"), chunkEvent(addr, 11, "Other")},
-		BlockHashes: []repository.BlockHashEntry{{BlockNumber: 10, Hash: "0xloser"}}, Checkpoint: checkpointAt(addr, 99),
+		ChainID:     chunkChain,
+		Events:      []*models.ChainEvent{chunkEvent(addr, 10, "Other"), chunkEvent(addr, 11, "Other")},
+		BlockHashes: []repository.BlockHashEntry{{BlockNumber: 10, Hash: "0xloser"}},
+		Checkpoint:  checkpointAt(addr, 99),
 	}
 
 	if ok, err := r.CommitChunk(ctx, winner); err != nil || !ok {
@@ -199,8 +248,12 @@ func TestLiveRewindChunk_RemovesExactlyTheRolledBackRange(t *testing.T) {
 	other := chunkEvent(a, 13, "Transfer")
 	other.ChainID = chunkChain + 1
 	seed := []*models.ChainEvent{
-		chunkEvent(a, 10, "Transfer"), chunkEvent(a, 11, "Transfer"), chunkEvent(a, 12, "Transfer"), chunkEvent(a, 13, "Transfer"),
-		chunkEvent(b, 12, "Transfer"), other,
+		chunkEvent(a, 10, "Transfer"),
+		chunkEvent(a, 11, "Transfer"),
+		chunkEvent(a, 12, "Transfer"),
+		chunkEvent(a, 13, "Transfer"),
+		chunkEvent(b, 12, "Transfer"),
+		other,
 	}
 	for _, e := range seed {
 		if _, err := r.events.InsertOne(ctx, e); err != nil {
@@ -212,8 +265,11 @@ func TestLiveRewindChunk_RemovesExactlyTheRolledBackRange(t *testing.T) {
 	}
 
 	ok, err := r.RewindChunk(ctx, repository.ChunkRewind{
-		ChainID: chunkChain, Addresses: []string{a}, DeleteFromBlock: 12,
-		Checkpoint: checkpointAt(a, 11), ExpectedCheckpointVersion: 1,
+		ChainID:                   chunkChain,
+		Addresses:                 []string{a},
+		DeleteFromBlock:           12,
+		Checkpoint:                checkpointAt(a, 11),
+		ExpectedCheckpointVersion: 1,
 	})
 	if err != nil || !ok {
 		t.Fatalf("RewindChunk = %v, %v, want committed", ok, err)
@@ -244,15 +300,19 @@ func TestLiveRewindChunk_StaleWriterDeletesNothing(t *testing.T) {
 	ctx := context.Background()
 	const addr = "0xA"
 	if ok, err := r.CommitChunk(ctx, repository.ChunkCommit{
-		ChainID: chunkChain, Events: []*models.ChainEvent{chunkEvent(addr, 10, "Transfer"), chunkEvent(addr, 11, "Transfer")},
+		ChainID:    chunkChain,
+		Events:     []*models.ChainEvent{chunkEvent(addr, 10, "Transfer"), chunkEvent(addr, 11, "Transfer")},
 		Checkpoint: checkpointAt(addr, 11),
 	}); err != nil || !ok {
 		t.Fatalf("seed: %v, %v", ok, err)
 	}
 
 	ok, err := r.RewindChunk(ctx, repository.ChunkRewind{
-		ChainID: chunkChain, Addresses: []string{addr}, DeleteFromBlock: 10,
-		Checkpoint: checkpointAt(addr, 9), ExpectedCheckpointVersion: 0, // stale: stored version is 1
+		ChainID:                   chunkChain,
+		Addresses:                 []string{addr},
+		DeleteFromBlock:           10,
+		Checkpoint:                checkpointAt(addr, 9),
+		ExpectedCheckpointVersion: 0, // stale: stored version is 1
 	})
 	if err != nil || ok {
 		t.Fatalf("stale RewindChunk = %v, %v, want (false, nil)", ok, err)

@@ -66,8 +66,11 @@ func sampleConfig(t *testing.T) bindings.ProjectConfig {
 		t.Fatal(err)
 	}
 	return bindings.ProjectConfig{
-		Name: "Gold Token", Symbol: "GLD", Decimals: 18,
-		ProfileDigest: pd, ProjectID: pid,
+		Name:                         "Gold Token",
+		Symbol:                       "GLD",
+		Decimals:                     18,
+		ProfileDigest:                pd,
+		ProjectID:                    pid,
 		QuoteToken:                   common.HexToAddress("0x000000000000000000000000000000000000AA01"),
 		PurchasePricePerWholeToken:   big.NewInt(2000000),
 		RedemptionPricePerWholeToken: big.NewInt(1950000),
@@ -90,9 +93,10 @@ func sampleProfile() *models.AssetProfile {
 // verifyFixture supplies a passing transaction/profile scenario so tests can isolate
 // each verification failure
 type fixtureOpts struct {
-	// v3 builds an rwa-v3 deployment with an income distributor; oracle (v3 only) deploys an
-	// OraclePriceStrategy instead of a FixedPriceStrategy
-	v3, oracle bool
+	// v3 builds an rwa-v3 deployment with an income distributor; v4 builds an rwa-v4 one, which
+	// has everything v3 has plus the purchase timeout and, for an oracle, the dealing cut-off.
+	// oracle (v3 and v4 only) deploys an OraclePriceStrategy instead of a FixedPriceStrategy.
+	v3, v4, oracle bool
 }
 
 type verifyFixture struct {
@@ -122,10 +126,17 @@ func newVerifyFixtureOpts(t *testing.T, o fixtureOpts) *verifyFixture {
 
 	cfg := sampleConfig(t)
 	version := bindings.FactoryVersionV2
-	if o.v3 {
+	if o.v3 || o.v4 {
 		version = bindings.FactoryVersionV3
 		cfg.MinPurchaseQuote = big.NewInt(5_000_000)
 		cfg.IncomeManager = common.HexToAddress("0x000000000000000000000000000000000000AA09")
+	}
+	if o.v4 {
+		version = bindings.FactoryVersionV4
+		cfg.PurchaseTimeout = 604800
+		if o.oracle {
+			cfg.DealingCutoff = 7200
+		}
 	}
 	if o.oracle {
 		cfg.StrategyKind = bindings.StrategyKindOracle
@@ -161,13 +172,17 @@ func newVerifyFixtureOpts(t *testing.T, o fixtureOpts) *verifyFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.v3 {
+	if o.v3 || o.v4 {
 		event = factoryABI.ABI.Events["ProjectDeployed"]
-		packed, err = event.Inputs.NonIndexed().Pack(tokenAddr, complianceAddr, controllerAddr, vaultAddr, escrowAddr, strategyAddr, incomeAddr, "rwa-v3")
+		packed, err = event.Inputs.NonIndexed().Pack(tokenAddr, complianceAddr, controllerAddr, vaultAddr, escrowAddr, strategyAddr, incomeAddr, version)
 		if err != nil {
 			t.Fatal(err)
 		}
-		calldata, err = factoryABI.PackDeploy(cfg)
+		if o.v4 {
+			calldata, err = factoryABI.PackDeploy(cfg)
+		} else {
+			calldata, err = factoryABI.PackDeployV3(cfg)
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -176,12 +191,15 @@ func newVerifyFixtureOpts(t *testing.T, o fixtureOpts) *verifyFixture {
 	txHash := tx.Hash()
 	client.SetTx(txHash, tx)
 	client.SetReceipt(txHash, &types.Receipt{
-		Status: types.ReceiptStatusSuccessful, BlockNumber: big.NewInt(1),
-		Logs: []*types.Log{{
-			Address: factoryAddr,
-			Topics:  []common.Hash{event.ID, common.Hash(cfg.ProjectID), common.Hash(cfg.ProfileDigest)},
-			Data:    packed,
-		}},
+		Status:      types.ReceiptStatusSuccessful,
+		BlockNumber: big.NewInt(1),
+		Logs: []*types.Log{
+			{
+				Address: factoryAddr,
+				Topics:  []common.Hash{event.ID, common.Hash(cfg.ProjectID), common.Hash(cfg.ProfileDigest)},
+				Data:    packed,
+			},
+		},
 	})
 
 	for _, a := range []common.Address{tokenAddr, complianceAddr, controllerAddr, vaultAddr, escrowAddr, strategyAddr, factoryAddr} {
@@ -189,13 +207,20 @@ func newVerifyFixtureOpts(t *testing.T, o fixtureOpts) *verifyFixture {
 	}
 	roleProject := &models.Project{
 		Addresses: models.Addresses{
-			Token: tokenAddr.Hex(), Compliance: complianceAddr.Hex(), SupplyController: controllerAddr.Hex(),
-			Vault: vaultAddr.Hex(), RedemptionEscrow: escrowAddr.Hex(), Strategy: strategyAddr.Hex(),
+			Token:            tokenAddr.Hex(),
+			Compliance:       complianceAddr.Hex(),
+			SupplyController: controllerAddr.Hex(),
+			Vault:            vaultAddr.Hex(),
+			RedemptionEscrow: escrowAddr.Hex(),
+			Strategy:         strategyAddr.Hex(),
 		},
-		Admin: cfg.Admin.Hex(), ComplianceOperator: cfg.ComplianceOperator.Hex(),
-		Pricer: cfg.Pricer.Hex(), Treasurer: cfg.Treasurer.Hex(), RedemptionManager: cfg.RedemptionManager.Hex(),
+		Admin:              cfg.Admin.Hex(),
+		ComplianceOperator: cfg.ComplianceOperator.Hex(),
+		Pricer:             cfg.Pricer.Hex(),
+		Treasurer:          cfg.Treasurer.Hex(),
+		RedemptionManager:  cfg.RedemptionManager.Hex(),
 	}
-	if o.v3 {
+	if o.v3 || o.v4 {
 		client.Code[incomeAddr] = []byte{0x60, 0x60}
 		roleProject.Addresses.IncomeDistributor = incomeAddr.Hex()
 		roleProject.IncomeManager = cfg.IncomeManager.Hex()
@@ -268,7 +293,11 @@ func newVerifyFixtureOpts(t *testing.T, o fixtureOpts) *verifyFixture {
 		setViewResponse(strategyABI, "purchasePricePerWholeToken", cfg.PurchasePricePerWholeToken)
 		setViewResponse(strategyABI, "redemptionPricePerWholeToken", cfg.RedemptionPricePerWholeToken)
 	}
-	if o.v3 {
+	if o.v4 {
+		setViewResponse(vaultABI, "purchaseTimeout", cfg.PurchaseTimeout)
+		setViewResponse(strategyABI, "forwardPriced", o.oracle)
+	}
+	if o.v3 || o.v4 {
 		setViewResponse(vaultABI, "minPurchaseQuote", cfg.MinPurchaseQuote)
 		incomeABI := bindings.NewIncomeDistributor().ABI
 		setViewResponse(incomeABI, "token", tokenAddr)
@@ -281,6 +310,9 @@ func newVerifyFixtureOpts(t *testing.T, o fixtureOpts) *verifyFixture {
 		setViewResponse(oracleABI, "sequencerUptimeFeed", cfg.SequencerUptimeFeed)
 		setViewResponse(oracleABI, "maxAge", cfg.PriceMaxAge)
 		setViewResponse(oracleABI, "gracePeriod", cfg.SequencerGracePeriod)
+		if o.v4 {
+			setViewResponse(oracleABI, "dealingCutoff", cfg.DealingCutoff)
+		}
 		setViewResponse(oracleABI, "purchaseSpreadBps", cfg.PurchaseSpreadBps)
 		setViewResponse(oracleABI, "redemptionSpreadBps", cfg.RedemptionSpreadBps)
 		setViewResponse(oracleABI, "quoteDecimals", uint8(6))
@@ -298,9 +330,21 @@ func newVerifyFixtureOpts(t *testing.T, o fixtureOpts) *verifyFixture {
 	client.CallResponses[common.Bytes2Hex(versionData)] = versionOut
 
 	return &verifyFixture{
-		svc: svc, client: client, projectRepo: projectRepo, profileRepo: profileRepo, txHash: txHash, factoryAddr: factoryAddr,
-		tokenAddr: tokenAddr, complianceAddr: complianceAddr, controllerAddr: controllerAddr,
-		vaultAddr: vaultAddr, escrowAddr: escrowAddr, strategyAddr: strategyAddr, incomeAddr: incomeAddr, cfg: cfg, profile: profile,
+		svc:            svc,
+		client:         client,
+		projectRepo:    projectRepo,
+		profileRepo:    profileRepo,
+		txHash:         txHash,
+		factoryAddr:    factoryAddr,
+		tokenAddr:      tokenAddr,
+		complianceAddr: complianceAddr,
+		controllerAddr: controllerAddr,
+		vaultAddr:      vaultAddr,
+		escrowAddr:     escrowAddr,
+		strategyAddr:   strategyAddr,
+		incomeAddr:     incomeAddr,
+		cfg:            cfg,
+		profile:        profile,
 	}
 }
 
@@ -308,8 +352,12 @@ func newVerifyFixtureOpts(t *testing.T, o fixtureOpts) *verifyFixture {
 func (f *verifyFixture) seedDeployEvent(t *testing.T, chainEvents *memory.ChainEventRepository) {
 	t.Helper()
 	if err := chainEvents.Create(context.Background(), &models.ChainEvent{
-		ChainID: 31337, Address: f.factoryAddr.Hex(), TxHash: f.txHash.Hex(), LogIndex: 0, BlockNumber: 1,
-		Name: "ProjectDeployed",
+		ChainID:     31337,
+		Address:     f.factoryAddr.Hex(),
+		TxHash:      f.txHash.Hex(),
+		LogIndex:    0,
+		BlockNumber: 1,
+		Name:        "ProjectDeployed",
 		Data: map[string]any{
 			"projectId":     common.Hash(f.cfg.ProjectID).Hex(),
 			"profileDigest": common.Hash(f.cfg.ProfileDigest).Hex(),
@@ -717,8 +765,12 @@ func TestReconcileDeploymentIgnoresMismatchedEvent(t *testing.T) {
 	chainEvents := memory.NewChainEventRepository()
 	// Event for a different profileDigest
 	if err := chainEvents.Create(context.Background(), &models.ChainEvent{
-		ChainID: 31337, Address: f.factoryAddr.Hex(), TxHash: f.txHash.Hex(), LogIndex: 0, BlockNumber: 1,
-		Name: "ProjectDeployed",
+		ChainID:     31337,
+		Address:     f.factoryAddr.Hex(),
+		TxHash:      f.txHash.Hex(),
+		LogIndex:    0,
+		BlockNumber: 1,
+		Name:        "ProjectDeployed",
 		Data: map[string]any{
 			"projectId":     common.Hash(f.cfg.ProjectID).Hex(),
 			"profileDigest": "0x" + strings.Repeat("22", 32),
@@ -764,20 +816,27 @@ func (f *verifyFixture) seedLookAlikeDeploy(t *testing.T, chainEvents *memory.Ch
 	}
 	f.client.SetTx(tx.Hash(), tx)
 	f.client.SetReceipt(tx.Hash(), &types.Receipt{
-		Status: types.ReceiptStatusSuccessful, BlockNumber: big.NewInt(2),
-		Logs: []*types.Log{{
-			Address: f.factoryAddr,
-			Topics:  []common.Hash{event.ID, common.Hash(cfg.ProjectID), common.Hash(cfg.ProfileDigest)},
-			Data:    packed,
-		}},
+		Status:      types.ReceiptStatusSuccessful,
+		BlockNumber: big.NewInt(2),
+		Logs: []*types.Log{
+			{
+				Address: f.factoryAddr,
+				Topics:  []common.Hash{event.ID, common.Hash(cfg.ProjectID), common.Hash(cfg.ProfileDigest)},
+				Data:    packed,
+			},
+		},
 	})
 	for n := byte(1); n <= 6; n++ {
 		f.client.Code[evilAddr(n)] = []byte{0x60, 0x60}
 	}
 	if chainEvents != nil {
 		if err := chainEvents.Create(context.Background(), &models.ChainEvent{
-			ChainID: testChainID, Address: f.factoryAddr.Hex(), TxHash: tx.Hash().Hex(), LogIndex: 0, BlockNumber: 2,
-			Name: "ProjectDeployed",
+			ChainID:     testChainID,
+			Address:     f.factoryAddr.Hex(),
+			TxHash:      tx.Hash().Hex(),
+			LogIndex:    0,
+			BlockNumber: 2,
+			Name:        "ProjectDeployed",
 			Data: map[string]any{
 				"projectId":     common.Hash(cfg.ProjectID).Hex(),
 				"profileDigest": common.Hash(cfg.ProfileDigest).Hex(),
@@ -1008,8 +1067,13 @@ func TestReconcileDeploymentIgnoresRemovedEvent(t *testing.T) {
 	ctx := context.Background()
 	mk := func(removed bool, f *verifyFixture) *models.ChainEvent {
 		return &models.ChainEvent{
-			ChainID: 31337, Address: f.factoryAddr.Hex(), TxHash: f.txHash.Hex(), LogIndex: 0, BlockNumber: 1,
-			Name: "ProjectDeployed", Removed: removed,
+			ChainID:     31337,
+			Address:     f.factoryAddr.Hex(),
+			TxHash:      f.txHash.Hex(),
+			LogIndex:    0,
+			BlockNumber: 1,
+			Name:        "ProjectDeployed",
+			Removed:     removed,
 			Data: map[string]any{
 				"projectId":     common.Hash(f.cfg.ProjectID).Hex(),
 				"profileDigest": common.Hash(f.cfg.ProfileDigest).Hex(),

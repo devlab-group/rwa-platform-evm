@@ -81,9 +81,14 @@ func (d IncomeDistributor) UnpackDistributionCreated(data []byte, topics []commo
 		return DistributionCreatedEvent{}, fmt.Errorf("bindings: DistributionCreated log has %d topics, want 3", len(topics))
 	}
 	return DistributionCreatedEvent{
-		ID: new(big.Int).SetBytes(topics[1].Bytes()), MerkleRoot: partial.MerkleRoot, Total: partial.Total,
-		RecordBlock: partial.RecordBlock, ClaimDeadline: partial.ClaimDeadline, SnapshotURI: partial.SnapshotURI,
-		SnapshotSha256: partial.SnapshotSha256, Caller: common.HexToAddress(topics[2].Hex()),
+		ID:             new(big.Int).SetBytes(topics[1].Bytes()),
+		MerkleRoot:     partial.MerkleRoot,
+		Total:          partial.Total,
+		RecordBlock:    partial.RecordBlock,
+		ClaimDeadline:  partial.ClaimDeadline,
+		SnapshotURI:    partial.SnapshotURI,
+		SnapshotSha256: partial.SnapshotSha256,
+		Caller:         common.HexToAddress(topics[2].Hex()),
 	}, nil
 }
 
@@ -104,7 +109,9 @@ func (d IncomeDistributor) UnpackIncomeClaimed(data []byte, topics []common.Hash
 		return IncomeClaimedEvent{}, fmt.Errorf("bindings: IncomeClaimed log has %d topics, want 3", len(topics))
 	}
 	return IncomeClaimedEvent{
-		ID: new(big.Int).SetBytes(topics[1].Bytes()), Account: common.HexToAddress(topics[2].Hex()), Amount: partial.Amount,
+		ID:      new(big.Int).SetBytes(topics[1].Bytes()),
+		Account: common.HexToAddress(topics[2].Hex()),
+		Amount:  partial.Amount,
 	}, nil
 }
 
@@ -125,7 +132,9 @@ func (d IncomeDistributor) UnpackUnclaimedReclaimed(data []byte, topics []common
 		return UnclaimedReclaimedEvent{}, fmt.Errorf("bindings: UnclaimedReclaimed log has %d topics, want 3", len(topics))
 	}
 	return UnclaimedReclaimedEvent{
-		ID: new(big.Int).SetBytes(topics[1].Bytes()), Treasury: common.HexToAddress(topics[2].Hex()), Amount: partial.Amount,
+		ID:       new(big.Int).SetBytes(topics[1].Bytes()),
+		Treasury: common.HexToAddress(topics[2].Hex()),
+		Amount:   partial.Amount,
 	}, nil
 }
 
@@ -150,7 +159,9 @@ func (d IncomeDistributor) UnpackClaimDeadlineExtended(data []byte, topics []com
 		return ClaimDeadlineExtendedEvent{}, fmt.Errorf("bindings: ClaimDeadlineExtended log has %d topics, want 3", len(topics))
 	}
 	return ClaimDeadlineExtendedEvent{
-		ID: new(big.Int).SetBytes(topics[1].Bytes()), PreviousDeadline: partial.PreviousDeadline,
-		NewDeadline: partial.NewDeadline, Caller: common.HexToAddress(topics[2].Hex()),
+		ID:               new(big.Int).SetBytes(topics[1].Bytes()),
+		PreviousDeadline: partial.PreviousDeadline,
+		NewDeadline:      partial.NewDeadline,
+		Caller:           common.HexToAddress(topics[2].Hex()),
 	}, nil
 }

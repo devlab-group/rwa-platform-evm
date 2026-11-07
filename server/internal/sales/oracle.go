@@ -2,10 +2,8 @@ package sales
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/big"
-	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -37,6 +35,9 @@ type OracleInfo struct {
 	// SequencerUptimeFeed is the zero address and GracePeriod 0 without a sequencer feed
 	SequencerUptimeFeed common.Address
 	GracePeriod         uint64
+	// DealingCutoff is the rwa-v4 forward-pricing cut-off in seconds; nil for an rwa-v3
+	// strategy, which has none
+	DealingCutoff *uint64
 	// Available reports whether latestPrice() succeeded; Price is then the validated feed
 	// answer in feed units
 	Available bool
@@ -66,21 +67,6 @@ type StrategyPrices struct {
 	Error                string
 }
 
-// isRevert requires ErrorData plus code 3 or "execution reverted". ErrorData alone also
-// appears on node failures such as rate limits and missing headers, which say nothing
-// about contract health.
-func isRevert(err error) bool {
-	var de interface{ ErrorData() interface{} }
-	if !errors.As(err, &de) {
-		return false
-	}
-	var ce interface{ ErrorCode() int }
-	if errors.As(err, &ce) && ce.ErrorCode() == 3 {
-		return true
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "execution reverted")
-}
-
 // StrategyKind probes feed() for Oracle, then purchasePricePerWholeToken() for Fixed only
 // after a revert. It caches resolved kinds by address and retries inconclusive KindUnknown
 // results, including transport failures.
@@ -91,7 +77,7 @@ func (s *Service) StrategyKind(ctx context.Context, strategy common.Address) str
 	kind := KindUnknown
 	if _, err := s.callOracle(ctx, strategy, "feed"); err == nil {
 		kind = KindOracle
-	} else if isRevert(err) {
+	} else if blockchain.IsRevert(err) {
 		if _, err := s.callOracle(ctx, strategy, "purchasePricePerWholeToken"); err == nil {
 			kind = KindFixed
 		}
@@ -120,6 +106,8 @@ type oracleParams struct {
 	maxAge, gracePeriod    uint64
 	purchaseBps, redeemBps uint16
 	feedDecimals           uint8
+	// dealingCutoff is nil for an rwa-v3 strategy, whose dealingCutoff() reverts
+	dealingCutoff *uint64
 }
 
 func (s *Service) oracleParams(ctx context.Context, strategy common.Address) (oracleParams, error) {
@@ -139,12 +127,26 @@ func (s *Service) oracleParams(ctx context.Context, strategy common.Address) (or
 		method string
 		dst    any
 	}{
-		{"feed", &p.feed}, {"sequencerUptimeFeed", &p.sequencer}, {"maxAge", &p.maxAge}, {"gracePeriod", &p.gracePeriod},
-		{"purchaseSpreadBps", &p.purchaseBps}, {"redemptionSpreadBps", &p.redeemBps}, {"feedDecimals", &p.feedDecimals},
+		{"feed", &p.feed},
+		{"sequencerUptimeFeed", &p.sequencer},
+		{"maxAge", &p.maxAge},
+		{"gracePeriod", &p.gracePeriod},
+		{"purchaseSpreadBps", &p.purchaseBps},
+		{"redemptionSpreadBps", &p.redeemBps},
+		{"feedDecimals", &p.feedDecimals},
 	} {
 		if err := read(step.method, step.dst); err != nil {
 			return oracleParams{}, err
 		}
+	}
+	// Treat a reverted dealingCutoff read as an absent view. Return other errors so a temporary
+	// RPC failure does not cache a missing cutoff.
+	if out, err := s.callOracle(ctx, strategy, "dealingCutoff"); err == nil {
+		var cutoff uint64
+		abi.ConvertType(out[0], &cutoff)
+		p.dealingCutoff = &cutoff
+	} else if !blockchain.IsRevert(err) {
+		return oracleParams{}, fmt.Errorf("sales: strategy.dealingCutoff: %w", err)
 	}
 	s.oracleCfg.Store(strategy, p)
 	return p, nil
@@ -164,14 +166,20 @@ func (s *Service) Oracle(ctx context.Context, strategy common.Address) (*OracleI
 		return nil, err
 	}
 	info := &OracleInfo{
-		Strategy: strategy, Feed: p.feed, MaxAge: p.maxAge, PurchaseSpreadBps: p.purchaseBps,
-		RedemptionSpreadBps: p.redeemBps, FeedDecimals: p.feedDecimals,
-		SequencerUptimeFeed: p.sequencer, GracePeriod: p.gracePeriod,
+		Strategy:            strategy,
+		Feed:                p.feed,
+		MaxAge:              p.maxAge,
+		PurchaseSpreadBps:   p.purchaseBps,
+		RedemptionSpreadBps: p.redeemBps,
+		FeedDecimals:        p.feedDecimals,
+		SequencerUptimeFeed: p.sequencer,
+		GracePeriod:         p.gracePeriod,
+		DealingCutoff:       p.dealingCutoff,
 	}
 
 	if data, err := s.oracle.ABI.Pack("latestPrice"); err == nil {
 		if raw, err := blockchain.Call(ctx, s.client, strategy, data); err != nil {
-			info.Error, info.TransportFailure = s.readFailure(err), !isRevert(err)
+			info.Error, info.TransportFailure = s.readFailure(err), !blockchain.IsRevert(err)
 		} else if lp, err := s.oracle.UnpackLatestPrice(raw); err != nil {
 			info.Error = bindings.PriceErrReadFailed
 		} else {
@@ -221,6 +229,17 @@ func (s *Service) OraclePrices(ctx context.Context, strategy common.Address) Str
 		*m.dst = v
 	}
 	return out
+}
+
+// ForwardPriced reads strategy.forwardPriced(), nil when the read fails. rwa-v2 and rwa-v3
+// strategies revert, so callers read it for rwa-v4 projects only.
+func (s *Service) ForwardPriced(ctx context.Context, strategy common.Address) *bool {
+	out, err := s.callOracle(ctx, strategy, "forwardPriced")
+	if err != nil {
+		return nil
+	}
+	v := *abi.ConvertType(out[0], new(bool)).(*bool)
+	return &v
 }
 
 // CurrentStrategy returns the Vault's live strategy address

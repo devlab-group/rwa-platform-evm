@@ -2,9 +2,11 @@ package project
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,8 +20,8 @@ import (
 
 // ReconcileSecurity rebuilds models.Project.Security from the verified deploy baseline
 // and surviving chain_events, never the previous projection. It folds pause,
-// auditor/treasury rotations, strategy/prices, freezes/forced transfers, roles and
-// admin-transfer schedules/cancellations.
+// auditor/treasury rotations, strategy/prices, freezes/forced transfers, roles,
+// admin-transfer schedules/cancellations and admin delay changes.
 //
 // Replay reflects indexer rollbacks; role set operations work with or without indexed
 // deploy-time grants. Repeated calls are safe; missing or non-Active projects and
@@ -90,7 +92,7 @@ func foldSecurity(ctx context.Context, chainEvents repository.ChainEventReposito
 			state.Treasury = v
 		}
 	}
-	if p.Version == bindings.FactoryVersionV3 {
+	if bindings.IsV3OrLater(p.Version) {
 		state.MinPurchaseQuote = p.MinPurchaseQuote
 		if a.Vault != "" {
 			if v, ok, err := latestStringField(ctx, chainEvents, chainID, a.Vault, "MinPurchaseQuoteChanged", "newMinimum"); err != nil {
@@ -168,7 +170,58 @@ func foldSecurity(ctx context.Context, chainEvents repository.ChainEventReposito
 		}
 	}
 
+	for _, c := range governedContracts(a, state.Strategy) {
+		if c.addr == "" {
+			continue
+		}
+		change, err := latestAdminDelayChange(ctx, chainEvents, chainID, c)
+		if err != nil {
+			return nil, err
+		}
+		if change != nil {
+			state.AdminDelayChanges = append(state.AdminDelayChanges, *change)
+		}
+	}
+
 	return state, nil
+}
+
+// latestAdminDelayChange returns c's latest uncancelled delay change, or nil.
+// Each cancellation removes the preceding schedule, including OpenZeppelin's
+// cancel-then-schedule pair for a replacement. OpenZeppelin cancels only pending
+// changes, so cancelling one restores any earlier change that took effect.
+func latestAdminDelayChange(ctx context.Context, chainEvents repository.ChainEventRepository, chainID int64, c governedContract) (*models.AdminDelayChange, error) {
+	const scheduled, canceled = "DefaultAdminDelayChangeScheduled", "DefaultAdminDelayChangeCanceled"
+	var events []*models.ChainEvent
+	for _, name := range []string{scheduled, canceled} {
+		evs, err := chainEvents.ListByName(ctx, chainID, c.addr, name)
+		if err != nil {
+			return nil, fmt.Errorf("project: list %s for %s: %w", name, c.addr, err)
+		}
+		events = append(events, evs...)
+	}
+	sort.Slice(events, func(i, j int) bool { return earlier(events[i], events[j]) })
+
+	var live []*models.ChainEvent
+	for _, e := range events {
+		switch {
+		case e.Removed:
+		case e.Name == scheduled:
+			live = append(live, e)
+		case len(live) > 0:
+			live = live[:len(live)-1]
+		}
+	}
+	if len(live) == 0 {
+		return nil, nil
+	}
+	last := live[len(live)-1]
+	newDelay, delayErr := strconv.ParseUint(fmt.Sprint(last.Data["newDelay"]), 10, 64)
+	effectAt, effectErr := strconv.ParseUint(fmt.Sprint(last.Data["effectSchedule"]), 10, 64)
+	if err := errors.Join(delayErr, effectErr); err != nil {
+		return nil, fmt.Errorf("project: %s event %s/%d: %w", scheduled, last.TxHash, last.LogIndex, err)
+	}
+	return &models.AdminDelayChange{Contract: c.label, NewDelay: newDelay, EffectAt: effectAt}, nil
 }
 
 // pendingAdminOnContract returns the scheduled newAdmin, or "" if none is pending. It
@@ -203,6 +256,22 @@ func pendingAdminOnContract(ctx context.Context, chainEvents repository.ChainEve
 	return newAdmin, nil
 }
 
+// governedContract is a project contract and the label the API reports it under
+type governedContract struct{ label, addr string }
+
+// governedContracts lists the role-bearing contracts; strategy is the live Security.Strategy
+func governedContracts(a models.Addresses, strategy string) []governedContract {
+	return []governedContract{
+		{"token", a.Token},
+		{"compliance", a.Compliance},
+		{"supplyController", a.SupplyController},
+		{"vault", a.Vault},
+		{"redemptionEscrow", a.RedemptionEscrow},
+		{"strategy", strategy},
+		{"incomeDistributor", a.IncomeDistributor},
+	}
+}
+
 // foldRoles seeds verified deploy-time holders, then applies surviving
 // RoleGranted/RoleRevoked events in (block, logIndex) order. It maps lowercase contract
 // addresses to role names to holder sets.
@@ -234,11 +303,7 @@ func foldRoles(ctx context.Context, chainEvents repository.ChainEventRepository,
 	}
 
 	// Same verified deploy baseline as verifyRoles
-	contracts := []struct{ label, addr string }{
-		{"token", a.Token}, {"compliance", a.Compliance}, {"supplyController", a.SupplyController},
-		{"vault", a.Vault}, {"redemptionEscrow", a.RedemptionEscrow}, {"strategy", strategyAddr},
-		{"incomeDistributor", a.IncomeDistributor},
-	}
+	contracts := governedContracts(a, strategyAddr)
 	// Do not seed deploy-time roles onto an unverified replacement strategy, nor onto a
 	// deployed OraclePriceStrategy, which has no roles
 	swappedStrategy := strategyAddr != a.Strategy || p.StrategyKind == models.StrategyKindOracle
@@ -441,25 +506,21 @@ func unionRoles(perContract map[string]map[string]map[string]bool) map[string][]
 // holders
 func rolesByContract(perContract map[string]map[string]map[string]bool, a models.Addresses, strategy string) map[string]map[string][]string {
 	out := map[string]map[string][]string{}
-	for label, addr := range map[string]string{
-		"token": a.Token, "compliance": a.Compliance, "supplyController": a.SupplyController,
-		"vault": a.Vault, "redemptionEscrow": a.RedemptionEscrow, "strategy": strategy,
-		"incomeDistributor": a.IncomeDistributor,
-	} {
-		if addr == "" {
+	for _, c := range governedContracts(a, strategy) {
+		if c.addr == "" {
 			continue
 		}
-		for role, holders := range perContract[strings.ToLower(addr)] {
+		for role, holders := range perContract[strings.ToLower(c.addr)] {
 			if len(holders) == 0 {
 				continue
 			}
-			if out[label] == nil {
-				out[label] = map[string][]string{}
+			if out[c.label] == nil {
+				out[c.label] = map[string][]string{}
 			}
 			for h := range holders {
-				out[label][role] = append(out[label][role], h)
+				out[c.label][role] = append(out[c.label][role], h)
 			}
-			sort.Strings(out[label][role])
+			sort.Strings(out[c.label][role])
 		}
 	}
 	if len(out) == 0 {

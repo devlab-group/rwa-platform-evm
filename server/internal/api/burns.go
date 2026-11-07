@@ -70,7 +70,9 @@ func (app *App) createBurn(c *gin.Context) {
 		return
 	}
 	burn, err := app.Burns.CreateBurn(c.Request.Context(), profile, projectID, assets.CreateBurnRequest{
-		RecordID: body.RecordID, Amount: body.Amount, Proofs: body.Proofs,
+		RecordID: body.RecordID,
+		Amount:   body.Amount,
+		Proofs:   body.Proofs,
 	})
 	if err != nil {
 		app.recordAuditResult(c.Request.Context(), intentID, "assets", actor, "assets.createBurn", body.RecordID, false, map[string]any{"error": err.Error()})

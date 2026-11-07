@@ -26,8 +26,12 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 			return "", nil, err
 		}
 		return "Minted", map[string]any{
-			"recordKey": ev.RecordKey.Hex(), "metadataDigest": ev.MetadataDigest.Hex(), "vault": ev.Vault.Hex(),
-			"amount": ev.Amount.String(), "nonce": ev.Nonce.String(), "auditor": ev.Auditor.Hex(),
+			"recordKey":      ev.RecordKey.Hex(),
+			"metadataDigest": ev.MetadataDigest.Hex(),
+			"vault":          ev.Vault.Hex(),
+			"amount":         ev.Amount.String(),
+			"nonce":          ev.Nonce.String(),
+			"auditor":        ev.Auditor.Hex(),
 		}, nil
 	case controller.EventID("Burned"):
 		ev, err := controller.UnpackBurned(log.Data, log.Topics)
@@ -35,8 +39,12 @@ func DecodeLog(log types.Log) (string, map[string]any, error) {
 			return "", nil, err
 		}
 		return "Burned", map[string]any{
-			"operationId": ev.OperationID.Hex(), "metadataDigest": ev.MetadataDigest.Hex(), "vault": ev.Vault.Hex(),
-			"amount": ev.Amount.String(), "nonce": ev.Nonce.String(), "auditor": ev.Auditor.Hex(),
+			"operationId":    ev.OperationID.Hex(),
+			"metadataDigest": ev.MetadataDigest.Hex(),
+			"vault":          ev.Vault.Hex(),
+			"amount":         ev.Amount.String(),
+			"nonce":          ev.Nonce.String(),
+			"auditor":        ev.Auditor.Hex(),
 		}, nil
 	case controller.EventID("AuditorChanged"):
 		// all three parameters are indexed, so there is no data to unpack

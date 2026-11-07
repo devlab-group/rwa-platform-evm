@@ -27,12 +27,25 @@ import (
 // ERC-20 "Transfer" (indexed for income snapshots, not shown as history); hashes without
 // eligible events produce no record.
 var stackTxKinds = []struct{ event, kind string }{
+	// Rank deployment above the role and status events emitted in the same transaction
+	{"ProjectDeployed", "project_deployed"},
 	{"ProceedsWithdrawn", "treasury_withdrawal"},
 	{"Purchased", "purchase"},
+	// settlePurchase that fills emits PurchaseSettled with Purchased, which ranks first;
+	// one that refunds emits PurchaseRefunded alone
+	{"PurchaseSettled", "purchase"},
+	{"PurchaseRequested", "purchase_requested"},
+	{"PurchaseRefunded", "purchase_refunded"},
+	{"PurchaseCancelled", "purchase_cancelled"},
+	{"PurchaseRejected", "purchase_rejected"},
 	{"Minted", "mint"},
 	{"Burned", "burn"},
 	{"RedemptionRequested", "redemption_requested"},
+	// an rwa-v4 oracle request also emits RedemptionForwardPriced
+	{"RedemptionForwardPriced", "redemption_requested"},
 	{"RedemptionFunded", "redemption_funded"},
+	// funding an rwa-v4 oracle request emits RedemptionPriced before RedemptionFunded
+	{"RedemptionPriced", "redemption_funded"},
 	// claimRedemption emits RedemptionCompleted; there is no RedemptionClaimed event
 	{"RedemptionCompleted", "redemption_claimed"},
 	{"RedemptionRejected", "redemption_rejected"},
@@ -52,6 +65,8 @@ var stackTxKinds = []struct{ event, kind string }{
 	{"Unpaused", "unpaused"},
 	{"DefaultAdminTransferScheduled", "admin_transfer_scheduled"},
 	{"DefaultAdminTransferCanceled", "admin_transfer_canceled"},
+	{"DefaultAdminDelayChangeScheduled", "admin_delay_change_scheduled"},
+	{"DefaultAdminDelayChangeCanceled", "admin_delay_change_canceled"},
 	{"RoleGranted", "role_granted"},
 	{"RoleRevoked", "role_revoked"},
 }
@@ -72,8 +87,10 @@ func init() {
 // one, such as Minted/Burned, leave From empty.
 var actorKeys = []string{"caller", "sender", "funder", "buyer", "account", "beneficiary"}
 
-// valueKeys orders amount fields for Value; none yields "0", as for role changes
-var valueKeys = []string{"quoteAmount", "amount", "rwaAmount", "total"}
+// valueKeys orders amount fields for Value; none yields "0", as for role changes. refund
+// precedes quoteAmount so a refunded order shows the deposit returned, not the quote it was
+// not charged; maxQuoteAmount is the deposit of a purchase request.
+var valueKeys = []string{"refund", "quoteAmount", "amount", "rwaAmount", "maxQuoteAmount", "total"}
 
 // ReconcileStackTransactions replays chainID's events, skipping hashes owned by the
 // transaction manager. Each remaining hash with a non-Removed, eligible event gets one

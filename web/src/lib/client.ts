@@ -408,6 +408,28 @@ export const api = {
     });
   },
 
+  listPurchaseOrders: (
+    opts: PageOptions<
+      operations["listPurchaseOrders"],
+      { status?: string; address?: string }
+    > = {},
+  ) => {
+    const { signal, limit, cursor, status, address } = opts;
+    return requestPage<operations["listPurchaseOrders"]>(
+      "/api/v1/sales/orders",
+      { signal, query: { status, address, limit, cursor } },
+    );
+  },
+
+  getPurchaseOrder: (id: string) =>
+    request<operations["getPurchaseOrder"]>(
+      "GET",
+      "/api/v1/sales/orders/{id}",
+      {
+        path: { id },
+      },
+    ),
+
   listRedemptions: (
     opts: PageOptions<
       operations["listRedemptions"],

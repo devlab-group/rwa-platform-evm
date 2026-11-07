@@ -41,8 +41,13 @@ func (r *idempotencyRepo) Reserve(ctx context.Context, key, method, path, reques
 		return nil, false, "", err
 	}
 	rec := &models.IdempotencyRecord{
-		Key: key, Method: method, Path: path, RequestHash: requestHash, Token: token,
-		CreatedAt: now, ExpiresAt: now.Add(ttl),
+		Key:         key,
+		Method:      method,
+		Path:        path,
+		RequestHash: requestHash,
+		Token:       token,
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(ttl),
 	}
 	filter := bson.M{"_id": key, "expiresAt": bson.M{"$lt": now}}
 	opts := options.FindOneAndReplace().SetUpsert(true)

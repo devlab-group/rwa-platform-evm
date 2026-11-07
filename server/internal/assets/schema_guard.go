@@ -12,19 +12,39 @@ import (
 
 // allowedValidationKeywords are the dialect's validation and applicator keywords
 var allowedValidationKeywords = map[string]bool{
-	"type": true, "properties": true, "required": true, "additionalProperties": true,
-	"items": true, "$ref": true,
-	"enum": true, "const": true,
-	"minLength": true, "maxLength": true, "pattern": true,
-	"minimum": true, "maximum": true, "exclusiveMinimum": true, "exclusiveMaximum": true,
-	"minItems": true, "maxItems": true, "uniqueItems": true,
+	"type":                 true,
+	"properties":           true,
+	"required":             true,
+	"additionalProperties": true,
+	"items":                true,
+	"$ref":                 true,
+	"enum":                 true,
+	"const":                true,
+	"minLength":            true,
+	"maxLength":            true,
+	"pattern":              true,
+	"minimum":              true,
+	"maximum":              true,
+	"exclusiveMinimum":     true,
+	"exclusiveMaximum":     true,
+	"minItems":             true,
+	"maxItems":             true,
+	"uniqueItems":          true,
 }
 
 // allowedAnnotationKeywords are accepted and have no validation effect
 var allowedAnnotationKeywords = map[string]bool{
-	"title": true, "description": true, "default": true, "examples": true,
-	"$comment": true, "$defs": true, "$id": true, "$schema": true,
-	"deprecated": true, "readOnly": true, "writeOnly": true,
+	"title":       true,
+	"description": true,
+	"default":     true,
+	"examples":    true,
+	"$comment":    true,
+	"$defs":       true,
+	"$id":         true,
+	"$schema":     true,
+	"deprecated":  true,
+	"readOnly":    true,
+	"writeOnly":   true,
 }
 
 // enum, const, default and examples hold data, not schemas, so walkSchema never descends
@@ -32,8 +52,13 @@ var allowedAnnotationKeywords = map[string]bool{
 
 // allowedTypeValues are the primitive type names the dialect accepts in "type"
 var allowedTypeValues = map[string]bool{
-	"object": true, "array": true, "string": true, "integer": true,
-	"number": true, "boolean": true, "null": true,
+	"object":  true,
+	"array":   true,
+	"string":  true,
+	"integer": true,
+	"number":  true,
+	"boolean": true,
+	"null":    true,
 }
 
 // maxRefDepth bounds the length of a $ref chain

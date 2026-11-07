@@ -11,10 +11,12 @@ import {
 } from "../../components/TransactionPreview";
 import { useAsync } from "../../hooks/useAsync";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
+import { useQuoteDecimals } from "../../hooks/useQuoteDecimals";
 import { useWallet } from "../../hooks/useWallet";
 import { IncomeSection } from "./IncomeSection";
 import { KycVerificationSection } from "./KycVerification";
 import { LegalDisclosure } from "./LegalDisclosure";
+import { PurchaseOrdersSection } from "./PurchaseOrders";
 import { api, ApiError } from "../../lib/client";
 import type { components } from "../../lib/api-types";
 import { resolveQuoteDecimals, resolveRwaDecimals } from "../../lib/decimals";
@@ -48,6 +50,7 @@ import {
   sendClaimRedemption,
   sendErc20Approve,
   sendErc20Transfer,
+  sendRequestPurchase,
   sendRequestRedemption,
   signMessage,
   waitForTxReceipt,
@@ -58,6 +61,12 @@ import {
   priceAvailability,
   type PriceAvailability,
 } from "../../lib/v3";
+import {
+  forwardDeposit,
+  formatDuration,
+  isForwardPriced,
+  redemptionQuoteCell,
+} from "../../lib/v4";
 import {
   clearWalletSession,
   getWalletSession,
@@ -199,6 +208,13 @@ export function Investor() {
       <BuySection
         availability={availability}
         chainId={chainId}
+        project={project.status === "success" ? project.data : undefined}
+        walletAddress={wallet.address}
+        chainMismatch={wallet.chainMismatch}
+        onSubmitted={submitted.record}
+      />
+
+      <PurchaseOrdersSection
         project={project.status === "success" ? project.data : undefined}
         walletAddress={wallet.address}
         chainMismatch={wallet.chainMismatch}
@@ -643,6 +659,8 @@ function PriceNotice({
           Prices follow an oracle price feed.
           {updatedAt !== undefined &&
             ` Last feed update: ${formatUnixSeconds(updatedAt)}.`}
+          {isForwardPriced(project) &&
+            " Orders are priced at a later feed round, not at the price shown when you place them."}
         </p>
       )}
       {availability.unavailable && (
@@ -677,6 +695,8 @@ function BuySection({
   const unavailable =
     previewOracleError !== undefined || availability.unavailable;
   const minimum = minPurchaseQuote(project);
+  // Forward-priced projects take an order with a deposit; Vault.buy reverts there
+  const forward = isForwardPriced(project);
   const [tokenAmount, setTokenAmount] = useState("");
   const [slippageBps, setSlippageBps] = useState(50);
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -700,6 +720,18 @@ function BuySection({
     allowance !== null &&
     maxQuoteAmount !== null &&
     allowance >= BigInt(maxQuoteAmount);
+  // The deposit must meet the minimum; checked on every render so lowering the slippage after
+  // the preview cannot slip under it
+  const depositPlan =
+    forward && quote
+      ? forwardDeposit(
+          BigInt(quote.quoteAmount),
+          slippageBps,
+          minimum,
+          quoteDecimals ?? undefined,
+        )
+      : null;
+  const cutoff = formatDuration(project?.oracle?.dealingCutoff ?? 0);
 
   async function handlePreview() {
     setError(null);
@@ -725,12 +757,15 @@ function BuySection({
         resolvedQuoteDecimals = null;
       }
       setQuoteDecimals(resolvedQuoteDecimals);
-      // Refuse before the wallet opens; the Vault would revert QuoteBelowMinimum
-      const refusal = minPurchaseRefusal(
-        quoteAmount,
-        minimum,
-        resolvedQuoteDecimals ?? undefined,
-      );
+      // Refuse before the wallet opens; the Vault would revert QuoteBelowMinimum. A forward
+      // order is checked against its deposit instead (depositPlan).
+      const refusal = forward
+        ? null
+        : minPurchaseRefusal(
+            quoteAmount,
+            minimum,
+            resolvedQuoteDecimals ?? undefined,
+          );
       if (refusal) {
         setQuote(null);
         setError(refusal);
@@ -791,8 +826,10 @@ function BuySection({
     setTxState("awaiting-signature");
     setError(null);
     try {
-      // Send to the project Vault with the buyer as recipient and the slippage spend ceiling
-      const tx = await sendBuy(
+      // Send to the project Vault with the buyer as recipient and the slippage spend ceiling;
+      // a forward-priced project takes the same ceiling as a deposit
+      const send = forward ? sendRequestPurchase : sendBuy;
+      const tx = await send(
         chainId,
         walletAddress as `0x${string}`,
         vault as `0x${string}`,
@@ -804,11 +841,11 @@ function BuySection({
         },
       );
       setBuyTx(tx);
-      onSubmitted(tx, "buy");
+      onSubmitted(tx, forward ? "purchase request" : "buy");
       setTxState("submitted");
     } catch (err) {
       setTxState("draft");
-      setError(describeTxError(err, "Buy failed."));
+      setError(describeTxError(err, forward ? "Order failed." : "Buy failed."));
     }
   }
 
@@ -844,6 +881,8 @@ function BuySection({
         <span className="field__hint" id="buy-slippage-hint">
           Capped at {MAX_SLIPPAGE_BPS / 100}% before rounding to the smallest
           quote-token unit.
+          {forward &&
+            " The deposit is the estimate plus this margin, so a higher value covers a larger price rise."}
         </span>
       </div>
       <button
@@ -859,8 +898,13 @@ function BuySection({
           {error}
         </p>
       )}
+      {depositPlan?.refusal && (
+        <p className="async-state--error" role="alert">
+          {depositPlan.refusal}
+        </p>
+      )}
 
-      {quote && project && maxQuoteAmount && (
+      {quote && project && maxQuoteAmount && !depositPlan?.refusal && (
         <TransactionPreview
           title="Purchase preview"
           chainId={chainId}
@@ -879,18 +923,25 @@ function BuySection({
               symbol: project.tokenUnit ?? "RWA",
             },
             {
-              label: "Quote amount",
+              label: forward ? "Estimated quote (not locked)" : "Quote amount",
               raw: quote.quoteAmount ?? "0",
               decimals: quoteDecimals ?? undefined,
               symbol: "quote token",
             },
             {
-              label: "Max quote amount (slippage bound)",
+              label: forward
+                ? "Deposit (max quote amount)"
+                : "Max quote amount (slippage bound)",
               raw: maxQuoteAmount,
               decimals: quoteDecimals ?? undefined,
               symbol: "quote token",
             },
           ]}
+          notice={
+            forward
+              ? `This places an order; it is not an instant purchase, and the quote above is only an estimate. The price is set by the first price published at least ${cutoff || "the dealing cut-off"} after you place the order. Your deposit of ${formatTokenAmount(maxQuoteAmount, quoteDecimals ?? undefined)} quote tokens is taken now and the unused part comes back when the order settles. The whole deposit is refunded, and no tokens are delivered, if the price exceeds the deposit, the inventory runs out or the recipient stops being eligible.${depositPlan?.estimateBelowMinimum ? " The estimate is below the project minimum, so if the price stays there the order is refunded." : ""}`
+              : undefined
+          }
           priceSide="purchase"
           quoteTokenSymbol={
             project.addresses?.quoteToken
@@ -927,7 +978,7 @@ function BuySection({
               txState === "awaiting-signature"
             }
           >
-            2. Buy
+            {forward ? "2. Place order" : "2. Buy"}
           </button>
         </TransactionPreview>
       )}
@@ -938,7 +989,9 @@ function BuySection({
       )}
       {buyTx && (
         <p role="status">
-          Buy submitted: <span className="mono">{buyTx}</span>
+          {forward ? "Order submitted" : "Buy submitted"}:{" "}
+          <span className="mono">{buyTx}</span>
+          {forward && " Follow it under Purchase orders once it is indexed."}
         </p>
       )}
     </section>
@@ -996,18 +1049,10 @@ function RedemptionSection({
   // Rows use project RWA decimals and resolved quote decimals; missing decimals show
   // grouped raw units to avoid incorrect scaling
   const rwaDisplayDecimals = project?.decimals;
-  const listQuoteDecimalsState = useAsync<number | null>(async () => {
-    if (!project || !chainId) return null;
-    try {
-      return await resolveQuoteDecimals(project, chainId);
-    } catch {
-      return null;
-    }
-  }, [project?.addresses?.quoteToken, chainId]);
-  const listQuoteDecimals =
-    listQuoteDecimalsState.status === "success"
-      ? (listQuoteDecimalsState.data ?? undefined)
-      : undefined;
+  const listQuoteDecimals = useQuoteDecimals(project, chainId);
+  // Forward requests are priced at funding, so the preview is only an estimate
+  const forward = isForwardPriced(project);
+  const cutoff = formatDuration(project?.oracle?.dealingCutoff ?? 0);
 
   const minQuoteOut = quote?.quoteAmount
     ? applySlippageFloor(quote.quoteAmount, slippageBps)
@@ -1218,7 +1263,9 @@ function RedemptionSection({
               symbol: project.tokenUnit ?? "RWA",
             },
             {
-              label: "Snapshotted quote",
+              label: forward
+                ? "Estimated quote (not locked)"
+                : "Snapshotted quote",
               raw: quote.quoteAmount ?? "0",
               decimals: quoteDecimals ?? undefined,
               symbol: "quote token",
@@ -1230,6 +1277,11 @@ function RedemptionSection({
               symbol: "quote token",
             },
           ]}
+          notice={
+            forward
+              ? `The quote above is only an estimate: this request is priced when the issuer funds it, from the first price published at least ${cutoff || "the dealing cut-off"} after you request. If that price is below your minimum quote out, the request is not funded. Funding closes at the timeout, after which you can cancel and get your RWA back.`
+              : undefined
+          }
           priceSide="redemption"
           quoteTokenSymbol={
             project.addresses?.quoteToken
@@ -1281,6 +1333,13 @@ function RedemptionSection({
       )}
 
       <h3 className="u-mt-5">Your redemption requests</h3>
+      {forward && (
+        <p className="field__hint">
+          A request is priced when the issuer funds it, so its quote is not
+          known until then. Funding closes at the timeout shown; after that you
+          can cancel and get your RWA back.
+        </p>
+      )}
       {!walletAddress ? (
         <p className="field__hint">
           Connect a wallet to view your redemption requests.
@@ -1334,10 +1393,10 @@ function RedemptionSection({
                             )}
                           </td>
                           <td>
-                            {formatTokenAmount(
-                              r.quoteAmount ?? "",
-                              listQuoteDecimals,
-                            )}
+                            <RedemptionQuote
+                              redemption={r}
+                              decimals={listQuoteDecimals}
+                            />
                           </td>
                           <td>{formatUnixSeconds(r.timeoutAt)}</td>
                           <td>
@@ -1393,6 +1452,31 @@ function RedemptionSection({
         </p>
       )}
     </section>
+  );
+}
+
+// Quote column: a request awaiting its forward price shows that, never its stored zero as a payout
+function RedemptionQuote({
+  redemption,
+  decimals,
+}: {
+  redemption: Redemption;
+  decimals: number | undefined;
+}) {
+  const cell = redemptionQuoteCell(redemption);
+  if (cell.kind === "none") return <>-</>;
+  if (cell.kind === "amount")
+    return <>{formatTokenAmount(cell.raw ?? "", decimals)}</>;
+  return (
+    <>
+      Priced at funding
+      {cell.minQuoteOut !== null && (
+        <span className="field__hint">
+          {" "}
+          (minimum {formatTokenAmount(cell.minQuoteOut, decimals)})
+        </span>
+      )}
+    </>
   );
 }
 

@@ -523,6 +523,13 @@ export function Security() {
         </RoleGate>
       </section>
 
+      {proj?.adminDelayChanges && (
+        <section className="card">
+          <h2>Admin delay changes</h2>
+          <AdminDelayChanges changes={proj.adminDelayChanges} />
+        </section>
+      )}
+
       {/* Pending admins accept before holding the role, so acceptance sits outside RoleGate */}
       {proj?.pendingAdmin ? (
         <section className="card">
@@ -535,6 +542,36 @@ export function Security() {
         </section>
       ) : null}
     </div>
+  );
+}
+
+// Use the effective time to label each contract's latest delay change; no event marks
+// when it takes effect
+function AdminDelayChanges({
+  changes,
+}: {
+  changes: components["schemas"]["AdminDelayChange"][];
+}) {
+  const now = Date.now() / 1000;
+  return (
+    <>
+      <p className="field__hint">
+        How long a new admin must wait on each contract before accepting the
+        role.
+      </p>
+      <dl className="tx-preview__grid">
+        {changes.map((change) => (
+          <div className="tx-preview__row" key={change.contract}>
+            <dt>{change.contract}</dt>
+            <dd>
+              {change.newDelay} seconds,{" "}
+              {change.effectAt > now ? "from" : "since"}{" "}
+              {formatUnixSeconds(change.effectAt)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </>
   );
 }
 
@@ -674,6 +711,12 @@ function OracleDetails({ oracle }: { oracle: OraclePrice }) {
           <dt>Max feed age</dt>
           <dd>{oracle.maxAge} s</dd>
         </div>
+        {oracle.dealingCutoff !== undefined && (
+          <div className="tx-preview__row">
+            <dt>Dealing cut-off</dt>
+            <dd>{oracle.dealingCutoff} s</dd>
+          </div>
+        )}
         <div className="tx-preview__row">
           <dt>Purchase spread</dt>
           <dd>{oracle.purchaseSpreadBps} bps</dd>

@@ -419,6 +419,35 @@ paths:
             X-Page-Size: { $ref: "#/components/headers/XPageSize" }
             X-Next-Cursor: { $ref: "#/components/headers/XNextCursor" }
           content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Purchase" } } } }
+  /api/v1/sales/orders:
+    get:
+      tags: [sales]
+      operationId: listPurchaseOrders
+      description: >
+        Public rwa-v4 purchase orders rebuilt from Vault events. The list uses keyset pagination and
+        supports exact status and case-insensitive buyer address filters.
+      security: []
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: address, in: query, required: false, schema: { type: string }, description: "Filter by buyer wallet" }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: "Purchase orders (bounded/paginated, see Limit/Cursor)"
+          headers:
+            X-Total-Count: { $ref: "#/components/headers/XTotalCount" }
+            X-Page-Size: { $ref: "#/components/headers/XPageSize" }
+            X-Next-Cursor: { $ref: "#/components/headers/XNextCursor" }
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/PurchaseOrder" } } } }
+  /api/v1/sales/orders/{id}:
+    get:
+      tags: [sales]
+      operationId: getPurchaseOrder
+      security: []
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: Purchase order, content: { application/json: { schema: { $ref: "#/components/schemas/PurchaseOrder" } } } }
 
   /api/v1/redemptions:
     get:
@@ -705,6 +734,12 @@ components:
           description: >
             Kind of the Vault's current strategy, probed from its views; Unknown when inconclusive, including
             RPC failures. Omitted before deployment.
+        forwardPriced:
+          type: boolean
+          description: >
+            Whether the Vault's current strategy uses forward pricing. When true, clients use requestPurchase
+            instead of buy. Read for rwa-v4 projects; omitted before deployment, for rwa-v2 and rwa-v3, and
+            when the read fails.
         oracle:
           $ref: "#/components/schemas/OraclePrice"
         tokenUnit: { type: string }
@@ -722,6 +757,14 @@ components:
             Incoming DEFAULT_ADMIN for the first governance contract with a pending two-step transfer,
             projected from scheduling, cancellation and role events; see securityStale. Set while any contract
             awaits acceptance. The console offers wallet acceptance or a Safe batch for a pending Safe.
+        adminDelayChanges:
+          type: array
+          description: >
+            Each governance contract's latest uncancelled default-admin delay change, projected from events;
+            see securityStale. No event marks when a change takes effect, so compare effectAt with the current
+            time. Omitted when empty.
+          items:
+            $ref: "#/components/schemas/AdminDelayChange"
         finalityConfirmations: { type: integer }
         bytecodeVerified:
           type: boolean
@@ -812,6 +855,7 @@ components:
         feedDecimals: { type: integer }
         sequencerUptimeFeed: { type: string, description: "L2 sequencer uptime feed; omitted when not configured" }
         gracePeriod: { type: integer, format: int64, description: "Seconds after a sequencer restart before prices are valid; omitted without a sequencer feed" }
+        dealingCutoff: { type: integer, format: int64, description: "Minimum seconds from an order to an eligible round's publication; omitted when the strategy lacks dealingCutoff" }
         available: { type: boolean, description: "latestPrice() succeeded on the cached read" }
         price: { type: string, description: "Validated feed answer in feed units; omitted when unavailable" }
         updatedAt: { type: integer, format: int64, description: "Feed's last update in Unix seconds, also when stale; omitted when the feed cannot be read" }
@@ -858,6 +902,21 @@ components:
         txHash: { type: string }
         blockNumber: { type: integer, format: int64 }
         logIndex: { type: integer }
+    AdminDelayChange:
+      type: object
+      required: [contract, newDelay, effectAt]
+      properties:
+        contract:
+          type: string
+          description: Contract label, as in rolesByContract.
+        newDelay:
+          type: integer
+          format: int64
+          description: New default-admin delay in seconds.
+        effectAt:
+          type: integer
+          format: int64
+          description: Unix timestamp in seconds when the new delay takes effect.
     RoleHolders:
       type: object
       additionalProperties: { type: array, items: { type: string } }
@@ -875,7 +934,7 @@ components:
         factoryVersion:
           type: string
           description: >
-            Configured RWAFactory.version(); supported encodings are rwa-v2 and rwa-v3. The first nonempty
+            Configured RWAFactory.version(); supported encodings are rwa-v2, rwa-v3 and rwa-v4. The first nonempty
             result is cached; failed reads return empty and retry after 30 seconds. The console blocks
             deployment for empty or unsupported versions.
         projectId:
@@ -997,6 +1056,11 @@ components:
       properties:
         inventory: { type: string }
         quoteBalance: { type: string }
+        pendingPurchaseQuote:
+          type: string
+          description: >
+            rwa-v4 only: open order deposits, in quote-token minimal units. Included in quoteBalance and
+            excluded from withdrawProceeds. Omitted for earlier Vaults.
         purchasePrice: { type: string, description: "Per whole RWA token; omitted when the strategy read fails" }
         redemptionPrice: { type: string, description: "Per whole RWA token; omitted when the strategy read fails" }
         priceError:
@@ -1012,7 +1076,15 @@ components:
         id: { type: string }
         beneficiary: { type: string }
         rwaAmount: { type: string }
-        quoteAmount: { type: string }
+        quoteAmount:
+          type: string
+          description: >
+            Quote-token minimal units. A Pending forward request stores "0" until funding sets its quote;
+            see pricedRound.
+        strategy: { type: string, description: "rwa-v4 forward requests only: the stored strategy that prices this request" }
+        baseRound: { type: string, description: "rwa-v4 forward requests only: feed round at request time, as a decimal string to preserve uint80 precision" }
+        minQuoteOut: { type: string, description: "rwa-v4 forward requests only: holder's minimum quote, enforced at funding" }
+        pricedRound: { type: string, description: "rwa-v4 forward requests only: round that priced the request; omitted until funded" }
         status: { type: string, enum: [None, Pending, Funded, Completed, Rejected, Cancelled] }
         claimable: { type: boolean }
         createdAt: { type: integer }
@@ -1128,6 +1200,30 @@ components:
         target: { type: string }
         createdAt: { type: string }
         details: { type: object }
+    PurchaseOrder:
+      type: object
+      description: >
+        rwa-v4 purchase order rebuilt from Vault events. Pending does not establish price availability;
+        read quotePurchaseAfter on its stored strategy. Settlement is permissionless but requires an
+        unpaused project and an Allowed buyer. Cancellation requires the buyer, timeoutAt reached,
+        no usable pricing round and an Allowed buyer.
+      required: [id, buyer, recipient, tokenAmount, maxQuoteAmount, strategy, baseRound, status, createdAt, timeoutAt, requestTxHash]
+      properties:
+        id: { type: string }
+        buyer: { type: string }
+        recipient: { type: string }
+        tokenAmount: { type: string, description: "RWA minimal units" }
+        maxQuoteAmount: { type: string, description: "Deposit in quote-token minimal units" }
+        strategy: { type: string, description: "Stored strategy that prices this order" }
+        baseRound: { type: string, description: "Feed round at order time, as a decimal string to preserve uint80 precision" }
+        status: { type: string, enum: [Pending, Settled, Refunded, Cancelled, Rejected] }
+        createdAt: { type: integer, format: int64 }
+        timeoutAt: { type: integer, format: int64, description: "createdAt plus the Vault's purchaseTimeout" }
+        pricedRound: { type: string, description: "Round that priced the order; Settled and Refunded only" }
+        quoteAmount: { type: string, description: "Quote at pricedRound; charged when Settled, not charged when Refunded" }
+        refund: { type: string, description: "Deposit returned to the buyer; omitted while Pending" }
+        requestTxHash: { type: string }
+        closeTxHash: { type: string, description: "Transaction that ended the order; omitted while Pending" }
     Purchase:
       type: object
       properties:

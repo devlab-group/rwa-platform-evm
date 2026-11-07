@@ -287,6 +287,20 @@ export const api = {
     });
   },
 
+  // rwa-v4 forward orders of a buyer wallet
+  listPurchaseOrders: (
+    opts: PageOptions<
+      operations["listPurchaseOrders"],
+      { status?: string; address?: string }
+    > = {},
+  ) => {
+    const { signal, limit, cursor, status, address } = opts;
+    return requestPage<operations["listPurchaseOrders"]>(
+      "/api/v1/sales/orders",
+      { signal, query: { status, address, limit, cursor } },
+    );
+  },
+
   listTransactions: (
     opts: PageOptions<
       operations["listTransactions"],

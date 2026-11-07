@@ -30,9 +30,16 @@ func TestAllTxStatusesUniqueAndComplete(t *testing.T) {
 	// TxStatus constants, instead of reflection, makes a status missing from
 	// AllTxStatuses fail this test
 	wantConsts := []models.TxStatus{
-		models.TxPending, models.TxMined, models.TxConfirmed, models.TxReplaced,
-		models.TxReverted, models.TxReorged, models.TxFailed, models.TxBroadcastUnknown,
-		models.TxNonceConsumedExternally, models.TxNeedsIntervention,
+		models.TxPending,
+		models.TxMined,
+		models.TxConfirmed,
+		models.TxReplaced,
+		models.TxReverted,
+		models.TxReorged,
+		models.TxFailed,
+		models.TxBroadcastUnknown,
+		models.TxNonceConsumedExternally,
+		models.TxNeedsIntervention,
 	}
 	for _, s := range wantConsts {
 		if !seen[s] {

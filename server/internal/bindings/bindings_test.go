@@ -157,6 +157,10 @@ func TestRedemptionEscrowGetRedemptionRoundTrip(t *testing.T) {
 		QuoteAmount: big.NewInt(950),
 		CreatedAt:   1700000000,
 		Status:      1,
+		Strategy:    common.HexToAddress("0x000000000000000000000000000000000000005A"),
+		// a feed round id is a uint80, past what uint64 holds
+		BaseRound:   new(big.Int).Lsh(big.NewInt(1), 79),
+		MinQuoteOut: big.NewInt(900),
 	}
 	packed, err := method.Outputs.Pack(want)
 	if err != nil {
@@ -167,7 +171,8 @@ func TestRedemptionEscrowGetRedemptionRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Beneficiary != want.Beneficiary || got.CreatedAt != want.CreatedAt || got.Status != want.Status ||
-		got.RWAAmount.Cmp(want.RWAAmount) != 0 || got.QuoteAmount.Cmp(want.QuoteAmount) != 0 {
+		got.RWAAmount.Cmp(want.RWAAmount) != 0 || got.QuoteAmount.Cmp(want.QuoteAmount) != 0 ||
+		got.Strategy != want.Strategy || got.BaseRound.Cmp(want.BaseRound) != 0 || got.MinQuoteOut.Cmp(want.MinQuoteOut) != 0 {
 		t.Errorf("got %+v want %+v", got, want)
 	}
 }

@@ -43,8 +43,12 @@ func TestGetMyWalletStatusReturnsOwnStatus(t *testing.T) {
 	address := addr("0xF00D")
 
 	if err := env.app.Repos.Investors.Upsert(ctx, &models.Investor{
-		Address: address, Status: models.ComplianceAllowed, ValidUntil: 1900000000, OwnershipVerified: true,
-		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Address:           address,
+		Status:            models.ComplianceAllowed,
+		ValidUntil:        1900000000,
+		OwnershipVerified: true,
+		CreatedAt:         time.Now(),
+		UpdatedAt:         time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -175,8 +179,11 @@ func TestGetMyWalletStatusReportsOwnFrozenAmount(t *testing.T) {
 
 	for _, a := range []string{mine, someoneElse} {
 		if err := env.app.Repos.Investors.Upsert(ctx, &models.Investor{
-			Address: a, Status: models.ComplianceAllowed, OwnershipVerified: true,
-			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+			Address:           a,
+			Status:            models.ComplianceAllowed,
+			OwnershipVerified: true,
+			CreatedAt:         time.Now(),
+			UpdatedAt:         time.Now(),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -186,12 +193,14 @@ func TestGetMyWalletStatusReportsOwnFrozenAmount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Security = &models.SecurityState{FrozenBalances: map[string]string{
-		// Lowercased on purpose: the projection stores checksummed keys, and the lookup
-		// must not depend on the casing
-		strings.ToLower(mine): "1500000000000000000",
-		someoneElse:           "42",
-	}}
+	p.Security = &models.SecurityState{
+		FrozenBalances: map[string]string{
+			// Use lowercase to check that lookup matches the projection's checksummed keys
+			// regardless of casing
+			strings.ToLower(mine): "1500000000000000000",
+			someoneElse:           "42",
+		},
+	}
 	if err := env.app.Repos.Projects.Upsert(ctx, p); err != nil {
 		t.Fatal(err)
 	}
@@ -223,8 +232,11 @@ func TestGetMyWalletStatusOmitsFrozenWhenNoneHeld(t *testing.T) {
 	address := addr("0xF00D")
 
 	if err := env.app.Repos.Investors.Upsert(ctx, &models.Investor{
-		Address: address, Status: models.ComplianceAllowed, OwnershipVerified: true,
-		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Address:           address,
+		Status:            models.ComplianceAllowed,
+		OwnershipVerified: true,
+		CreatedAt:         time.Now(),
+		UpdatedAt:         time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}

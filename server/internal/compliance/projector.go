@@ -139,8 +139,12 @@ func Reconcile(ctx context.Context, chainEvents repository.ChainEventRepository,
 			return fmt.Errorf("compliance: load investor %s: %w", account, err)
 		}
 		if err := investors.Upsert(ctx, &models.Investor{
-			Address: account, Status: s.Status, ValidUntil: s.ValidUntil,
-			OwnershipVerified: ownershipVerified, CreatedAt: createdAt, UpdatedAt: now,
+			Address:           account,
+			Status:            s.Status,
+			ValidUntil:        s.ValidUntil,
+			OwnershipVerified: ownershipVerified,
+			CreatedAt:         createdAt,
+			UpdatedAt:         now,
 		}); err != nil {
 			return fmt.Errorf("compliance: upsert investor %s: %w", account, err)
 		}

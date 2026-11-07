@@ -50,9 +50,9 @@ func CheckConfigDrift(ctx context.Context, client blockchain.Client, projects re
 		return false, reason, nil
 	}
 
-	// rwa-v2 swaps split purchase/redemption pricing; rwa-v3 follows Vault.strategy(),
+	// rwa-v2 swaps split purchase/redemption pricing; rwa-v3 and later follow Vault.strategy(),
 	// already checked by verifyImmutableConfig
-	if p.Version != bindings.FactoryVersionV3 && vaultStrategy != common.HexToAddress(p.Addresses.Strategy) {
+	if !bindings.IsV3OrLater(p.Version) && vaultStrategy != common.HexToAddress(p.Addresses.Strategy) {
 		return false, fmt.Sprintf("vault.strategy = %s but redemptionEscrow.strategy = %s (immutable): purchases and redemptions are priced by different contracts",
 			vaultStrategy.Hex(), common.HexToAddress(p.Addresses.Strategy).Hex()), nil
 	}

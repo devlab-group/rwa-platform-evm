@@ -212,6 +212,11 @@ func NewRouter(app *App) *gin.Engine {
 		// Global purchase history requires admin access
 		v1.GET("/sales/purchases", adminOnly, app.listPurchases)
 
+		// rwa-v4 forward-priced orders are public Vault events, optionally filtered by buyer.
+		// Wallets read quotes and submit request, settle and cancel calls directly.
+		v1.GET("/sales/orders", app.listPurchaseOrders)
+		v1.GET("/sales/orders/:id", app.getPurchaseOrder)
+
 		// Redemption reads mirror public chain data, optionally filtered by beneficiary.
 		// Wallets read quotes and submit request, claim and cancel calls directly.
 		v1.GET("/redemptions", app.listRedemptions)

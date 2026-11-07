@@ -25,7 +25,8 @@ func TestDecodeProceedsWithdrawn(t *testing.T) {
 	log := types.Log{
 		Topics: []common.Hash{
 			v.EventID("ProceedsWithdrawn"),
-			common.BytesToHash(treasury.Bytes()), common.BytesToHash(caller.Bytes()),
+			common.BytesToHash(treasury.Bytes()),
+			common.BytesToHash(caller.Bytes()),
 		},
 		Data: data,
 	}

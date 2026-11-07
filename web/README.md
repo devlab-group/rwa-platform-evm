@@ -36,12 +36,21 @@ Root/unmatched URLs redirect to `/admin/setup`; without a live session, the shel
 | `setup`           | Asset Profile validation/creation, legal descriptor, project summary and deployment |
 | `assets`          | Records, signer policy/package downloads, signed-result upload, mint and burn       |
 | `compliance`      | Wallet status, allow/block, ownership challenges, webhooks and audit log            |
-| `inventory-sales` | Inventory, quote preview, treasury withdrawal and purchase history                  |
+| `inventory-sales` | Inventory, quote preview, treasury withdrawal, purchase orders and history          |
 | `redemptions`     | Requests/details, funding and rejection                                             |
 | `transactions`    | Tracked transactions and explorer links                                             |
 | `security`        | Pause, prices, roles, admin transfer, freeze/seizure and bytecode-presence status   |
 
-Purchases use on-chain `Vault.buy`.
+Instant strategies use on-chain `Vault.buy`. On an rwa-v4 Oracle strategy, `Vault.buy` reverts;
+purchase orders use the first feed round published at least the dealing cutoff after the order.
+Anyone can settle; `TREASURER_ROLE` can reject a Pending order and refund its whole deposit only while
+the project is paused. Withdrawable proceeds exclude open order deposits.
+
+A forward-priced redemption request stores `quoteAmount` as `"0"` until funding. Before wallet
+or Safe funding, the console reads `RedemptionEscrow.previewFunding` for the approval amount.
+It shows when a round is unavailable, the quote is below the holder's minimum, or funding has
+closed at the timeout. Setup adds purchase timeout and Oracle dealing cutoff fields for rwa-v4;
+rwa-v2 and rwa-v3 retain their forms and ABIs.
 
 Burns retire Vault inventory against a Minted record. Start from that record on Assets, enter
 up to its remaining amount and give the package to the auditor. Upload `signed-result.json`

@@ -244,10 +244,18 @@ func TestTxManagerReconcileReplacementsRepairsMissingLink(t *testing.T) {
 	// Persist a replacement without linking its original, simulating the crash window
 	// reconcileReplacements repairs
 	orphan := &models.Transaction{
-		ID: "replacement-orphan", Kind: original.Kind, ChainID: original.ChainID,
-		From: original.From, To: original.To, Data: original.Data, Value: original.Value,
-		Nonce: original.Nonce, TxHash: "0x" + common.Bytes2Hex([]byte("fake-replacement-hash-000000000")),
-		SignedRawTx: "0x00", Replaces: original.ID, Status: models.TxPending,
+		ID:          "replacement-orphan",
+		Kind:        original.Kind,
+		ChainID:     original.ChainID,
+		From:        original.From,
+		To:          original.To,
+		Data:        original.Data,
+		Value:       original.Value,
+		Nonce:       original.Nonce,
+		TxHash:      "0x" + common.Bytes2Hex([]byte("fake-replacement-hash-000000000")),
+		SignedRawTx: "0x00",
+		Replaces:    original.ID,
+		Status:      models.TxPending,
 	}
 	if err := txRepo.Create(context.Background(), orphan); err != nil {
 		t.Fatal(err)
@@ -294,10 +302,18 @@ func TestTxManagerReconcileReplacementsIgnoresFailedReplacement(t *testing.T) {
 	// Model a TxFailed replacement whose best-effort restoration of the original to
 	// Pending was interrupted, leaving Replaces intact
 	failedReplacement := &models.Transaction{
-		ID: "replacement-failed", Kind: original.Kind, ChainID: original.ChainID,
-		From: original.From, To: original.To, Data: original.Data, Value: original.Value,
-		Nonce: original.Nonce, TxHash: "0x" + common.Bytes2Hex([]byte("fake-failed-replacement-hash-00")),
-		SignedRawTx: "0x00", Replaces: original.ID, Status: models.TxFailed,
+		ID:          "replacement-failed",
+		Kind:        original.Kind,
+		ChainID:     original.ChainID,
+		From:        original.From,
+		To:          original.To,
+		Data:        original.Data,
+		Value:       original.Value,
+		Nonce:       original.Nonce,
+		TxHash:      "0x" + common.Bytes2Hex([]byte("fake-failed-replacement-hash-00")),
+		SignedRawTx: "0x00",
+		Replaces:    original.ID,
+		Status:      models.TxFailed,
 	}
 	if err := txRepo.Create(context.Background(), failedReplacement); err != nil {
 		t.Fatal(err)
@@ -379,7 +395,9 @@ func TestTxManagerRefreshStatusesConfirmedTxReorgsOnBlockHashMismatch(t *testing
 	preReorgHeader := &types.Header{Number: minedAt, Extra: []byte("pre-reorg")}
 	client.SetHeader(minedAt.Uint64(), preReorgHeader)
 	client.SetReceipt(txHash, &types.Receipt{
-		Status: types.ReceiptStatusSuccessful, BlockNumber: minedAt, BlockHash: preReorgHeader.Hash(),
+		Status:      types.ReceiptStatusSuccessful,
+		BlockNumber: minedAt,
+		BlockHash:   preReorgHeader.Hash(),
 	})
 	client.BlockNum += 3
 	if err := mgr.RefreshStatuses(context.Background(), 3); err != nil {
@@ -873,7 +891,11 @@ func TestTxManagerAllocateNonceReconcilesAgainstLocalRecords(t *testing.T) {
 
 	// Seed local TxPending nonce 3, absent from both fake node views
 	if err := txRepo.Create(context.Background(), &models.Transaction{
-		ID: "local-1", From: from.Hex(), To: to.Hex(), Nonce: 3, Status: models.TxPending,
+		ID:     "local-1",
+		From:   from.Hex(),
+		To:     to.Hex(),
+		Nonce:  3,
+		Status: models.TxPending,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1029,7 +1051,11 @@ func TestTxManagerSubmitBlockedBySignerNeedsIntervention(t *testing.T) {
 	to := common.HexToAddress("0x0000000000000000000000000000000000dEaD")
 
 	if err := txRepo.Create(context.Background(), &models.Transaction{
-		ID: "stuck-1", From: from.Hex(), To: to.Hex(), Nonce: 0, Status: models.TxNeedsIntervention,
+		ID:     "stuck-1",
+		From:   from.Hex(),
+		To:     to.Hex(),
+		Nonce:  0,
+		Status: models.TxNeedsIntervention,
 	}); err != nil {
 		t.Fatal(err)
 	}

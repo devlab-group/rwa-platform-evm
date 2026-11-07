@@ -12,10 +12,14 @@ import (
 
 func addrChangeLog(name string, prev, next, caller common.Address) types.Log {
 	v := bindings.NewVault()
-	return types.Log{Topics: []common.Hash{
-		v.EventID(name),
-		common.BytesToHash(prev.Bytes()), common.BytesToHash(next.Bytes()), common.BytesToHash(caller.Bytes()),
-	}}
+	return types.Log{
+		Topics: []common.Hash{
+			v.EventID(name),
+			common.BytesToHash(prev.Bytes()),
+			common.BytesToHash(next.Bytes()),
+			common.BytesToHash(caller.Bytes()),
+		},
+	}
 }
 
 func TestDecodeTreasuryStrategyChanged(t *testing.T) {
@@ -49,7 +53,9 @@ func TestDecodeMinPurchaseQuoteChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	name, got, err := DecodeLog(types.Log{
-		Topics: []common.Hash{v.EventID("MinPurchaseQuoteChanged"), common.BytesToHash(caller.Bytes())}, Data: data})
+		Topics: []common.Hash{v.EventID("MinPurchaseQuoteChanged"), common.BytesToHash(caller.Bytes())},
+		Data:   data,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

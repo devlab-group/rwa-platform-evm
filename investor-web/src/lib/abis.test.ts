@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   incomeDistributorAbi,
   oracleErrorsAbi,
+  oracleForwardAbi,
   redemptionEscrowAbi,
   tokenErrorsAbi,
   vaultAbi,
@@ -65,6 +66,7 @@ describe.skipIf(!FORGE_BUILT && !process.env.CI)(
       ["RedemptionEscrow", redemptionEscrowAbi],
       ["RWAToken", tokenErrorsAbi],
       ["OraclePriceStrategy", oracleErrorsAbi],
+      ["OraclePriceStrategy", oracleForwardAbi],
       ["IncomeDistributor", incomeDistributorAbi],
     ] as const;
 

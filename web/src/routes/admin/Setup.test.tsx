@@ -682,4 +682,190 @@ describe("Setup by factory version", () => {
     );
     expect(sendDeployProject).not.toHaveBeenCalled();
   });
+
+  describe("rwa-v4 factory", () => {
+    const sentConfig = () =>
+      vi.mocked(sendDeployProject).mock.calls[0][3] as unknown as Record<
+        string,
+        unknown
+      >;
+    const review = () =>
+      screen.getByRole("button", { name: "Review deployment" });
+
+    async function reachForm(version = "rwa-v4") {
+      config(version);
+      renderWithWallet(<Setup />, { connected: true });
+      await screen.findByRole("button", { name: "Review deployment" });
+      fillCommon();
+      fill("Income manager address", ADDR(10));
+    }
+
+    function fillOracle(cutoff = "7200") {
+      fill("Price strategy", "Oracle");
+      fill("Price feed address", ADDR(0xfee));
+      fill("Max feed age (seconds)", "3600");
+      if (cutoff) fill("Dealing cut-off (seconds)", cutoff);
+    }
+
+    async function confirm() {
+      fireEvent.click(review());
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Confirm deploy" }),
+      );
+      await waitFor(() => expect(sendDeployProject).toHaveBeenCalled());
+    }
+
+    it("offers neither new field on an rwa-v3 factory, and sends no purchaseTimeout", async () => {
+      await reachForm("rwa-v3");
+      fillOracle("");
+      expect(screen.queryByLabelText("Purchase timeout (seconds)")).toBeNull();
+      expect(screen.queryByLabelText("Dealing cut-off (seconds)")).toBeNull();
+      expect(review()).toBeEnabled();
+
+      await confirm();
+      expect(sentConfig()).not.toHaveProperty("purchaseTimeout");
+      expect(sentConfig()).not.toHaveProperty("dealingCutoff");
+    });
+
+    it("asks for a purchase timeout on a Fixed project, defaulting to 7 days, and no cut-off", async () => {
+      await reachForm();
+      fill("Purchase price per whole token (whole quote-token units)", "2");
+      fill("Redemption price per whole token (whole quote-token units)", "1.5");
+      fill("Pricer address", ADDR(6));
+
+      expect(screen.getByLabelText("Purchase timeout (seconds)")).toHaveValue(
+        604800,
+      );
+      expect(screen.queryByLabelText("Dealing cut-off (seconds)")).toBeNull();
+      await confirm();
+      expect(sentConfig()).toMatchObject({
+        strategyKind: 0,
+        dealingCutoff: 0n,
+        purchaseTimeout: 604_800n,
+        redemptionTimeout: 604_800n,
+      });
+    });
+
+    it("sends the cut-off and both timeouts of an Oracle project", async () => {
+      await reachForm();
+      fillOracle("7200");
+      fill("Purchase timeout (seconds)", "1209600");
+      fill("Redemption timeout (seconds)", "864000");
+      await confirm();
+      expect(sentConfig()).toMatchObject({
+        strategyKind: 1,
+        dealingCutoff: 7200n,
+        purchaseTimeout: 1_209_600n,
+        redemptionTimeout: 864_000n,
+      });
+    });
+
+    it("states what the cut-off commits the operator to and what the timeouts must exceed", async () => {
+      await reachForm();
+      fill("Price strategy", "Oracle");
+      const hint = document.getElementById("dealingCutoff-hint") as HTMLElement;
+      expect(hint).toHaveTextContent(
+        /longest gap from a price's strike to its publication that you commit to/,
+      );
+      expect(hint).toHaveTextContent(
+        /timeouts must exceed the gap between price updates plus this cut-off/,
+      );
+      expect(
+        screen.getByLabelText("Dealing cut-off (seconds)"),
+      ).toHaveAttribute("aria-describedby", "dealingCutoff-hint");
+    });
+
+    it("blocks review until an Oracle project has a cut-off", async () => {
+      await reachForm();
+      fillOracle("");
+      expect(review()).toBeDisabled();
+      fill("Dealing cut-off (seconds)", "7200");
+      expect(review()).toBeEnabled();
+    });
+
+    it.each([
+      ["equal to both timeouts", "604800", false],
+      ["one second under both timeouts", "604799", true],
+      ["zero", "0", false],
+      ["not a whole number", "12.5", false],
+    ])("review with a cut-off %s", async (_name, cutoff, enabled) => {
+      await reachForm();
+      fillOracle(cutoff);
+      if (enabled) {
+        expect(review()).toBeEnabled();
+      } else {
+        expect(review()).toBeDisabled();
+      }
+    });
+
+    it("explains an invalid cut-off inline, naming both timeouts", async () => {
+      await reachForm();
+      fillOracle("604800");
+      const message = await screen.findByText(
+        /below both the redemption timeout \(604800 s\) and the purchase timeout \(604800 s\)/,
+      );
+      expect(message).toHaveAttribute("role", "alert");
+    });
+
+    it("blocks review when only the purchase timeout is not above the cut-off", async () => {
+      await reachForm();
+      fillOracle("100000");
+      fill("Purchase timeout (seconds)", "100000");
+      expect(review()).toBeDisabled();
+      fill("Purchase timeout (seconds)", "100001");
+      expect(review()).toBeEnabled();
+    });
+
+    it.each([
+      ["one second under 1 day", "86399", false],
+      ["1 day", "86400", true],
+      ["365 days", "31536000", true],
+      ["one second over 365 days", "31536001", false],
+    ])("review with a purchase timeout %s", async (_name, seconds, enabled) => {
+      await reachForm();
+      fill("Purchase price per whole token (whole quote-token units)", "2");
+      fill("Redemption price per whole token (whole quote-token units)", "1.5");
+      fill("Pricer address", ADDR(6));
+      fill("Purchase timeout (seconds)", seconds);
+      if (enabled) {
+        expect(review()).toBeEnabled();
+      } else {
+        expect(review()).toBeDisabled();
+      }
+    });
+
+    it("shows the cut-off and both timeouts in the review step", async () => {
+      await reachForm();
+      fillOracle("7200");
+      fill("Purchase timeout (seconds)", "1209600");
+      fireEvent.click(review());
+      const confirmCard = (
+        await screen.findByRole("heading", { name: "Confirm deployment" })
+      ).parentElement as HTMLElement;
+      expect(
+        within(confirmCard).getByText("Dealing cut-off").nextSibling,
+      ).toHaveTextContent("7200 s");
+      expect(
+        within(confirmCard).getByText("Purchase timeout").nextSibling,
+      ).toHaveTextContent("1209600 s");
+      expect(
+        within(confirmCard).getByText("Redemption timeout").nextSibling,
+      ).toHaveTextContent("604800 s");
+    });
+
+    it("omits the cut-off from the review of a Fixed project", async () => {
+      await reachForm();
+      fill("Purchase price per whole token (whole quote-token units)", "2");
+      fill("Redemption price per whole token (whole quote-token units)", "1.5");
+      fill("Pricer address", ADDR(6));
+      fireEvent.click(review());
+      const confirmCard = (
+        await screen.findByRole("heading", { name: "Confirm deployment" })
+      ).parentElement as HTMLElement;
+      expect(within(confirmCard).queryByText("Dealing cut-off")).toBeNull();
+      expect(
+        within(confirmCard).getByText("Purchase timeout"),
+      ).toBeInTheDocument();
+    });
+  });
 });

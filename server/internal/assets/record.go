@@ -23,8 +23,13 @@ var decimalAmountPattern = regexp.MustCompile(`^[0-9]+$`)
 var maxIssuanceAmount = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 
 var metadataAllowedTopLevelKeys = map[string]bool{
-	"platformVersion": true, "projectId": true, "recordId": true, "asset": true,
-	"issuance": true, "proofs": true, "createdAt": true,
+	"platformVersion": true,
+	"projectId":       true,
+	"recordId":        true,
+	"asset":           true,
+	"issuance":        true,
+	"proofs":          true,
+	"createdAt":       true,
 }
 
 // ProofRecord mirrors one shared/schemas/metadata.schema.json proofs[] entry

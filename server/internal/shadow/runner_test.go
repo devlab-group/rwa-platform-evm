@@ -21,7 +21,9 @@ func falseVal() *bool { f := false; return &f }
 // counts
 func TestRunnerReplaysScriptedScenarioAndReconciles(t *testing.T) {
 	sc := &Scenario{
-		ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1,
+		ChainID:    testChainID,
+		Addresses:  []string{testAddr},
+		StartBlock: 1,
 		Steps: []Step{
 			{
 				Description: "genesis ingest",
@@ -102,7 +104,10 @@ func TestRunnerReplaysScriptedScenarioAndReconciles(t *testing.T) {
 // errors
 func TestRunnerRecoversFromATransientFaultWithoutReportingAnError(t *testing.T) {
 	sc := &Scenario{
-		ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1, MaxLogRange: 10,
+		ChainID:     testChainID,
+		Addresses:   []string{testAddr},
+		StartBlock:  1,
+		MaxLogRange: 10,
 		Steps: []Step{
 			{
 				Description:     "transient RPC fault recovered by the indexer's retry",
@@ -124,10 +129,15 @@ func TestRunnerRecoversFromATransientFaultWithoutReportingAnError(t *testing.T) 
 
 // Run returns the context error when already cancelled
 func TestRunnerRespectsContextCancellation(t *testing.T) {
-	sc := &Scenario{ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1, Steps: []Step{
-		{Description: "one", Headers: []HeaderSpec{{Number: 1, Seed: 1}}, Head: 1},
-		{Description: "two", Headers: []HeaderSpec{{Number: 2, Seed: 1}}, Head: 2},
-	}}
+	sc := &Scenario{
+		ChainID:    testChainID,
+		Addresses:  []string{testAddr},
+		StartBlock: 1,
+		Steps: []Step{
+			{Description: "one", Headers: []HeaderSpec{{Number: 1, Seed: 1}}, Head: 1},
+			{Description: "two", Headers: []HeaderSpec{{Number: 2, Seed: 1}}, Head: 2},
+		},
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := NewRunner(sc).Run(ctx)
@@ -138,9 +148,14 @@ func TestRunnerRespectsContextCancellation(t *testing.T) {
 
 // Loading a saved Scenario preserves its chain ID and step count
 func TestLoadScenarioRoundTrips(t *testing.T) {
-	sc := &Scenario{ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1, Steps: []Step{
-		{Description: "genesis", Headers: []HeaderSpec{{Number: 1, Seed: 1}}, Head: 1},
-	}}
+	sc := &Scenario{
+		ChainID:    testChainID,
+		Addresses:  []string{testAddr},
+		StartBlock: 1,
+		Steps: []Step{
+			{Description: "genesis", Headers: []HeaderSpec{{Number: 1, Seed: 1}}, Head: 1},
+		},
+	}
 	raw, err := json.Marshal(sc)
 	if err != nil {
 		t.Fatal(err)
@@ -175,11 +190,17 @@ func TestSampleReturnsPlausibleValues(t *testing.T) {
 // not reconciled
 func TestRunnerReportsAStepThatWasExpectedToFailButSucceeded(t *testing.T) {
 	sc := &Scenario{
-		ChainID: testChainID, Addresses: []string{testAddr}, StartBlock: 1,
-		Steps: []Step{{
-			Description: "claims a failure that never comes", Headers: []HeaderSpec{{Number: 1, Seed: 1}}, Head: 1,
-			ExpectPollError: true,
-		}},
+		ChainID:    testChainID,
+		Addresses:  []string{testAddr},
+		StartBlock: 1,
+		Steps: []Step{
+			{
+				Description:     "claims a failure that never comes",
+				Headers:         []HeaderSpec{{Number: 1, Seed: 1}},
+				Head:            1,
+				ExpectPollError: true,
+			},
+		},
 	}
 	report, err := NewRunner(sc).Run(context.Background())
 	if err != nil {

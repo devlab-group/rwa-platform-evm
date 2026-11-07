@@ -23,17 +23,37 @@ import (
 // are outside this allowlist
 var allowedKeywords = map[string]bool{
 	// Annotations and definition containers; no assertions of their own
-	"$schema": true, "$id": true, "$comment": true, "$defs": true,
-	"title": true, "description": true, "default": true, "examples": true,
-	"deprecated": true, "readOnly": true, "writeOnly": true,
+	"$schema":     true,
+	"$id":         true,
+	"$comment":    true,
+	"$defs":       true,
+	"title":       true,
+	"description": true,
+	"default":     true,
+	"examples":    true,
+	"deprecated":  true,
+	"readOnly":    true,
+	"writeOnly":   true,
 	// Reference
 	"$ref": true,
 	// Implemented applicators and assertions
-	"type": true, "properties": true, "required": true, "additionalProperties": true,
-	"items": true, "enum": true, "const": true,
-	"minLength": true, "maxLength": true, "pattern": true,
-	"minimum": true, "maximum": true, "exclusiveMinimum": true, "exclusiveMaximum": true,
-	"minItems": true, "maxItems": true, "uniqueItems": true,
+	"type":                 true,
+	"properties":           true,
+	"required":             true,
+	"additionalProperties": true,
+	"items":                true,
+	"enum":                 true,
+	"const":                true,
+	"minLength":            true,
+	"maxLength":            true,
+	"pattern":              true,
+	"minimum":              true,
+	"maximum":              true,
+	"exclusiveMinimum":     true,
+	"exclusiveMaximum":     true,
+	"minItems":             true,
+	"maxItems":             true,
+	"uniqueItems":          true,
 }
 
 // maxSchemaDepth bounds shared recursion through nested schemas and $ref chains to

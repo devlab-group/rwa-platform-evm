@@ -86,15 +86,26 @@ func setupTestApp(t *testing.T) *testEnv {
 	escrowAddr := common.HexToAddress("0x0000000000000000000000000000000000E5C0")
 
 	if err := repos.AssetProfiles.Upsert(ctx, &models.AssetProfile{
-		ProjectID: profile.ProjectID, ProfileRaw: []byte(goldGramProfile), Digest: profile.DigestHex(), CID: profile.CID,
-		TokenDecimals: profile.TokenDecimals, TokenUnit: profile.TokenUnit, RecordIDLabel: profile.RecordIDLabel, CreatedAt: time.Now(),
+		ProjectID:     profile.ProjectID,
+		ProfileRaw:    []byte(goldGramProfile),
+		Digest:        profile.DigestHex(),
+		CID:           profile.CID,
+		TokenDecimals: profile.TokenDecimals,
+		TokenUnit:     profile.TokenUnit,
+		RecordIDLabel: profile.RecordIDLabel,
+		CreatedAt:     time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repos.Projects.Upsert(ctx, &models.Project{
-		ProjectID: profile.ProjectID, Version: "rwa-v2", ChainID: 31337, ProfileDigest: profile.DigestHex(),
-		Addresses: models.Addresses{SupplyController: controllerAddr.Hex(), Vault: vaultAddr.Hex(), RedemptionEscrow: escrowAddr.Hex()},
-		Status:    models.ProjectStatusActive, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		ProjectID:     profile.ProjectID,
+		Version:       "rwa-v2",
+		ChainID:       31337,
+		ProfileDigest: profile.DigestHex(),
+		Addresses:     models.Addresses{SupplyController: controllerAddr.Hex(), Vault: vaultAddr.Hex(), RedemptionEscrow: escrowAddr.Hex()},
+		Status:        models.ProjectStatusActive,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +129,7 @@ func setupTestApp(t *testing.T) *testEnv {
 	// these tests use; buildApp wires KYC and Webhooks together, so the test App does too
 	kycProvider, _ := kyc.New(kyc.Config{Mode: kyc.ModeNone, GenericHMACSecret: "webhook-secret"})
 	status := compliance.NewStatusService(txs, common.HexToAddress("0x0000000000000000000000000000000000C0A1"), blockchain.NewStaticKeySigner(complianceKey))
-	salesSvc := sales.New(client, vaultAddr, common.HexToAddress("0xA001"), repos.Purchases)
+	salesSvc := sales.New(client, vaultAddr, common.HexToAddress("0xA001"), repos.Purchases).WithOrders(repos.PurchaseOrders)
 	complianceRegistryAddr := common.HexToAddress("0x0000000000000000000000000000000000C0A1")
 	redemptionSvc := redemption.New(client, escrowAddr, repos.RedemptionRequests, complianceRegistryAddr)
 
@@ -127,9 +138,18 @@ func setupTestApp(t *testing.T) *testEnv {
 	jwtSecret := []byte("test-jwt-secret-that-is-at-least-32-bytes-long")
 
 	app := &App{
-		Repos: repos, ChainID: 31337,
-		Project: nil, Records: records, Burns: assets.NewBurnService(records, repos.Burns), Challenges: challenges, Webhooks: webhooks, KYC: kycProvider, Status: status,
-		Sales: salesSvc, Redemptions: redemptionSvc, Audit: auditlog.New(repos.AuditLogs),
+		Repos:                 repos,
+		ChainID:               31337,
+		Project:               nil,
+		Records:               records,
+		Burns:                 assets.NewBurnService(records, repos.Burns),
+		Challenges:            challenges,
+		Webhooks:              webhooks,
+		KYC:                   kycProvider,
+		Status:                status,
+		Sales:                 salesSvc,
+		Redemptions:           redemptionSvc,
+		Audit:                 auditlog.New(repos.AuditLogs),
 		Sessions:              auth.NewSessionManager(repos.WalletSessions, 15*time.Minute),
 		AdminChallenges:       auth.NewAdminChallengeService(repos.AdminChallenges, time.Hour, "RWA Test Platform"),
 		AdminAddress:          adminAddr.Hex(),
@@ -147,9 +167,17 @@ func setupTestApp(t *testing.T) *testEnv {
 	}
 
 	return &testEnv{
-		app: app, router: router, client: client, auditorKey: auditorKey,
-		controllerAddr: controllerAddr, vaultAddr: vaultAddr, escrowAddr: escrowAddr,
-		adminKey: adminKey, adminAddr: adminAddr, jwtSecret: jwtSecret, bearer: "Bearer " + token,
+		app:            app,
+		router:         router,
+		client:         client,
+		auditorKey:     auditorKey,
+		controllerAddr: controllerAddr,
+		vaultAddr:      vaultAddr,
+		escrowAddr:     escrowAddr,
+		adminKey:       adminKey,
+		adminAddr:      adminAddr,
+		jwtSecret:      jwtSecret,
+		bearer:         "Bearer " + token,
 	}
 }
 
@@ -717,8 +745,11 @@ func TestListRecordsIsPaginated(t *testing.T) {
 	const total = defaultListLimit + 7
 	for i := 0; i < total; i++ {
 		if err := env.app.Repos.AssetRecords.Create(ctx, &models.AssetRecord{
-			RecordID: fmt.Sprintf("PAGE-%03d", i), ProjectID: "4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61",
-			Status: models.RecordStatusDraft, Amount: "1", CreatedAt: time.Now().Add(time.Duration(i) * time.Millisecond),
+			RecordID:  fmt.Sprintf("PAGE-%03d", i),
+			ProjectID: "4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61",
+			Status:    models.RecordStatusDraft,
+			Amount:    "1",
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Millisecond),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -784,8 +815,11 @@ func TestListRecordsRejectsOversizedLimit(t *testing.T) {
 	const total = maxListLimit + 5
 	for i := 0; i < total; i++ {
 		if err := env.app.Repos.AssetRecords.Create(ctx, &models.AssetRecord{
-			RecordID: fmt.Sprintf("CAP-%04d", i), ProjectID: "4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61",
-			Status: models.RecordStatusDraft, Amount: "1", CreatedAt: time.Now().Add(time.Duration(i) * time.Millisecond),
+			RecordID:  fmt.Sprintf("CAP-%04d", i),
+			ProjectID: "4fd4224f-6e65-4d6b-9fa9-c5c2b3514e61",
+			Status:    models.RecordStatusDraft,
+			Amount:    "1",
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Millisecond),
 		}); err != nil {
 			t.Fatal(err)
 		}

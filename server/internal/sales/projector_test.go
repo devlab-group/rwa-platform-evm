@@ -29,9 +29,18 @@ func (d probedPurchaseRepo) DeleteStaleGeneration(ctx context.Context, gen int64
 
 func TestBuildPurchases(t *testing.T) {
 	events := []*models.ChainEvent{
-		{Name: "Purchased", TxHash: "0xaa", LogIndex: 0, BlockNumber: 5, Data: map[string]any{
-			"buyer": "0xBUYER", "recipient": "0xRECIP", "tokenAmount": "100", "quoteAmount": "95",
-		}},
+		{
+			Name:        "Purchased",
+			TxHash:      "0xaa",
+			LogIndex:    0,
+			BlockNumber: 5,
+			Data: map[string]any{
+				"buyer":       "0xBUYER",
+				"recipient":   "0xRECIP",
+				"tokenAmount": "100",
+				"quoteAmount": "95",
+			},
+		},
 		{Name: "ProceedsWithdrawn", TxHash: "0xcc", LogIndex: 0, BlockNumber: 7, Data: map[string]any{}},
 	}
 
@@ -54,8 +63,13 @@ func TestReconcileRebuildsPurchases(t *testing.T) {
 
 	ctx := context.Background()
 	if err := events.Create(ctx, &models.ChainEvent{
-		ChainID: 31337, Address: vaultAddr.Hex(), Name: "Purchased", TxHash: "0xaa", LogIndex: 0, BlockNumber: 5,
-		Data: map[string]any{"buyer": "0xBUYER", "recipient": "0xRECIP", "tokenAmount": "100", "quoteAmount": "95"},
+		ChainID:     31337,
+		Address:     vaultAddr.Hex(),
+		Name:        "Purchased",
+		TxHash:      "0xaa",
+		LogIndex:    0,
+		BlockNumber: 5,
+		Data:        map[string]any{"buyer": "0xBUYER", "recipient": "0xRECIP", "tokenAmount": "100", "quoteAmount": "95"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -98,25 +112,33 @@ func TestReconcileNeverExposesEmptyOrPartialPurchasesBetweenWrites(t *testing.T)
 	events := memory.NewChainEventRepository()
 	inner := memory.NewPurchaseRepository()
 	armed, probes, minObserved := false, 0, 1<<30
-	purchases := probedPurchaseRepo{PurchaseRepository: inner, probe: func() {
-		if !armed {
-			return // only the rebuild under test is observed
-		}
-		probes++
-		list, err := inner.List(context.Background())
-		if err != nil {
-			t.Errorf("probe List: %v", err)
-			return
-		}
-		minObserved = min(minObserved, len(list))
-	}}
+	purchases := probedPurchaseRepo{
+		PurchaseRepository: inner,
+		probe: func() {
+			if !armed {
+				return // only the rebuild under test is observed
+			}
+			probes++
+			list, err := inner.List(context.Background())
+			if err != nil {
+				t.Errorf("probe List: %v", err)
+				return
+			}
+			minObserved = min(minObserved, len(list))
+		},
+	}
 	svc := New(nil, vaultAddr, common.Address{}, purchases)
 
 	ctx := context.Background()
 	for i, tx := range []string{"0x1", "0x2", "0x3"} {
 		if err := events.Create(ctx, &models.ChainEvent{
-			ChainID: 31337, Address: vaultAddr.Hex(), Name: "Purchased", TxHash: tx, LogIndex: 0, BlockNumber: uint64(5 + i),
-			Data: map[string]any{"buyer": "0xBUYER", "recipient": "0xRECIP", "tokenAmount": "100", "quoteAmount": "95"},
+			ChainID:     31337,
+			Address:     vaultAddr.Hex(),
+			Name:        "Purchased",
+			TxHash:      tx,
+			LogIndex:    0,
+			BlockNumber: uint64(5 + i),
+			Data:        map[string]any{"buyer": "0xBUYER", "recipient": "0xRECIP", "tokenAmount": "100", "quoteAmount": "95"},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -135,8 +157,13 @@ func TestReconcileNeverExposesEmptyOrPartialPurchasesBetweenWrites(t *testing.T)
 	}
 	for i, tx := range []string{"0x4", "0x5", "0x6"} {
 		if err := events.Create(ctx, &models.ChainEvent{
-			ChainID: 31337, Address: vaultAddr.Hex(), Name: "Purchased", TxHash: tx, LogIndex: 0, BlockNumber: uint64(20 + i),
-			Data: map[string]any{"buyer": "0xBUYER2", "recipient": "0xRECIP2", "tokenAmount": "200", "quoteAmount": "190"},
+			ChainID:     31337,
+			Address:     vaultAddr.Hex(),
+			Name:        "Purchased",
+			TxHash:      tx,
+			LogIndex:    0,
+			BlockNumber: uint64(20 + i),
+			Data:        map[string]any{"buyer": "0xBUYER2", "recipient": "0xRECIP2", "tokenAmount": "200", "quoteAmount": "190"},
 		}); err != nil {
 			t.Fatal(err)
 		}

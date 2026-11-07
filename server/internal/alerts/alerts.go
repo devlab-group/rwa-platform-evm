@@ -33,8 +33,11 @@ func EvaluatePendingRedemptionSLA(requests []*models.RedemptionRequest, threshol
 			continue
 		}
 		out = append(out, Alert{
-			Kind: "pending_redemption_sla", RedemptionID: r.ID, Since: createdAt, Age: age,
-			Message: fmt.Sprintf("redemption %s has been Pending for %s (SLA %s)", r.ID, age.Round(time.Second), threshold),
+			Kind:         "pending_redemption_sla",
+			RedemptionID: r.ID,
+			Since:        createdAt,
+			Age:          age,
+			Message:      fmt.Sprintf("redemption %s has been Pending for %s (SLA %s)", r.ID, age.Round(time.Second), threshold),
 		})
 	}
 	return out
@@ -60,8 +63,11 @@ func EvaluateFundedClaimFailure(requests []*models.RedemptionRequest, threshold 
 			continue
 		}
 		out = append(out, Alert{
-			Kind: "funded_claim_failure", RedemptionID: r.ID, Since: fundedAt, Age: age,
-			Message: fmt.Sprintf("redemption %s has been Funded for %s without being claimed (SLA %s)", r.ID, age.Round(time.Second), threshold),
+			Kind:         "funded_claim_failure",
+			RedemptionID: r.ID,
+			Since:        fundedAt,
+			Age:          age,
+			Message:      fmt.Sprintf("redemption %s has been Funded for %s without being claimed (SLA %s)", r.ID, age.Round(time.Second), threshold),
 		})
 	}
 	return out

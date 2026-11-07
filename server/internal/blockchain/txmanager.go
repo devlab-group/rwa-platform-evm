@@ -332,8 +332,11 @@ func (m *txManager) Submit(ctx context.Context, req SubmitRequest) (*models.Tran
 		id = existing.ID // a retry updates the same record instead of creating a second one for the key
 		// Archive the earlier Nonce, TxHash and SignedRawTx in Attempts before replacing them
 		priorAttempts = append(append([]models.TxAttempt{}, existing.Attempts...), models.TxAttempt{
-			Nonce: existing.Nonce, TxHash: existing.TxHash, SignedRawTx: existing.SignedRawTx,
-			Status: existing.Status, RecordedAt: existing.UpdatedAt,
+			Nonce:       existing.Nonce,
+			TxHash:      existing.TxHash,
+			SignedRawTx: existing.SignedRawTx,
+			Status:      existing.Status,
+			RecordedAt:  existing.UpdatedAt,
 		})
 	}
 	record := &models.Transaction{

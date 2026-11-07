@@ -105,3 +105,28 @@ export function TransactionStatusBadge({ status }: { status: string }) {
     </span>
   );
 }
+
+const PURCHASE_ORDER_TONE: Record<string, string> = {
+  Pending: "badge--neutral",
+  Settled: "badge--success",
+  Refunded: "badge--warning",
+  Cancelled: "badge--danger",
+  Rejected: "badge--danger",
+};
+
+/** Status of an rwa-v4 purchase order; a status this client does not know shows as Unknown */
+export function PurchaseOrderStatusBadge({
+  status,
+}: {
+  status: string | undefined;
+}) {
+  const known = status !== undefined && status in PURCHASE_ORDER_TONE;
+  return (
+    <span
+      className={`badge ${known ? PURCHASE_ORDER_TONE[status] : "badge--warning"}`}
+      data-status={known ? status : "unknown"}
+    >
+      {known ? status : "Unknown"}
+    </span>
+  );
+}

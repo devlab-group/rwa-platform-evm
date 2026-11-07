@@ -29,15 +29,23 @@ func TestReindexRehearsalReconstructsIdenticalReadModel(t *testing.T) {
 	requestedTopics, requestedData := packRedemptionRequested(t, escrowABI, big.NewInt(1),
 		common.HexToAddress("0x00000000000000000000000000000000000AAA"), big.NewInt(1000), big.NewInt(950), 1_700_000_000)
 	source.AddLog(types.Log{
-		Address: escrowAddr, Topics: requestedTopics, Data: requestedData,
-		BlockNumber: 1, TxHash: common.HexToHash("0xaa"), Index: 0,
+		Address:     escrowAddr,
+		Topics:      requestedTopics,
+		Data:        requestedData,
+		BlockNumber: 1,
+		TxHash:      common.HexToHash("0xaa"),
+		Index:       0,
 	})
 	source.SetHeader(2, 2)
 	fundedTopics, fundedData := packRedemptionFunded(t, escrowABI, big.NewInt(1),
 		common.HexToAddress("0x00000000000000000000000000000000000BBB"), big.NewInt(950))
 	source.AddLog(types.Log{
-		Address: escrowAddr, Topics: fundedTopics, Data: fundedData,
-		BlockNumber: 2, TxHash: common.HexToHash("0xbb"), Index: 0,
+		Address:     escrowAddr,
+		Topics:      fundedTopics,
+		Data:        fundedData,
+		BlockNumber: 2,
+		TxHash:      common.HexToHash("0xbb"),
+		Index:       0,
 	})
 	source.SetHead(2)
 

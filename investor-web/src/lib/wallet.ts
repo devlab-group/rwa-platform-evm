@@ -1,5 +1,6 @@
-// Injected-provider wallet integration: encodes ERC-20 approve/transfer, Vault.buy and escrow
-// request/claim/cancel with viem/pinned ABIs. Reads contract prices and accepts no server calldata.
+// Injected-provider wallet integration: encodes ERC-20 approve/transfer, Vault buy and forward
+// order request/settle/cancel, and escrow request/claim/cancel with viem/pinned ABIs. Reads
+// contract prices and accepts no server calldata.
 // Wallet RPC runs at call time, so builds need no live wallet.
 import {
   createPublicClient,
@@ -17,12 +18,15 @@ import {
 import {
   incomeDistributorAbi,
   oracleErrorsAbi,
+  oracleForwardAbi,
   redemptionEscrowAbi,
   tokenErrorsAbi,
   vaultAbi,
   vaultErrorsAbi,
 } from "./abis";
 import { oracleReason } from "./v3";
+import { roundFromRevert, type OrderReadArgs, type OrderRound } from "./v4";
+import { formatUnixSeconds } from "./format";
 import { findNetwork, toAddChainParams } from "./networks";
 
 export interface InjectedProvider {
@@ -248,6 +252,47 @@ export async function readPreviewRedeem(
   });
 }
 
+/**
+ * Read quotePurchaseAfter on the strategy stored with the order. Revert data maps to a round
+ * state; failures without revert data, such as an unavailable RPC or empty contract response,
+ * reject the read.
+ */
+export async function readOrderRound(
+  expectedChainId: number,
+  strategy: Address,
+  args: OrderReadArgs,
+): Promise<OrderRound> {
+  const provider = getInjectedProvider();
+  if (!provider) throw new Error("No injected wallet found.");
+  await assertChain(provider, expectedChainId);
+  // A revert is an expected answer here, so skip viem's retry backoff for it
+  const client = createPublicClient({
+    transport: custom(provider, { retryCount: 0 }),
+  });
+  try {
+    const [quote, roundId] = await client.readContract({
+      address: strategy,
+      abi: oracleForwardAbi,
+      functionName: "quotePurchaseAfter",
+      args: [args.tokenAmount, args.baseRound, args.createdAt],
+    });
+    return { state: "priced", quote, roundId: BigInt(roundId) };
+  } catch (err) {
+    const data = revertData(err);
+    if (!data) throw err;
+    let name: string;
+    try {
+      name = decodeErrorResult({
+        abi: [...oracleErrorsAbi, ...oracleForwardAbi],
+        data,
+      }).errorName;
+    } catch {
+      name = "Unknown";
+    }
+    return roundFromRevert(name);
+  }
+}
+
 export function formatWithDecimals(raw: string, decimals: number): string {
   return formatUnits(BigInt(raw), decimals);
 }
@@ -354,6 +399,7 @@ function revertReason(err: unknown): string {
         ...tokenErrorsAbi,
         ...vaultErrorsAbi,
         ...oracleErrorsAbi,
+        ...oracleForwardAbi,
         ...incomeDistributorAbi,
       ],
       data,
@@ -398,6 +444,83 @@ export async function sendBuy(
         input.recipient,
         input.deadline,
       ],
+    }),
+  );
+}
+
+/**
+ * Vault.requestPurchase arguments: tokenAmount in RWA minimal units, maxQuoteAmount in
+ * quote-token minimal units (the deposit and slippage ceiling), deadline in Unix seconds
+ */
+export interface RequestPurchaseInput {
+  tokenAmount: bigint;
+  maxQuoteAmount: bigint;
+  recipient: Address;
+  deadline: bigint;
+}
+
+/**
+ * Broadcasts Vault.requestPurchase on a forward-priced project; caller and recipient must be
+ * Allowed. The Vault pulls maxQuoteAmount as a deposit, so approve it first. The order ID comes
+ * from the Vault event and appears in the server list after indexing.
+ */
+export async function sendRequestPurchase(
+  expectedChainId: number,
+  from: Address,
+  vault: Address,
+  input: RequestPurchaseInput,
+): Promise<Hex> {
+  return sendWrite(
+    expectedChainId,
+    from,
+    vault,
+    encodeFunctionData({
+      abi: vaultAbi,
+      functionName: "requestPurchase",
+      args: [
+        input.tokenAmount,
+        input.maxQuoteAmount,
+        input.recipient,
+        input.deadline,
+      ],
+    }),
+  );
+}
+
+/** Permissionless settlement of a priced order; delivers to the recorded recipient, refunds the buyer */
+export async function sendSettlePurchase(
+  expectedChainId: number,
+  from: Address,
+  vault: Address,
+  id: bigint,
+): Promise<Hex> {
+  return sendWrite(
+    expectedChainId,
+    from,
+    vault,
+    encodeFunctionData({
+      abi: vaultAbi,
+      functionName: "settlePurchase",
+      args: [id],
+    }),
+  );
+}
+
+/** Returns a Pending order's deposit to its buyer after the timeout, only while no usable round exists */
+export async function sendCancelPurchase(
+  expectedChainId: number,
+  from: Address,
+  vault: Address,
+  id: bigint,
+): Promise<Hex> {
+  return sendWrite(
+    expectedChainId,
+    from,
+    vault,
+    encodeFunctionData({
+      abi: vaultAbi,
+      functionName: "cancelPurchase",
+      args: [id],
     }),
   );
 }
@@ -505,6 +628,35 @@ const INCOME_ERROR_TEXT: Record<string, string> = {
   ExceedsTotal: "This claim would exceed the distribution total.",
 };
 
+// Vault revert wording; args follow the error's ABI inputs
+function vaultErrorText(
+  name: string,
+  args: readonly unknown[] | undefined,
+): string {
+  switch (name) {
+    case "QuoteBelowMinimum":
+      return `This purchase is below the project minimum: it quotes ${String(args?.[0])} and the minimum is ${String(args?.[1])} (quote-token minimal units).`;
+    case "ProjectPaused":
+      return "The project is paused; settlement resumes when it is unpaused.";
+    case "ForwardPriced":
+      return "This project prices purchases at a later feed round, so a direct buy is not possible. Reload the page and place an order instead.";
+    case "NotForwardPriced":
+      return "This project prices purchases instantly, so an order cannot be placed. Reload the page and buy directly instead.";
+    case "NotPending":
+      return "This request or order is no longer pending.";
+    case "NotBuyer":
+      return "Only the wallet that placed this order can cancel it.";
+    case "BuyerNotAllowed":
+      return "The buyer wallet is not Allowed in the compliance registry, so this order cannot be settled or cancelled until it is Allowed again.";
+    case "TimeoutNotReached":
+      return `The timeout has not elapsed yet; cancelling opens at ${formatUnixSeconds(Number(args?.[0]))}.`;
+    case "RoundAvailable":
+      return "A price round is available for this order, so it cannot be cancelled. Settle it instead.";
+    default:
+      return `The vault rejected the call (${name}).`;
+  }
+}
+
 /** Oracle error name when err carries oracle revert data, so callers can stop new purchases */
 export function oracleErrorName(err: unknown): string | undefined {
   const data = revertData(err);
@@ -531,10 +683,21 @@ export function describeTxError(
     const oracle = oracleErrorName(err);
     if (oracle) return `Prices unavailable: ${oracleReason(oracle)}.`;
     try {
-      const below = decodeErrorResult({ abi: vaultErrorsAbi, data });
-      return `This purchase is below the project minimum: it quotes ${String(below.args[0])} and the minimum is ${String(below.args[1])} (quote-token minimal units).`;
+      const vault = decodeErrorResult({ abi: vaultErrorsAbi, data });
+      // ProjectPaused is shared with IncomeDistributor, whose claim wording applies there
+      if (!(context === "income" && vault.errorName === "ProjectPaused")) {
+        return vaultErrorText(vault.errorName, vault.args);
+      }
     } catch {
       // Not a Vault error
+    }
+    try {
+      const round = decodeErrorResult({ abi: oracleForwardAbi, data });
+      if (round.errorName === "RoundNotAvailable") {
+        return "No price has been published for this order yet. Try again after the next feed update.";
+      }
+    } catch {
+      // Not a forward-pricing error
     }
     // Shared selectors such as ProjectPaused() need claim wording only for income transactions
     if (context === "income") {

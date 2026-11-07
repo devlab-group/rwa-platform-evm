@@ -56,8 +56,15 @@ type Profile struct {
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 var profileAllowedTopLevelKeys = map[string]bool{
-	"profileVersion": true, "projectId": true, "assetType": true, "tokenUnit": true,
-	"tokenDecimals": true, "recordIdLabel": true, "displayFields": true, "legal": true, "assetSchema": true,
+	"profileVersion": true,
+	"projectId":      true,
+	"assetType":      true,
+	"tokenUnit":      true,
+	"tokenDecimals":  true,
+	"recordIdLabel":  true,
+	"displayFields":  true,
+	"legal":          true,
+	"assetSchema":    true,
 }
 
 // lengthInRange counts Unicode code points, matching JSON Schema minLength/maxLength
