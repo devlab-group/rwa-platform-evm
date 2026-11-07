@@ -157,14 +157,15 @@ func TestVaultPurchaseEventsDecode(t *testing.T) {
 func TestVaultPurchaseOrderViews(t *testing.T) {
 	v := NewVault()
 	want := PurchaseOrderTuple{
-		Buyer:          common.HexToAddress("0x01"),
-		CreatedAt:      1700000000,
-		Status:         1,
-		Recipient:      common.HexToAddress("0x02"),
-		Strategy:       common.HexToAddress("0x03"),
-		BaseRound:      new(big.Int).Lsh(big.NewInt(1), 79),
-		TokenAmount:    big.NewInt(1000),
-		MaxQuoteAmount: big.NewInt(2500),
+		Buyer:            common.HexToAddress("0x01"),
+		CreatedAt:        1700000000,
+		Status:           1,
+		Recipient:        common.HexToAddress("0x02"),
+		Strategy:         common.HexToAddress("0x03"),
+		BaseRound:        new(big.Int).Lsh(big.NewInt(1), 79),
+		TokenAmount:      big.NewInt(1000),
+		MaxQuoteAmount:   big.NewInt(2500),
+		MinPurchaseQuote: big.NewInt(900),
 	}
 	packed, err := v.ABI.Methods["getPurchase"].Outputs.Pack(want)
 	if err != nil {
@@ -176,7 +177,7 @@ func TestVaultPurchaseOrderViews(t *testing.T) {
 	}
 	if got.Buyer != want.Buyer || got.CreatedAt != want.CreatedAt || got.Status != want.Status || got.Recipient != want.Recipient ||
 		got.Strategy != want.Strategy || got.BaseRound.Cmp(want.BaseRound) != 0 || got.TokenAmount.Cmp(want.TokenAmount) != 0 ||
-		got.MaxQuoteAmount.Cmp(want.MaxQuoteAmount) != 0 {
+		got.MaxQuoteAmount.Cmp(want.MaxQuoteAmount) != 0 || got.MinPurchaseQuote.Cmp(want.MinPurchaseQuote) != 0 {
 		t.Errorf("getPurchase: got %+v want %+v", got, want)
 	}
 

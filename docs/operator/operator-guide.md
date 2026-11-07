@@ -545,23 +545,32 @@ an in-flight transaction, it simulates `settlePurchase` and submits the call if 
 A simulation that reverts, including for an unavailable round, pause or buyer who is not Allowed,
 sends no transaction and spends no gas. The order is retried on the next pass. After a pending
 transaction waits over 5 minutes, the keeper attempts a replacement with 20% higher fees, subject
-to the configured fee caps.
+to the configured fee caps. If a send times out and its outcome is unknown, the keeper keeps
+track of that transaction and rebroadcasts the same bytes instead of sending a second settlement.
 
-Use an rwa-v4 Vault address. Startup checks the RPC chain ID and runs an initial pass; any
-error in that pass aborts startup. Later pass errors are logged and polling continues. The
-keeper exposes no metrics, so monitor the process, logs and wallet balance. An unfunded wallet
-cannot pay settlement gas.
+Use an rwa-v4 Vault address. Startup checks the RPC chain ID and runs an initial pass. A reverted
+or undecodable `nextPurchaseId` response aborts startup, as does any error in a `--once` run.
+Other first-pass errors in a long-running keeper, such as a dropped RPC connection, are logged
+and retried on the next poll, just as later pass errors are. The keeper exposes no
+metrics, so monitor the process, logs and wallet balance; a keeper that stops settling shows up
+as growing `rwa_purchase_orders_pending_oldest_age_seconds` and as the `pending_purchase_sla`
+alert (§5). An unfunded wallet cannot pay settlement gas.
 
 Its limits:
 
 - Transaction records live in memory. A restart can submit another settlement for an order
   whose transaction is still pending. If both are mined, one reverts and spends gas. Each
   `--once` run starts with fresh transaction records.
-- Exhausting a transaction's replacement limit blocks further submissions from that wallet
-  until restart. Investigate the stuck transaction before restarting.
+- Exhausting a transaction's replacement limit blocks further submissions from that wallet.
+  The keeper cannot clear that record from memory, so it logs the stuck transaction and exits
+  with an error. Resolve the stuck nonce from the wallet, then restart it. A replacement that is
+  reorged out or loses its nonce is retried like the original and does not block the keeper.
 - Startup discovers and reads historical order IDs, so its first pass grows with the order count.
-- If a reorg undoes a settlement the keeper already saw, it does not look at that order again
-  until it restarts. The buyer or anyone else can still settle it.
+  An order that fails to read is retried on the next pass.
+- If a reorg removes the newest requests, the keeper forgets those order IDs and picks up the
+  orders that reuse them. If a reorg undoes a settlement the keeper already saw and puts an order
+  back to Pending, it does not look at that order again until it restarts. The buyer or anyone
+  else can still settle it.
 - Every settlement costs gas, including refunds, so an Allowed investor placing many small orders
   spends the wallet. `minPurchaseQuote` raises the cost of that and the wallet balance caps the
   loss. Keep the balance small.

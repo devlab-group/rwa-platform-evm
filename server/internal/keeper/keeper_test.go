@@ -3,6 +3,7 @@ package keeper
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"reflect"
 	"testing"
@@ -15,10 +16,12 @@ import (
 
 	"github.com/rwa-platform/server/internal/bindings"
 	"github.com/rwa-platform/server/internal/blockchain"
+	"github.com/rwa-platform/server/internal/dal/models"
 )
 
 // Vault PurchaseStatus values
 const (
+	statusNone      uint8 = 0
 	statusPending   uint8 = 1
 	statusSettled   uint8 = 2
 	statusRefunded  uint8 = 3
@@ -80,11 +83,17 @@ func (v *fakeVault) CallContract(ctx context.Context, msg ethereum.CallMsg, bloc
 		if err := v.readErr[id]; err != nil {
 			return nil, err
 		}
+		// an id past the last order reads None, as on the Vault
+		status := statusNone
+		if id < uint64(len(v.statuses)) {
+			status = v.statuses[id]
+		}
 		return method.Outputs.Pack(bindings.PurchaseOrderTuple{
-			Status:         v.statuses[id],
-			BaseRound:      big.NewInt(1),
-			TokenAmount:    big.NewInt(1),
-			MaxQuoteAmount: big.NewInt(1),
+			Status:           status,
+			BaseRound:        big.NewInt(1),
+			TokenAmount:      big.NewInt(1),
+			MaxQuoteAmount:   big.NewInt(1),
+			MinPurchaseQuote: big.NewInt(0),
 		})
 	case "settlePurchase":
 		if v.onSimulate != nil {
@@ -217,6 +226,9 @@ func TestPass_OneOrderFails_OthersStillSettleAndItRetries(t *testing.T) {
 			if !errors.Is(err, errTransport) {
 				t.Fatalf("Pass error = %v, want the transport failure", err)
 			}
+			if Fatal(err) {
+				t.Fatalf("a transient failure is fatal: %v", err)
+			}
 			wantSent(t, vault, 1)
 
 			delete(vault.readErr, 0)
@@ -246,8 +258,8 @@ func TestPass_NextIdUnreadable_ReportsItAndKeepsWorkingKnownOrders(t *testing.T)
 	vault.nextErr = errTransport
 	err := k.Pass(context.Background())
 
-	if !errors.Is(err, errTransport) {
-		t.Fatalf("Pass error = %v, want the transport failure", err)
+	if !errors.Is(err, errTransport) || Fatal(err) {
+		t.Fatalf("Pass error = %v, want the transport failure, not fatal", err)
 	}
 	wantSent(t, vault, 0)
 }
@@ -256,8 +268,9 @@ func TestPass_AddressWithoutOrders_IsAnError(t *testing.T) {
 	k, vault, _ := newFixture(t, blockchain.FeeCaps{})
 	vault.nextEmpty = true
 
-	if err := k.Pass(context.Background()); err == nil {
-		t.Fatal("Pass reported no error")
+	err := k.Pass(context.Background())
+	if !errors.Is(err, ErrNotVault) || !Fatal(err) {
+		t.Fatalf("Pass error = %v, want a fatal ErrNotVault", err)
 	}
 }
 
@@ -430,4 +443,142 @@ func TestRun_PassesOnEachTickUntilCancelled(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not reach the order and stop")
 	}
+}
+
+// replaceOnce sends order 0's settlement, then lets it age until the keeper replaces it
+func replaceOnce(t *testing.T, k *Keeper) *models.Transaction {
+	t.Helper()
+	mustPass(t, k)
+	first, err := k.records.Get(context.Background(), k.sent[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.now = func() time.Time { return first.SubmittedAt.Add(replaceAfter + time.Second) }
+	mustPass(t, k)
+	k.now = time.Now
+	replacement, err := k.records.Get(context.Background(), k.sent[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.ID == first.ID {
+		t.Fatal("the keeper did not replace the transaction")
+	}
+	return replacement
+}
+
+func TestPass_ReplacementLost_SubmitsAgainInsteadOfBlocking(t *testing.T) {
+	for _, lost := range []models.TxStatus{models.TxReorged, models.TxNonceConsumedExternally} {
+		t.Run(string(lost), func(t *testing.T) {
+			k, vault, _ := newFixture(t, blockchain.FeeCaps{}, statusPending)
+			replacement := replaceOnce(t, k)
+			replacement.Status = lost
+			if err := k.records.Update(context.Background(), replacement); err != nil {
+				t.Fatal(err)
+			}
+
+			mustPass(t, k)
+
+			wantSent(t, vault, 0, 0, 0)
+		})
+	}
+}
+
+func TestPass_WalletBlockedByStuckTransaction_IsFatal(t *testing.T) {
+	k, vault, sender := newFixture(t, blockchain.FeeCaps{}, statusPending)
+	stuck := &models.Transaction{ID: "stuck", From: sender.Hex(), Status: models.TxNeedsIntervention}
+	if err := k.records.Create(context.Background(), stuck); err != nil {
+		t.Fatal(err)
+	}
+
+	err := k.Pass(context.Background())
+	if !errors.Is(err, blockchain.ErrNeedsIntervention) || !Fatal(err) {
+		t.Fatalf("Pass error = %v, want a fatal ErrNeedsIntervention", err)
+	}
+	wantSent(t, vault)
+
+	runErr := k.Run(context.Background(), time.Millisecond)
+	if !errors.Is(runErr, blockchain.ErrNeedsIntervention) {
+		t.Fatalf("Run returned %v, want it to stop on ErrNeedsIntervention", runErr)
+	}
+}
+
+func TestPass_AmbiguousBroadcast_DoesNotQueueASecondSettlement(t *testing.T) {
+	k, vault, _ := newFixture(t, blockchain.FeeCaps{}, statusPending)
+	vault.SendTransactionErr = fmt.Errorf("proxy timeout: %w", blockchain.ErrAmbiguousBroadcast)
+
+	if err := k.Pass(context.Background()); !errors.Is(err, blockchain.ErrAmbiguousBroadcast) {
+		t.Fatalf("Pass error = %v, want the ambiguous broadcast", err)
+	}
+	vault.SendTransactionErr = nil
+	mustPass(t, k)
+	mustPass(t, k)
+
+	// every send is the held transaction again: same nonce and bytes, never a second settlement
+	if len(vault.SentTxs) == 0 {
+		t.Fatal("the held transaction was never rebroadcast")
+	}
+	for i, tx := range vault.SentTxs {
+		if tx.Hash() != vault.SentTxs[0].Hash() || tx.Nonce() != 0 {
+			t.Fatalf("send %d is %s at nonce %d, want the held transaction at nonce 0", i, tx.Hash(), tx.Nonce())
+		}
+	}
+}
+
+func TestPass_AmbiguousReplacement_DoesNotQueueASecondSettlement(t *testing.T) {
+	k, vault, _ := newFixture(t, blockchain.FeeCaps{}, statusPending)
+	mustPass(t, k)
+	first, err := k.records.Get(context.Background(), k.sent[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.now = func() time.Time { return first.SubmittedAt.Add(replaceAfter + time.Second) }
+	vault.SendTransactionErr = fmt.Errorf("proxy timeout: %w", blockchain.ErrAmbiguousBroadcast)
+	if err := k.Pass(context.Background()); !errors.Is(err, blockchain.ErrAmbiguousBroadcast) {
+		t.Fatalf("Pass error = %v, want the ambiguous broadcast", err)
+	}
+	vault.SendTransactionErr = nil
+	k.now = time.Now
+
+	mustPass(t, k)
+	mustPass(t, k)
+
+	for i, tx := range vault.SentTxs {
+		if tx.Nonce() != 0 {
+			t.Fatalf("transaction %d has nonce %d: a second settlement was queued behind the replacement", i, tx.Nonce())
+		}
+	}
+}
+
+func TestPass_ReorgShrinksOrderCount_DropsAndRediscoversIds(t *testing.T) {
+	k, vault, _ := newFixture(t, blockchain.FeeCaps{}, statusSettled, statusPending)
+	vault.settleErr[1] = revertError{}
+	mustPass(t, k)
+	reads := vault.reads[1]
+
+	// a reorg removes order 1: it is not read again while the Vault has no such order
+	vault.statuses = vault.statuses[:1]
+	mustPass(t, k)
+	mustPass(t, k)
+	if vault.reads[1] != reads {
+		t.Fatalf("order 1 read %d more times after the reorg removed it", vault.reads[1]-reads)
+	}
+
+	// a different request takes its id
+	vault.statuses = append(vault.statuses, statusPending)
+	delete(vault.settleErr, 1)
+	mustPass(t, k)
+
+	wantSent(t, vault, 1)
+}
+
+func TestPass_OrderReadsNone_IsNotDroppedForGood(t *testing.T) {
+	k, vault, _ := newFixture(t, blockchain.FeeCaps{}, statusNone)
+	mustPass(t, k)
+	wantSent(t, vault)
+
+	// a lagging node caught up
+	vault.statuses[0] = statusPending
+	mustPass(t, k)
+
+	wantSent(t, vault, 0)
 }

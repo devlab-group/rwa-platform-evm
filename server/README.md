@@ -219,7 +219,9 @@ serves read models. Wallets encode and submit the contract writes.
   and submits successful simulations through `blockchain.TxManager`. The Vault enforces round,
   pause and compliance rules during simulation and execution. Run it with its separate config
   and a dedicated key. Its transaction records live in memory, and it can run while the
-  platform is down. `keeper.example.yaml` lists its settings and the
+  platform is down. It exits with an error when a stuck transaction blocks its wallet, since
+  only a restart clears that record, and it tracks a send whose outcome is unknown instead of
+  settling the order twice. `keeper.example.yaml` lists its settings and the
   [operator guide](../docs/operator/operator-guide.md#4f-order-keeper) covers running it.
 
 ## Income distribution

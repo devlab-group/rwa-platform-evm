@@ -1,14 +1,24 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
+
+	"github.com/rwa-platform/server/internal/blockchain"
+	"github.com/rwa-platform/server/internal/keeper"
 )
 
 // fakeRPC answers eth_chainId with 0x7a69 (31337) and fails everything else
@@ -67,6 +77,46 @@ func TestRun_RefusesToStart(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error %q does not mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// callFails answers every eth_call with err, or with no data when err is nil, as an address
+// without code does
+type callFails struct {
+	*blockchain.FakeClient
+	err error
+}
+
+func (c callFails) CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+	return nil, c.err
+}
+
+func TestFirstPass_OnlyUnfixableFailuresStopStartup(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	transient := errors.New("connection refused")
+	for name, tc := range map[string]struct {
+		callErr error
+		once    bool
+		wantErr bool
+	}{
+		"transient failure, long-running": {callErr: transient},
+		"transient failure, one shot":     {callErr: transient, once: true, wantErr: true},
+		"no such Vault, long-running":     {wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := callFails{FakeClient: blockchain.NewFakeClient(), err: tc.callErr}
+			k := keeper.New(client, blockchain.NewStaticKeySigner(key), big.NewInt(31337), vault, blockchain.FeeCaps{})
+
+			err := firstPass(context.Background(), k, tc.once)
+
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("firstPass error = %v, want an error: %v", err, tc.wantErr)
 			}
 		})
 	}

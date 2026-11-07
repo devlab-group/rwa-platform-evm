@@ -68,13 +68,26 @@ func run(configPath string, once bool) error {
 	log.Printf("keeper: %s settling orders on Vault %s", address, cfg.VaultAddress)
 
 	k := keeper.New(client, signer, chainID, common.HexToAddress(cfg.VaultAddress), cfg.FeeCaps)
-	// Abort startup if the initial order pass fails
-	if err := k.Pass(ctx); err != nil {
+	if err := firstPass(ctx, k, once); err != nil {
 		return err
 	}
 	if once {
 		return nil
 	}
-	k.Run(ctx, cfg.PollInterval)
+	if err := k.Run(ctx, cfg.PollInterval); err != nil {
+		return fmt.Errorf("stopped: %w; resolve it, then restart the keeper", err)
+	}
 	return nil
+}
+
+// firstPass returns all errors in one-shot mode and fatal errors in polling mode.
+// Other polling errors, such as a dropped RPC connection, are logged and retried
+// on the next tick.
+func firstPass(ctx context.Context, k *keeper.Keeper, once bool) error {
+	err := k.Pass(ctx)
+	if err != nil && !once && !keeper.Fatal(err) {
+		log.Printf("keeper: first pass: %v", err)
+		return nil
+	}
+	return err
 }

@@ -32,7 +32,8 @@ const vaultABIJSON = `[
     "outputs":[{"name":"","type":"tuple","components":[
       {"name":"buyer","type":"address"},{"name":"createdAt","type":"uint64"},{"name":"status","type":"uint8"},
       {"name":"recipient","type":"address"},{"name":"strategy","type":"address"},{"name":"baseRound","type":"uint80"},
-      {"name":"tokenAmount","type":"uint256"},{"name":"maxQuoteAmount","type":"uint256"}]}]},
+      {"name":"tokenAmount","type":"uint256"},{"name":"maxQuoteAmount","type":"uint256"},
+      {"name":"minPurchaseQuote","type":"uint256"}]}]},
   {"type":"function","name":"nextPurchaseId","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint256"}]},
   {"type":"function","name":"pendingPurchaseQuote","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint256"}]},
   {"type":"function","name":"purchaseTimeout","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint64"}]},
@@ -102,16 +103,18 @@ func (v Vault) PackRejectPurchase(id *big.Int) ([]byte, error) {
 	return v.ABI.Pack("rejectPurchase", id)
 }
 
-// PurchaseOrderTuple mirrors IVault.PurchaseOrder; BaseRound is a uint80
+// PurchaseOrderTuple mirrors IVault.PurchaseOrder; BaseRound is a uint80 and
+// MinPurchaseQuote the Vault minimum recorded when the order was requested
 type PurchaseOrderTuple struct {
-	Buyer          common.Address `abi:"buyer"`
-	CreatedAt      uint64         `abi:"createdAt"`
-	Status         uint8          `abi:"status"`
-	Recipient      common.Address `abi:"recipient"`
-	Strategy       common.Address `abi:"strategy"`
-	BaseRound      *big.Int       `abi:"baseRound"`
-	TokenAmount    *big.Int       `abi:"tokenAmount"`
-	MaxQuoteAmount *big.Int       `abi:"maxQuoteAmount"`
+	Buyer            common.Address `abi:"buyer"`
+	CreatedAt        uint64         `abi:"createdAt"`
+	Status           uint8          `abi:"status"`
+	Recipient        common.Address `abi:"recipient"`
+	Strategy         common.Address `abi:"strategy"`
+	BaseRound        *big.Int       `abi:"baseRound"`
+	TokenAmount      *big.Int       `abi:"tokenAmount"`
+	MaxQuoteAmount   *big.Int       `abi:"maxQuoteAmount"`
+	MinPurchaseQuote *big.Int       `abi:"minPurchaseQuote"`
 }
 
 // PackGetPurchase builds calldata for the getPurchase(uint256) view call

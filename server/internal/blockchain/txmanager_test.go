@@ -3,6 +3,7 @@ package blockchain
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"strings"
 	"sync"
@@ -1023,8 +1024,8 @@ func TestTxManagerReplaceExhaustsAttemptsMarksNeedsIntervention(t *testing.T) {
 
 	// the second replacement targets the replacement record itself, which is
 	// TxPending with ReplacementCount 1, over the cap of 1
-	if _, err := mgr.Replace(context.Background(), replacement.ID, NewStaticKeySigner(priv), 20); err == nil {
-		t.Fatal("expected an error once the replacement-attempt cap is exceeded")
+	if _, err := mgr.Replace(context.Background(), replacement.ID, NewStaticKeySigner(priv), 20); !errors.Is(err, ErrNeedsIntervention) {
+		t.Fatalf("Replace error = %v, want ErrNeedsIntervention once the replacement-attempt cap is exceeded", err)
 	}
 	if len(client.SentTxs) != sentBeforeSecond {
 		t.Fatalf("expected no further broadcast once the cap is exceeded, sent %d, then %d", sentBeforeSecond, len(client.SentTxs))
@@ -1060,11 +1061,51 @@ func TestTxManagerSubmitBlockedBySignerNeedsIntervention(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := mgr.Submit(context.Background(), SubmitRequest{PrivateKey: priv, To: to}); err == nil {
-		t.Fatal("expected Submit to refuse a signer with an outstanding TxNeedsIntervention transaction")
+	if _, err := mgr.Submit(context.Background(), SubmitRequest{PrivateKey: priv, To: to}); !errors.Is(err, ErrNeedsIntervention) {
+		t.Fatalf("Submit error = %v, want ErrNeedsIntervention for a signer with an outstanding TxNeedsIntervention transaction", err)
 	}
 	if len(client.SentTxs) != 0 {
 		t.Fatalf("expected nothing broadcast, got %d", len(client.SentTxs))
+	}
+}
+
+// TestTxManagerReplacementInheritsAllowReorgRetry checks that a replacement keeps its
+// original's AllowReorgRetry, so a replacement that is reorged or loses its nonce does not
+// block the signer's later submissions when the original would not have
+func TestTxManagerReplacementInheritsAllowReorgRetry(t *testing.T) {
+	for _, allow := range []bool{true, false} {
+		t.Run(fmt.Sprintf("allow=%v", allow), func(t *testing.T) {
+			priv, _ := crypto.GenerateKey()
+			client := NewFakeClient()
+			client.AutoIncrementNonce = true
+			txRepo := memory.NewTransactionRepository()
+			mgr := NewTxManager(client, txRepo, big.NewInt(31337), FeeModeLegacy)
+			to := common.HexToAddress("0x0000000000000000000000000000000000dEaD")
+
+			original, err := mgr.Submit(context.Background(), SubmitRequest{PrivateKey: priv, To: to, AllowReorgRetry: allow})
+			if err != nil {
+				t.Fatal(err)
+			}
+			replacement, err := mgr.Replace(context.Background(), original.ID, NewStaticKeySigner(priv), 20)
+			if err != nil {
+				t.Fatalf("Replace: %v", err)
+			}
+			if replacement.AllowReorgRetry != allow {
+				t.Fatalf("replacement AllowReorgRetry = %v, want %v", replacement.AllowReorgRetry, allow)
+			}
+
+			replacement.Status = models.TxReorged
+			if err := txRepo.Update(context.Background(), replacement); err != nil {
+				t.Fatal(err)
+			}
+			_, err = mgr.Submit(context.Background(), SubmitRequest{PrivateKey: priv, To: to})
+			if allow && err != nil {
+				t.Fatalf("Submit after a reorged replacement: %v", err)
+			}
+			if !allow && !errors.Is(err, ErrNeedsIntervention) {
+				t.Fatalf("Submit error = %v, want ErrNeedsIntervention", err)
+			}
+		})
 	}
 }
 

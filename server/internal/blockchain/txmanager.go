@@ -67,6 +67,11 @@ func (req SubmitRequest) signer() (Signer, error) {
 // transport failures.
 var ErrAmbiguousBroadcast = errors.New("blockchain: ambiguous broadcast outcome")
 
+// ErrNeedsIntervention marks a signer blocked by a transaction that only an operator can
+// resolve. Submit and Replace wrap it; callers that cannot clear the record themselves,
+// such as a process with an in-memory repository, should stop instead of retrying.
+var ErrNeedsIntervention = errors.New("blockchain: operator intervention required")
+
 // isAmbiguousBroadcast classifies ErrAmbiguousBroadcast, context
 // cancellation/deadlines, net.Error and EOF errors as unknown outcomes: the node may
 // have accepted the transaction before losing acknowledgement. Other errors are treated
@@ -279,7 +284,7 @@ func (m *txManager) Submit(ctx context.Context, req SubmitRequest) (*models.Tran
 	} else if blocker != nil {
 		// nodes mine a signer's transactions in nonce order, so anything
 		// submitted behind a stuck nonce would be stuck too
-		return nil, fmt.Errorf("blockchain: signer %s has transaction %s (nonce %d) requiring operator intervention; resolve it before submitting further transactions", from.Hex(), blocker.ID, blocker.Nonce)
+		return nil, fmt.Errorf("%w: signer %s has transaction %s (nonce %d) blocking new submissions; resolve it before submitting further transactions", ErrNeedsIntervention, from.Hex(), blocker.ID, blocker.Nonce)
 	}
 
 	var existing *models.Transaction
@@ -783,7 +788,7 @@ func (m *txManager) markNeedsIntervention(ctx context.Context, tx *models.Transa
 	if err := m.txs.Update(ctx, tx); err != nil {
 		return fmt.Errorf("blockchain: mark %s needs-intervention: %w", tx.ID, err)
 	}
-	return fmt.Errorf("blockchain: transaction %s exhausted its replacement-attempt limit (%d); marked for operator intervention", tx.ID, m.maxReplacementAttempts)
+	return fmt.Errorf("%w: transaction %s exhausted its replacement-attempt limit (%d)", ErrNeedsIntervention, tx.ID, m.maxReplacementAttempts)
 }
 
 // reconcileReplacements uses Replaces to restore original Replaced/ReplacedBy links
@@ -914,6 +919,7 @@ func (m *txManager) Replace(ctx context.Context, id string, signer Signer, bumpP
 		ReplacementCount: old.ReplacementCount + 1,
 		Status:           models.TxBroadcastUnknown,
 		FencingToken:     leaseToken,
+		AllowReorgRetry:  old.AllowReorgRetry, // the replacement stands in for the original, so it keeps the same retry permission
 		SubmittedAt:      now,
 		UpdatedAt:        now,
 	}
